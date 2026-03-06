@@ -381,6 +381,7 @@ The Fundamental Analyst is responsible for evaluating the intrinsic value of the
   ratios, and recent executive stock sales. The `rig` agent is prompted to evaluate these metrics against sector
   averages, identifying severe vulnerabilities such as high leverage in a rising interest rate environment or massive
   insider dumping. The output is serialized directly into the `FundamentalData` structure.
+* **Prompt specification**: [Fundamentals Analyst](docs/prompts.md#fundamentals-analyst)
 
 #### 2. Sentiment Analyst Task
 
@@ -392,6 +393,7 @@ This agent quantifies the irrational, emotional drivers of market momentum.
   integration. Scraped posts are embedded and stored in an `InMemoryVectorStore`. The agent then performs a semantic
   search against the asset ticker, aggregating public sentiment into a normalized score, specifically noting peaks in
   positive or negative retail engagement that often precede severe volatility events.
+* **Prompt specification**: [Social Media Analyst](docs/prompts.md#social-media-analyst) (referred to as Sentiment Analyst in this implementation)
 
 #### 3. News Analyst Task
 
@@ -404,6 +406,7 @@ The News Analyst contextualizes the asset within the broader global macroeconomi
 * **Execution Logic**: The agent processes breaking news articles to extract causal relationships. For example, if
   analyzing a semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff
   implementations, or federal reserve interest rate commentary that directly impacts the supply chain or discount rates.
+* **Prompt specification**: [News Analyst](docs/prompts.md#news-analyst)
 
 #### 4. Technical Analyst Task
 
@@ -416,6 +419,7 @@ The Technical Analyst identifies actionable entry and exit signals based entirel
   crossovers), and the Average True Range (measuring historical volatility). The LLM does not perform the math; it
   simply interprets the statistical output provided by `kand`, producing a definitive summary of momentum and
   support/resistance boundaries.
+* **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis
 
@@ -426,9 +430,14 @@ the probability of confirmation bias.
 * **Bullish Researcher**: Configured via a `rig` preamble to adopt a structurally optimistic persona. Its objective is
   to synthesize the data provided by the Analysts to formulate a compelling thesis for capital appreciation. It
   highlights robust cash flows, technical breakouts, and favorable market sentiment.
+  — *Prompt specification*: [Bull Researcher](docs/prompts.md#bull-researcher)
 * **Bearish Researcher**: Configured with a highly skeptical preamble. Its objective is to actively dismantle the
   Bullish Researcher's arguments. It searches the `TradingState` for counter-indicators, emphasizing insider selling,
   overextended P/E ratios, macroeconomic headwinds, and impending technical resistance levels.
+  — *Prompt specification*: [Bear Researcher](docs/prompts.md#bear-researcher)
+* **Debate Moderator**: Evaluates completed debate rounds, selects the prevailing perspective, and records a structured
+  `consensus_summary` before routing the state to the Trader Agent.
+  — *Prompt specification*: [Debate Moderator (Research Manager)](docs/prompts.md#debate-moderator-research-manager)
 
 During each cycle, the `rig` chat history is updated, allowing each agent to directly address the specific claims made
 by its counterpart in the previous iteration. This produces a highly nuanced, multi-dimensional evaluation of the asset
@@ -443,6 +452,7 @@ The Trader Agent acts as the central executive intelligence.
   output a strict `TradeProposal` JSON schema indicating the proposed action (Buy/Sell/Hold), a specific target price, a
   justified stop-loss threshold, and a confidence metric. This structured output ensures that downstream components
   receive a mathematically actionable directive rather than a vague natural language suggestion.
+* **Prompt specification**: [Trader](docs/prompts.md#trader)
 
 ### The Risk Management Team
 
@@ -454,18 +464,22 @@ debate pattern within the risk phase.
 * **Risk-Seeking Agent** (mapped to "Aggressive" in this implementation): Evaluates whether the proposed stop-loss is
   too tight to survive normal market volatility, specifically referencing the Average True Range calculated by the
   Technical Analyst. It advocates for wider stops to capture massive momentum breakouts.
+  — *Prompt specification*: [Aggressive Risk Analyst](docs/prompts.md#aggressive-risk-analyst)
 
 * **Risk-Conservative Agent**: Evaluates the proposal entirely from the perspective of Maximum Drawdown. It actively
   vetoes trades if the asset exhibits overbought RSI conditions, severe macroeconomic uncertainty, or high beta relative
   to the broader market, demanding strict adherence to capital preservation.
+  — *Prompt specification*: [Conservative Risk Analyst](docs/prompts.md#conservative-risk-analyst)
 
 * **Neutral Risk Agent**: Functions as the moderating force, attempting to optimize the Sharpe Ratio by balancing the
   aggressive upside targets against the conservative downside protections.
+  — *Prompt specification*: [Neutral Risk Analyst](docs/prompts.md#neutral-risk-analyst)
 
 A `RiskModerator` node coordinates the discussion loop, identical in structure to the `DebateModerator` in the
 Researcher Team, and exits once consensus is reached or `max_risk_rounds` is exhausted. Acting as a reflective
 summarizer, it ensures the aggregated discussion is clearly distilled and written to `risk_discussion_history` in the
 `TradingState` for auditability.
+— *Prompt specification*: [Risk Manager (Judge)](docs/prompts.md#risk-manager-judge)
 
 ### The Fund Manager
 
