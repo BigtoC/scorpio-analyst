@@ -19,7 +19,7 @@ The system aims to replace monolithic trading AI with a structured multi-agent s
 - **Config**: `dotenvy` (.env loading), `config.toml` for defaults
 - **Security**: `secrecy` (API key management — zeroed on drop, excluded from Debug/logs)
 - **Testing**: `mockall` (mocks), `proptest` (property-based)
-- **CLI**: `clap` (subcommand-based CLI framework)
+- **CLI**: `clap` (subcommand-based CLI framework); `colored` or `comfy-table` for human-readable output formatting
 - **Interactive TUI (Phase 2)**: `ratatui` + `crossterm` — full-screen interactive terminal UI inspired by Claude Code
 - **Desktop UI (Phase 3)**: `gpui` — GPU-accelerated native UI framework from Zed (behind `gui` feature flag)
 - **Build**: Cargo (single binary crate, name: `scorpio-analyst`)
@@ -41,7 +41,7 @@ The system aims to replace monolithic trading AI with a structured multi-agent s
 - Detailed conventions in `.github/instructions/rust.instructions.md`
 
 ### Architecture Patterns
-- **5-phase pipeline**: Analyst Team (fan-out) → Researcher Team (cyclic debate) → Trader (sequential) → Risk Team (fan-out + debate) → Fund Manager (sequential)
+- **5-phase pipeline**: Analyst Team (fan-out) → Researcher Team (cyclic debate) → Trader (sequential) → Risk Team (fan-out + cyclic debate) → Fund Manager (sequential, deep-thinking LLM primary with deterministic fallback: reject if Conservative + Neutral both flag violation)
 - **State management**: All inter-agent data flows through a strongly-typed `TradingState` struct via `graph_flow::Context` — agents read/write specific struct fields, not free-text chat buffers (eliminates "telephone effect")
 - **Dual-tier LLM routing**: Analysts use quick-thinking models (gpt-4o-mini, claude-haiku, gemini-flash); Researchers, Trader, and Risk agents use deep-thinking models (o3, claude-opus, etc.)
 - **Concurrency**: Fan-out tasks use `tokio::spawn` with per-field `Arc<RwLock<Option<T>>>` locking (not struct-level). Never hold `std::sync::Mutex` across `.await` — use `tokio::sync::RwLock`
@@ -49,14 +49,14 @@ The system aims to replace monolithic trading AI with a structured multi-agent s
 - **Error resilience**: Retry with exponential backoff (max 3, base 500ms); 1 analyst failure degrades gracefully, 2+ aborts; per-analyst 30s timeout
 - **Configuration layering**: `config.toml` → `.env` (dotenvy) → environment variables (highest priority)
 - **User interaction (phased)**:
-  - **Phase 1 (MVP)**: CLI via `clap` — structured subcommands (`analyze`, `backtest`, `config`, `history`) plus natural language queries via `ask` subcommand (LLM intent parser routes to pipeline actions); supports human-readable, JSON, and quiet output modes; real-time agent progress streaming via `tracing`
-  - **Phase 2**: Interactive terminal UI via `ratatui`/`crossterm` — persistent conversational session (like Claude Code) building on Phase 1's natural language support with multi-turn context, live agent activity panels, inline trade proposal review/approval, and keyboard-navigable history browsing
-  - **Phase 3**: Native desktop application via [GPUI](https://www.gpui.rs/) (Zed's GPU-accelerated Rust UI framework) — live workflow dashboard, trade proposal review, historical audit trail, performance analytics charts; built behind `--features gui` Cargo flag sharing the same core `lib.rs`
+  - **Phase 1 (MVP)**: CLI via `clap` — structured subcommands (`analyze`, `backtest`, `config show`, `config check`, `history --last N --verbose`) plus natural language queries via `ask` subcommand (quick-thinking LLM intent parser extracts symbol/date/model params and routes to the same pipeline code paths); output modes: human-readable (colored/comfy-table, default), JSON (`--output json`), quiet (`--quiet`); real-time agent progress streaming via `tracing` with optional `--no-stream` flag for batch use
+  - **Phase 2**: Interactive terminal UI via `ratatui`/`crossterm` — launched via `scorpio-analyst interactive` (or as default when no subcommand given); persistent multi-turn conversational session building on Phase 1's `ask` command; live agent activity panels with progress indicators/spinners; inline trade proposal review (approve/reject/request more analysis rounds) without restarting; keyboard-navigable scrollable history; thin presentation shell over the same `lib.rs` — subscribes to `tracing` event stream and `graph_flow::Context` state updates; `tokio::select!` event loop processes keyboard input and async pipeline events concurrently
+  - **Phase 3**: Native desktop application via [GPUI](https://www.gpui.rs/) (Zed's GPU-accelerated Rust UI framework) — live workflow dashboard with animated agent node transitions, asset configuration panel, trade proposal review cards, searchable/filterable audit trail, performance analytics charts (Cumulative Return, Sharpe Ratio, Max Drawdown vs. baselines); built behind `--features gui` Cargo flag sharing the same core `lib.rs`
 
 ### Testing Strategy
 - **Unit tests**: Each agent task tested in isolation with mocked API responses (`mockall`). Assertions verify correct `TradingState` fields populated with properly deserialized structs
 - **Integration tests**: Full `graph-flow` workflow end-to-end with deterministic stubs (no real API calls). Validates phase transitions, debate cycle termination, and risk moderation loop
-- **Backtesting**: Ingest historical OHLCV data (June–November 2024), replay day-by-day with no look-ahead bias. Compute Cumulative Return, Annualized Return, Sharpe Ratio, and Maximum Drawdown
+- **Backtesting**: Ingest historical OHLCV data (June–November 2024), replay day-by-day with no look-ahead bias (agents only access data up to the target date). Compute Cumulative Return, Annualized Return, Sharpe Ratio, and Maximum Drawdown. LLM calls use a cached response layer for determinism and cost control
 - **Property-based tests**: `proptest` validates `TradingState` serialization round-trips and `TradingError` edge cases
 - **CI**: Warnings treated as errors (`-D warnings`). Run `cargo fmt -- --check`, `cargo clippy`, `cargo test`
 
