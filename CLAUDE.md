@@ -82,3 +82,13 @@ layer:
 - Retry: exponential backoff (max 3 retries, base 500ms) for LLM calls
 - Graceful degradation: 1 analyst failure continues with partial data; 2+ failures abort the cycle
 - Per-analyst timeout: 30s default via `tokio::time::timeout`
+
+## Rust Guidelines
+
+Detailed Rust coding conventions are in `.github/instructions/rust.instructions.md`. Key points:
+- Prefer borrowing (`&T`) over cloning; use `&str` over `String` for function params when ownership isn't needed.
+- Use `serde` for serialization, `thiserror`/`anyhow` for errors.
+- Async code uses `tokio` runtime with `async/await`.
+- Implement common traits (`Debug`, `Clone`, `PartialEq`) on public types.
+- Use enums over flags/booleans for type safety.
+- Warnings are treated as errors in CI (`-D warnings`).
