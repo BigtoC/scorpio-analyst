@@ -388,12 +388,14 @@ The Fundamental Analyst is responsible for evaluating the intrinsic value of the
 This agent quantifies the irrational, emotional drivers of market momentum.
 
 * **Tool Bindings**: Equipped with HTTP scraper tools targeting Reddit (e.g., r/wallstreetbets, r/investing) and
-  X/Twitter APIs.
+  X/Twitter APIs. If direct API access is unavailable, the Gemini CLI can be used as an alternative for web-search-based
+  sentiment analysis.
 * **Execution Logic**: Due to the massive volume of social media text, this agent utilizes `rig`'s vector store
   integration. Scraped posts are embedded and stored in an `InMemoryVectorStore`. The agent then performs a semantic
   search against the asset ticker, aggregating public sentiment into a normalized score, specifically noting peaks in
   positive or negative retail engagement that often precede severe volatility events.
-* **Prompt specification**: [Social Media Analyst](docs/prompts.md#social-media-analyst) (referred to as Sentiment Analyst in this implementation)
+* **Prompt specification**: [Social Media Analyst](docs/prompts.md#social-media-analyst) (referred to as Sentiment
+  Analyst in this implementation)
 
 #### 3. News Analyst Task
 
@@ -402,7 +404,8 @@ The News Analyst contextualizes the asset within the broader global macroeconomi
 * **Tool Bindings**: Accesses `finnhub` market news and economic indicator endpoints as the primary source. The
   original paper ingested news from Bloomberg, Yahoo Finance, EODHD, and FinnHub simultaneously; for this
   implementation FinnHub is the primary aggregator, with EODHD as an optional supplementary source where API access
-  permits.
+  permits. If direct API access is unavailable for certain sources, the Gemini CLI can be used as an alternative for
+  web-search-based news analysis.
 * **Execution Logic**: The agent processes breaking news articles to extract causal relationships. For example, if
   analyzing a semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff
   implementations, or federal reserve interest rate commentary that directly impacts the supply chain or discount rates.
