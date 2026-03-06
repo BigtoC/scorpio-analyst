@@ -15,7 +15,7 @@ Multi-agent frameworks powered by Large Language Models resolve these deficienci
 dialectical, and structured workflows of real-world trading firms.
 
 The original TradingAgents framework, developed by researchers at UCLA (Yijia Xiao, Edward Sun, Di Luo, Wei Wang) and
-published under the TauricResearch GitHub organization, empirically demonstrated that a highly specialized society of
+published under the Tauric Research GitHub organization, empirically demonstrated that a highly specialized society of
 autonomous agents—including fundamental analysts, technical analysts, bearish and bullish researchers, and
 dedicated risk managers—can significantly outperform traditional rule-based trading strategies such as Simple Moving
 Average crossover models, Zero Mean Reversion, and MACD momentum strategies. The original reference implementation was
@@ -139,7 +139,7 @@ primary advantage is its ability to manage cyclic execution (such as the debate 
 shared, immutable state object across all nodes. To replicate this in Rust, the framework requires a stateful execution
 engine.
 
-#### Selected Orchestrator: `graph-flow` (v0.2.x)
+#### Selected Orchestrator: `graph-flow` (v0.4.0)
 
 `graph-flow` is a high-performance, type-safe framework explicitly designed to bring LangGraph-inspired stateful
 execution to the Rust ecosystem. It treats the primary workflow as a directed graph, where each execution node
@@ -188,7 +188,7 @@ large time-series arrays. To emulate the Technical Analyst agent, the system mus
 before injecting them into the LLM context.
 
 The Python ecosystem relies on libraries like `pandas-ta`, which operate on dataframes. The Rust ecosystem offers
-several alternatives, including `ta`, `rust_ti`, and `kand`. The `kand` crate (v0.0.9) is selected as the quantitative
+several alternatives, including `ta`, `rust_ti`, and `kand`. The `kand` crate (v0.2) is selected as the quantitative
 engine.
 Inspired by the C-based `TA-Lib`, `kand` is written entirely in pure Rust, providing a comprehensive suite of momentum,
 volatility, and trend indicators. It is chosen specifically for its configurable precision modes; it can execute
@@ -310,8 +310,9 @@ execution at the entry point and routes the `TradingState` through the necessary
    transitions to the Researcher Team. Here, `graph-flow`'s conditional edges are utilized to construct a loop. The
    graph alternates execution between the `BullishResearcher` and `BearishResearcher` tasks. A discrete
    `DebateModerator` task evaluates the number of completed iterations against a `max_debate_rounds` parameter (
-   typically set to 2 or 3). Once the threshold is met, the moderator updates the `NextAction` to exit the loop, moving
-   the state to the Trader Agent.
+   typically set to 2 or 3). Crucially, the Moderator acts as a "Reflective Agent" for the team: once the threshold is
+   met, it explicitly reviews the debate history, selects the prevailing perspective, and records it as a structured
+   `consensus_summary` before updating the `NextAction` to exit the loop, moving the state to the Trader Agent.
 3. **Synthesis and Proposal**: The Trader Agent task operates sequentially, utilizing the complete `TradingState` to
    generate a formalized TradeProposal.
 4. **Risk Fan-Out**: Similar to the initial data ingestion, the risk assessment phase utilizes a parallel Fan-Out
@@ -323,7 +324,9 @@ execution at the entry point and routes the `TradingState` through the necessary
 ## Agent Role Specifications and Implementation Directives
 
 Each persona within the TradingAgents framework requires specific LLM backbone routing, precise system prompt
-engineering, and distinct tool access. The implementation will utilize a multi-provider factory pattern via `rig` to
+engineering, and distinct tool access. Following the original paper's architecture, all agents must operate using the *
+*ReAct (Reasoning and Acting)** prompting framework, synergizing step-by-step reasoning with tool execution before
+emitting their final structured schemas. The implementation will utilize a multi-provider factory pattern via `rig` to
 ensure seamless task routing across a diverse suite of models, including OpenAI, Anthropic, Google Gemini, and a custom
 GitHub Copilot integration, and other more LLM providers.
 
@@ -378,17 +381,21 @@ The Fundamental Analyst is responsible for evaluating the intrinsic value of the
   ratios, and recent executive stock sales. The `rig` agent is prompted to evaluate these metrics against sector
   averages, identifying severe vulnerabilities such as high leverage in a rising interest rate environment or massive
   insider dumping. The output is serialized directly into the `FundamentalData` structure.
+* **Prompt specification**: [Fundamentals Analyst](docs/prompts.md#fundamentals-analyst)
 
 #### 2. Sentiment Analyst Task
 
 This agent quantifies the irrational, emotional drivers of market momentum.
 
 * **Tool Bindings**: Equipped with HTTP scraper tools targeting Reddit (e.g., r/wallstreetbets, r/investing) and
-  X/Twitter APIs.
+  X/Twitter APIs. If direct API access is unavailable, the Gemini CLI can be used as an alternative for web-search-based
+  sentiment analysis.
 * **Execution Logic**: Due to the massive volume of social media text, this agent utilizes `rig`'s vector store
   integration. Scraped posts are embedded and stored in an `InMemoryVectorStore`. The agent then performs a semantic
   search against the asset ticker, aggregating public sentiment into a normalized score, specifically noting peaks in
   positive or negative retail engagement that often precede severe volatility events.
+* **Prompt specification**: [Social Media Analyst](docs/prompts.md#social-media-analyst) (referred to as Sentiment
+  Analyst in this implementation)
 
 #### 3. News Analyst Task
 
@@ -397,10 +404,12 @@ The News Analyst contextualizes the asset within the broader global macroeconomi
 * **Tool Bindings**: Accesses `finnhub` market news and economic indicator endpoints as the primary source. The
   original paper ingested news from Bloomberg, Yahoo Finance, EODHD, and FinnHub simultaneously; for this
   implementation FinnHub is the primary aggregator, with EODHD as an optional supplementary source where API access
-  permits.
+  permits. If direct API access is unavailable for certain sources, the Gemini CLI can be used as an alternative for
+  web-search-based news analysis.
 * **Execution Logic**: The agent processes breaking news articles to extract causal relationships. For example, if
   analyzing a semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff
   implementations, or federal reserve interest rate commentary that directly impacts the supply chain or discount rates.
+* **Prompt specification**: [News Analyst](docs/prompts.md#news-analyst)
 
 #### 4. Technical Analyst Task
 
@@ -413,6 +422,7 @@ The Technical Analyst identifies actionable entry and exit signals based entirel
   crossovers), and the Average True Range (measuring historical volatility). The LLM does not perform the math; it
   simply interprets the statistical output provided by `kand`, producing a definitive summary of momentum and
   support/resistance boundaries.
+* **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis
 
@@ -423,9 +433,14 @@ the probability of confirmation bias.
 * **Bullish Researcher**: Configured via a `rig` preamble to adopt a structurally optimistic persona. Its objective is
   to synthesize the data provided by the Analysts to formulate a compelling thesis for capital appreciation. It
   highlights robust cash flows, technical breakouts, and favorable market sentiment.
+  — *Prompt specification*: [Bull Researcher](docs/prompts.md#bull-researcher)
 * **Bearish Researcher**: Configured with a highly skeptical preamble. Its objective is to actively dismantle the
   Bullish Researcher's arguments. It searches the `TradingState` for counter-indicators, emphasizing insider selling,
   overextended P/E ratios, macroeconomic headwinds, and impending technical resistance levels.
+  — *Prompt specification*: [Bear Researcher](docs/prompts.md#bear-researcher)
+* **Debate Moderator**: Evaluates completed debate rounds, selects the prevailing perspective, and records a structured
+  `consensus_summary` before routing the state to the Trader Agent.
+  — *Prompt specification*: [Debate Moderator (Research Manager)](docs/prompts.md#debate-moderator-research-manager)
 
 During each cycle, the `rig` chat history is updated, allowing each agent to directly address the specific claims made
 by its counterpart in the previous iteration. This produces a highly nuanced, multi-dimensional evaluation of the asset
@@ -440,6 +455,7 @@ The Trader Agent acts as the central executive intelligence.
   output a strict `TradeProposal` JSON schema indicating the proposed action (Buy/Sell/Hold), a specific target price, a
   justified stop-loss threshold, and a confidence metric. This structured output ensures that downstream components
   receive a mathematically actionable directive rather than a vague natural language suggestion.
+* **Prompt specification**: [Trader](docs/prompts.md#trader)
 
 ### The Risk Management Team
 
@@ -451,17 +467,22 @@ debate pattern within the risk phase.
 * **Risk-Seeking Agent** (mapped to "Aggressive" in this implementation): Evaluates whether the proposed stop-loss is
   too tight to survive normal market volatility, specifically referencing the Average True Range calculated by the
   Technical Analyst. It advocates for wider stops to capture massive momentum breakouts.
+  — *Prompt specification*: [Aggressive Risk Analyst](docs/prompts.md#aggressive-risk-analyst)
 
 * **Risk-Conservative Agent**: Evaluates the proposal entirely from the perspective of Maximum Drawdown. It actively
   vetoes trades if the asset exhibits overbought RSI conditions, severe macroeconomic uncertainty, or high beta relative
   to the broader market, demanding strict adherence to capital preservation.
+  — *Prompt specification*: [Conservative Risk Analyst](docs/prompts.md#conservative-risk-analyst)
 
 * **Neutral Risk Agent**: Functions as the moderating force, attempting to optimize the Sharpe Ratio by balancing the
   aggressive upside targets against the conservative downside protections.
+  — *Prompt specification*: [Neutral Risk Analyst](docs/prompts.md#neutral-risk-analyst)
 
 A `RiskModerator` node coordinates the discussion loop, identical in structure to the `DebateModerator` in the
-Researcher Team, and exits once consensus is reached or `max_risk_rounds` is exhausted. The aggregated discussion is
-written to `risk_discussion_history` in the `TradingState` for auditability.
+Researcher Team, and exits once consensus is reached or `max_risk_rounds` is exhausted. Acting as a reflective
+summarizer, it ensures the aggregated discussion is clearly distilled and written to `risk_discussion_history` in the
+`TradingState` for auditability.
+— *Prompt specification*: [Risk Manager (Judge)](docs/prompts.md#risk-manager-judge)
 
 ### The Fund Manager
 
@@ -472,6 +493,181 @@ appropriate risk adjustments." While a purely deterministic fallback rule (rejec
 violation) will serve as a safety net, the primary decision path uses LLM reasoning to handle nuanced edge cases. If
 the Fund Manager approves the trade, it serializes the final order for dispatch to a brokerage API such as Alpaca; if
 it rejects, it appends a structured rationale to `ExecutionStatus` for the audit trail.
+
+## User Interaction Interface
+
+The original TradingAgents research framework operates as a headless batch process, lacking any user-facing interaction
+layer. For scorpio-analyst to function as a practical portfolio management tool, the system must provide intuitive
+interfaces through which users can configure analyses, trigger trade cycles, monitor agent deliberations in real time,
+and review historical decision rationale. The interaction layer is delivered in three sequential phases to balance rapid
+utility with progressive user experience refinement.
+
+### Phase 1: Command-Line Interface (MVP)
+
+The initial release exposes all system functionality through a structured command-line interface built with the `clap`
+crate. The CLI serves as the primary user touchpoint during early development, providing full access to the trading
+pipeline without requiring graphical dependencies. This approach enables rapid iteration, scriptable automation, and
+seamless integration with CI/CD and cron-based scheduling workflows.
+
+#### Core Commands
+
+The CLI supports both structured subcommands and natural language queries. Structured subcommands follow modern Rust CLI
+conventions for deterministic, scriptable usage:
+
+```bash
+# Trigger a full analysis cycle for a specific asset
+scorpio-analyst analyze --symbol AAPL --date 2024-11-15
+
+# Run analysis with custom model configuration
+scorpio-analyst analyze --symbol NVDA --analyst-model gpt-4o-mini --researcher-model o3
+
+# Run backtesting over a historical window
+scorpio-analyst backtest --symbol AAPL --start 2024-06-01 --end 2024-11-30
+
+# Display the current configuration (redacting API keys)
+scorpio-analyst config show
+
+# Validate API connectivity and model availability
+scorpio-analyst config check
+
+# View the most recent trade decision and its full audit trail
+scorpio-analyst history --last 1 --verbose
+```
+
+#### Natural Language Queries
+
+In addition to structured subcommands, the CLI accepts natural language queries via the `ask` subcommand, enabling
+users to interact with the trading agent team conversationally from the very first release:
+
+```bash
+# Natural language analysis requests
+scorpio-analyst ask "Analyze AAPL for today"
+scorpio-analyst ask "What's the risk profile for NVDA?"
+scorpio-analyst ask "Run a backtest on MSFT for the last 6 months"
+scorpio-analyst ask "Show me the last 3 trade decisions"
+```
+
+The `ask` command routes the user's natural language input through a lightweight LLM intent parser that maps the query
+to the appropriate pipeline action (analyze, backtest, history retrieval, etc.), extracts parameters (symbol, date
+ranges, model overrides), and dispatches execution through the same code paths as the structured subcommands. This
+design lowers the barrier to entry — users do not need to memorize flags or subcommand syntax — while preserving the
+deterministic structured subcommands for scripting and automation. The intent parser uses the quick-thinking LLM tier
+to minimize latency overhead.
+
+#### Output Formatting
+
+The CLI supports multiple output formats to accommodate both human operators and downstream tooling:
+
+* **Human-readable** (default): Richly formatted terminal output using the `colored` or `comfy-table` crate, displaying
+  agent phase transitions, debate summaries, and final trade proposals with color-coded risk indicators.
+* **JSON** (`--output json`): Machine-readable structured output mirroring the serialized `TradingState`, enabling
+  piping into `jq`, logging infrastructure, or external dashboards.
+* **Quiet mode** (`--quiet`): Suppresses intermediate agent output, emitting only the final `TradeProposal` and
+  `ExecutionStatus` — designed for cron jobs and scripted pipelines.
+
+#### Real-Time Streaming
+
+During an active analysis cycle, the CLI streams agent progress to the terminal in real time. Each phase transition,
+tool invocation, and debate round is emitted as a structured log line via the `tracing` subscriber, allowing the user
+to observe the multi-agent deliberation as it unfolds. An optional `--no-stream` flag disables real-time output for
+batch execution contexts.
+
+### Phase 2: Interactive Terminal UI
+
+The second phase introduces a rich interactive terminal user interface, inspired by conversational developer tools like
+Claude Code. Rather than a fire-and-forget CLI invocation, Phase 2 transforms scorpio-analyst into a persistent,
+conversational terminal application where users interact with the trading agent team through a full-screen terminal
+interface built with the `ratatui` and `crossterm` crates.
+
+#### Interaction Model
+
+The interactive TUI operates as a long-running session within the terminal. Upon launch via
+`scorpio-analyst interactive`
+(or simply `scorpio-analyst` when no subcommand is provided), the user enters a conversational loop where they can:
+
+* **Conversational natural language interaction**: Building on the `ask` command introduced in Phase 1, the TUI
+  elevates natural language queries into a persistent, multi-turn conversational experience. Users can issue follow-up
+  questions, refine analysis parameters, and chain queries without restarting — e.g., "Analyze AAPL" followed by
+  "Now compare it with NVDA" or "Tighten the stop-loss to 2%".
+* **Monitor live agent activity**: A dedicated panel renders the real-time execution of each agent phase. Users observe
+  the Analyst Team's data retrieval, the Bullish/Bearish debate rounds, the Trader's proposal formulation, and the Risk
+  Team's deliberation — all streaming within styled terminal panels with progress indicators and spinners.
+* **Review and approve decisions**: When the pipeline produces a `TradeProposal`, the TUI presents it inline with
+  syntax-highlighted details (action, target price, stop-loss, confidence). The user can approve, reject, or request
+  additional analysis rounds interactively — without restarting the process.
+* **Browse history**: Navigate past trade cycles using keyboard shortcuts, with scrollable panels displaying the full
+  `TradingState` audit trail for each historical decision.
+
+#### Architecture
+
+The TUI layer is a thin presentation shell over the same core library (`lib.rs`) used by the Phase 1 CLI. It subscribes
+to the `tracing` event stream and `graph_flow::Context` state updates, rendering them into `ratatui` widgets. The
+application uses `crossterm` as the terminal backend for cross-platform compatibility (macOS, Linux, Windows). An
+event loop driven by `tokio::select!` concurrently processes user keyboard input and async agent pipeline events,
+ensuring the interface remains responsive during long-running analysis cycles.
+
+#### Phase 2 Dependencies
+
+| Crate       | Purpose                                                               |
+|:------------|:----------------------------------------------------------------------|
+| `ratatui`   | Terminal UI framework for rendering widgets, layouts, and styled text |
+| `crossterm` | Cross-platform terminal manipulation (raw mode, input events, colors) |
+
+### Phase 3: Native Desktop Application (GPUI)
+
+The third phase introduces a high-performance native desktop application built with
+[GPUI](https://www.gpui.rs/) — the GPU-accelerated UI framework created by the [Zed](https://zed.dev) team, written
+entirely in Rust. GPUI is selected specifically for its zero-compromise alignment with the project's Rust-native
+philosophy: it compiles directly into the application binary, eliminating Electron-style runtime overhead, and
+delivers 120fps rendering through direct GPU composition. Because GPUI is a Rust crate, it integrates seamlessly with
+the existing `tokio` async runtime, `rig` agent infrastructure, and `graph-flow` state machine without requiring
+foreign function interfaces or inter-process communication bridges.
+
+#### Architectural Integration
+
+The GPUI application layer will be structured as an optional Cargo feature (`--features gui`), keeping the CLI and TUI
+as the default build targets. The GUI shares the identical core library (`lib.rs`), ensuring complete behavioral parity.
+The GPUI layer consumes the same `graph_flow::Context` state and `tracing` event streams, translating them into reactive
+UI updates via GPUI's retained-mode component model.
+
+#### Planned Interface Capabilities
+
+The desktop application will provide the following capabilities upon Phase 3 completion:
+
+1. **Live Workflow Dashboard**: A real-time visualization of the 5-phase execution graph. Each agent node displays its
+   current status (idle, executing, completed, failed), with animated transitions as the `graph-flow` state machine
+   progresses. The debate rounds between Bullish and Bearish researchers are rendered as a side-by-side conversational
+   panel, enabling the user to observe dialectical synthesis as it occurs.
+
+2. **Asset Configuration Panel**: A form-driven interface for selecting target assets, configuring model tiers (quick-
+   thinking vs. deep-thinking), adjusting debate round limits, and setting risk tolerance parameters — replacing the
+   CLI flags and `config.toml` with an interactive settings surface.
+
+3. **Trade Proposal Review**: Upon cycle completion, the `TradeProposal` and aggregated `RiskReport` objects are
+   rendered in a structured card layout, presenting the proposed action (Buy/Sell/Hold), target price, stop-loss
+   threshold, confidence metric, and the dissenting risk arguments. The user can approve, reject, or request additional
+   analysis rounds before execution.
+
+4. **Historical Audit Trail**: A searchable, filterable timeline of all past trade cycles, displaying the complete
+   `TradingState` snapshot for each decision. Users can drill into any historical cycle to review the exact analyst
+   data, debate arguments, and risk assessments that informed the final decision, supporting regulatory compliance
+   and strategy refinement.
+
+5. **Performance Analytics**: Interactive charts rendering backtesting results — Cumulative Return, Annualized Return,
+   Sharpe Ratio, and Maximum Drawdown — plotted against baseline strategies (Buy & Hold, SMA, MACD). These
+   visualizations leverage GPUI's GPU-accelerated rendering for smooth pan, zoom, and hover interactions across large
+   historical datasets.
+
+#### Phase 3 Dependencies
+
+The GPUI integration introduces the following additional crate dependencies:
+
+| Crate  | Purpose                                        |
+|:-------|:-----------------------------------------------|
+| `gpui` | GPU-accelerated native UI framework (from Zed) |
+
+The `gpui` crate is added behind the `gui` feature flag to prevent the desktop application's GPU and windowing
+dependencies from affecting the headless CLI and TUI builds.
 
 ## Non-Functional Requirements and Enterprise Operations
 
