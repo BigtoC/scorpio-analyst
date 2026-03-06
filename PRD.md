@@ -139,7 +139,7 @@ primary advantage is its ability to manage cyclic execution (such as the debate 
 shared, immutable state object across all nodes. To replicate this in Rust, the framework requires a stateful execution
 engine.
 
-#### Selected Orchestrator: `graph-flow` (v0.2.x)
+#### Selected Orchestrator: `graph-flow` (v0.4.0)
 
 `graph-flow` is a high-performance, type-safe framework explicitly designed to bring LangGraph-inspired stateful
 execution to the Rust ecosystem. It treats the primary workflow as a directed graph, where each execution node
@@ -188,7 +188,7 @@ large time-series arrays. To emulate the Technical Analyst agent, the system mus
 before injecting them into the LLM context.
 
 The Python ecosystem relies on libraries like `pandas-ta`, which operate on dataframes. The Rust ecosystem offers
-several alternatives, including `ta`, `rust_ti`, and `kand`. The `kand` crate (v0.0.9) is selected as the quantitative
+several alternatives, including `ta`, `rust_ti`, and `kand`. The `kand` crate (v0.2) is selected as the quantitative
 engine.
 Inspired by the C-based `TA-Lib`, `kand` is written entirely in pure Rust, providing a comprehensive suite of momentum,
 volatility, and trend indicators. It is chosen specifically for its configurable precision modes; it can execute
