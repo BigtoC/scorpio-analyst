@@ -289,6 +289,35 @@ pub struct TradingState {
 
     // Phase 5: Final Execution
     pub final_execution_status: Option<ExecutionStatus>,
+
+    // Token Usage Tracking
+    pub token_usage: TokenUsageTracker,
+}
+
+/// Tracks token consumption per agent, per phase, and for the entire run.
+pub struct TokenUsageTracker {
+    pub phase_usage: Vec<PhaseTokenUsage>,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+pub struct PhaseTokenUsage {
+    pub phase_name: String,           // e.g. "Analyst Team", "Researcher Debate Round 2"
+    pub agent_usage: Vec<AgentTokenUsage>,
+    pub phase_prompt_tokens: u64,
+    pub phase_completion_tokens: u64,
+    pub phase_total_tokens: u64,
+    pub phase_duration_ms: u64,
+}
+
+pub struct AgentTokenUsage {
+    pub agent_name: String,           // e.g. "Fundamental Analyst", "Bullish Researcher"
+    pub model_id: String,             // e.g. "gpt-4o-mini", "o3"
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub latency_ms: u64,
 }
 ```
 
@@ -559,11 +588,12 @@ to minimize latency overhead.
 The CLI supports multiple output formats to accommodate both human operators and downstream tooling:
 
 * **Human-readable** (default): Richly formatted terminal output using the `colored` or `comfy-table` crate, displaying
-  agent phase transitions, debate summaries, and final trade proposals with color-coded risk indicators.
-* **JSON** (`--output json`): Machine-readable structured output mirroring the serialized `TradingState`, enabling
-  piping into `jq`, logging infrastructure, or external dashboards.
-* **Quiet mode** (`--quiet`): Suppresses intermediate agent output, emitting only the final `TradeProposal` and
-  `ExecutionStatus` — designed for cron jobs and scripted pipelines.
+  agent phase transitions, debate summaries, final trade proposals with color-coded risk indicators, and a post-run
+  statistics summary showing per-phase and per-agent token usage and latency.
+* **JSON** (`--output json`): Machine-readable structured output mirroring the serialized `TradingState` (including the
+  full `TokenUsageTracker`), enabling piping into `jq`, logging infrastructure, or external dashboards.
+* **Quiet mode** (`--quiet`): Suppresses intermediate agent output, emitting only the final `TradeProposal`,
+  `ExecutionStatus`, and the run statistics summary — designed for cron jobs and scripted pipelines.
 
 #### Real-Time Streaming
 
@@ -783,6 +813,88 @@ via`graph-flow`'s storage backend (e.g., PostgreSQL JSONB), quantitative researc
 sequence of debate arguments and risk assessments that led to a specific trade, ensuring total regulatory compliance and
 facilitating continuous framework optimization.
 
+### Token Usage Tracking and Run Statistics
+
+Every LLM invocation throughout the pipeline must record its token consumption. The `rig` completion response includes
+prompt and completion token counts; each agent task wrapper extracts these values and appends them to the
+`TokenUsageTracker` in the `TradingState` immediately after each call returns. This tracking is mandatory — no LLM
+call may bypass the accounting layer.
+
+#### Per-Step Tracking
+
+Each phase of the execution graph records its own `PhaseTokenUsage` entry:
+
+| Phase                      | Agents Tracked                                                       |
+|:---------------------------|:---------------------------------------------------------------------|
+| Phase 1: Analyst Team      | Fundamental, Sentiment, News, Technical (each individually)          |
+| Phase 2: Researcher Debate | Bullish Researcher, Bearish Researcher (per round), Debate Moderator |
+| Phase 3: Trader Synthesis  | Trader Agent                                                         |
+| Phase 4: Risk Discussion   | Aggressive, Conservative, Neutral (per round), Risk Moderator        |
+| Phase 5: Fund Manager      | Fund Manager                                                         |
+
+Within each phase, individual `AgentTokenUsage` entries capture the model used, prompt/completion token counts, and
+wall-clock latency for that specific invocation. For cyclic phases (debate and risk rounds), each round produces a
+separate `PhaseTokenUsage` entry (e.g., "Researcher Debate Round 1", "Researcher Debate Round 2"), enabling granular
+analysis of token cost per debate iteration.
+
+#### Post-Run Statistics Display
+
+After every completed analysis cycle, the system **must** emit a comprehensive run statistics summary. This summary is
+displayed regardless of output format (human-readable, JSON, or quiet mode — in quiet mode it is appended after the
+final `TradeProposal`).
+
+The statistics report includes:
+
+1. **Phase-by-phase token breakdown**: A table showing prompt tokens, completion tokens, total tokens, and wall-clock
+   duration for each phase.
+2. **Agent-level detail**: Within each phase, a nested breakdown per agent showing model used, token counts, and
+   latency.
+3. **Run totals**: Aggregate prompt tokens, completion tokens, total tokens, total LLM calls, and total wall-clock
+   time for the entire pipeline.
+
+Example human-readable output:
+
+```
+══════════════════════════════════════════════════════════════════════════════════════
+                    Run Statistics — AAPL 2024-11-15
+══════════════════════════════════════════════════════════════════════════════════════
+
+Phase                          Prompt    Completion    Total     Duration
+──────────────────────────────────────────────────────────────────────────────────────
+Phase 1: Analyst Team           8,420       3,210    11,630      4.2s
+  ├─ Fundamental Analyst        2,100         830     2,930      1.1s  (gpt-4o-mini)
+  ├─ Sentiment Analyst          2,340         790     3,130      1.3s  (gpt-4o-mini)
+  ├─ News Analyst               1,980         810     2,790      1.0s  (gpt-4o-mini)
+  └─ Technical Analyst          2,000         780     2,780      0.8s  (gpt-4o-mini)
+Phase 2: Researcher Debate     12,600       5,800    18,400      8.1s
+  ├─ Round 1                    6,200       2,900     9,100      4.0s
+  │   ├─ Bullish Researcher     3,100       1,500     4,600      2.1s  (o3)
+  │   └─ Bearish Researcher     3,100       1,400     4,500      1.9s  (o3)
+  ├─ Round 2                    6,400       2,900     9,300      4.1s
+  │   ├─ Bullish Researcher     3,200       1,500     4,700      2.1s  (o3)
+  │   └─ Bearish Researcher     3,200       1,400     4,600      2.0s  (o3)
+  └─ Debate Moderator           1,800         600     2,400      0.9s  (o3)
+Phase 3: Trader Synthesis       4,200       1,800     6,000      3.2s  (o3)
+Phase 4: Risk Discussion        9,800       3,600    13,400      6.5s
+  ├─ Round 1                    4,900       1,800     6,700      3.2s
+  │   ├─ Aggressive Risk        1,600         600     2,200      1.0s  (o3)
+  │   ├─ Conservative Risk      1,700         600     2,300      1.1s  (o3)
+  │   └─ Neutral Risk           1,600         600     2,200      1.1s  (o3)
+  └─ Risk Moderator             1,500         500     2,000      0.8s  (o3)
+Phase 5: Fund Manager           3,200       1,200     4,400      2.1s  (o3)
+──────────────────────────────────────────────────────────────────────────────────────
+TOTAL                          38,220      15,610    53,830     24.1s
+LLM calls:                     14
+══════════════════════════════════════════════════════════════════════════════════════
+```
+
+In JSON output mode (`--output json`), the `token_usage` field is included as a top-level key in the serialized
+`TradingState`, containing the full `TokenUsageTracker` structure.
+
+In the Phase 2 interactive TUI, the statistics panel is rendered as a persistent sidebar widget that updates in real
+time as each agent completes, showing a live running total. In the Phase 3 GPUI desktop application, the statistics
+are displayed in a dedicated "Run Metrics" card within the workflow dashboard.
+
 ### Testing Strategy
 
 The framework requires three distinct test layers to validate correctness, integration, and financial performance.
@@ -823,4 +935,3 @@ quantitative trading infrastructure.
 
 - TradingAgents: Multi-Agents LLM Financial Trading Framework (https://arxiv.org/pdf/2412.20138)
 - TauricResearch/TradingAgents (https://github.com/TauricResearch/TradingAgents/)
-

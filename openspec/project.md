@@ -64,6 +64,10 @@ drawdown on backtests) while preserving full decision auditability.
   Never hold `std::sync::Mutex` across `.await` — use `tokio::sync::RwLock`
 - **Custom GitHub Copilot provider**: Implemented as a custom `rig` provider via ACP (Agent Client Protocol) over
   JSON-RPC 2.0/NDJSON, spawning `copilot --acp --stdio`
+- **Token usage tracking**: Every LLM call records prompt/completion/total token counts, model ID, and wall-clock
+  latency into a `TokenUsageTracker` on `TradingState`. Per-phase and per-agent breakdowns are displayed after every
+  run (all output modes). Cyclic phases record per-round entries. TUI shows live running totals; GPUI renders a
+  dedicated "Run Metrics" card.
 - **Error resilience**: Retry with exponential backoff (max 3, base 500ms); 1 analyst failure degrades gracefully, 2+
   aborts; per-analyst 30s timeout
 - **Configuration layering**: `config.toml` → `.env` (dotenvy) → environment variables (highest priority)
@@ -94,6 +98,8 @@ drawdown on backtests) while preserving full decision auditability.
   only access data up to the target date). Compute Cumulative Return, Annualized Return, Sharpe Ratio, and Maximum
   Drawdown. LLM calls use a cached response layer for determinism and cost control
 - **Property-based tests**: `proptest` validates `TradingState` serialization round-trips and `TradingError` edge cases
+- **Token usage tests**: Verify that every LLM call records token counts in `TokenUsageTracker` and that post-run
+  statistics are emitted in all output modes
 - **CI**: Warnings treated as errors (`-D warnings`). Run `cargo fmt -- --check`, `cargo clippy`, `cargo test`
 
 ### Git Workflow
@@ -114,6 +120,8 @@ drawdown on backtests) while preserving full decision auditability.
 - **Risk personas**: Aggressive (wider stops for momentum), Conservative (capital preservation, veto on
   overbought/high-beta), Neutral (Sharpe Ratio optimization)
 - **Key metrics**: Cumulative Return, Annualized Return, Sharpe Ratio, Maximum Drawdown
+- **Token budget awareness**: Each run tracks prompt tokens, completion tokens, total tokens, LLM call count, and
+  latency — broken down per phase, per round (for cyclic debates), and per agent
 - **Technical indicators**: RSI (overbought >70, oversold <30), MACD (signal line crossovers), ATR (volatility
   measurement)
 
