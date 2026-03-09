@@ -2,5 +2,46 @@
 name = "scorpio-analyst"
 version = "0.1.0"
 edition = "2024"
+description = "Rust-native multi-agent LLM-powered financial trading system"
+license = "MIT"
+repository = "https://github.com/BigtoC/scorpio-analyst"
 
 [dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Rate limiting
+governor = "0.8"
+
+# Configuration
+config = "0.15"
+dotenvy = "0.15"
+
+# Secrets
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Unique identifiers
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Utilities
+nonzero_ext = "0.3"
+
+[dev-dependencies]
+proptest = "1"
+mockall = "0.13"
+pretty_assertions = "1"
