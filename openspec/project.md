@@ -59,7 +59,9 @@ drawdown on backtests) while preserving full decision auditability.
   `graph_flow::Context` — agents read/write specific struct fields, not free-text chat buffers (eliminates "telephone
   effect")
 - **Dual-tier LLM routing**: Analysts use quick-thinking models (gpt-4o-mini, claude-haiku, gemini-flash); Researchers,
-  Trader, and Risk agents use deep-thinking models (o3, claude-opus, etc.)
+  Trader, and Risk agents use deep-thinking models (o3, claude-opus, etc.). The MVP uses a single
+  `llm.default_provider`; per-agent provider overrides are intentionally deferred until after the MVP and tracked in
+  `docs/future-enhancements.md`.
 - **Concurrency**: Fan-out tasks use `tokio::spawn` with per-field `Arc<RwLock<Option<T>>>` locking (not struct-level).
   Never hold `std::sync::Mutex` across `.await` — use `tokio::sync::RwLock`
 - **Custom GitHub Copilot provider**: Implemented as a custom `rig` provider via ACP (Agent Client Protocol) over
@@ -106,6 +108,8 @@ drawdown on backtests) while preserving full decision auditability.
 
 - Spec-driven development via OpenSpec — create change proposals before implementing features, breaking changes, or
   architecture shifts
+- If a design spec intentionally defers a future enhancement, record or update it in `docs/future-enhancements.md` so
+  post-MVP follow-ups stay visible without expanding current scope
 - Bug fixes, typos, and non-breaking dependency updates can be done directly without proposals
 - Archive completed changes after deployment (`openspec archive <change-id>`)
 
