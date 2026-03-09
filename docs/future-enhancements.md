@@ -16,10 +16,10 @@ follow-up that should be revisited later.
 
 - **Status**: Deferred until after the MVP is finished
 - **Source**: `openspec/changes/add-llm-providers/design.md`
-- **Current baseline**: The provider layer uses one `llm.default_provider` and selects models by tier (`QuickThinking` /
-  `DeepThinking`), not by agent.
-- **Why it was deferred**: A single provider keeps config, key management, testing, and provider-factory behavior
-  simpler while the MVP is being established.
+- **Current baseline**: The provider layer uses tier-level providers (`llm.quick_thinking_provider`,
+  `llm.deep_thinking_provider`) and tier-level models (`QuickThinking` / `DeepThinking`), not per-agent overrides.
+- **Why it was deferred**: Tier-level provider selection keeps config and key management simpler than fully per-agent
+  routing while still allowing quick/deep tiers to use different backends.
 - **Why revisit later**: Different agents may eventually benefit from different providers, cost/performance profiles, or
   provider-specific capabilities.
 - **Intentionally deferred details**:

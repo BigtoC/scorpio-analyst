@@ -2,9 +2,10 @@
 # Override with .env or environment variables (prefix: SCORPIO_)
 
 [llm]
-default_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
+quick_thinking_provider = "gemini"
+quick_thinking_model = "gemini-2.5-fast"
+deep_thinking_provider = "openai"
+deep_thinking_model = "gpt-5.4"
 max_debate_rounds = 3
 max_risk_rounds = 2
 agent_timeout_secs = 30

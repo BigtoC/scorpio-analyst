@@ -51,7 +51,8 @@ model routing strategy. This design captures the architectural decisions for the
 ### Provider Resolution Flow
 
 1. Caller specifies a `ModelTier` (quick-thinking or deep-thinking).
-2. The factory reads `LlmConfig.default_provider` to determine which backend (OpenAI / Anthropic / Gemini).
+2. The factory reads `LlmConfig.quick_thinking_provider` or `LlmConfig.deep_thinking_provider` based on
+   `ModelTier` to determine which backend (OpenAI / Anthropic / Gemini).
 3. The factory selects the model ID from `LlmConfig.quick_thinking_model` or `LlmConfig.deep_thinking_model`.
 4. The factory constructs the `rig` client using the API key from `ApiConfig`, returning a boxed `CompletionModel`.
 
@@ -108,10 +109,10 @@ This keeps downstream agent specs focused on domain prompts and tools rather tha
 
 ## Key Decisions
 
-- **Single `default_provider` with per-tier model selection**: Rather than allowing different providers per tier
-  (which complicates key management), the factory uses one provider backend resolved from `default_provider` and
-  routes to the correct model ID per tier. Users switch providers by changing `default_provider` in config. This
-  mirrors the PRD's "dynamic model picker" concept while keeping configuration simple.
+- **Per-tier providers with per-tier model selection**: The factory resolves provider by tier
+  (`quick_thinking_provider` for `QuickThinking`, `deep_thinking_provider` for `DeepThinking`) and routes to the
+  corresponding tier model ID. This allows fast/deep tiers to use different backends without introducing per-agent
+  override complexity.
 
 - **Prompt/chat parity at the provider layer**: Because the PRD explicitly relies on both `prompt` and `chat` traits,
   the provider layer owns wrappers for both invocation styles. This avoids a future split where cyclic agents implement
@@ -132,8 +133,7 @@ This keeps downstream agent specs focused on domain prompts and tools rather tha
 
 ## Trade-offs
 
-- **Single provider vs. per-agent provider**: Using one `default_provider` means all agents use the same backend. A
-  future enhancement could allow per-agent provider overrides via config, but this adds complexity without current
-  need.
+- **Tier-level provider vs. per-agent provider**: Tier-level provider config allows quick/deep tiers to diverge while
+  still avoiding the larger complexity of per-agent override matrices.
 - **`Box<dyn CompletionModel>` vs. generics**: Boxing adds a vtable indirection per LLM call. Given that LLM calls
   are network-bound (hundreds of milliseconds), this overhead is negligible.

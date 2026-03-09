@@ -23,23 +23,24 @@ model configured with the `deep_thinking_model` identifier from `LlmConfig` (e.g
 
 The system MUST expose a provider factory function that accepts a `ModelTier` and configuration references (`LlmConfig`
 and `ApiConfig`) and returns a completion model ready for prompt execution.
-The factory MUST resolve the backend provider from `LlmConfig.default_provider` and inject the corresponding API key
-from `ApiConfig`.
+The factory MUST resolve the backend provider from `LlmConfig.quick_thinking_provider` or
+`LlmConfig.deep_thinking_provider` according to the requested `ModelTier`, then inject the corresponding API key from
+`ApiConfig`.
 
 #### Scenario: Building An OpenAI Completion Model
 
-When `default_provider` is `"openai"` and a valid `openai_api_key` is present, the factory constructs an OpenAI-backed
-completion model for the requested tier. If the API key is missing, the factory returns a `TradingError::Config`
-indicating the absent credential.
+When the selected tier provider is `"openai"` and a valid `openai_api_key` is present, the factory constructs an
+OpenAI-backed completion model for the requested tier. If the API key is missing, the factory returns a
+`TradingError::Config` indicating the absent credential.
 
 #### Scenario: Switching To Anthropic Provider
 
-When `default_provider` is changed to `"anthropic"` in configuration, the same factory call returns an Anthropic-backed
-completion model using `anthropic_api_key`, with no code changes required in downstream agents.
+When the selected tier provider is set to `"anthropic"` in configuration, the same factory call returns an
+Anthropic-backed completion model using `anthropic_api_key`, with no code changes required in downstream agents.
 
 #### Scenario: Switching To Gemini Provider
 
-When `default_provider` is changed to `"gemini"` in configuration, the same factory call returns a Gemini-backed
+When the selected tier provider is set to `"gemini"` in configuration, the same factory call returns a Gemini-backed
 completion model using `gemini_api_key`, with no code changes required in downstream agents.
 
 ### Requirement: Rig-Core Integration
@@ -52,7 +53,7 @@ completion models conforming to `rig`'s `CompletionModel` trait.
 
 When the application starts, the provider factory is capable of constructing completion models for
 any of the three supported backends (OpenAI, Anthropic, Gemini) depending on the active
-`default_provider` configuration value.
+tier-level provider configuration values.
 
 ### Requirement: Agent Builder Helper
 
