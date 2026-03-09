@@ -4,39 +4,43 @@
 
 ### Requirement: Dual-Tier Model Routing
 
-The system MUST define a `ModelTier` enum with variants `QuickThinking` and `DeepThinking` to encode
-the PRD's dual-tier cognitive routing strategy. Agents MUST resolve their model selection through this
-enum rather than hardcoding model identifiers.
+The system **MUST** define a `ModelTier` enum with variants `QuickThinking` and `DeepThinking` to encode the PRD's
+dual-tier cognitive routing strategy. Agents MUST resolve their model selection through this enum rather than hardcoding
+model identifiers.
 
 #### Scenario: Analyst Selects Quick-Thinking Model
 
 When an analyst agent requests a completion model for the `QuickThinking` tier, the provider layer
 returns a model configured with the `quick_thinking_model` identifier from `LlmConfig` (e.g.,
-`gpt-4o-mini`).
+`gemini-2.5-fast`).
 
 #### Scenario: Deep-Thinking Researcher Resolution
 
 When a researcher agent requests a model for the `DeepThinking` tier, the provider layer returns a
-model configured with the `deep_thinking_model` identifier from `LlmConfig` (e.g., `o3`).
+model configured with the `deep_thinking_model` identifier from `LlmConfig` (e.g., `gpt-5.4`).
 
 ### Requirement: Provider Factory Construction
 
-The system MUST expose a provider factory function that accepts a `ModelTier` and configuration
-references (`LlmConfig` and `ApiConfig`) and returns a completion model ready for prompt execution.
-The factory MUST resolve the backend provider from `LlmConfig.default_provider` and inject the
-corresponding API key from `ApiConfig`.
+The system MUST expose a provider factory function that accepts a `ModelTier` and configuration references (`LlmConfig`
+and `ApiConfig`) and returns a completion model ready for prompt execution.
+The factory MUST resolve the backend provider from `LlmConfig.default_provider` and inject the corresponding API key
+from `ApiConfig`.
 
 #### Scenario: Building An OpenAI Completion Model
 
-When `default_provider` is `"openai"` and a valid `openai_api_key` is present, the factory
-constructs an OpenAI-backed completion model for the requested tier. If the API key is missing, the
-factory returns a `TradingError::Config` indicating the absent credential.
+When `default_provider` is `"openai"` and a valid `openai_api_key` is present, the factory constructs an OpenAI-backed
+completion model for the requested tier. If the API key is missing, the factory returns a `TradingError::Config`
+indicating the absent credential.
 
 #### Scenario: Switching To Anthropic Provider
 
-When `default_provider` is changed to `"anthropic"` in configuration, the same factory call
-returns an Anthropic-backed completion model using `anthropic_api_key`, with no code changes
-required in downstream agents.
+When `default_provider` is changed to `"anthropic"` in configuration, the same factory call returns an Anthropic-backed
+completion model using `anthropic_api_key`, with no code changes required in downstream agents.
+
+#### Scenario: Switching To Gemini Provider
+
+When `default_provider` is changed to `"gemini"` in configuration, the same factory call returns a Gemini-backed
+completion model using `gemini_api_key`, with no code changes required in downstream agents.
 
 ### Requirement: Rig-Core Integration
 
