@@ -692,7 +692,9 @@ mod tests {
         let script_path = unique_temp_path("copilot-mock", "sh");
         let script = format!("#!/bin/sh\nset -eu\n{body}\n");
         fs::write(&script_path, script).expect("write mock copilot script");
-        let mut permissions = fs::metadata(&script_path).expect("stat script").permissions();
+        let mut permissions = fs::metadata(&script_path)
+            .expect("stat script")
+            .permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&script_path, permissions).expect("chmod script");
         script_path
@@ -834,7 +836,10 @@ mod tests {
         ));
 
         let mut client = CopilotClient::new(script_path.display().to_string());
-        client.ensure_initialized().await.expect("first initialize succeeds");
+        client
+            .ensure_initialized()
+            .await
+            .expect("first initialize succeeds");
 
         for _ in 0..20 {
             if !client.check_alive() {
@@ -853,7 +858,11 @@ mod tests {
             .expect("second initialize respawns after crash");
 
         let spawn_count = fs::read_to_string(&spawn_count_path).expect("read spawn count file");
-        assert_eq!(spawn_count.lines().count(), 2, "expected one initial spawn and one respawn");
+        assert_eq!(
+            spawn_count.lines().count(),
+            2,
+            "expected one initial spawn and one respawn"
+        );
 
         client.shutdown().await;
         let _ = fs::remove_file(script_path);

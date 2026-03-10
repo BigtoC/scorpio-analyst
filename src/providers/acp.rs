@@ -389,10 +389,9 @@ impl AcpTransport {
                 }
                 Some(AcpMessage::Request(req)) => {
                     if req.method == "session/request_permission" {
-                        let params: RequestPermissionParams = serde_json::from_value(
-                            req.params.clone().unwrap_or(Value::Null),
-                        )
-                        .map_err(AcpTransportError::Deserialization)?;
+                        let params: RequestPermissionParams =
+                            serde_json::from_value(req.params.clone().unwrap_or(Value::Null))
+                                .map_err(AcpTransportError::Deserialization)?;
                         self.send_permission_response(&params.session_id, &params.permission_id)
                             .await?;
                         tracing::warn!(
@@ -541,7 +540,8 @@ mod tests {
     fn acp_message_discriminates_response_by_id_field() {
         let response_json = r#"{"jsonrpc":"2.0","id":1,"result":null}"#;
         let notification_json = r#"{"jsonrpc":"2.0","method":"session/update","params":null}"#;
-        let request_json = r#"{"jsonrpc":"2.0","id":2,"method":"session/request_permission","params":null}"#;
+        let request_json =
+            r#"{"jsonrpc":"2.0","id":2,"method":"session/request_permission","params":null}"#;
 
         let resp_val: Value = serde_json::from_str(response_json).unwrap();
         let notif_val: Value = serde_json::from_str(notification_json).unwrap();

@@ -858,7 +858,8 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "copilot".to_owned();
 
-        let handle = create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_for_copilot());
+        let handle =
+            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_for_copilot());
         assert!(handle.is_ok());
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "copilot");
