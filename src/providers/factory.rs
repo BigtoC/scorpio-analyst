@@ -20,6 +20,7 @@ use tracing::{info, warn};
 use crate::{
     config::{ApiConfig, LlmConfig},
     error::{RetryPolicy, TradingError},
+    providers::copilot::{CopilotCompletionModel, CopilotProviderClient},
 };
 
 use super::ModelTier;
@@ -31,6 +32,8 @@ pub enum ProviderId {
     OpenAI,
     Anthropic,
     Gemini,
+    /// GitHub Copilot via ACP (no API key required; spawns local CLI).
+    Copilot,
 }
 
 impl ProviderId {
@@ -39,6 +42,7 @@ impl ProviderId {
             Self::OpenAI => "openai",
             Self::Anthropic => "anthropic",
             Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
         }
     }
 
@@ -47,6 +51,7 @@ impl ProviderId {
             Self::OpenAI => "SCORPIO_OPENAI_API_KEY",
             Self::Anthropic => "SCORPIO_ANTHROPIC_API_KEY",
             Self::Gemini => "SCORPIO_GEMINI_API_KEY",
+            Self::Copilot => "(no API key required — install the Copilot CLI and authenticate)",
         }
     }
 }
@@ -89,6 +94,8 @@ pub enum ProviderClient {
     Anthropic(anthropic::Client),
     /// Google Gemini API client.
     Gemini(gemini::Client),
+    /// GitHub Copilot via ACP (local CLI subprocess, no API key).
+    Copilot(CopilotProviderClient),
 }
 
 /// Construct a reusable completion-model handle from configuration.
@@ -119,6 +126,26 @@ pub fn create_provider_client(
     api_config: &ApiConfig,
 ) -> Result<ProviderClient, TradingError> {
     create_completion_model(tier, llm_config, api_config).map(|handle| handle.client)
+}
+
+pub async fn preflight_configured_providers(
+    llm_config: &LlmConfig,
+    api_config: &ApiConfig,
+) -> Result<(), TradingError> {
+    for tier in [ModelTier::QuickThinking, ModelTier::DeepThinking] {
+        let handle = create_completion_model(tier, llm_config, api_config)?;
+        if let ProviderClient::Copilot(client) = &handle.client {
+            client.preflight().await.map_err(|err| {
+                TradingError::Rig(format!(
+                    "provider=copilot model={} summary={}",
+                    handle.model_id(),
+                    sanitize_error_summary(&err.to_string())
+                ))
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 fn create_provider_client_for(
@@ -153,6 +180,15 @@ fn create_provider_client_for(
                 .map_err(|e| config_error(&format!("failed to create Gemini client: {e}")))?;
             Ok(ProviderClient::Gemini(client))
         }
+        ProviderId::Copilot => {
+            // Copilot requires no API key; the CLI executable path defaults to "copilot".
+            // Use SCORPIO_COPILOT_CLI_PATH env var to override if needed.
+            let exe_path =
+                std::env::var("SCORPIO_COPILOT_CLI_PATH").unwrap_or_else(|_| "copilot".to_owned());
+            Ok(ProviderClient::Copilot(CopilotProviderClient::new(
+                exe_path,
+            )))
+        }
     }
 }
 
@@ -177,6 +213,8 @@ enum LlmAgentInner {
     Anthropic(rig::agent::Agent<AnthropicModel>),
     /// Agent backed by Google Gemini API.
     Gemini(rig::agent::Agent<GeminiModel>),
+    /// Agent backed by GitHub Copilot via ACP.
+    Copilot(rig::agent::Agent<CopilotCompletionModel>),
 }
 
 impl LlmAgent {
@@ -194,6 +232,7 @@ impl LlmAgent {
             LlmAgentInner::OpenAI(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Gemini(agent) => agent.prompt(prompt).await,
+            LlmAgentInner::Copilot(agent) => agent.prompt(prompt).await,
         }
     }
 
@@ -207,6 +246,7 @@ impl LlmAgent {
             LlmAgentInner::OpenAI(agent) => agent.chat(prompt, chat_history).await,
             LlmAgentInner::Anthropic(agent) => agent.chat(prompt, chat_history).await,
             LlmAgentInner::Gemini(agent) => agent.chat(prompt, chat_history).await,
+            LlmAgentInner::Copilot(agent) => agent.chat(prompt, chat_history).await,
         }
     }
 }
@@ -265,6 +305,15 @@ pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAg
                 inner: LlmAgentInner::Gemini(agent),
             }
         }
+        ProviderClient::Copilot(c) => {
+            use rig::prelude::CompletionClient;
+            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::Copilot(agent),
+            }
+        }
     }
 }
 
@@ -279,11 +328,7 @@ pub fn map_prompt_error(err: PromptError) -> TradingError {
     map_prompt_error_with_context("unknown", "unknown", err)
 }
 
-fn map_prompt_error_with_context(
-    provider: &str,
-    model_id: &str,
-    err: PromptError,
-) -> TradingError {
+fn map_prompt_error_with_context(provider: &str, model_id: &str, err: PromptError) -> TradingError {
     TradingError::Rig(format!(
         "provider={provider} model={model_id} summary={}",
         sanitize_error_summary(&err.to_string())
@@ -316,7 +361,9 @@ fn map_structured_output_error_with_context(
                 sanitize_error_summary("model returned empty response for structured output")
             ),
         },
-        StructuredOutputError::PromptError(e) => map_prompt_error_with_context(provider, model_id, e),
+        StructuredOutputError::PromptError(e) => {
+            map_prompt_error_with_context(provider, model_id, e)
+        }
     }
 }
 
@@ -397,7 +444,10 @@ pub async fn prompt_with_retry_budget(
             Err(_elapsed) => {
                 let err = TradingError::NetworkTimeout {
                     elapsed: started_at.elapsed(),
-                    message: format!("prompt timed out on attempt {attempt} for model {}", agent.model_id()),
+                    message: format!(
+                        "prompt timed out on attempt {attempt} for model {}",
+                        agent.model_id()
+                    ),
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "prompt timed out, will retry");
@@ -487,7 +537,10 @@ pub async fn chat_with_retry_budget(
             Err(_elapsed) => {
                 let err = TradingError::NetworkTimeout {
                     elapsed: started_at.elapsed(),
-                    message: format!("chat timed out on attempt {attempt} for model {}", agent.model_id()),
+                    message: format!(
+                        "chat timed out on attempt {attempt} for model {}",
+                        agent.model_id()
+                    ),
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "chat timed out, will retry");
@@ -518,24 +571,18 @@ where
 {
     use rig::completion::TypedPrompt;
     match &agent.inner {
-        LlmAgentInner::OpenAI(a) => a
-            .prompt_typed::<T>(prompt)
-            .await
-            .map_err(|err| {
-                map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-            }),
-        LlmAgentInner::Anthropic(a) => a
-            .prompt_typed::<T>(prompt)
-            .await
-            .map_err(|err| {
-                map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-            }),
-        LlmAgentInner::Gemini(a) => a
-            .prompt_typed::<T>(prompt)
-            .await
-            .map_err(|err| {
-                map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-            }),
+        LlmAgentInner::OpenAI(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
+            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+        }),
+        LlmAgentInner::Anthropic(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
+            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+        }),
+        LlmAgentInner::Gemini(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
+            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+        }),
+        LlmAgentInner::Copilot(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
+            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+        }),
     }
 }
 
@@ -576,8 +623,9 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
         "openai" => Ok(ProviderId::OpenAI),
         "anthropic" => Ok(ProviderId::Anthropic),
         "gemini" => Ok(ProviderId::Gemini),
+        "copilot" => Ok(ProviderId::Copilot),
         unknown => Err(config_error(&format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini)"
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot)"
         ))),
     }
 }
@@ -607,7 +655,10 @@ fn sanitize_error_summary(input: &str) -> String {
         .replace("authorization", "[REDACTED]")
         .replace("api key", "[REDACTED]");
 
-    let truncated = sanitized.chars().take(MAX_ERROR_SUMMARY_CHARS).collect::<String>();
+    let truncated = sanitized
+        .chars()
+        .take(MAX_ERROR_SUMMARY_CHARS)
+        .collect::<String>();
     if sanitized.chars().count() > MAX_ERROR_SUMMARY_CHARS {
         format!("{truncated}...")
     } else {
@@ -618,8 +669,9 @@ fn sanitize_error_summary(input: &str) -> String {
 fn total_request_budget(timeout: Duration, policy: &RetryPolicy) -> Duration {
     let attempts = policy.max_retries.saturating_add(1);
     let base_budget = timeout.saturating_mul(attempts);
-    let backoff_budget = (0..policy.max_retries)
-        .fold(Duration::ZERO, |acc, attempt| acc.saturating_add(policy.delay_for_attempt(attempt)));
+    let backoff_budget = (0..policy.max_retries).fold(Duration::ZERO, |acc, attempt| {
+        acc.saturating_add(policy.delay_for_attempt(attempt))
+    });
     base_budget.saturating_add(backoff_budget)
 }
 
@@ -688,6 +740,10 @@ mod tests {
             gemini_api_key: Some(SecretString::from("test-key")),
             ..empty_api_config()
         }
+    }
+
+    fn api_config_for_copilot() -> ApiConfig {
+        empty_api_config()
     }
 
     // ── Factory error paths ──────────────────────────────────────────────
@@ -791,9 +847,22 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_model = "   ".to_owned();
 
-        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
+        let result =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("model ID"));
+    }
+
+    #[test]
+    fn factory_creates_copilot_client_without_api_key() {
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "copilot".to_owned();
+
+        let handle = create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_for_copilot());
+        assert!(handle.is_ok());
+        let handle = handle.unwrap();
+        assert_eq!(handle.provider_name(), "copilot");
+        assert_eq!(handle.model_id(), "o3");
     }
 
     // ── Agent builder ────────────────────────────────────────────────────
