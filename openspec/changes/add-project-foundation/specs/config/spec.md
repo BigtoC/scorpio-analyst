@@ -7,15 +7,18 @@
 System configurations MUST map onto strictly grouped struct boundaries including `Config`, `LLMConfig`, `TradingConfig`,
 and `ApiConfig`, ensuring isolated access domains.
 
-- `LLMConfig` MUST include stable fields for analyst model selection, researcher model selection, `max_debate_rounds`,
-  `max_risk_rounds`, and `analyst_timeout_secs`.
-- `ApiConfig` MUST include provider credentials and provider quota inputs needed by downstream clients and rate-limiters.
+- `LLMConfig` MUST include stable tier-routing fields `quick_thinking_provider`, `deep_thinking_provider`,
+  `quick_thinking_model`, `deep_thinking_model`, `max_debate_rounds`, `max_risk_rounds`, and
+  `analyst_timeout_secs`.
+- `ApiConfig` MUST include provider credentials and provider quota inputs needed by downstream clients and rate-limiters,
+  including the provider keys consumed by the LLM provider factory.
 - `TradingConfig` MAY own non-secret trading defaults needed by downstream execution layers.
 
 #### Scenario: Sub-System Instantiation
 
-When initializing the provider factory, only the `LLMConfig` slice is passed downstream, explicitly isolating it from
-unrelated trading defaults while still exposing model names, round limits, and analyst timeout settings.
+When initializing the provider factory, only the `LLMConfig` slice and the credential-bearing `ApiConfig` slice are
+passed downstream, explicitly isolating provider construction from unrelated trading defaults while still exposing
+tier-provider names, model identifiers, round limits, timeout settings, and required provider credentials.
 
 ### Requirement: 3-Tier Multi-Layer Configuration Pipeline
 
