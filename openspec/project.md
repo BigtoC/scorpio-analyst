@@ -66,10 +66,13 @@ drawdown on backtests) while preserving full decision auditability.
   Never hold `std::sync::Mutex` across `.await` — use `tokio::sync::RwLock`
 - **Custom GitHub Copilot provider**: Implemented as a custom `rig` provider via ACP (Agent Client Protocol) over
   JSON-RPC 2.0/NDJSON, spawning `copilot --acp --stdio`
-- **Token usage tracking**: Every LLM call records prompt/completion/total token counts, model ID, and wall-clock
-  latency into a `TokenUsageTracker` on `TradingState`. Per-phase and per-agent breakdowns are displayed after every
-  run (all output modes). Cyclic phases record per-round entries. TUI shows live running totals; GPUI renders a
-  dedicated "Run Metrics" card.
+- **Token usage tracking**: Every LLM call records model ID and wall-clock latency into a `TokenUsageTracker` on
+  `TradingState`, along with provider-reported prompt/completion/total token counts when authoritative metadata is
+  available. Providers that do not expose authoritative token counts (for example Copilot via ACP) record documented
+  unavailable token metadata for MVP reporting; visible-text estimates, if ever added later, must be labeled as
+  heuristic-only rather than measured usage. Per-phase and per-agent breakdowns are displayed after every run (all
+  output modes). Cyclic phases record per-round entries. TUI shows live running totals; GPUI renders a dedicated
+  "Run Metrics" card.
 - **Error resilience**: Retry with exponential backoff (max 3, base 500ms); 1 analyst failure degrades gracefully, 2+
   aborts; per-analyst 30s timeout
 - **Configuration layering**: `config.toml` → `.env` (dotenvy) → environment variables (highest priority)
@@ -100,7 +103,8 @@ drawdown on backtests) while preserving full decision auditability.
   only access data up to the target date). Compute Cumulative Return, Annualized Return, Sharpe Ratio, and Maximum
   Drawdown. LLM calls use a cached response layer for determinism and cost control
 - **Property-based tests**: `proptest` validates `TradingState` serialization round-trips and `TradingError` edge cases
-- **Token usage tests**: Verify that every LLM call records token counts in `TokenUsageTracker` and that post-run
+- **Token usage tests**: Verify that every LLM call records token metadata in `TokenUsageTracker`, with authoritative
+  counts where the provider exposes them and documented unavailable markers where it does not, and that post-run
   statistics are emitted in all output modes
 - **CI**: Warnings treated as errors (`-D warnings`). Run `cargo fmt -- --check`, `cargo clippy`, `cargo test`
 
@@ -125,7 +129,9 @@ drawdown on backtests) while preserving full decision auditability.
   overbought/high-beta), Neutral (Sharpe Ratio optimization)
 - **Key metrics**: Cumulative Return, Annualized Return, Sharpe Ratio, Maximum Drawdown
 - **Token budget awareness**: Each run tracks prompt tokens, completion tokens, total tokens, LLM call count, and
-  latency — broken down per phase, per round (for cyclic debates), and per agent
+  latency — broken down per phase, per round (for cyclic debates), and per agent. When a provider cannot expose
+  authoritative token counts, the system still records latency and preserves documented unavailable-token metadata rather
+  than implying exact counts.
 - **Technical indicators**: RSI (overbought >70, oversold <30), MACD (signal line crossovers), ATR (volatility
   measurement)
 
