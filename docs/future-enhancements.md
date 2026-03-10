@@ -12,6 +12,9 @@ follow-up that should be revisited later.
 
 ## Deferred Enhancements
 
+> Will be considered for implementation after the MVP is complete and stable enough to evaluate whether the added
+> complexity is justified by the benefits.
+
 ### Per-agent provider overrides
 
 - **Status**: Deferred until after the MVP is finished
@@ -29,3 +32,22 @@ follow-up that should be revisited later.
     - Any migration path from the MVP config model
 - **Revisit trigger**: After the MVP provider, agent, and workflow layers are stable enough to evaluate whether
   mixed-provider routing is worth the added complexity
+
+### Copilot heuristic token estimation
+
+- **Status**: Deferred until after the MVP is finished
+- **Source**: `openspec/changes/add-copilot-provider/design.md`
+- **Current baseline**: GitHub Copilot via ACP does not expose authoritative provider token counts. MVP records
+  authoritative latency, and token count fields are treated as unavailable/not reported metadata for Copilot-backed
+  calls.
+- **Why it was deferred**: A client-side estimate can only be derived from visible prompt/response text and would miss
+  hidden system prompts, backend prompt rewrites, model/tokenizer differences, and other provider-side accounting.
+- **Why revisit later**: Approximate token estimates may still be useful for rough budgeting or comparative UX if they
+  are clearly labeled as heuristic-only.
+- **Intentionally deferred details**:
+    - Whether estimates should be shown in CLI/TUI/GPUI by default or only in verbose/debug views
+    - Which tokenizer or model-family fallback to use when Copilot does not expose a stable backend model ID
+    - How to separate approximate estimates from authoritative provider-reported counts in summaries and exports
+    - Whether aggregate totals should exclude heuristic estimates by default to preserve auditability
+- **Revisit trigger**: After the MVP token-usage reporting and Copilot provider behavior are stable enough to evaluate
+  whether approximate estimates add enough value to justify the extra complexity and caveats
