@@ -1963,6 +1963,7 @@ dependencies = [
  "chrono",
  "config",
  "dotenvy",
+ "futures",
  "governor",
  "mockall",
  "nonzero_ext",

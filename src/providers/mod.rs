@@ -26,6 +26,8 @@
 //! # }
 //! ```
 
+pub mod acp;
+pub mod copilot;
 pub mod factory;
 
 use crate::config::LlmConfig;
