@@ -6,7 +6,7 @@
 //! # Architecture
 //!
 //! - [`ModelTier`] encodes the PRD's quick-thinking / deep-thinking routing strategy.
-//! - [`factory::create_provider_client`] constructs a tier-specific `rig` provider client from config.
+//! - [`factory::create_completion_model`] constructs a tier-specific reusable completion-model handle from config.
 //! - [`factory::build_agent`] wraps `rig`'s agent builder with system prompt setup.
 //! - [`factory::prompt_with_retry`] and [`factory::chat_with_retry`] add timeout and
 //!   exponential backoff retry around `rig` completion calls.
@@ -19,9 +19,9 @@
 //!
 //! # async fn example() -> Result<(), scorpio_analyst::error::TradingError> {
 //! let cfg = Config::load().expect("config");
-//! let client = factory::create_provider_client(ModelTier::QuickThinking, &cfg.llm, &cfg.api)?;
-//! let model_id = ModelTier::QuickThinking.model_id(&cfg.llm);
-//! // Use client.agent(model_id) to build agents...
+//! let handle = factory::create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.api)?;
+//! let agent = factory::build_agent(&handle, "You are a fast analyst.");
+//! let _model_id = agent.model_id();
 //! # Ok(())
 //! # }
 //! ```

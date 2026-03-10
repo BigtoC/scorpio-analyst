@@ -7,7 +7,7 @@
 //! - [`prompt_with_retry`] and [`chat_with_retry`] wrappers applying timeout + exponential backoff.
 //! - Error mapping from `rig` errors to [`TradingError`].
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rig::{
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
@@ -23,6 +23,54 @@ use crate::{
 };
 
 use super::ModelTier;
+
+const MAX_ERROR_SUMMARY_CHARS: usize = 200;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProviderId {
+    OpenAI,
+    Anthropic,
+    Gemini,
+}
+
+impl ProviderId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    const fn missing_key_hint(self) -> &'static str {
+        match self {
+            Self::OpenAI => "SCORPIO_OPENAI_API_KEY",
+            Self::Anthropic => "SCORPIO_ANTHROPIC_API_KEY",
+            Self::Gemini => "SCORPIO_GEMINI_API_KEY",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletionModelHandle {
+    provider: ProviderId,
+    model_id: String,
+    client: ProviderClient,
+}
+
+impl CompletionModelHandle {
+    pub const fn provider_id(&self) -> ProviderId {
+        self.provider
+    }
+
+    pub const fn provider_name(&self) -> &'static str {
+        self.provider.as_str()
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Provider client enum
@@ -43,51 +91,68 @@ pub enum ProviderClient {
     Gemini(gemini::Client),
 }
 
-/// Construct a [`ProviderClient`] from configuration.
+/// Construct a reusable completion-model handle from configuration.
 ///
 /// Resolves provider from the requested `tier`, then extracts the
 /// corresponding API key from `api_config`. Returns `TradingError::Config` for unknown
-/// providers or missing keys.
+/// providers, invalid model IDs, or missing keys.
+pub fn create_completion_model(
+    tier: ModelTier,
+    llm_config: &LlmConfig,
+    api_config: &ApiConfig,
+) -> Result<CompletionModelHandle, TradingError> {
+    let provider = validate_provider_id(tier.provider_id(llm_config))?;
+    let model_id = validate_model_id(tier.model_id(llm_config))?;
+    let client = create_provider_client_for(provider, api_config)?;
+    info!(provider = provider.as_str(), model = model_id.as_str(), tier = %tier, "LLM completion model handle created");
+    Ok(CompletionModelHandle {
+        provider,
+        model_id,
+        client,
+    })
+}
+
+/// Backwards-compatible helper that returns only the provider client.
 pub fn create_provider_client(
     tier: ModelTier,
     llm_config: &LlmConfig,
     api_config: &ApiConfig,
 ) -> Result<ProviderClient, TradingError> {
-    let provider = tier.provider_id(llm_config);
+    create_completion_model(tier, llm_config, api_config).map(|handle| handle.client)
+}
+
+fn create_provider_client_for(
+    provider: ProviderId,
+    api_config: &ApiConfig,
+) -> Result<ProviderClient, TradingError> {
     match provider {
-        "openai" => {
+        ProviderId::OpenAI => {
             let key = api_config
                 .openai_api_key
                 .as_ref()
-                .ok_or_else(|| missing_key_error("openai", "SCORPIO_OPENAI_API_KEY"))?;
+                .ok_or_else(|| missing_key_error(provider))?;
             let client = openai::Client::new(key.expose_secret())
                 .map_err(|e| config_error(&format!("failed to create OpenAI client: {e}")))?;
-            info!(provider = "openai", tier = %tier, "LLM provider client created");
             Ok(ProviderClient::OpenAI(client))
         }
-        "anthropic" => {
+        ProviderId::Anthropic => {
             let key = api_config
                 .anthropic_api_key
                 .as_ref()
-                .ok_or_else(|| missing_key_error("anthropic", "SCORPIO_ANTHROPIC_API_KEY"))?;
+                .ok_or_else(|| missing_key_error(provider))?;
             let client = anthropic::Client::new(key.expose_secret())
                 .map_err(|e| config_error(&format!("failed to create Anthropic client: {e}")))?;
-            info!(provider = "anthropic", tier = %tier, "LLM provider client created");
             Ok(ProviderClient::Anthropic(client))
         }
-        "gemini" => {
+        ProviderId::Gemini => {
             let key = api_config
                 .gemini_api_key
                 .as_ref()
-                .ok_or_else(|| missing_key_error("gemini", "SCORPIO_GEMINI_API_KEY"))?;
+                .ok_or_else(|| missing_key_error(provider))?;
             let client = gemini::Client::new(key.expose_secret())
                 .map_err(|e| config_error(&format!("failed to create Gemini client: {e}")))?;
-            info!(provider = "gemini", tier = %tier, "LLM provider client created");
             Ok(ProviderClient::Gemini(client))
         }
-        unknown => Err(config_error(&format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini)"
-        ))),
     }
 }
 
@@ -105,7 +170,7 @@ type GeminiModel = rig::providers::gemini::completion::CompletionModel;
 /// Each variant wraps a fully-configured `rig::agent::Agent<M>` for the corresponding
 /// provider's completion model type.
 #[derive(Clone)]
-pub enum LlmAgent {
+enum LlmAgentInner {
     /// Agent backed by OpenAI Responses API.
     OpenAI(rig::agent::Agent<OpenAIModel>),
     /// Agent backed by Anthropic Messages API.
@@ -115,12 +180,20 @@ pub enum LlmAgent {
 }
 
 impl LlmAgent {
+    pub fn provider_name(&self) -> &'static str {
+        self.provider.as_str()
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
     /// Send a one-shot prompt and return the response text.
     pub async fn prompt(&self, prompt: &str) -> Result<String, PromptError> {
-        match self {
-            Self::OpenAI(agent) => agent.prompt(prompt).await,
-            Self::Anthropic(agent) => agent.prompt(prompt).await,
-            Self::Gemini(agent) => agent.prompt(prompt).await,
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => agent.prompt(prompt).await,
+            LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).await,
+            LlmAgentInner::Gemini(agent) => agent.prompt(prompt).await,
         }
     }
 
@@ -130,12 +203,19 @@ impl LlmAgent {
         prompt: &str,
         chat_history: Vec<Message>,
     ) -> Result<String, PromptError> {
-        match self {
-            Self::OpenAI(agent) => agent.chat(prompt, chat_history).await,
-            Self::Anthropic(agent) => agent.chat(prompt, chat_history).await,
-            Self::Gemini(agent) => agent.chat(prompt, chat_history).await,
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => agent.chat(prompt, chat_history).await,
+            LlmAgentInner::Anthropic(agent) => agent.chat(prompt, chat_history).await,
+            LlmAgentInner::Gemini(agent) => agent.chat(prompt, chat_history).await,
         }
     }
+}
+
+#[derive(Clone)]
+pub struct LlmAgent {
+    provider: ProviderId,
+    model_id: String,
+    inner: LlmAgentInner,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -152,32 +232,38 @@ impl LlmAgent {
 ///
 /// Returns `TradingError::Config` if the provider is unknown or the API key is missing
 /// (delegated to [`create_provider_client`]).
-pub fn build_agent(
-    client: &ProviderClient,
-    llm_config: &LlmConfig,
-    tier: ModelTier,
-    system_prompt: &str,
-) -> LlmAgent {
-    let model_id = tier.model_id(llm_config);
-    match client {
+pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAgent {
+    match &handle.client {
         ProviderClient::OpenAI(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c.agent(model_id).preamble(system_prompt).build();
-            LlmAgent::OpenAI(agent)
+            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::OpenAI(agent),
+            }
         }
         ProviderClient::Anthropic(c) => {
             use rig::prelude::CompletionClient;
             let agent = c
-                .agent(model_id)
+                .agent(handle.model_id())
                 .preamble(system_prompt)
                 .max_tokens(4096)
                 .build();
-            LlmAgent::Anthropic(agent)
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::Anthropic(agent),
+            }
         }
         ProviderClient::Gemini(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c.agent(model_id).preamble(system_prompt).build();
-            LlmAgent::Gemini(agent)
+            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::Gemini(agent),
+            }
         }
     }
 }
@@ -188,10 +274,20 @@ pub fn build_agent(
 
 /// Map a `rig` [`PromptError`] to [`TradingError`].
 ///
-/// Transport, provider, and tool errors become `TradingError::Rig`.
-/// This preserves the original error message for diagnostics.
+/// Transport, provider, and tool errors become `TradingError::Rig` with sanitized context.
 pub fn map_prompt_error(err: PromptError) -> TradingError {
-    TradingError::Rig(err.to_string())
+    map_prompt_error_with_context("unknown", "unknown", err)
+}
+
+fn map_prompt_error_with_context(
+    provider: &str,
+    model_id: &str,
+    err: PromptError,
+) -> TradingError {
+    TradingError::Rig(format!(
+        "provider={provider} model={model_id} summary={}",
+        sanitize_error_summary(&err.to_string())
+    ))
 }
 
 /// Map a `rig` [`StructuredOutputError`] to [`TradingError`].
@@ -199,14 +295,28 @@ pub fn map_prompt_error(err: PromptError) -> TradingError {
 /// Deserialization and empty-response failures become `TradingError::SchemaViolation`.
 /// Underlying prompt/transport errors fall through to `TradingError::Rig`.
 pub fn map_structured_output_error(err: StructuredOutputError) -> TradingError {
+    map_structured_output_error_with_context("unknown", "unknown", err)
+}
+
+fn map_structured_output_error_with_context(
+    provider: &str,
+    model_id: &str,
+    err: StructuredOutputError,
+) -> TradingError {
     match err {
         StructuredOutputError::DeserializationError(e) => TradingError::SchemaViolation {
-            message: format!("failed to parse structured output: {e}"),
+            message: format!(
+                "provider={provider} model={model_id} summary={}",
+                sanitize_error_summary(&format!("failed to parse structured output: {e}"))
+            ),
         },
         StructuredOutputError::EmptyResponse => TradingError::SchemaViolation {
-            message: "model returned empty response for structured output".to_owned(),
+            message: format!(
+                "provider={provider} model={model_id} summary={}",
+                sanitize_error_summary("model returned empty response for structured output")
+            ),
         },
-        StructuredOutputError::PromptError(e) => map_prompt_error(e),
+        StructuredOutputError::PromptError(e) => map_prompt_error_with_context(provider, model_id, e),
     }
 }
 
@@ -230,29 +340,64 @@ pub async fn prompt_with_retry(
     timeout: Duration,
     policy: &RetryPolicy,
 ) -> Result<String, TradingError> {
+    let total_budget = total_request_budget(timeout, policy);
+    prompt_with_retry_budget(agent, prompt, timeout, total_budget, policy).await
+}
+
+pub async fn prompt_with_retry_budget(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+) -> Result<String, TradingError> {
     let mut last_err = None;
+    let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
         if attempt > 0 {
             let delay = policy.delay_for_attempt(attempt - 1);
+            if started_at.elapsed().saturating_add(delay) > total_budget {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "prompt retry budget exhausted before next attempt".to_owned(),
+                });
+            }
             warn!(attempt, ?delay, "retrying prompt after transient error");
             tokio::time::sleep(delay).await;
         }
 
-        match tokio::time::timeout(timeout, agent.prompt(prompt)).await {
+        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+        if remaining_budget.is_zero() {
+            return Err(TradingError::NetworkTimeout {
+                elapsed: started_at.elapsed(),
+                message: "prompt retry budget exhausted".to_owned(),
+            });
+        }
+        let attempt_timeout = timeout.min(remaining_budget);
+
+        match tokio::time::timeout(attempt_timeout, agent.prompt(prompt)).await {
             Ok(Ok(response)) => return Ok(response),
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
-                    warn!(attempt, error = %err, "transient prompt error, will retry");
-                    last_err = Some(map_prompt_error(err));
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
+                    last_err = Some(map_prompt_error_with_context(
+                        agent.provider_name(),
+                        agent.model_id(),
+                        err,
+                    ));
                     continue;
                 }
-                return Err(map_prompt_error(err));
+                return Err(map_prompt_error_with_context(
+                    agent.provider_name(),
+                    agent.model_id(),
+                    err,
+                ));
             }
             Err(_elapsed) => {
                 let err = TradingError::NetworkTimeout {
-                    elapsed: timeout,
-                    message: format!("prompt timed out on attempt {attempt}"),
+                    elapsed: started_at.elapsed(),
+                    message: format!("prompt timed out on attempt {attempt} for model {}", agent.model_id()),
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "prompt timed out, will retry");
@@ -283,30 +428,66 @@ pub async fn chat_with_retry(
     timeout: Duration,
     policy: &RetryPolicy,
 ) -> Result<String, TradingError> {
+    let total_budget = total_request_budget(timeout, policy);
+    chat_with_retry_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
+}
+
+pub async fn chat_with_retry_budget(
+    agent: &LlmAgent,
+    prompt: &str,
+    chat_history: &[Message],
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+) -> Result<String, TradingError> {
     let mut last_err = None;
+    let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
         if attempt > 0 {
             let delay = policy.delay_for_attempt(attempt - 1);
+            if started_at.elapsed().saturating_add(delay) > total_budget {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "chat retry budget exhausted before next attempt".to_owned(),
+                });
+            }
             warn!(attempt, ?delay, "retrying chat after transient error");
             tokio::time::sleep(delay).await;
         }
 
         let history = chat_history.to_vec();
-        match tokio::time::timeout(timeout, agent.chat(prompt, history)).await {
+        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+        if remaining_budget.is_zero() {
+            return Err(TradingError::NetworkTimeout {
+                elapsed: started_at.elapsed(),
+                message: "chat retry budget exhausted".to_owned(),
+            });
+        }
+        let attempt_timeout = timeout.min(remaining_budget);
+
+        match tokio::time::timeout(attempt_timeout, agent.chat(prompt, history)).await {
             Ok(Ok(response)) => return Ok(response),
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
-                    warn!(attempt, error = %err, "transient chat error, will retry");
-                    last_err = Some(map_prompt_error(err));
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat error, will retry");
+                    last_err = Some(map_prompt_error_with_context(
+                        agent.provider_name(),
+                        agent.model_id(),
+                        err,
+                    ));
                     continue;
                 }
-                return Err(map_prompt_error(err));
+                return Err(map_prompt_error_with_context(
+                    agent.provider_name(),
+                    agent.model_id(),
+                    err,
+                ));
             }
             Err(_elapsed) => {
                 let err = TradingError::NetworkTimeout {
-                    elapsed: timeout,
-                    message: format!("chat timed out on attempt {attempt}"),
+                    elapsed: started_at.elapsed(),
+                    message: format!("chat timed out on attempt {attempt} for model {}", agent.model_id()),
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "chat timed out, will retry");
@@ -336,19 +517,25 @@ where
     T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
 {
     use rig::completion::TypedPrompt;
-    match agent {
-        LlmAgent::OpenAI(a) => a
+    match &agent.inner {
+        LlmAgentInner::OpenAI(a) => a
             .prompt_typed::<T>(prompt)
             .await
-            .map_err(map_structured_output_error),
-        LlmAgent::Anthropic(a) => a
+            .map_err(|err| {
+                map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+            }),
+        LlmAgentInner::Anthropic(a) => a
             .prompt_typed::<T>(prompt)
             .await
-            .map_err(map_structured_output_error),
-        LlmAgent::Gemini(a) => a
+            .map_err(|err| {
+                map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+            }),
+        LlmAgentInner::Gemini(a) => a
             .prompt_typed::<T>(prompt)
             .await
-            .map_err(map_structured_output_error),
+            .map_err(|err| {
+                map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+            }),
     }
 }
 
@@ -384,15 +571,69 @@ fn is_transient_error(err: &PromptError) -> bool {
     }
 }
 
+fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "openai" => Ok(ProviderId::OpenAI),
+        "anthropic" => Ok(ProviderId::Anthropic),
+        "gemini" => Ok(ProviderId::Gemini),
+        unknown => Err(config_error(&format!(
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini)"
+        ))),
+    }
+}
+
+fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() {
+        return Err(config_error("LLM model ID must not be empty"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn sanitize_error_summary(input: &str) -> String {
+    let mut sanitized = input
+        .chars()
+        .map(|ch| {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
+
+    sanitized = sanitized
+        .replace("sk-", "[REDACTED]-")
+        .replace("authorization", "[REDACTED]")
+        .replace("api key", "[REDACTED]");
+
+    let truncated = sanitized.chars().take(MAX_ERROR_SUMMARY_CHARS).collect::<String>();
+    if sanitized.chars().count() > MAX_ERROR_SUMMARY_CHARS {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+fn total_request_budget(timeout: Duration, policy: &RetryPolicy) -> Duration {
+    let attempts = policy.max_retries.saturating_add(1);
+    let base_budget = timeout.saturating_mul(attempts);
+    let backoff_budget = (0..policy.max_retries)
+        .fold(Duration::ZERO, |acc, attempt| acc.saturating_add(policy.delay_for_attempt(attempt)));
+    base_budget.saturating_add(backoff_budget)
+}
+
 /// Convenience for creating `TradingError::Config` from a message.
 fn config_error(msg: &str) -> TradingError {
     TradingError::Config(anyhow::anyhow!("{}", msg))
 }
 
 /// Convenience for creating a missing-API-key config error.
-fn missing_key_error(provider: &str, env_var: &str) -> TradingError {
+fn missing_key_error(provider: ProviderId) -> TradingError {
     config_error(&format!(
-        "API key for provider \"{provider}\" is not set (expected env var: {env_var})"
+        "API key for provider \"{}\" is not set (expected env var: {})",
+        provider.as_str(),
+        provider.missing_key_hint()
     ))
 }
 
@@ -456,7 +697,7 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "unsupported".to_owned();
 
-        let result = create_provider_client(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = err.to_string();
@@ -469,7 +710,7 @@ mod tests {
     #[test]
     fn factory_missing_openai_key_returns_config_error() {
         let cfg = sample_llm_config();
-        let result = create_provider_client(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -483,7 +724,7 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "anthropic".to_owned();
 
-        let result = create_provider_client(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -497,7 +738,7 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "gemini".to_owned();
 
-        let result = create_provider_client(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -511,10 +752,12 @@ mod tests {
     #[test]
     fn factory_creates_openai_client() {
         let cfg = sample_llm_config();
-        let client =
-            create_provider_client(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
-        assert!(client.is_ok());
-        assert!(matches!(client.unwrap(), ProviderClient::OpenAI(_)));
+        let handle =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
+        assert!(handle.is_ok());
+        let handle = handle.unwrap();
+        assert_eq!(handle.provider_name(), "openai");
+        assert_eq!(handle.model_id(), "gpt-4o-mini");
     }
 
     #[test]
@@ -522,10 +765,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "anthropic".to_owned();
 
-        let client =
-            create_provider_client(ModelTier::DeepThinking, &cfg, &api_config_with_anthropic());
-        assert!(client.is_ok());
-        assert!(matches!(client.unwrap(), ProviderClient::Anthropic(_)));
+        let handle =
+            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_anthropic());
+        assert!(handle.is_ok());
+        let handle = handle.unwrap();
+        assert_eq!(handle.provider_name(), "anthropic");
+        assert_eq!(handle.model_id(), "o3");
     }
 
     #[test]
@@ -533,10 +778,22 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "gemini".to_owned();
 
-        let client =
-            create_provider_client(ModelTier::DeepThinking, &cfg, &api_config_with_gemini());
-        assert!(client.is_ok());
-        assert!(matches!(client.unwrap(), ProviderClient::Gemini(_)));
+        let handle =
+            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_gemini());
+        assert!(handle.is_ok());
+        let handle = handle.unwrap();
+        assert_eq!(handle.provider_name(), "gemini");
+        assert_eq!(handle.model_id(), "o3");
+    }
+
+    #[test]
+    fn factory_empty_model_id_returns_config_error() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_model = "   ".to_owned();
+
+        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("model ID"));
     }
 
     // ── Agent builder ────────────────────────────────────────────────────
@@ -544,48 +801,36 @@ mod tests {
     #[tokio::test]
     async fn build_agent_creates_openai_agent() {
         let cfg = sample_llm_config();
-        let client =
-            create_provider_client(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
+        let handle =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
                 .unwrap();
-        let agent = build_agent(
-            &client,
-            &cfg,
-            ModelTier::QuickThinking,
-            "You are a test agent.",
-        );
-        assert!(matches!(agent, LlmAgent::OpenAI(_)));
+        let agent = build_agent(&handle, "You are a test agent.");
+        assert_eq!(agent.provider_name(), "openai");
+        assert_eq!(agent.model_id(), "gpt-4o-mini");
     }
 
     #[tokio::test]
     async fn build_agent_creates_anthropic_agent() {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "anthropic".to_owned();
-        let client =
-            create_provider_client(ModelTier::DeepThinking, &cfg, &api_config_with_anthropic())
+        let handle =
+            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_anthropic())
                 .unwrap();
-        let agent = build_agent(
-            &client,
-            &cfg,
-            ModelTier::DeepThinking,
-            "You are a test agent.",
-        );
-        assert!(matches!(agent, LlmAgent::Anthropic(_)));
+        let agent = build_agent(&handle, "You are a test agent.");
+        assert_eq!(agent.provider_name(), "anthropic");
+        assert_eq!(agent.model_id(), "o3");
     }
 
     #[tokio::test]
     async fn build_agent_creates_gemini_agent() {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "gemini".to_owned();
-        let client =
-            create_provider_client(ModelTier::DeepThinking, &cfg, &api_config_with_gemini())
+        let handle =
+            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_gemini())
                 .unwrap();
-        let agent = build_agent(
-            &client,
-            &cfg,
-            ModelTier::DeepThinking,
-            "You are a test agent.",
-        );
-        assert!(matches!(agent, LlmAgent::Gemini(_)));
+        let agent = build_agent(&handle, "You are a test agent.");
+        assert_eq!(agent.provider_name(), "gemini");
+        assert_eq!(agent.model_id(), "o3");
     }
 
     // ── Error mapping ────────────────────────────────────────────────────
@@ -595,23 +840,24 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "test error".to_owned(),
         ));
-        let mapped = map_prompt_error(err);
+        let mapped = map_prompt_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::Rig(_)));
-        assert!(mapped.to_string().contains("test error"));
+        assert!(mapped.to_string().contains("openai"));
+        assert!(mapped.to_string().contains("gpt-4o-mini"));
     }
 
     #[test]
     fn map_structured_output_deserialization_error_produces_schema_violation() {
         let json_err = serde_json::from_str::<i32>("not a number").unwrap_err();
         let err = StructuredOutputError::DeserializationError(json_err);
-        let mapped = map_structured_output_error(err);
+        let mapped = map_structured_output_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::SchemaViolation { .. }));
     }
 
     #[test]
     fn map_structured_output_empty_response_produces_schema_violation() {
         let err = StructuredOutputError::EmptyResponse;
-        let mapped = map_structured_output_error(err);
+        let mapped = map_structured_output_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::SchemaViolation { .. }));
         assert!(mapped.to_string().contains("empty response"));
     }
@@ -622,8 +868,25 @@ mod tests {
             "inner".to_owned(),
         ));
         let err = StructuredOutputError::PromptError(inner);
-        let mapped = map_structured_output_error(err);
+        let mapped = map_structured_output_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::Rig(_)));
+    }
+
+    #[test]
+    fn sanitize_error_summary_redacts_secret_like_values() {
+        let sanitized = sanitize_error_summary("authorization failed for sk-secret-value");
+        assert!(!sanitized.contains("sk-secret-value"));
+        assert!(sanitized.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn total_request_budget_includes_retry_delays() {
+        let policy = RetryPolicy {
+            max_retries: 2,
+            base_delay: Duration::from_millis(100),
+        };
+        let budget = total_request_budget(Duration::from_secs(1), &policy);
+        assert_eq!(budget, Duration::from_millis(3300));
     }
 
     // ── Transient error classification ───────────────────────────────────
