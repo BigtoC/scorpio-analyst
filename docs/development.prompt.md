@@ -32,10 +32,11 @@ You are checking opensoec @AGENTS.md created spec docs, based on the requirement
 
 ```
 Follow @AGENTS.md, based on @PRD.md and @docs/architect-plan.md, create an agent team to review {spec-name}. 
-Spawn 4 reviewers:
+Spawn 5 reviewers:
 - One focus on requirements fullflllments
 - One focused on security implications
 - One checking performance impact
+- One checking code quality and maintainability, find Quality Checklist in .github/instructions/rust.instructions.md
 - One validating test coverage
 Have them each review and report findings.
 ```
