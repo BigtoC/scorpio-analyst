@@ -51,18 +51,28 @@ When the Trader task issues a Buy action after researcher debate concludes, the 
 ### Requirement: Token Usage Tracking
 
 The system MUST measure token expenditures accurately using `TokenUsageTracker`, `PhaseTokenUsage`, and
-`AgentTokenUsage`.
+`AgentTokenUsage` whenever the underlying provider exposes authoritative token metadata. When a provider does not expose
+authoritative token counts, the system MUST still record latency and model identity, and MUST preserve a documented
+representation that the token fields are unavailable rather than falsely claiming measured counts.
 
-- `TokenUsageTracker` MUST capture aggregate prompt, completion, and total token counts for the entire run.
+- `TokenUsageTracker` MUST capture aggregate prompt, completion, and total token counts for the entire run when
+  authoritative counts are available, and otherwise retain the documented unavailable/sentinel behavior used by the
+  provider layer.
 - `PhaseTokenUsage` MUST capture a phase name, duration, aggregate phase totals, and nested per-agent entries.
 - `AgentTokenUsage` MUST capture agent name, model ID, prompt/completion/total tokens, and latency.
 - Cyclic phases MUST support multiple `PhaseTokenUsage` entries so individual debate and risk rounds can be tracked
   separately.
 
-#### Scenario: Aggregating End of Cycle Tokens
+#### Scenario: Aggregating End Of Cycle Tokens With Full Provider Metadata
 
 At workflow conclusion, the orchestrator retrieves token metadata collected across all tasks, including per-phase and
 per-agent totals, latency, and cyclic round breakdowns stored via `TokenUsageTracker`.
+
+#### Scenario: Aggregating End Of Cycle Tokens When Provider Metadata Is Unavailable
+
+At workflow conclusion, if a provider did not expose authoritative token counts, the orchestrator still preserves
+latency, model identity, and the documented unavailable-token representation in `TokenUsageTracker` instead of
+pretending exact counts were measured.
 
 ### Requirement: Foundation Serialization Contract
 
