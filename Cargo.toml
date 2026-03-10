@@ -44,6 +44,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Utilities
 nonzero_ext = "0.3"
+futures = "0.3"
 
 [dev-dependencies]
 proptest = "1"
