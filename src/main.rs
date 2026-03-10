@@ -7,7 +7,8 @@ fn main() {
     match Config::load() {
         Ok(cfg) => {
             tracing::info!(
-                provider = %cfg.llm.default_provider,
+                quick_provider = %cfg.llm.quick_thinking_provider,
+                deep_provider = %cfg.llm.deep_thinking_provider,
                 symbol = %cfg.trading.asset_symbol,
                 "scorpio-analyst initialized"
             );

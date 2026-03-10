@@ -285,9 +285,10 @@ Splitting them would cause immediate cross-spec modifications.
 **Capability spec created** (1): `llm-providers`
 
 - `rig-core` client initialization for OpenAI, Anthropic, Gemini
-- Provider factory pattern: `create_provider(tier: ModelTier, config: &LLMConfig) -> impl CompletionModel`
-- `ModelTier` enum: `QuickThinking` (gpt-4o-mini, claude-haiku, gemini-flash) vs
-  `DeepThinking` (o3, claude-opus, gemini-advanced)
+- Provider factory pattern: `create_completion_model(tier: ModelTier, llm_config: &LLMConfig, api_config: &ApiConfig) -> impl CompletionModel`
+- `ModelTier` enum: `QuickThinking` vs `DeepThinking`, where tier-to-model/provider routing is driven by
+  `LLMConfig.quick_thinking_provider`, `LLMConfig.deep_thinking_provider`, `LLMConfig.quick_thinking_model`, and
+  `LLMConfig.deep_thinking_model`
 - `#[tool]` macro usage patterns for agent tool bindings
 - Agent builder patterns: system prompt + tools + structured output extraction
 - Retry wrapper around `rig` completion calls

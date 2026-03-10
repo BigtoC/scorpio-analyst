@@ -9,7 +9,13 @@ use governor::{Quota, RateLimiter};
 /// enforce per-provider request quotas across concurrent operations.
 #[derive(Debug, Clone)]
 pub struct SharedRateLimiter {
-    inner: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    inner: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
     label: String,
 }
 

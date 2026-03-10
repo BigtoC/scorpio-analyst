@@ -13,7 +13,7 @@ agent changes (I3) can develop in parallel against a stable provider interface.
 
 - Add `rig-core` (and its feature-gated provider sub-crates) to the project dependency tree.
 - Define a `ModelTier` enum encoding the dual-tier cognitive routing strategy from the PRD.
-- Implement a provider factory that constructs `rig` completion models from `Config` and `ApiConfig`.
+- Implement a provider factory that constructs `rig` completion models from `LLMConfig` and `ApiConfig`.
 - Support both stateless prompt execution and stateful chat-history execution so downstream debate and risk loops can
   reuse the same provider layer.
 - Establish agent builder helper patterns (system prompt + tools + structured output extraction) that
@@ -23,12 +23,15 @@ agent changes (I3) can develop in parallel against a stable provider interface.
 - Wrap `rig` completion calls with the retry/timeout policies defined in `error-handling`.
 - Surface transport/provider failures through `TradingError::Rig` and structured-output failures through
   `TradingError::SchemaViolation` with proper context propagation.
+- Preserve the foundation security contract by keeping secrets redacted, disallowing raw prompt/history leakage, and
+  failing fast on invalid provider/model configuration before downstream agents execute.
+- Keep provider handles reusable so downstream concurrent fan-out work does not repeatedly rebuild clients or agents.
 
 ## Scope
 
 - **In Scope:** `rig-core` dependency, `ModelTier` enum, provider factory, prompt/chat-compatible agent builder helpers,
-  typed tool-calling patterns, schema-enforced structured output handling, retry-wrapped completion calls, provider
-  integration tests with mocked completions, `Cargo.toml` dependency additions.
+  typed tool-calling patterns, schema-enforced structured output handling, retry-wrapped completion calls, reusable
+  provider/model handles, provider integration tests with mocked completions, `Cargo.toml` dependency additions.
 - **Out of Scope / Deferred:** Custom GitHub Copilot ACP integration (`add-copilot-provider`), specific agent
   implementations (`add-analyst-team`, etc.), `graph-flow` task wiring (`add-graph-orchestration`), financial data
   clients, CLI/TUI/GUI behavior.

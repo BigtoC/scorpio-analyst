@@ -15,10 +15,7 @@ pub enum TradingError {
 
     /// A network request timed out.
     #[error("network timeout after {elapsed:?}: {message}")]
-    NetworkTimeout {
-        elapsed: Duration,
-        message: String,
-    },
+    NetworkTimeout { elapsed: Duration, message: String },
 
     /// The LLM returned data that could not be parsed into the expected schema.
     #[error("schema violation: {message}")]
@@ -61,10 +58,7 @@ impl RetryPolicy {
 /// Degradation rules:
 /// - 1 failure: continue with partial data
 /// - 2+ failures: abort the cycle
-pub fn check_analyst_degradation(
-    total: usize,
-    failures: usize,
-) -> Result<(), TradingError> {
+pub fn check_analyst_degradation(total: usize, failures: usize) -> Result<(), TradingError> {
     if failures >= 2 || (total > 0 && failures == total) {
         return Err(TradingError::AnalystError {
             agent: "fan-out".to_owned(),

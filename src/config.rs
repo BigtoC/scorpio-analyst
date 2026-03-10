@@ -15,7 +15,8 @@ pub struct Config {
 /// LLM provider and model routing settings.
 #[derive(Debug, Deserialize)]
 pub struct LlmConfig {
-    pub default_provider: String,
+    pub quick_thinking_provider: String,
+    pub deep_thinking_provider: String,
     pub quick_thinking_model: String,
     pub deep_thinking_model: String,
     #[serde(default = "default_debate_rounds")]
@@ -73,7 +74,10 @@ impl std::fmt::Debug for ApiConfig {
         f.debug_struct("ApiConfig")
             .field("finnhub_rate_limit", &self.finnhub_rate_limit)
             .field("openai_api_key", &secret_display(&self.openai_api_key))
-            .field("anthropic_api_key", &secret_display(&self.anthropic_api_key))
+            .field(
+                "anthropic_api_key",
+                &secret_display(&self.anthropic_api_key),
+            )
             .field("gemini_api_key", &secret_display(&self.gemini_api_key))
             .field("finnhub_api_key", &secret_display(&self.finnhub_api_key))
             .finish()
@@ -128,8 +132,11 @@ impl Config {
 
     /// Fail fast on missing critical settings.
     fn validate(&self) -> Result<()> {
-        if self.llm.default_provider.is_empty() {
-            bail!("config validation: llm.default_provider must not be empty");
+        if self.llm.quick_thinking_provider.is_empty() {
+            bail!("config validation: llm.quick_thinking_provider must not be empty");
+        }
+        if self.llm.deep_thinking_provider.is_empty() {
+            bail!("config validation: llm.deep_thinking_provider must not be empty");
         }
         if self.trading.asset_symbol.is_empty() {
             bail!("config validation: trading.asset_symbol must not be empty");
@@ -166,16 +173,28 @@ mod tests {
             finnhub_api_key: None,
         };
         let debug_output = format!("{api:?}");
-        assert!(debug_output.contains("[REDACTED]"), "should redact present keys");
-        assert!(!debug_output.contains("super-secret"), "must not leak secret value");
-        assert!(debug_output.contains("<not set>"), "should mark absent keys");
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "should redact present keys"
+        );
+        assert!(
+            !debug_output.contains("super-secret"),
+            "must not leak secret value"
+        );
+        assert!(
+            debug_output.contains("<not set>"),
+            "should mark absent keys"
+        );
     }
 
     #[test]
     fn load_from_defaults_only() {
         // Load only from the checked-in config.toml without any env overrides
         let cfg = Config::load_from("config.toml");
-        assert!(cfg.is_ok(), "loading from config.toml should succeed: {cfg:?}");
+        assert!(
+            cfg.is_ok(),
+            "loading from config.toml should succeed: {cfg:?}"
+        );
         let cfg = cfg.unwrap();
         assert_eq!(cfg.llm.max_debate_rounds, 3);
         assert_eq!(cfg.api.finnhub_rate_limit, 30);

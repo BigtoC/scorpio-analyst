@@ -73,16 +73,11 @@ fn arb_fundamental_data() -> impl Strategy<Value = FundamentalData> {
 }
 
 fn arb_macd_values() -> impl Strategy<Value = MacdValues> {
-    (
-        arb_f64(),
-        arb_f64(),
-        arb_f64(),
-    )
-        .prop_map(|(macd_line, signal_line, histogram)| MacdValues {
-            macd_line,
-            signal_line,
-            histogram,
-        })
+    (arb_f64(), arb_f64(), arb_f64()).prop_map(|(macd_line, signal_line, histogram)| MacdValues {
+        macd_line,
+        signal_line,
+        histogram,
+    })
 }
 
 fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
@@ -96,12 +91,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
         arb_opt_f64(),
         arb_opt_f64(),
         arb_opt_f64(),
-        (
-            arb_opt_f64(),
-            arb_opt_f64(),
-            arb_opt_f64(),
-            "[a-z ]{0,30}",
-        ),
+        (arb_opt_f64(), arb_opt_f64(), arb_opt_f64(), "[a-z ]{0,30}"),
     )
         .prop_map(
             |(
@@ -136,13 +126,13 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
 }
 
 fn arb_sentiment_source() -> impl Strategy<Value = SentimentSource> {
-    ("[a-z]{3,10}", arb_f64(), 0..10_000u64).prop_map(
-        |(source_name, score, sample_size)| SentimentSource {
+    ("[a-z]{3,10}", arb_f64(), 0..10_000u64).prop_map(|(source_name, score, sample_size)| {
+        SentimentSource {
             source_name,
             score,
             sample_size,
-        },
-    )
+        }
+    })
 }
 
 fn arb_engagement_peak() -> impl Strategy<Value = EngagementPeak> {
@@ -438,10 +428,15 @@ where
     let back1: T = serde_json::from_str(&json1).expect("deserialize");
     let json2 = serde_json::to_string(&back1).expect("re-serialize");
     let back2: T = serde_json::from_str(&json2).expect("re-deserialize");
-    assert_eq!(json2, serde_json::to_string(&back2).expect("third serialize"),
-        "serialization is not stable after normalization");
-    assert_eq!(back1, back2,
-        "deserialized values differ after normalization");
+    assert_eq!(
+        json2,
+        serde_json::to_string(&back2).expect("third serialize"),
+        "serialization is not stable after normalization"
+    );
+    assert_eq!(
+        back1, back2,
+        "deserialized values differ after normalization"
+    );
 }
 
 proptest! {
