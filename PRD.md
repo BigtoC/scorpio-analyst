@@ -7,8 +7,8 @@
 The integration of Large Language Models into the financial technology sector has catalyzed a transition from
 traditional quantitative algorithmic trading to autonomous, agentic decision-making systems.
 Traditional deep learning and quantitative models, while mathematically rigorous, frequently struggle to incorporate
-qualitative variables such as macroeconomic sentiment, geopolitical news, and unstructured social media data into their
-predictive algorithms.
+qualitative variables such as macroeconomic sentiment, geopolitical news, and company-specific narrative signals into
+their predictive algorithms.
 Furthermore, deep learning architectures often function as impenetrable black boxes, lacking the necessary
 explainability required by institutional compliance and risk management protocols.
 Multi-agent frameworks powered by Large Language Models resolve these deficiencies by mimicking the collaborative,
@@ -411,27 +411,25 @@ The Fundamental Analyst is responsible for evaluating the intrinsic value of the
 
 #### 2. Sentiment Analyst Task
 
-This agent quantifies the irrational, emotional drivers of market momentum.
+This agent quantifies company-specific sentiment and narrative shifts using recent news coverage rather than direct
+social-platform ingestion in the MVP.
 
-* **Tool Bindings**: Equipped with HTTP scraper tools targeting Reddit (e.g., r/wallstreetbets, r/investing) and
-  X/Twitter APIs. If direct API access is unavailable, the Gemini CLI can be used as an alternative for web-search-based
-  sentiment analysis.
-* **Execution Logic**: Due to the massive volume of social media text, this agent utilizes `rig`'s vector store
-  integration. Scraped posts are embedded and stored in an `InMemoryVectorStore`. The agent then performs a semantic
-  search against the asset ticker, aggregating public sentiment into a normalized score, specifically noting peaks in
-  positive or negative retail engagement that often precede severe volatility events.
-* **Prompt specification**: [Social Media Analyst](docs/prompts.md#social-media-analyst) (referred to as Sentiment
-  Analyst in this implementation)
+* **Tool Bindings**: Accesses company-specific news data from `finnhub` and/or `yfinance-rs` where available. If direct
+  API access is unavailable or insufficient for the target company/news query, the Gemini CLI can be used as a fallback
+  for web-search-based news retrieval.
+* **Execution Logic**: The agent analyzes recent company-specific news to identify tone shifts, recurring themes,
+  management or product narratives, and event-driven sentiment that could affect trading decisions. The goal is to
+  aggregate news-driven sentiment into a normalized view of market perception over the past week. Direct Reddit and
+  X/Twitter ingestion is intentionally deferred to future improvements.
+* **Prompt specification**: [Sentiment Analyst](docs/prompts.md#sentiment-analyst)
 
 #### 3. News Analyst Task
 
 The News Analyst contextualizes the asset within the broader global macroeconomic environment.
 
-* **Tool Bindings**: Accesses `finnhub` market news and economic indicator endpoints as the primary source. The
-  original paper ingested news from Bloomberg, Yahoo Finance, EODHD, and FinnHub simultaneously; for this
-  implementation FinnHub is the primary aggregator, with EODHD as an optional supplementary source where API access
-  permits. If direct API access is unavailable for certain sources, the Gemini CLI can be used as an alternative for
-  web-search-based news analysis.
+* **Tool Bindings**: Accesses `finnhub` market news and economic indicator endpoints as the primary source. Yahoo
+  Finance news data may also be used when it provides relevant company-specific coverage. If direct API access is
+  unavailable for certain sources, the Gemini CLI can be used as an alternative for web-search-based news analysis.
 * **Execution Logic**: The agent processes breaking news articles to extract causal relationships. For example, if
   analyzing a semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff
   implementations, or federal reserve interest rate commentary that directly impacts the supply chain or discount rates.
