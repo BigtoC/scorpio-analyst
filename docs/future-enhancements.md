@@ -51,3 +51,32 @@ follow-up that should be revisited later.
     - Whether aggregate totals should exclude heuristic estimates by default to preserve auditability
 - **Revisit trigger**: After the MVP token-usage reporting and Copilot provider behavior are stable enough to evaluate
   whether approximate estimates add enough value to justify the extra complexity and caveats
+
+### Hyperliquid perps DEX research input
+
+- **Status**: Deferred until after the MVP is finished
+- **Source**: Research-team planning follow-up and prompt guidance updates
+- **Current baseline**: The Researcher Team debates using analyst outputs from fundamentals, news, sentiment, and
+  technical analysis only. No Hyperliquid market structure or perps DEX data is provided yet.
+- **Why it was deferred**: Hyperliquid introduces a narrower, symbol-dependent data path that only applies to a
+  manually maintained whitelist of stock-linked markets. Keeping it out of the MVP avoids expanding the data layer,
+  researcher inputs, and prompt context before the core workflow is stable.
+- **Why revisit later**: For whitelisted symbols listed on Hyperliquid, perps DEX positioning and market structure may
+  give the Researcher Team an additional real-time signal for momentum, crowding, and directional conviction.
+- **Initial scope when revisited**:
+    - Only enable the source for manually whitelisted symbols listed on Hyperliquid
+    - Start with examples such as `QQQ`, `SPY`, and `NVDA`
+    - Treat the whitelist as operator-managed rather than auto-discovered in MVP+1 planning
+- **Prompt impact when revisited**:
+    - Bull Researcher, Bear Researcher, and Debate Moderator prompts should accept an additional Hyperliquid perps DEX
+      research input for eligible symbols
+    - Prompts should explicitly ignore the source when the target symbol is not on the whitelist
+- **Intentionally deferred details**:
+    - Exact API/client integration and normalization rules for Hyperliquid market data
+    - Which perps fields should be exposed to researchers first (for example price basis, funding, OI, volume, long/
+      short imbalance)
+    - Freshness requirements and whether the data should be analyst-produced or injected directly into researcher
+      context
+    - How to prevent researchers from over-weighting DEX-specific signals relative to fundamentals and macro context
+- **Revisit trigger**: After the sentiment and research-team modules are stable enough to evaluate whether whitelisted
+  Hyperliquid signals improve debate quality without adding excessive complexity

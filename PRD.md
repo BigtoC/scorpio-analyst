@@ -165,8 +165,7 @@ implementations, communicating exclusively through the `graph_flow::Context` sta
 ### Financial Data Ingestion Ecosystem
 
 The Analyst Team relies entirely on the accuracy, speed, and breadth of the underlying financial data application
-programming interfaces. The original implementation utilizes `yfinance` for technical data and Alpha Vantage for
-fundamental and news data. The Rust implementation must leverage highly optimized HTTP clients to manage this ingestion.
+programming interfaces. The Rust implementation must leverage highly optimized HTTP clients to manage this ingestion.
 
 1. **Fundamental and News Data**: The `finnhub` (v0.2.1) crate will serve as the primary conduit for corporate
    fundamentals, earnings reports, and global news. It provides 96% coverage of the `Finnhub` API, delivering strongly
@@ -177,9 +176,7 @@ fundamental and news data. The Rust implementation must leverage highly optimize
 2. **Market Pricing and Alternative Data**: The `yfinance-rs` (v0.7.2) crate will be utilized for historical OHLCV
    (Open, High, Low, Close, Volume) data and real-time quote streaming. This crate utilizes an asynchronous, fluent
    builder pattern and supports parallel fetching, allowing the Technical Analyst to retrieve massive datasets for
-   technical indicator calculation with minimal network latency. `alphavantage` will be retained as a fallback
-   integration for specific physical currency or digital asset queries, ensuring complete parity with the original
-   repository.
+   technical indicator calculation with minimal network latency.
 
 ### Technical Analysis and Quantitative Mathematics
 
