@@ -33,7 +33,7 @@ sequenced to minimize code conflicts and maximize parallel work.
 
 ## Capability Inventory
 
-19 capabilities derived from the PRD, grouped by architectural layer:
+21 capabilities derived from the PRD, grouped by architectural layer:
 
 ### Foundation Layer
 
@@ -55,40 +55,41 @@ sequenced to minimize code conflicts and maximize parallel work.
 
 ### Data Layer
 
-| #  | Capability ID        | Description                                                   |
-|----|----------------------|---------------------------------------------------------------|
-| 9  | `financial-data`     | Finnhub (fundamentals + news), yfinance-rs (OHLCV), sentiment |
-| 10 | `technical-analysis` | `kand` indicator calculations (RSI, MACD, ATR, etc.)          |
+| #  | Capability ID        | Description                                                         |
+|----|----------------------|---------------------------------------------------------------------|
+| 9  | `financial-data`     | Finnhub (fundamentals + news) and yfinance-rs (OHLCV pricing)       |
+| 10 | `sentiment-data`     | Reddit/X/Twitter sentiment ingestion, Gemini fallback, vector store |
+| 11 | `technical-analysis` | `kand` indicator calculations (RSI, MACD, ATR, etc.)                |
 
 ### Agent Layer
 
 | #  | Capability ID       | Description                                                     |
 |----|---------------------|-----------------------------------------------------------------|
-| 11 | `analyst-team`      | 4 analyst agents (Fundamental, Sentiment, News, Technical)      |
-| 12 | `researcher-debate` | Bullish/Bearish researchers + Debate Moderator cyclic loop      |
-| 13 | `trader-agent`      | Trader Agent — TradeProposal synthesis from debate consensus    |
-| 14 | `risk-management`   | Risk Team (Aggressive, Conservative, Neutral) + Risk Moderator  |
-| 15 | `fund-manager`      | Fund Manager — final approve/reject with deterministic fallback |
+| 12 | `analyst-team`      | 4 analyst agents (Fundamental, Sentiment, News, Technical)      |
+| 13 | `researcher-debate` | Bullish/Bearish researchers + Debate Moderator cyclic loop      |
+| 14 | `trader-agent`      | Trader Agent — TradeProposal synthesis from debate consensus    |
+| 15 | `risk-management`   | Risk Team (Aggressive, Conservative, Neutral) + Risk Moderator  |
+| 16 | `fund-manager`      | Fund Manager — final approve/reject with deterministic fallback |
 
 ### Orchestration Layer
 
 | #  | Capability ID         | Description                                                    |
 |----|-----------------------|----------------------------------------------------------------|
-| 16 | `graph-orchestration` | `graph-flow` 5-phase pipeline, fan-out, cyclic debate patterns |
+| 17 | `graph-orchestration` | `graph-flow` 5-phase pipeline, fan-out, cyclic debate patterns |
 
 ### Interface Layer
 
 | #  | Capability ID | Description                                              |
 |----|---------------|----------------------------------------------------------|
-| 17 | `cli`         | `clap` subcommands, `ask` NL parser, output formatting   |
-| 18 | `backtesting` | Historical OHLCV replay, performance metrics, cached LLM |
+| 18 | `cli`         | `clap` subcommands, `ask` NL parser, output formatting   |
+| 19 | `backtesting` | Historical OHLCV replay, performance metrics, cached LLM |
 
 ### Future Phases
 
 | #  | Capability ID | Description                                                  |
 |----|---------------|--------------------------------------------------------------|
-| 19 | `tui`         | Phase 2 — `ratatui`/`crossterm` interactive terminal UI      |
-| 20 | `gui`         | Phase 3 — GPUI desktop application (behind `--features gui`) |
+| 20 | `tui`         | Phase 2 — `ratatui`/`crossterm` interactive terminal UI      |
+| 21 | `gui`         | Phase 3 — GPUI desktop application (behind `--features gui`) |
 
 ---
 
@@ -101,6 +102,7 @@ Each row is a change proposal (verb-led kebab-case ID) → the capabilities it c
 | `add-project-foundation`  | `core-types`, `error-handling`, `config`, `observability`, `rate-limiting`, `testing-strategy` | Foundation |
 | `add-llm-providers`       | `llm-providers`                                                                                | Foundation |
 | `add-financial-data`      | `financial-data`                                                                               | Data       |
+| `add-sentiment-data`      | `sentiment-data`                                                                               | Data       |
 | `add-technical-analysis`  | `technical-analysis`                                                                           | Data       |
 | `add-copilot-provider`    | `copilot-provider`                                                                             | Provider   |
 | `add-analyst-team`        | `analyst-team`                                                                                 | Agent      |
@@ -114,7 +116,7 @@ Each row is a change proposal (verb-led kebab-case ID) → the capabilities it c
 | `add-tui`                 | `tui`                                                                                          | Phase 2    |
 | `add-gui`                 | `gui`                                                                                          | Phase 3    |
 
-**15 change proposals → 20 capability specs** (the foundation bundles 6 related capabilities).
+**16 change proposals → 21 capability specs** (the foundation bundles 6 related capabilities).
 
 ---
 
@@ -128,6 +130,7 @@ graph TD
 %% Implementation dependencies shown with solid arrows.
 %% Spec-writing-only dependencies shown with dotted arrows.
     LLM --> FD[add-financial-data]
+    LLM --> SD[add-sentiment-data]
     LLM --> TA[add-technical-analysis]
     LLM --> CP[add-copilot-provider]
     LLM --> AT[add-analyst-team]
@@ -136,6 +139,7 @@ graph TD
     LLM --> RM[add-risk-management]
     LLM --> FM[add-fund-manager]
     FD --> AT
+    SD --> AT
     TA --> AT
     AT --> GO[add-graph-orchestration]
     RD --> GO
@@ -149,6 +153,7 @@ graph TD
     style F fill: #ff6b6b, color: #fff
     style LLM fill: #ff6b6b, color: #fff
     style FD fill: #4ecdc4, color: #fff
+    style SD fill: #4ecdc4, color: #fff
     style TA fill: #4ecdc4, color: #fff
     style CP fill: #4ecdc4, color: #fff
     style AT fill: #45b7d1, color: #fff
@@ -189,7 +194,7 @@ types are formally defined.
 |-------|----------------------------------|------------------|--------------|
 | S0    | `add-project-foundation`         | No (solo)        | —            |
 | S1    | `add-llm-providers`              | No (solo)        | S0           |
-| S2    | ALL remaining specs (13 changes) | **Yes (all 13)** | S0, S1       |
+| S2    | ALL remaining specs (14 changes) | **Yes (all 14)** | S0, S1       |
 
 **Why S0 must be first**: Every other spec references `TradingState` sub-types, `TradingError`
 variants, `Config` fields, or tracing patterns defined in the foundation. Writing the foundation
@@ -209,7 +214,7 @@ Implementation has stricter ordering because code has compile-time dependencies:
 |-------|------------------------------------------------------------------------------------------------------------|-------------|
 | I0    | `add-project-foundation`                                                                                   | Solo        |
 | I1    | `add-llm-providers`                                                                                        | Solo        |
-| I2    | `add-financial-data`, `add-technical-analysis`, `add-copilot-provider`                                     | **Yes (3)** |
+| I2    | `add-financial-data`, `add-sentiment-data`, `add-technical-analysis`, `add-copilot-provider`               | **Yes (4)** |
 | I3    | `add-analyst-team`, `add-researcher-debate`, `add-trader-agent`, `add-risk-management`, `add-fund-manager` | **Yes (5)** |
 | I4    | `add-graph-orchestration`                                                                                  | Solo        |
 | I5    | `add-cli`, `add-backtesting`                                                                               | **Yes (2)** |
@@ -302,29 +307,36 @@ all agent specs build on.
 
 ### Phase S2 / I2–I5: Parallel Specs
 
-After the foundation (S0) and provider layer (S1) are written, **all 13 remaining specs can be
+After the foundation (S0) and provider layer (S1) are written, **all 14 remaining specs can be
 written as spec documents simultaneously**. For implementation, they follow the phased order below.
 
-#### I2 — Data & Provider Layer (3 parallel)
+#### I2 — Data & Provider Layer (4 parallel)
 
 | Change                   | Capability           | Files Owned                                                                               |
 |--------------------------|----------------------|-------------------------------------------------------------------------------------------|
-| `add-financial-data`     | `financial-data`     | `src/data/mod.rs`, `src/data/finnhub.rs`, `src/data/yfinance.rs`, `src/data/sentiment.rs` |
+| `add-financial-data`     | `financial-data`     | `src/data/finnhub.rs`, `src/data/yfinance.rs`                                             |
+| `add-sentiment-data`     | `sentiment-data`     | `src/data/sentiment.rs`                                                                   |
 | `add-technical-analysis` | `technical-analysis` | `src/indicators/mod.rs`, `src/indicators/calculator.rs`                                   |
 | `add-copilot-provider`   | `copilot-provider`   | `src/providers/copilot.rs`, `src/providers/acp.rs`                                        |
 
 **No code conflicts**: each owns a unique directory or file set. `add-copilot-provider` adds to
 `src/providers/` but only creates new files — the foundation already declared `pub mod copilot;`
-and `pub mod acp;` stubs.
+and `pub mod acp;` stubs. `src/data/mod.rs` remains foundation-owned skeleton wiring, so splitting
+sentiment out does not introduce shared-file conflicts inside the data layer.
 
 **`add-financial-data`** details:
 
 - Finnhub client wrapper: `get_fundamentals()`, `get_earnings()`, `get_news()`, `get_insider_transactions()`
 - yfinance-rs wrapper: `get_ohlcv(symbol, start, end)` → `Vec<Candle>`
-- Sentiment scraper: Reddit, X/Twitter, Gemini CLI fallback handling unstructured/noisy extraction
-- `InMemoryVectorStore` + `EmbeddingsBuilder` integration for storing and querying text data
 - All return types map to `TradingState` sub-structs defined in `core-types`
 - Rate limiter injection via constructor parameter
+
+**`add-sentiment-data`** details:
+
+- Sentiment scraper: Reddit, X/Twitter, Gemini CLI fallback handling unstructured/noisy extraction
+- `InMemoryVectorStore` + `EmbeddingsBuilder` integration for storing and querying text data
+- Social-post normalization, deduplication, and run-scoped vector-store lifecycle management
+- All return types map to `SentimentData` and sentiment-supporting sub-types defined in `core-types`
 
 **`add-technical-analysis`** details:
 
@@ -353,8 +365,8 @@ and `pub mod acp;` stubs.
 **No code conflicts**: each agent spec owns its own subdirectory or file within `src/agents/`.
 The foundation pre-declares all `pub mod` entries in `src/agents/mod.rs`.
 
-**Implementation dependency**: `add-analyst-team` needs `add-financial-data` and
-`add-technical-analysis` to be implemented first (agents use data tools). The other 4 agent specs
+**Implementation dependency**: `add-analyst-team` needs `add-financial-data`, `add-sentiment-data`,
+and `add-technical-analysis` to be implemented first (agents use data tools). The other 4 agent specs
 need only the foundation and `llm-providers`.
 
 **Common spec pattern for all agents**:
@@ -370,7 +382,7 @@ need only the foundation and `llm-providers`.
 
 - 4 agents sharing fan-out execution pattern
 - Each writes to one `Option<T>` field on `TradingState`
-- Each has distinct tool bindings (Finnhub, yfinance+kand, sentiment scraper)
+- Each has distinct tool bindings (Finnhub, yfinance+kand, sentiment scraper/vector retrieval)
 - The **Sentiment Analyst** must explicitly use `InMemoryVectorStore` to query the semantically embedded social media
   posts
 
@@ -523,7 +535,7 @@ src/
 │   ├── mod.rs                  ← add-project-foundation (skeleton)
 │   ├── finnhub.rs              ← add-financial-data
 │   ├── yfinance.rs             ← add-financial-data
-│   └── sentiment.rs            ← add-financial-data
+│   └── sentiment.rs            ← add-sentiment-data
 ├── indicators/
 │   ├── mod.rs                  ← add-project-foundation (skeleton)
 │   └── calculator.rs           ← add-technical-analysis
@@ -577,10 +589,10 @@ SEQUENTIAL ───────────────────────
   S1: add-llm-providers          ← WRITE AND IMPLEMENT THIS SECOND
 
 PARALLEL (spec writing) ─────────────────────────────────────────────────────
-  S2: Write ALL 13 remaining specs simultaneously (no doc conflicts)
+  S2: Write ALL 14 remaining specs simultaneously (no doc conflicts)
 
 PARALLEL (implementation, phased) ───────────────────────────────────────────
-  I2: add-financial-data  ║  add-technical-analysis  ║  add-copilot-provider
+  I2: add-financial-data  ║  add-sentiment-data  ║  add-technical-analysis  ║  add-copilot-provider
   I3: add-analyst-team ║ add-researcher-debate ║ add-trader-agent ║ add-risk-management ║ add-fund-manager
   I4: add-graph-orchestration    ← solo (wires everything together)
   I5: add-cli  ║  add-backtesting
@@ -588,5 +600,6 @@ PARALLEL (implementation, phased) ───────────────�
   I7: add-gui                    ← Phase 3
 ```
 
-**Maximum parallelism achieved**: After 2 sequential specs, all 13 remaining spec documents can be
-written in parallel. Implementation achieves up to 5-way parallelism in the agent layer (I3).
+**Maximum parallelism achieved**: After 2 sequential specs, all 14 remaining spec documents can be
+written in parallel. Implementation achieves 4-way parallelism in the data/provider layer (I2) and
+up to 5-way parallelism in the agent layer (I3).

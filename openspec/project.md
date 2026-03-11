@@ -150,8 +150,8 @@ drawdown on backtests) while preserving full decision auditability.
 - **LLM Providers**: OpenAI (gpt-4o-mini, o3), Anthropic (claude-haiku, claude-opus), Google Gemini (gemini-flash,
   advanced reasoning), GitHub Copilot (via ACP/JSON-RPC 2.0)
 - **Financial Data APIs**: Finnhub (fundamentals, earnings, news — 30 req/s free tier), Yahoo Finance via
-  `yfinance-rs` (OHLCV pricing), Alpha Vantage (fallback for currencies/crypto). If direct API access is unavailable for
-  certain sources, the Gemini CLI can be used as an alternative for web-search-based news analysis.
+  `yfinance-rs` (OHLCV pricing). If direct API access is unavailable for certain sources, the Gemini CLI can be used as
+  an alternative for web-search-based news analysis.
 - **Social Data**: Reddit (r/wallstreetbets, r/investing), X/Twitter APIs — for Sentiment Analyst. If direct API access
   is unavailable, the Gemini CLI can be used as an alternative for web-search-based sentiment analysis.
 - **UI Framework (Phase 2)**: [GPUI](https://www.gpui.rs/) — GPU-accelerated native Rust UI framework from the creators
