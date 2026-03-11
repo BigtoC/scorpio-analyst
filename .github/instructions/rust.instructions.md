@@ -21,6 +21,7 @@ These instructions are based on [The Rust Book](https://doc.rust-lang.org/book/)
 - Use consistent naming conventions following [RFC 430](https://github.com/rust-lang/rfcs/blob/master/text/0430-finalizing-naming-conventions.md).
 - Write idiomatic, safe, and efficient Rust code that follows the borrow checker's rules.
 - Ensure code compiles without warnings.
+- Do not write duplicated codes; refactor common logic into reusable functions or modules.
 
 ## Patterns to Follow
 
@@ -132,4 +133,5 @@ Before publishing or reviewing Rust code, ensure:
 - [ ] **Performance**: Efficient use of iterators, minimal allocations
 - [ ] **API Design**: Functions are predictable, flexible, and type-safe
 - [ ] **Future Proofing**: Private fields in structs, sealed traits where appropriate
+- [ ] **Duplicated codes**: Identify duplicated codes and refactored into reusable functions or modules
 - [ ] **Tooling**: Code passes `cargo fmt`, `cargo clippy`, and `cargo test`
