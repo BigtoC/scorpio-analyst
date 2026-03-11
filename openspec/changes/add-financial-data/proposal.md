@@ -2,13 +2,13 @@
 
 ## Why
 
-The Analyst Team's Fundamental, News, and Technical paths require reliable, rate-limited access to structured market
-data APIs before any agent can populate `TradingState` fields. This proposal introduces the core financial data
-ingestion layer that wraps Finnhub (fundamentals, earnings, news, insider transactions) and yfinance-rs (OHLCV
-pricing) behind typed async clients. Sentiment ingestion is intentionally split into a dedicated follow-on change so
-the financial market data scope stays focused and easier to implement independently. All clients accept the shared
-`governor`-based rate limiter via dependency injection, ensuring concurrent analyst agents cannot exceed provider
-quotas.
+The Analyst Team's Fundamental, News, Technical, and current Sentiment paths require reliable, rate-limited access to
+structured market data APIs before any agent can populate `TradingState` fields. This proposal introduces the core
+financial data ingestion layer that wraps Finnhub (fundamentals, earnings, news, insider transactions) and yfinance-rs
+(OHLCV pricing) behind typed async clients. Company-specific news retrieved through this layer supports both the News
+Analyst and the MVP Sentiment Analyst baseline, while direct social-platform ingestion is intentionally deferred to
+future improvements. All clients accept the shared `governor`-based rate limiter via dependency injection, ensuring
+concurrent analyst agents cannot exceed provider quotas.
 
 ## What Changes
 
@@ -27,8 +27,7 @@ quotas.
 ## Impact
 
 - Affected specs: `financial-data` (new)
-- Affected code: `src/data/mod.rs` (fill in skeleton), `src/data/finnhub.rs` (new), `src/data/yfinance.rs` (new),
-  excluding sentiment-specific ingestion code which moves to `add-sentiment-data`
+- Affected code: `src/data/mod.rs` (fill in skeleton), `src/data/finnhub.rs` (new), `src/data/yfinance.rs` (new)
 - Dependencies: `add-project-foundation` (core types, error handling, config, rate-limiting, module stubs),
   `add-llm-providers` (rig embeddings/vector store integration, tool macro patterns)
 - No modifications to foundation-owned files (`src/config.rs`, `src/error.rs`, `src/state/*`,

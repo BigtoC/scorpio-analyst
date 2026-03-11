@@ -6,11 +6,12 @@ The `add-project-foundation` change established core types (`FundamentalData`, `
 `NewsData`), error handling (`TradingError`), configuration (`ApiConfig` with provider credentials), and rate limiting
 (`governor`-based shared limiters). The `add-llm-providers` change established `rig-core` integration and tool-binding
 patterns. This change fills in the structured financial market data ingestion layer (`src/data/`) that downstream
-analyst agents depend on to populate `TradingState` fields. Social sentiment ingestion is intentionally deferred to the
-dedicated `add-sentiment-data` change so this design remains limited to Finnhub and Yahoo Finance responsibilities.
+analyst agents depend on to populate `TradingState` fields. Company-specific news gathered from Finnhub and Yahoo
+Finance supports both the News Analyst and the MVP Sentiment Analyst baseline, while direct social-platform ingestion is
+intentionally deferred to future improvements.
 
-**Stakeholders:** Analyst Team agents (Fundamental, News, Technical), rate-limiting infrastructure, configuration (API
-keys and endpoints), `add-technical-analysis` (consumes OHLCV data from yfinance).
+**Stakeholders:** Analyst Team agents (Fundamental, Sentiment, News, Technical), rate-limiting infrastructure,
+configuration (API keys and endpoints), `add-technical-analysis` (consumes OHLCV data from yfinance).
 
 ## Goals / Non-Goals
 
@@ -19,6 +20,7 @@ keys and endpoints), `add-technical-analysis` (consumes OHLCV data from yfinance
     transactions, returning data that maps to `FundamentalData` and `NewsData` sub-structs.
   - Wrap the `yfinance-rs` crate to expose typed async OHLCV retrieval for a given symbol and date range,
     returning `Vec<Candle>` (or equivalent) consumed by the Technical Analyst and `kand` calculations.
+  - Provide company-specific news inputs that can be reused by both the News Analyst and the MVP Sentiment Analyst.
   - Accept the shared `governor` rate limiter via constructor injection for all clients that hit rate-limited APIs.
   - Expose `rig` `#[tool]`-compatible wrappers so downstream analyst agents can bind data functions as typed tools.
   - Map all data-layer errors into the established `TradingError` hierarchy.
@@ -27,7 +29,8 @@ keys and endpoints), `add-technical-analysis` (consumes OHLCV data from yfinance
 - **Non-Goals:**
   - Implementing the Technical Analyst's `kand` indicator calculations — that belongs to `add-technical-analysis`.
   - Implementing agent logic, system prompts, or LLM invocations — those belong to `add-analyst-team`.
-  - Implementing sentiment scraping, embedding, or vector retrieval — those belong to `add-sentiment-data`.
+  - Implementing direct Reddit or X/Twitter scraping — those social-platform integrations are deferred to future
+    improvements after MVP.
   - Real-time streaming price feeds — the MVP operates on historical/snapshot data.
   - Persistent market-data caching across runs — caching can be introduced later if API pressure justifies it.
 
@@ -45,6 +48,7 @@ src/data/
 ```
   Finnhub API ──► finnhub.rs ──► FundamentalData, NewsData ──► TradingState
   Yahoo Finance ──► yfinance.rs ──► Vec<Candle> ──► (kand) ──► TechnicalData
+  Company-specific news inputs ──► News Analyst + MVP Sentiment Analyst
 ```
 
 ### Client Pattern
@@ -80,6 +84,12 @@ methods. Tool definitions live alongside their client implementations in the res
   satisfying the Technical Analyst's historical-data needs.
   - *Alternatives considered:* A second pricing provider could be added later if concrete Yahoo coverage gaps appear,
     but it is not required for the current financial-data scope.
+
+- **Decision: Sentiment is company-news-based in MVP** — The current Sentiment Analyst baseline derives sentiment from
+  company-specific news gathered through the same structured data sources used by the News Analyst, rather than from
+  direct Reddit or X/Twitter ingestion.
+  - *Alternatives considered:* Direct social-platform scraping could produce a richer sentiment signal, but it expands
+    the data layer, auth surface, and maintenance burden beyond the current MVP scope.
 
 - **Decision: Rate limiter injection via constructor** — Aligns with the `rate-limiting` capability's dependency
   injection requirement. Each client receives the appropriate provider-scoped limiter rather than constructing its
