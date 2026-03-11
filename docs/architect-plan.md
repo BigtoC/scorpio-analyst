@@ -55,11 +55,11 @@ sequenced to minimize code conflicts and maximize parallel work.
 
 ### Data Layer
 
-| #  | Capability ID        | Description                                                         |
-|----|----------------------|---------------------------------------------------------------------|
-| 9  | `financial-data`     | Finnhub (fundamentals + news) and yfinance-rs (OHLCV pricing)       |
-| 10 | `sentiment-data`     | Reddit/X/Twitter sentiment ingestion, Gemini fallback, vector store |
-| 11 | `technical-analysis` | `kand` indicator calculations (RSI, MACD, ATR, etc.)                |
+| #  | Capability ID        | Description                                                                       |
+|----|----------------------|-----------------------------------------------------------------------------------|
+| 9  | `financial-data`     | Finnhub (fundamentals + company news) and yfinance-rs (OHLCV pricing)             |
+| 10 | `sentiment-data`     | Deferred post-MVP social-platform sentiment ingestion (Reddit/X, Gemini fallback) |
+| 11 | `technical-analysis` | `kand` indicator calculations (RSI, MACD, ATR, etc.)                              |
 
 ### Agent Layer
 
@@ -333,10 +333,10 @@ sentiment out does not introduce shared-file conflicts inside the data layer.
 
 **`add-sentiment-data`** details:
 
-- Sentiment scraper: Reddit, X/Twitter, Gemini CLI fallback handling unstructured/noisy extraction
-- `InMemoryVectorStore` + `EmbeddingsBuilder` integration for storing and querying text data
-- Social-post normalization, deduplication, and run-scoped vector-store lifecycle management
-- All return types map to `SentimentData` and sentiment-supporting sub-types defined in `core-types`
+- Deferred post-MVP social-platform sentiment ingestion work rather than part of the MVP baseline
+- Potential Reddit and X/Twitter source handling, with Gemini CLI and operator-managed helpers as fallback options
+- Any future text normalization, deduplication, and optional vector-store lifecycle management for social inputs
+- Should enrich `SentimentData` only after the MVP news-based sentiment workflow proves insufficient
 
 **`add-technical-analysis`** details:
 
@@ -365,9 +365,9 @@ sentiment out does not introduce shared-file conflicts inside the data layer.
 **No code conflicts**: each agent spec owns its own subdirectory or file within `src/agents/`.
 The foundation pre-declares all `pub mod` entries in `src/agents/mod.rs`.
 
-**Implementation dependency**: `add-analyst-team` needs `add-financial-data`, `add-sentiment-data`,
-and `add-technical-analysis` to be implemented first (agents use data tools). The other 4 agent specs
-need only the foundation and `llm-providers`.
+**Implementation dependency**: `add-analyst-team` needs `add-financial-data` and `add-technical-analysis` to be
+implemented first (agents use data tools). Social-platform sentiment ingestion is deferred and is not required for the
+MVP analyst team.
 
 **Common spec pattern for all agents**:
 
@@ -382,9 +382,9 @@ need only the foundation and `llm-providers`.
 
 - 4 agents sharing fan-out execution pattern
 - Each writes to one `Option<T>` field on `TradingState`
-- Each has distinct tool bindings (Finnhub, yfinance+kand, sentiment scraper/vector retrieval)
-- The **Sentiment Analyst** must explicitly use `InMemoryVectorStore` to query the semantically embedded social media
-  posts
+- Each has distinct tool bindings (Finnhub fundamentals/news, yfinance+kand, and company-news sentiment analysis)
+- The **Sentiment Analyst** consumes company-specific news inputs from Finnhub and/or Yahoo Finance in the MVP; direct
+  Reddit/X ingestion is deferred to future improvements
 
 **`add-researcher-debate`** specifics:
 

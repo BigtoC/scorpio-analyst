@@ -149,12 +149,12 @@ drawdown on backtests) while preserving full decision auditability.
 
 - **LLM Providers**: OpenAI (gpt-4o-mini, o3), Anthropic (claude-haiku, claude-opus), Google Gemini (gemini-flash,
   advanced reasoning), GitHub Copilot (via ACP/JSON-RPC 2.0)
-- **Financial Data APIs**: Finnhub (fundamentals, earnings, news — 30 req/s free tier), Yahoo Finance via
-  `yfinance-rs` (OHLCV pricing). If direct API access is unavailable for certain sources, the Gemini CLI can be used as
-  an alternative for web-search-based news analysis.
-- **Social Data**: Reddit (r/wallstreetbets, r/investing), X/Twitter APIs — for Sentiment Analyst. If direct API access
-  is unavailable, the Gemini CLI can be used as an alternative for web-search-based sentiment analysis.
-- **UI Framework (Phase 2)**: [GPUI](https://www.gpui.rs/) — GPU-accelerated native Rust UI framework from the creators
+- **Financial Data APIs**: Finnhub (fundamentals, earnings, company news — 30 req/s free tier), Yahoo Finance via
+  `yfinance-rs` (OHLCV pricing, and optionally company-news data where its API surface is sufficient). Gemini CLI is the
+  current fallback for company/news fetching when direct news API access is unavailable.
+- **Social Data**: Direct Reddit and X/Twitter ingestion is intentionally deferred until after the MVP and tracked in
+  `docs/future-enhancements.md`.
+- **UI Framework (Phase 3)**: [GPUI](https://www.gpui.rs/) — GPU-accelerated native Rust UI framework from the creators
   of [Zed](https://zed.dev)
 - **Reference Implementation**: [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents/) (
   Python/LangGraph)

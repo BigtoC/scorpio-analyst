@@ -80,3 +80,26 @@ follow-up that should be revisited later.
     - How to prevent researchers from over-weighting DEX-specific signals relative to fundamentals and macro context
 - **Revisit trigger**: After the sentiment and research-team modules are stable enough to evaluate whether whitelisted
   Hyperliquid signals improve debate quality without adding excessive complexity
+
+### Social-platform sentiment ingestion
+
+- **Status**: Deferred until after the MVP is finished
+- **Source**: `PRD.md`, `openspec/project.md`, and `openspec/changes/add-financial-data/design.md`
+- **Current baseline**: The MVP Sentiment Analyst uses company-specific news data from `Finnhub` and/or `yfinance-rs`
+  for sentiment analysis, with Gemini CLI as a fallback for company/news fetching. Direct Reddit and X/Twitter API usage
+  is out of current scope.
+- **Why it was deferred**: Social-platform ingestion expands the auth surface, moderation/compliance concerns, source
+  normalization, and maintenance burden well beyond the current MVP data layer.
+- **Why revisit later**: Reddit and X/Twitter may add earlier crowd-positioning and retail-conviction signals that are
+  not always visible in company-news coverage alone.
+- **Potential implementation options when revisited**:
+    - Direct Reddit API ingestion for selected finance-focused communities
+    - Direct X/Twitter ingestion where compliant access is available
+    - `twitter-cli` as an operator-managed option for X/Twitter collection: https://github.com/jackwener/twitter-cli
+- **Intentionally deferred details**:
+    - Exact source-priority rules relative to Finnhub/Yahoo Finance news
+    - Credential, compliance, and rate-limit handling for each platform
+    - Deduplication and weighting rules between news-driven and social-driven sentiment
+    - Whether social inputs should feed only the Sentiment Analyst or also enrich researcher debate context
+- **Revisit trigger**: After the MVP news-based sentiment workflow is stable enough to evaluate whether social signals
+  add material value beyond company-specific news sentiment

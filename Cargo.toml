@@ -45,8 +45,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # Utilities
 nonzero_ext = "0.3"
 futures = "0.3"
+finnhub = "0.2.2"
+yfinance-rs = "0.7.2"
 
 [dev-dependencies]
 proptest = "1"
 mockall = "0.13"
 pretty_assertions = "1"
+paft-money = "0.7"
+rust_decimal = "1"

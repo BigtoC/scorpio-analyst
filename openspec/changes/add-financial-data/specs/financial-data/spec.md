@@ -34,7 +34,8 @@ ratios, and insider transactions. All Finnhub transport and deserialization erro
 The system MUST provide an async Finnhub client function that retrieves market news and economic indicator data for a
 given asset symbol. The return type MUST map to the `NewsData` sub-struct defined in `core-types`, including articles,
 macro events, and causal relationships relevant to the target asset. The news client MUST share the same rate limiter
-and error mapping conventions as the fundamental data client.
+and error mapping conventions as the fundamental data client. The same company-specific news inputs MAY be reused by
+both the News Analyst and the MVP Sentiment Analyst baseline.
 
 #### Scenario: Successful News Retrieval
 
@@ -47,6 +48,12 @@ and error mapping conventions as the fundamental data client.
 - **WHEN** the Finnhub news endpoint returns an empty result set for the queried symbol
 - **THEN** the client returns a valid `NewsData` struct with empty collections rather than an error, allowing the
   downstream News Analyst to report the absence of recent news
+
+#### Scenario: Sentiment Analyst Reuses Company News Inputs
+
+- **WHEN** the Sentiment Analyst needs current company-specific narrative inputs during the MVP
+- **THEN** it can consume the same company-news data returned by the financial-data layer instead of requiring direct
+  Reddit or X/Twitter ingestion
 
 ### Requirement: Yahoo Finance OHLCV Client
 
@@ -97,10 +104,10 @@ implementations within `src/data/`.
 
 This capability's implementation MUST remain limited to structured financial market data concerns within
 `src/data/mod.rs`, `src/data/finnhub.rs`, and `src/data/yfinance.rs`. It MUST re-export all public types and
-functions needed by downstream fundamental, news, and technical agent changes from `src/data/mod.rs`. Social-media
-sentiment scraping, embedding, and vector retrieval MUST be handled by the separate `add-sentiment-data` capability.
-The financial-data module MUST NOT modify foundation-owned files (`src/config.rs`, `src/error.rs`, `src/state/*`,
-`src/rate_limit.rs`) or provider-owned files (`src/providers/*`).
+functions needed by downstream fundamental, news, technical, and MVP sentiment agent changes from `src/data/mod.rs`.
+Direct Reddit/X-Twitter scraping and other social-platform ingestion are intentionally deferred to future enhancements
+rather than included in this capability. The financial-data module MUST NOT modify foundation-owned files (`src/config.rs`,
+`src/error.rs`, `src/state/*`, `src/rate_limit.rs`) or provider-owned files (`src/providers/*`).
 
 #### Scenario: Downstream Agent Import Path
 
