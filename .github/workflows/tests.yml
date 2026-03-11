@@ -2,7 +2,13 @@ name: Tests
 
 on:
   push:
+    paths-ignore:
+      - 'docs/**'
+      - 'openspec/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'openspec/**'
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
@@ -34,4 +40,3 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
-
