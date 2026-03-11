@@ -77,6 +77,50 @@ Scorpio-Analyst is designed with a phased user interface approach to provide bot
 
 This project is in the early stages of development. The architecture and core components are being actively built.
 
+## Spec Driven Development Workflow Shortcuts
+
+This repository includes matching OpenCode commands and GitHub Copilot prompt files to simplify the OpenSpec workflow for planned changes.
+
+### Requirements
+
+These shortcuts only work when all the following are true:
+
+- OpenSpec is already set up in the repository
+- `openspec/AGENTS.md` exists
+- `PRD.md` exists
+- `docs/architect-plan.md` exists
+
+### OpenCode Commands
+
+The following custom commands are available through `.opencode/command/`:
+
+- `/spec-writer <spec-name>`
+- `/spec-reviewer <spec-name>`
+- `/spec-code-developer <spec-name>`
+- `/spec-code-reviewer <spec-name>`
+
+### GitHub Copilot Prompts
+
+Matching Copilot prompt files are available in `.github/prompts/`:
+
+- `spec-writer.prompt.md`
+- `spec-reviewer.prompt.md`
+- `spec-code-developer.prompt.md`
+- `spec-code-reviewer.prompt.md`
+
+### Example Usage
+
+```text
+/spec-writer add-sentiment-data
+```
+
+### Workflow Mapping
+
+- `spec-writer`: create a new OpenSpec proposal from the plan
+- `spec-reviewer`: review and improve the proposal docs
+- `spec-code-developer`: implement the approved OpenSpec change
+- `spec-code-reviewer`: review the implementation across requirements, security, performance, code quality, and tests
+
 For a deep dive into the system's architecture, agent roles, and technical specifications, please see the [**Product Requirements Document (PRD.md)**](PRD.md).
 
 Contributions are welcome!
