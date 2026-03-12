@@ -103,3 +103,30 @@ follow-up that should be revisited later.
     - Whether social inputs should feed only the Sentiment Analyst or also enrich researcher debate context
 - **Revisit trigger**: After the MVP news-based sentiment workflow is stable enough to evaluate whether social signals
   add material value beyond company-specific news sentiment
+
+### Crypto-native technical analysis
+
+- **Status**: Deferred until after the MVP is finished
+- **Source**: `PRD.md` and `openspec/changes/add-technical-analysis/design.md`
+- **Current baseline**: The MVP technical-analysis layer is designed for traditional OHLCV-based long-term investing
+  workflows. It computes price/volume indicators from candle data and derives long-horizon support/resistance, but it is
+  not treated as a complete crypto-analysis solution.
+- **Why it was deferred**: Full crypto analysis expands scope beyond standard OHLCV indicators into 24/7 market
+  structure, logarithmic-scale interpretation, and on-chain metrics such as MVRV. Adding that now would widen both the
+  data layer and the interpretation layer before the core MVP workflow is stable.
+- **Why revisit later**: Crypto assets may require different long-horizon interpretation rules and additional valuation
+  signals that are not captured by OHLCV-derived indicators alone.
+- **Potential implementation options when revisited**:
+    - Add crypto-specific market assumptions such as explicit UTC candle/session boundaries for 24/7 trading
+    - Add log-scale-aware trend and support/resistance interpretation for long-horizon crypto charts
+    - Add on-chain valuation and positioning metrics such as MVRV as a separate capability layered on top of the core
+      technical-analysis module
+- **Intentionally deferred details**:
+    - Whether crypto support should extend the existing `technical-analysis` capability or be introduced as a separate
+      crypto-specific capability
+    - Which on-chain metrics should be first-class in MVP+1 (for example MVRV, NUPL, realized cap, exchange flows)
+    - Which market data provider(s) should supply crypto OHLCV and whether volume should be exchange-specific or
+      aggregated
+    - How log-scale interpretation should affect prompts, reports, and any future UI charting surfaces
+- **Revisit trigger**: After the MVP technical-analysis and financial-data layers are stable enough to evaluate whether
+  crypto-specific workflows justify a dedicated follow-up capability

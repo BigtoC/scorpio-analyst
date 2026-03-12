@@ -194,6 +194,11 @@ propagation issues frequently encountered when calculating iterative variables l
 Exponential Moving Averages over long horizons. The speed of native Rust array processing allows the Technical Analyst
 to calculate 60 distinct technical indicators across thousands of historical ticks in a fraction of a millisecond.
 
+For the MVP, this technical-analysis layer is scoped to traditional OHLCV-based long-term investing workflows. While
+some of the same indicators may later be reused for digital assets, the MVP MUST NOT be treated as a fully compatible
+crypto-analysis solution. Full crypto-native analysis is deferred to future enhancements because it requires explicit
+24/7 market-structure handling, logarithmic-scale-aware interpretation, and on-chain valuation metrics such as MVRV.
+
 ## Core System Architecture and Topographical Flow
 
 The architecture of the Rust-native TradingAgents system enforces a strict separation between the cognitive reasoning
@@ -445,7 +450,9 @@ The Technical Analyst identifies actionable entry and exit signals based entirel
   or oversold < 30 conditions), the Moving Average Convergence Divergence (identifying trend reversals via signal line
   crossovers), and the Average True Range (measuring historical volatility). The LLM does not perform the math; it
   simply interprets the statistical output provided by `kand`, producing a definitive summary of momentum and
-  support/resistance boundaries.
+  support/resistance boundaries. This MVP interpretation path is designed for traditional long-term investing workflows;
+  crypto-native interpretation concerns such as logarithmic scaling, 24/7 market structure, and MVRV-style on-chain
+  metrics are intentionally deferred beyond the MVP.
 * **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis

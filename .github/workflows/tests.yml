@@ -2,13 +2,19 @@ name: Tests
 
 on:
   push:
-    paths-ignore:
-      - 'docs/**'
-      - 'openspec/**'
+    paths:
+      - '.github/workflows/tests.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - 'openspec/**'
+    paths:
+      - '.github/workflows/tests.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
