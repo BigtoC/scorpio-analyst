@@ -25,7 +25,9 @@ Each function MUST return `Result<T, TradingError>` where unavailable values due
 represented as `Option<f64>` (`None`) rather than NaN. Empty or zero-length input arrays MUST produce a
 `TradingError::SchemaViolation` rather than a panic. The implementation SHOULD remain extensible enough to support the
 architect plan's broader 60+ indicator batch target without changing the public module boundary introduced by this
-capability.
+capability. This MVP capability is designed for traditional OHLCV-based long-term investing workflows and MUST NOT be
+described as fully compatible with crypto-native analysis requirements such as logarithmic-scale interpretation,
+on-chain valuation metrics like MVRV, or explicit 24/7 market-structure handling.
 
 #### Scenario: RSI Calculation With Sufficient Data
 
@@ -48,6 +50,12 @@ capability.
 
 - **WHEN** an indicator function is called with fewer candles than its lookback period requires
 - **THEN** it returns a result where all values are `None` rather than producing NaN or panicking
+
+#### Scenario: Crypto Analysis Expectations Are Scoped Out Of MVP
+
+- **WHEN** a caller attempts to use this MVP capability as a complete crypto-analysis solution
+- **THEN** the documentation and proposal scope make clear that OHLCV indicator calculations are reusable but full
+  crypto-native analysis remains a future improvement outside the MVP boundary
 
 ### Requirement: Batch Indicator Calculation
 

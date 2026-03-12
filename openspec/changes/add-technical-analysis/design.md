@@ -6,7 +6,10 @@ The `add-project-foundation` change established core types including `TechnicalD
 support/resistance levels), error handling (`TradingError`), and the module skeleton (`src/indicators/`). The
 `add-financial-data` change provides the `Vec<Candle>` OHLCV data from Yahoo Finance via `yfinance-rs`. This change
 fills in the technical indicator calculation layer that transforms raw candle data into the `TechnicalData` struct
-consumed by the Technical Analyst agent.
+consumed by the Technical Analyst agent. The MVP design target is long-term investing over traditional OHLCV-based
+markets. Crypto assets can still reuse some of the same indicators, but the current MVP is not fully compatible with
+crypto-native analysis because it does not include logarithmic-scale interpretation, on-chain valuation metrics (for
+example MVRV), or explicit 24/7 market-structure handling.
 
 **Stakeholders:** Technical Analyst agent (primary consumer), `add-analyst-team` (binds indicator tools to the agent),
 `add-graph-orchestration` (indicator results flow into `TradingState.technical_indicators`).
@@ -31,6 +34,8 @@ consumed by the Technical Analyst agent.
   - Fetching OHLCV data from Yahoo Finance -- belongs to `add-financial-data`.
   - Real-time streaming indicator updates -- the MVP operates on historical snapshots.
   - Custom user-defined indicator formulas -- all indicators follow `kand`'s built-in implementations.
+  - Full crypto-native technical analysis, including log-scale-aware interpretation, MVRV and other on-chain metrics,
+    and crypto-specific market-structure adjustments -- deferred to future improvements.
 
 ## Architectural Overview
 
@@ -117,3 +122,5 @@ broader 60+ indicator batch-calculation target without changing the public modul
 - Should indicator periods (e.g., RSI 14, SMA 50/200) be configurable via `Config`, or hardcoded to match the
   prompt spec? (Current decision: hardcode to match the reference paper's defaults; configurability deferred
   to post-MVP.)
+- Future improvement: should crypto-specific analysis become a separate capability layered on top of this OHLCV
+  calculator, or should `technical-analysis` itself expand to cover crypto-native interpretation and on-chain metrics?

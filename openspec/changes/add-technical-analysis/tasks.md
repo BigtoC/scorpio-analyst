@@ -90,6 +90,9 @@
 ## 7. Documentation and CI
 
 - [ ] 7.1 Add inline doc comments (`///`) for all public types and functions in `calculator.rs` and `mod.rs`
-- [ ] 7.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
-- [ ] 7.3 Ensure `cargo fmt -- --check` passes
-- [ ] 7.4 Ensure `cargo test` passes all new and existing tests
+- [ ] 7.2 Document that the MVP indicator layer is designed for traditional OHLCV-based long-term investing and is
+      not fully compatible with crypto-native analysis requirements (log-scale interpretation, MVRV, 24/7 market
+      assumptions), which remain future improvements
+- [ ] 7.3 Ensure `cargo clippy -- -D warnings` passes with no new warnings
+- [ ] 7.4 Ensure `cargo fmt -- --check` passes
+- [ ] 7.5 Ensure `cargo test` passes all new and existing tests

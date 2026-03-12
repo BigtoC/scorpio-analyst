@@ -7,6 +7,9 @@ VWMA, and others) before it can reason about price action. LLMs cannot perform p
 time-series arrays, so the system must compute these indicators natively in Rust and inject the results into the LLM
 context. This proposal introduces the `kand`-based technical analysis calculation layer that transforms raw OHLCV
 candle data (provided by `add-financial-data`) into a populated `TechnicalData` struct ready for agent consumption.
+The MVP is designed around traditional OHLCV-based long-term investing workflows and is not fully compatible with
+crypto-specific analysis needs such as logarithmic-scale interpretation, on-chain valuation metrics like MVRV, and
+24/7 market-structure assumptions.
 
 ## What Changes
 
@@ -25,6 +28,8 @@ candle data (provided by `add-financial-data`) into a populated `TechnicalData` 
   can bind them as typed tools through the agent builder helper from `llm-providers`. These wrappers MUST operate on
   pre-fetched candle data from `financial-data` rather than fetching market data directly, preserving the planned
   boundary between data retrieval and indicator calculation.
+- Explicitly defer full crypto-native analysis to future improvements rather than treating the MVP OHLCV indicator
+  layer as fully sufficient for digital-asset workflows.
 
 ## Impact
 
