@@ -196,22 +196,7 @@ mod tests {
     use super::*;
     use crate::data::yfinance::Candle;
     use crate::error::TradingError;
-
-    fn rising_candles(n: usize, start: f64, step: f64) -> Vec<Candle> {
-        (0..n)
-            .map(|i| {
-                let c = start + i as f64 * step;
-                Candle {
-                    date: format!("2024-01-{:02}", (i % 28) + 1),
-                    open: c,
-                    high: c + step * 0.5,
-                    low: (c - step * 0.5).max(0.01),
-                    close: c,
-                    volume: Some(1_000_000 + i as u64 * 10_000),
-                }
-            })
-            .collect()
-    }
+    use crate::indicators::test_utils::*;
 
     // ── Named indicator API ────────────────────────────────────────────────
 

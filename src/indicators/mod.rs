@@ -18,36 +18,25 @@
 //! };
 //! ```
 
-pub mod refactored_calc;
+mod batch;
+mod core_math;
+mod support_resistance;
+mod tools;
+mod types;
+mod utils;
 
-pub use refactored_calc::{
-    // Intermediate result types
-    BollingerResult,
-    // Tool structs
-    CalculateAllIndicators,
-    // Tool arg types
-    CalculateAllIndicatorsArgs,
-    CalculateAtr,
-    CalculateAtrArgs,
-    CalculateBollingerArgs,
-    CalculateBollingerBands,
-    CalculateIndicatorByName,
-    CalculateIndicatorByNameArgs,
-    CalculateMacd,
-    CalculateMacdArgs,
-    CalculateRsi,
-    CalculateRsiArgs,
-    MacdResult,
-    NamedIndicatorOutput,
-    // Calculation functions
-    calculate_all_indicators,
-    calculate_atr,
-    calculate_bollinger_bands,
-    calculate_ema,
-    calculate_indicator_by_name,
-    calculate_macd,
-    calculate_rsi,
-    calculate_sma,
-    calculate_vwma,
-    derive_support_resistance,
+#[cfg(test)]
+pub mod test_utils;
+
+pub use batch::{calculate_all_indicators, calculate_indicator_by_name};
+pub use core_math::{
+    calculate_atr, calculate_bollinger_bands, calculate_ema, calculate_macd, calculate_rsi,
+    calculate_sma, calculate_vwma,
 };
+pub use support_resistance::derive_support_resistance;
+pub use tools::{
+    CalculateAllIndicators, CalculateAllIndicatorsArgs, CalculateAtr, CalculateAtrArgs,
+    CalculateBollingerArgs, CalculateBollingerBands, CalculateIndicatorByName,
+    CalculateIndicatorByNameArgs, CalculateMacd, CalculateMacdArgs, CalculateRsi, CalculateRsiArgs,
+};
+pub use types::{BollingerResult, MacdResult, NamedIndicatorOutput};

@@ -186,34 +186,7 @@ pub fn derive_support_resistance(candles: &[Candle]) -> (Option<f64>, Option<f64
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::yfinance::Candle;
-
-    fn candle(close: f64) -> Candle {
-        Candle {
-            date: "2024-01-01".to_owned(),
-            open: close,
-            high: close + 0.5,
-            low: (close - 0.5).max(0.01),
-            close,
-            volume: Some(1_000_000),
-        }
-    }
-
-    fn rising_candles(n: usize, start: f64, step: f64) -> Vec<Candle> {
-        (0..n)
-            .map(|i| {
-                let c = start + i as f64 * step;
-                Candle {
-                    date: format!("2024-01-{:02}", (i % 28) + 1),
-                    open: c,
-                    high: c + step * 0.5,
-                    low: (c - step * 0.5).max(0.01),
-                    close: c,
-                    volume: Some(1_000_000 + i as u64 * 10_000),
-                }
-            })
-            .collect()
-    }
+    use crate::indicators::test_utils::*;
 
     #[test]
     fn support_resistance_empty_returns_none() {
