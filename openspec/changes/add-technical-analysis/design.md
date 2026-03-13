@@ -40,13 +40,20 @@ example MVRV), or explicit 24/7 market-structure handling.
 ## Architectural Overview
 
     src/indicators/
-    +-- mod.rs           <-- Re-exports calculator public API
-    +-- calculator.rs    <-- kand wrapper: individual + batch indicator calculations
+    +-- mod.rs               <-- Facade re-exporting calculator public API
+    +-- refactored_calc/     <-- kand wrapper submodules:
+        +-- mod.rs           <-- Inner facade
+        +-- core_math.rs     <-- Individual indicator functions
+        +-- batch.rs         <-- Batch calculation and named indicator API
+        +-- tools.rs         <-- rig #[tool] implementations
+        +-- support_resistance.rs <-- Pivot derivation
+        +-- types.rs         <-- Result structs
+        +-- utils.rs         <-- Crate-private helpers
 
 ### Data Flow
 
     Vec<Candle> (from yfinance.rs)
-        --> calculator.rs (kand computations in f64)
+        --> refactored_calc/core_math.rs (kand computations in f64)
         --> TechnicalData (written to TradingState.technical_indicators)
 
 Tool wrappers in this capability operate on candle data that has already been fetched through the financial-data
@@ -108,7 +115,7 @@ broader 60+ indicator batch-calculation target without changing the public modul
 ## Risks / Trade-offs
 
 - **`kand` API stability**: v0.2 is relatively new. Mitigated by wrapping all calls behind internal functions
-  so a future crate version change only affects `calculator.rs`.
+  so a future crate version change only affects `refactored_calc/core_math.rs`.
 - **Indicator lookback periods**: Some indicators (e.g., 200 SMA) require 200+ candles of history. If the
   requested date range yields fewer candles, those indicators return `None`. The Technical Analyst prompt
   instructs the LLM to note when indicators are unavailable.
