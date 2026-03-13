@@ -109,7 +109,7 @@ Matching Copilot prompt files are available in `.github/prompts/`:
 - `spec-code-reviewer.prompt.md`
 
 ### Example Usage
-
+In CLI or in chat:
 ```text
 /spec-writer add-sentiment-data
 ```
