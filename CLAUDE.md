@@ -36,7 +36,7 @@ layer:
 3. **Trader Agent** (sequential) — Synthesizes debate into a structured `TradeProposal`
 4. **Risk Management Team** (parallel fan-out + cyclic debate) — Aggressive, Conservative, Neutral risk agents debate,
    coordinated by a Risk Moderator (`max_risk_rounds`)
-5. **Fund Manager** (sequential) — Final approve/reject decision
+5. **Fund Manager** (sequential) — Final approve/reject decision, with deterministic fallback: reject if Conservative + Neutral risk agents both flag a violation
 
 ### Key Design Decisions
 
@@ -49,16 +49,21 @@ layer:
   single struct-level lock). Never hold `std::sync::Mutex` across `.await` — use `tokio::sync::RwLock`.
 - **Custom GitHub Copilot provider**: Implemented as a custom `rig` provider via ACP (Agent Client Protocol) over
   JSON-RPC 2.0/NDJSON, spawning `copilot --acp --stdio`.
+- **Token usage tracking**: Every LLM call records model ID, wall-clock latency, and provider-reported token counts
+  into a `TokenUsageTracker` on `TradingState`. Providers that don't expose authoritative counts (e.g. Copilot via ACP)
+  record documented unavailable metadata. Per-phase and per-agent breakdowns are displayed after every run.
+- **Phased UI**: Phase 1 = CLI (`clap`); Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop
+  app (`gpui`, behind `--features gui`). All phases share the same core `lib.rs`.
 
 ### Planned Crate Dependencies
 
 | Crate                              | Purpose                                                                            |
 |------------------------------------|------------------------------------------------------------------------------------|
 | `rig-core` 0.31                    | LLM provider abstraction (OpenAI, Anthropic, Gemini, custom Copilot)               |
-| `graph-flow` 0.2 (feature `"rig"`) | Stateful directed graph orchestration (LangGraph equivalent)                       |
+| `graph-flow` 0.4 (feature `"rig"`) | Stateful directed graph orchestration (LangGraph equivalent)                       |
 | `finnhub` 0.2                      | Corporate fundamentals, earnings, news                                             |
 | `yfinance-rs` 0.7                  | Historical OHLCV pricing data                                                      |
-| `kand` 0.0.9                       | Technical indicators (RSI, MACD, ATR) in pure Rust f64                             |
+| `kand` 0.2                         | Technical indicators (RSI, MACD, ATR) in pure Rust f64                             |
 | `tokio`                            | Async runtime                                                                      |
 | `serde` / `serde_json`             | State serialization                                                                |
 | `anyhow` / `thiserror`             | Error handling (anyhow for context propagation, thiserror for typed domain errors) |
@@ -66,6 +71,10 @@ layer:
 | `tracing` / `tracing-subscriber`   | Structured observability                                                           |
 | `secrecy`                          | API key management (zeroed on drop, excluded from Debug/logs)                      |
 | `dotenvy`                          | .env file loading                                                                  |
+| `clap`                             | Subcommand-based CLI framework                                                     |
+| `colored` / `comfy-table`          | Human-readable output formatting                                                   |
+| `ratatui` + `crossterm`            | Interactive TUI (Phase 2, behind feature flag)                                     |
+| `gpui`                             | GPU-accelerated native desktop UI (Phase 3, behind `gui` feature flag)             |
 | `mockall` / `proptest`             | Testing (mocks + property-based)                                                   |
 
 ### Configuration Loading Order
