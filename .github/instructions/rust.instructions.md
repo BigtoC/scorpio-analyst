@@ -116,6 +116,7 @@ Eagerly implement common traits where appropriate:
 - Use feature flags for optional functionality.
 - Organize code into modules using `mod.rs` or named files.
 - Keep `main.rs` or `lib.rs` minimal - move logic to modules.
+- **Refactoring & Modularity**: When refactoring large files (e.g. >300 lines) into smaller submodules, utilize the **Facade Pattern**. Re-export the public items from the submodules in the parent `mod.rs` file. This strategy ensures the refactoring remains an internal implementation detail and strictly prevents downstream API breakage.
 
 ## Quality Checklist
 
@@ -134,6 +135,6 @@ Before publishing or reviewing Rust code, ensure:
 - [ ] **API Design**: Functions are predictable, flexible, and type-safe
 - [ ] **Future Proofing**: Private fields in structs, sealed traits where appropriate
 - [ ] **Duplicated codes**: Identify duplicated codes and refactored into reusable functions or modules
-- [ ] **Design Patterns**: Apply proper design patterns (e.g., Builder, Strategy, Factory, Newtype) to write clean, maintainable code
-- [ ] **Module Cohesion**: Each file has a single, focused responsibility; split files exceeding ~300 lines or mixing multiple concerns into separate modules
+- [ ] **Design Patterns**: Apply proper design patterns (e.g., Builder, Strategy, Factory, Newtype, Facade) to write clean, maintainable code
+- [ ] **Module Cohesion**: Each file has a single, focused responsibility; split files exceeding ~300 lines or mixing multiple concerns into separate modules. Use the Facade pattern in `mod.rs` to shield consumers from internal refactoring and prevent downstream API breakage.
 - [ ] **Tooling**: Code passes `cargo fmt`, `cargo clippy`, and `cargo test`
