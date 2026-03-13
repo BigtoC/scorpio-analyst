@@ -134,4 +134,6 @@ Before publishing or reviewing Rust code, ensure:
 - [ ] **API Design**: Functions are predictable, flexible, and type-safe
 - [ ] **Future Proofing**: Private fields in structs, sealed traits where appropriate
 - [ ] **Duplicated codes**: Identify duplicated codes and refactored into reusable functions or modules
+- [ ] **Design Patterns**: Apply proper design patterns (e.g., Builder, Strategy, Factory, Newtype) to write clean, maintainable code
+- [ ] **Module Cohesion**: Each file has a single, focused responsibility; split files exceeding ~300 lines or mixing multiple concerns into separate modules
 - [ ] **Tooling**: Code passes `cargo fmt`, `cargo clippy`, and `cargo test`
