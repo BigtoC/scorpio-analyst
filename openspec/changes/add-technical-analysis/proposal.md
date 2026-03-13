@@ -13,7 +13,7 @@ crypto-specific analysis needs such as logarithmic-scale interpretation, on-chai
 
 ## What Changes
 
-- Implement a technical indicator calculator module (`src/indicators/refactored_calc/`) that accepts `Vec<Candle>` from
+- Implement technical indicator calculator submodules under `src/indicators/` that accept `Vec<Candle>` from
   the Yahoo Finance client and computes technical indicators using the `kand` crate in `f64` extended precision. The
   calculator MUST cover the Technical Analyst prompt's exact indicator names (`close_50_sma`, `close_200_sma`,
   `close_10_ema`, `macd`, `macds`, `macdh`, `rsi`, `boll`, `boll_ub`, `boll_lb`, `atr`, `vwma`) and support the
@@ -34,7 +34,7 @@ crypto-specific analysis needs such as logarithmic-scale interpretation, on-chai
 ## Impact
 
 - Affected specs: `technical-analysis` (new)
-- Affected code: `src/indicators/mod.rs` (fill in skeleton), `src/indicators/refactored_calc/` (new)
+- Affected code: `src/indicators/mod.rs` (fill in facade), `src/indicators/{core_math,batch,tools,support_resistance,types,utils}.rs` (new)
 - Dependencies: `add-project-foundation` (core types including `TechnicalData`, error handling, module stubs),
   `add-llm-providers` (rig tool macro patterns), `add-financial-data` (provides `Vec<Candle>` input type)
 - No modifications to foundation-owned files (`src/config.rs`, `src/error.rs`, `src/state/*`, `src/rate_limit.rs`)

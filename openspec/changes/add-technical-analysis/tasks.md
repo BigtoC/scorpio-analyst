@@ -6,7 +6,7 @@
 - [x] `add-llm-providers` is complete (rig-core integration and tool macro patterns)
 - [x] `add-financial-data` is complete (provides `Vec<Candle>` input type from `yfinance-rs`)
 
-## 1. Individual Indicator Functions (`src/indicators/refactored_calc/core_math.rs`)
+## 1. Individual Indicator Functions (`src/indicators/core_math.rs`)
 
 - [x] 1.1 Define `IndicatorCalculator` struct (or stateless module functions) that accepts `&[Candle]` as input
 - [x] 1.2 Implement `calculate_rsi(candles: &[Candle], period: usize)` -- compute RSI via `kand` in `f64`,
