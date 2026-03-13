@@ -1,4 +1,5 @@
-# Scorpio-Analyst: A Rust-Native Multi-Agent Financial Trading System
+# Scorpio-Analyst
+> Your personal Multi-Agent portfolio manager and financial analyst team
 
 Scorpio-Analyst is a Rust-native reimplementation of the [TradingAgents framework](https://github.com/TauricResearch/TradingAgents), inspired by the paper [_TradingAgents: Multi-Agents LLM Financial Trading Framework_](https://arxiv.org/pdf/2412.20138). It simulates a sophisticated trading firm by employing a society of specialized AI agents that collaborate to make autonomous, explainable financial trading decisions.
 
