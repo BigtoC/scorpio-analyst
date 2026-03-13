@@ -458,7 +458,9 @@ mod tests {
         let candles = rising_candles(100, 50.0, 1.0);
         let result = calculate_bollinger_bands(&candles, 20, 2.0).unwrap();
         for i in 0..result.upper.len() {
-            if let (Some(u), Some(m), Some(l)) = (result.upper[i], result.middle[i], result.lower[i]) {
+            if let (Some(u), Some(m), Some(l)) =
+                (result.upper[i], result.middle[i], result.lower[i])
+            {
                 assert!(u > m, "Upper {u} should be > middle {m} at index {i}");
                 assert!(m > l, "Middle {m} should be > lower {l} at index {i}");
             }
