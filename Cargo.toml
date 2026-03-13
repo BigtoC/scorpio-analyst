@@ -47,6 +47,7 @@ nonzero_ext = "0.3"
 futures = "0.3"
 finnhub = "0.2.2"
 yfinance-rs = "0.7.2"
+kand = "0.2.2"
 
 [dev-dependencies]
 proptest = "1"
