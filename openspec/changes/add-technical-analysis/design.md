@@ -40,13 +40,21 @@ example MVRV), or explicit 24/7 market-structure handling.
 ## Architectural Overview
 
     src/indicators/
-    +-- mod.rs           <-- Re-exports calculator public API
-    +-- calculator.rs    <-- kand wrapper: individual + batch indicator calculations
+    +-- mod.rs                 <-- Facade re-exporting public API
+    +-- core_math.rs           <-- Individual indicator functions
+    +-- batch.rs               <-- Batch calculation and named indicator API
+    +-- tools.rs               <-- rig #[tool] implementations
+    +-- support_resistance.rs   <-- Pivot derivation
+    +-- types.rs               <-- Result structs
+    +-- utils.rs               <-- Crate-private helpers
+
+The module uses the **Facade Pattern**: submodules are private (mod-level), and `mod.rs` re-exports all public
+symbols so downstream code sees a single, consistent public API via `use scorpio_analyst::indicators::*`.
 
 ### Data Flow
 
     Vec<Candle> (from yfinance.rs)
-        --> calculator.rs (kand computations in f64)
+        --> core_math.rs (kand computations in f64)
         --> TechnicalData (written to TradingState.technical_indicators)
 
 Tool wrappers in this capability operate on candle data that has already been fetched through the financial-data
@@ -103,12 +111,13 @@ broader 60+ indicator batch-calculation target without changing the public modul
   indicator calculation. Data retrieval stays in `financial-data`, and tool wrappers here operate on pre-fetched
   candle inputs.
 - **Tool wrappers co-located with calculator**: Follows the same pattern as `add-financial-data` where `#[tool]`
-  wrappers live alongside the implementation code they delegate to.
+  wrappers live alongside the implementation code they delegate to. In this case, `tools.rs` imports calculation
+  functions from the sibling submodules and delegates to them.
 
 ## Risks / Trade-offs
 
 - **`kand` API stability**: v0.2 is relatively new. Mitigated by wrapping all calls behind internal functions
-  so a future crate version change only affects `calculator.rs`.
+  so a future crate version change only affects `src/indicators/core_math.rs`.
 - **Indicator lookback periods**: Some indicators (e.g., 200 SMA) require 200+ candles of history. If the
   requested date range yields fewer candles, those indicators return `None`. The Technical Analyst prompt
   instructs the LLM to note when indicators are unavailable.
