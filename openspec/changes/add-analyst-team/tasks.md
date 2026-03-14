@@ -64,19 +64,19 @@
 
 ## 5. Fan-Out Execution (`src/agents/analyst/mod.rs`)
 
-- [ ] 5.1 Implement `run_analyst_team` function that spawns all four analysts concurrently via `tokio::spawn`,
+- [x] 5.1 Implement `run_analyst_team` function that spawns all four analysts concurrently via `tokio::spawn`,
       each wrapped in `tokio::time::timeout(Duration::from_secs(config.llm.analyst_timeout_secs))`
-- [ ] 5.2 Implement result collection via `tokio::join!` or equivalent, collecting
+- [x] 5.2 Implement result collection via `tokio::join!` or equivalent, collecting
       `Result<(T, AgentTokenUsage), TradingError>` from each task
-- [ ] 5.3 Implement graceful degradation logic: count failures, apply 1-failure/2-failure policy, write
+- [x] 5.3 Implement graceful degradation logic: count failures, apply 1-failure/2-failure policy, write
       successful outputs to `TradingState` using per-field `Arc<RwLock<Option<T>>>` locking
-- [ ] 5.4 Return collected `Vec<AgentTokenUsage>` for all completed analysts alongside the (possibly partial)
+- [x] 5.4 Return collected `Vec<AgentTokenUsage>` for all completed analysts alongside the (possibly partial)
       `TradingState` updates
-- [ ] 5.5 Re-export `run_analyst_team` and individual analyst types from `src/agents/analyst/mod.rs`
-- [ ] 5.6 Write unit test: all four analysts succeed, verify all four `TradingState` fields populated
-- [ ] 5.7 Write unit test: one analyst times out, verify three fields populated, one `None`, warning logged
-- [ ] 5.8 Write unit test: two analysts fail, verify `TradingError::AnalystError` returned with both agent names
-- [ ] 5.9 Write unit test: configurable timeout (60s) is respected
+- [x] 5.5 Re-export `run_analyst_team` and individual analyst types from `src/agents/analyst/mod.rs`
+- [x] 5.6 Write unit test: all four analysts succeed, verify all four `TradingState` fields populated
+- [x] 5.7 Write unit test: one analyst times out, verify three fields populated, one `None`, warning logged
+- [x] 5.8 Write unit test: two analysts fail, verify `TradingError::AnalystError` returned with both agent names
+- [x] 5.9 Write unit test: configurable timeout (60s) is respected
 
 ## 6. Integration Tests
 
@@ -88,8 +88,8 @@
 
 ## 7. Documentation and CI
 
-- [ ] 7.1 Add inline doc comments (`///`) for all public types and functions in `mod.rs`, `fundamental.rs`,
+- [x] 7.1 Add inline doc comments (`///`) for all public types and functions in `mod.rs`, `fundamental.rs`,
       `sentiment.rs`, `news.rs`, and `technical.rs`
-- [ ] 7.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
-- [ ] 7.3 Ensure `cargo fmt -- --check` passes
-- [ ] 7.4 Ensure `cargo test` passes all new and existing tests
+- [x] 7.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
+- [x] 7.3 Ensure `cargo fmt -- --check` passes
+- [x] 7.4 Ensure `cargo test` passes all new and existing tests
