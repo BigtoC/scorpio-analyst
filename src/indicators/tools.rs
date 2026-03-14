@@ -433,7 +433,7 @@ mod tests {
 
     async fn seeded_context(count: usize) -> OhlcvToolContext {
         let context = OhlcvToolContext::new();
-        context.store(rising_candles(count, 100.0, 1.0)).await;
+        let _ = context.store(rising_candles(count, 100.0, 1.0)).await;
         context
     }
 
