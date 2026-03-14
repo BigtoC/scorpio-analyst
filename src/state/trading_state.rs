@@ -97,6 +97,9 @@ impl TradingState {
             "analyst_handles() called on a TradingState that already has analyst data; \
              did you forget to call TradingState::new() for this analysis cycle?"
         );
+        // The four clones below are near-zero cost: all fields are None at this
+        // point (enforced by the debug_assert above), so each clone is just
+        // Option::None — a single-byte copy with no heap allocation.
         AnalystStateHandles {
             fundamental_metrics: Arc::new(RwLock::new(self.fundamental_metrics.clone())),
             technical_indicators: Arc::new(RwLock::new(self.technical_indicators.clone())),
