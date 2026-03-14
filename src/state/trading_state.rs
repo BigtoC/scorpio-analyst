@@ -11,7 +11,9 @@ use super::{
 /// A single message entry in a debate or risk discussion history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DebateMessage {
+    /// The speaker role, e.g. `"bullish_researcher"`, `"bearish_researcher"`, or `"moderator"`.
     pub role: String,
+    /// The free-text content of the message produced by the LLM agent.
     pub content: String,
 }
 
@@ -110,6 +112,9 @@ impl TradingState {
 
     /// Merge concurrent analyst results back into the main state after fan-out completes.
     pub async fn apply_analyst_handles(&mut self, handles: &AnalystStateHandles) {
+        // All four tasks have already finished (their JoinHandles were awaited before
+        // this call), so these `.read()` locks are uncontested: no task holds a write
+        // lock at this point.  They still use `.await` to satisfy the async RwLock API.
         self.fundamental_metrics = handles.fundamental_metrics.read().await.clone();
         self.technical_indicators = handles.technical_indicators.read().await.clone();
         self.market_sentiment = handles.market_sentiment.read().await.clone();

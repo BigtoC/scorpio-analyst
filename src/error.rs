@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::config::LlmConfig;
+
 /// Unified error type for the trading system.
 #[derive(Debug, Error)]
 pub enum TradingError {
@@ -47,6 +49,14 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
+    /// Build a `RetryPolicy` from the LLM configuration values.
+    pub fn from_config(cfg: &LlmConfig) -> Self {
+        Self {
+            max_retries: cfg.retry_max_retries,
+            base_delay: Duration::from_millis(cfg.retry_base_delay_ms),
+        }
+    }
+
     /// Calculate the delay for a given attempt (0-indexed), using exponential backoff.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         self.base_delay * 2u32.saturating_pow(attempt)
@@ -71,10 +81,17 @@ impl RetryPolicy {
 /// Degradation rules:
 /// - 1 failure: continue with partial data
 /// - 2+ failures: abort the cycle
-pub fn check_analyst_degradation(total: usize, failures: usize) -> Result<(), TradingError> {
+///
+/// Pass the names of the failed agents; the error message includes their names
+/// and the count so upstream callers can diagnose which analysts failed.
+pub fn check_analyst_degradation(
+    total: usize,
+    failed_agents: &[String],
+) -> Result<(), TradingError> {
+    let failures = failed_agents.len();
     if failures >= 2 || (total > 0 && failures == total) {
         return Err(TradingError::AnalystError {
-            agent: "fan-out".to_owned(),
+            agent: failed_agents.join(", "),
             message: format!("{failures}/{total} analysts failed — aborting cycle"),
         });
     }
@@ -95,16 +112,23 @@ mod tests {
 
     #[test]
     fn degradation_allows_single_failure() {
-        assert!(check_analyst_degradation(4, 1).is_ok());
+        assert!(check_analyst_degradation(4, &["Fundamental Analyst".to_owned()]).is_ok());
     }
 
     #[test]
     fn degradation_aborts_on_two_failures() {
-        assert!(check_analyst_degradation(4, 2).is_err());
+        let failed = vec!["Fundamental Analyst".to_owned(), "News Analyst".to_owned()];
+        assert!(check_analyst_degradation(4, &failed).is_err());
     }
 
     #[test]
     fn degradation_aborts_on_total_failure() {
-        assert!(check_analyst_degradation(4, 4).is_err());
+        let failed = vec![
+            "A".to_owned(),
+            "B".to_owned(),
+            "C".to_owned(),
+            "D".to_owned(),
+        ];
+        assert!(check_analyst_degradation(4, &failed).is_err());
     }
 }

@@ -260,55 +260,36 @@ impl LlmAgent {
     {
         use rig::completion::TypedPrompt;
 
+        // Capture the error-mapping closure once so each arm stays a single expression.
+        let map_err = |err| {
+            map_structured_output_error_with_context(self.provider_name(), self.model_id(), err)
+        };
+
         match &self.inner {
             LlmAgentInner::OpenAI(agent) => agent
                 .prompt_typed::<T>(prompt)
                 .max_turns(max_turns)
                 .extended_details()
                 .await
-                .map_err(|err| {
-                    map_structured_output_error_with_context(
-                        self.provider_name(),
-                        self.model_id(),
-                        err,
-                    )
-                }),
+                .map_err(map_err),
             LlmAgentInner::Anthropic(agent) => agent
                 .prompt_typed::<T>(prompt)
                 .max_turns(max_turns)
                 .extended_details()
                 .await
-                .map_err(|err| {
-                    map_structured_output_error_with_context(
-                        self.provider_name(),
-                        self.model_id(),
-                        err,
-                    )
-                }),
+                .map_err(map_err),
             LlmAgentInner::Gemini(agent) => agent
                 .prompt_typed::<T>(prompt)
                 .max_turns(max_turns)
                 .extended_details()
                 .await
-                .map_err(|err| {
-                    map_structured_output_error_with_context(
-                        self.provider_name(),
-                        self.model_id(),
-                        err,
-                    )
-                }),
+                .map_err(map_err),
             LlmAgentInner::Copilot(agent) => agent
                 .prompt_typed::<T>(prompt)
                 .max_turns(max_turns)
                 .extended_details()
                 .await
-                .map_err(|err| {
-                    map_structured_output_error_with_context(
-                        self.provider_name(),
-                        self.model_id(),
-                        err,
-                    )
-                }),
+                .map_err(map_err),
         }
     }
 
@@ -349,48 +330,7 @@ pub struct LlmAgent {
 /// Returns `TradingError::Config` if the provider is unknown or the API key is missing
 /// (delegated to [`create_provider_client`]).
 pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAgent {
-    match &handle.client {
-        ProviderClient::OpenAI(c) => {
-            use rig::prelude::CompletionClient;
-            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::OpenAI(agent),
-            }
-        }
-        ProviderClient::Anthropic(c) => {
-            use rig::prelude::CompletionClient;
-            let agent = c
-                .agent(handle.model_id())
-                .preamble(system_prompt)
-                .max_tokens(4096)
-                .build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Anthropic(agent),
-            }
-        }
-        ProviderClient::Gemini(c) => {
-            use rig::prelude::CompletionClient;
-            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Gemini(agent),
-            }
-        }
-        ProviderClient::Copilot(c) => {
-            use rig::prelude::CompletionClient;
-            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Copilot(agent),
-            }
-        }
-    }
+    build_agent_inner(handle, system_prompt, None)
 }
 
 /// Build a configured [`LlmAgent`] with a set of tools attached.
@@ -413,59 +353,65 @@ pub fn build_agent_with_tools(
     system_prompt: &str,
     tools: Vec<Box<dyn ToolDyn>>,
 ) -> LlmAgent {
+    build_agent_inner(handle, system_prompt, Some(tools))
+}
+
+/// Shared builder core for [`build_agent`] and [`build_agent_with_tools`].
+///
+/// When `tools` is `None` the agent is constructed without tool bindings;
+/// when `Some` the tools are attached via `AgentBuilder::tools`.
+///
+/// # Typestate note
+///
+/// `rig`'s `AgentBuilder` uses a typestate pattern: calling `.tools()` changes
+/// the builder's type parameter from `NoToolConfig` to `WithBuilderTools`, making
+/// it impossible to assign back to the same `let mut` binding. The macro therefore
+/// has two branches — one for `None` (no tools) and one for `Some(t)` (with tools)
+/// — rather than a conditional `builder = builder.tools(t)`.
+fn build_agent_inner(
+    handle: &CompletionModelHandle,
+    system_prompt: &str,
+    tools: Option<Vec<Box<dyn ToolDyn>>>,
+) -> LlmAgent {
+    // Produces the base builder (without Anthropic's extra `.max_tokens`) and
+    // dispatches on `tools` to avoid the typestate assignment problem.
+    macro_rules! make_agent {
+        ($client:expr, $base_builder:expr, $variant:ident) => {{
+            let agent = match tools {
+                None => $base_builder.build(),
+                Some(t) => $base_builder.tools(t).build(),
+            };
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::$variant(agent),
+            }
+        }};
+    }
+
     match &handle.client {
         ProviderClient::OpenAI(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c
-                .agent(handle.model_id())
-                .preamble(system_prompt)
-                .tools(tools)
-                .build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::OpenAI(agent),
-            }
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, OpenAI)
         }
         ProviderClient::Anthropic(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c
+            let base = c
                 .agent(handle.model_id())
                 .preamble(system_prompt)
-                .max_tokens(4096)
-                .tools(tools)
-                .build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Anthropic(agent),
-            }
+                .max_tokens(4096);
+            make_agent!(c, base, Anthropic)
         }
         ProviderClient::Gemini(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c
-                .agent(handle.model_id())
-                .preamble(system_prompt)
-                .tools(tools)
-                .build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Gemini(agent),
-            }
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, Gemini)
         }
         ProviderClient::Copilot(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c
-                .agent(handle.model_id())
-                .preamble(system_prompt)
-                .tools(tools)
-                .build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Copilot(agent),
-            }
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, Copilot)
         }
     }
 }
@@ -561,85 +507,49 @@ pub async fn prompt_with_retry_details(
     prompt_with_retry_details_budget(agent, prompt, timeout, total_budget, policy).await
 }
 
-pub async fn prompt_with_retry_details_budget(
+pub(crate) async fn prompt_with_retry_details_budget(
     agent: &LlmAgent,
     prompt: &str,
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<PromptResponse, TradingError> {
-    let mut last_err = None;
-    let started_at = Instant::now();
-
-    for attempt in 0..=policy.max_retries {
-        if attempt > 0 {
-            let delay = policy.delay_for_attempt(attempt - 1);
-            if started_at.elapsed().saturating_add(delay) > total_budget {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "prompt retry budget exhausted before next attempt".to_owned(),
-                });
-            }
-            warn!(attempt, ?delay, "retrying prompt after transient error");
-            tokio::time::sleep(delay).await;
-        }
-
-        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
-        if remaining_budget.is_zero() {
-            return Err(TradingError::NetworkTimeout {
-                elapsed: started_at.elapsed(),
-                message: "prompt retry budget exhausted".to_owned(),
-            });
-        }
-
-        let attempt_timeout = timeout.min(remaining_budget);
-        match tokio::time::timeout(attempt_timeout, agent.prompt_details(prompt)).await {
-            Ok(Ok(response)) => return Ok(response),
-            Ok(Err(err)) => {
-                if is_transient_error(&err) && attempt < policy.max_retries {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
-                    last_err = Some(map_prompt_error_with_context(
-                        agent.provider_name(),
-                        agent.model_id(),
-                        err,
-                    ));
-                    continue;
-                }
-                return Err(map_prompt_error_with_context(
-                    agent.provider_name(),
-                    agent.model_id(),
-                    err,
-                ));
-            }
-            Err(_elapsed) => {
-                let err = TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: format!(
-                        "prompt timed out on attempt {attempt} for model {}",
-                        agent.model_id()
-                    ),
-                };
-                if attempt < policy.max_retries {
-                    warn!(attempt, "prompt timed out, will retry");
-                    last_err = Some(err);
-                    continue;
-                }
-                return Err(err);
-            }
-        }
-    }
-
-    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
+        agent.prompt_details(prompt)
+    })
+    .await
 }
 
-pub async fn prompt_with_retry_budget(
+pub(crate) async fn prompt_with_retry_budget(
     agent: &LlmAgent,
     prompt: &str,
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<String, TradingError> {
-    let mut last_err = None;
+    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
+        agent.prompt(prompt)
+    })
+    .await
+}
+
+/// Shared retry-loop core for [`prompt_with_retry_budget`] and
+/// [`prompt_with_retry_details_budget`].
+///
+/// `call_fn` is invoked on each attempt and must return a `Future` that resolves to
+/// `Result<R, PromptError>`. The two callers differ only in which `LlmAgent` method
+/// they invoke (`prompt` vs `prompt_details`).
+async fn retry_prompt_budget_loop<R, F, Fut>(
+    agent: &LlmAgent,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+    call_fn: F,
+) -> Result<R, TradingError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<R, PromptError>>,
+{
     let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
@@ -664,16 +574,11 @@ pub async fn prompt_with_retry_budget(
         }
         let attempt_timeout = timeout.min(remaining_budget);
 
-        match tokio::time::timeout(attempt_timeout, agent.prompt(prompt)).await {
+        match tokio::time::timeout(attempt_timeout, call_fn()).await {
             Ok(Ok(response)) => return Ok(response),
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
-                    last_err = Some(map_prompt_error_with_context(
-                        agent.provider_name(),
-                        agent.model_id(),
-                        err,
-                    ));
                     continue;
                 }
                 return Err(map_prompt_error_with_context(
@@ -692,7 +597,6 @@ pub async fn prompt_with_retry_budget(
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "prompt timed out, will retry");
-                    last_err = Some(err);
                     continue;
                 }
                 return Err(err);
@@ -700,8 +604,10 @@ pub async fn prompt_with_retry_budget(
         }
     }
 
-    // Should not reach here, but handle gracefully.
-    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+    // The loop runs for `0..=max_retries` iterations. Every iteration either
+    // returns early or continues. Reaching here requires zero iterations,
+    // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
 /// Send a chat prompt (with history) with timeout and exponential-backoff retry.
@@ -731,7 +637,6 @@ pub async fn chat_with_retry_budget(
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<String, TradingError> {
-    let mut last_err = None;
     let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
@@ -762,11 +667,6 @@ pub async fn chat_with_retry_budget(
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat error, will retry");
-                    last_err = Some(map_prompt_error_with_context(
-                        agent.provider_name(),
-                        agent.model_id(),
-                        err,
-                    ));
                     continue;
                 }
                 return Err(map_prompt_error_with_context(
@@ -785,7 +685,6 @@ pub async fn chat_with_retry_budget(
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "chat timed out, will retry");
-                    last_err = Some(err);
                     continue;
                 }
                 return Err(err);
@@ -793,7 +692,10 @@ pub async fn chat_with_retry_budget(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+    // The loop runs for `0..=max_retries` iterations. Every iteration either
+    // returns early or continues. Reaching here requires zero iterations,
+    // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
 /// Prompt for a typed (structured) response, mapping schema failures to
@@ -839,7 +741,6 @@ where
     T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
 {
     let total_budget = total_request_budget(timeout, policy);
-    let mut last_err = None;
     let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
@@ -877,7 +778,6 @@ where
             Ok(Ok(response)) => return Ok(response),
             Ok(Err(err)) => {
                 if should_retry_typed_error(&err) && attempt < policy.max_retries {
-                    last_err = Some(err);
                     continue;
                 }
                 return Err(err);
@@ -891,7 +791,6 @@ where
                     ),
                 };
                 if attempt < policy.max_retries {
-                    last_err = Some(err);
                     continue;
                 }
                 return Err(err);
@@ -899,7 +798,10 @@ where
         }
     }
 
-    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+    // The loop runs for `0..=max_retries` iterations. Every iteration either
+    // returns early or continues. Reaching here requires zero iterations,
+    // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1012,10 +914,9 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
     Ok(trimmed.to_owned())
 }
 
-fn sanitize_error_summary(input: &str) -> String {
-    // Step 1: replace control characters.
-    let mut sanitized = input
-        .chars()
+/// Replace ASCII/Unicode control characters (except `\n` and `\t`) with a space.
+fn replace_control_chars(s: &str) -> String {
+    s.chars()
         .map(|ch| {
             if ch.is_control() && ch != '\n' && ch != '\t' {
                 ' '
@@ -1023,15 +924,11 @@ fn sanitize_error_summary(input: &str) -> String {
                 ch
             }
         })
-        .collect::<String>();
+        .collect()
+}
 
-    // Step 2: redact known API key prefixes and auth header patterns.
-    //
-    // We check against a lowercased copy first so we can detect case variants,
-    // then perform the replacement on the original-case string using a targeted
-    // scan so we don't accidentally replace legitimate words.
-    let lower = sanitized.to_ascii_lowercase();
-
+/// Redact known credential patterns (API key prefixes, auth headers, bearer tokens).
+fn redact_credentials(s: &str) -> String {
     // Patterns that reliably indicate a credential is present.
     const REDACT_PATTERNS: &[&str] = &[
         // OpenAI / generic "sk-" style keys
@@ -1062,21 +959,27 @@ fn sanitize_error_summary(input: &str) -> String {
         "authorization",
     ];
 
-    let _ = lower; // used for detection above; replacements below cover case variants
+    let mut out = s.to_owned();
     for pattern in REDACT_PATTERNS {
-        sanitized = sanitized.replace(pattern, "[REDACTED]");
+        out = out.replace(pattern, "[REDACTED]");
     }
+    out
+}
 
-    // Step 3: truncate to the maximum display length.
-    let truncated = sanitized
-        .chars()
-        .take(MAX_ERROR_SUMMARY_CHARS)
-        .collect::<String>();
-    if sanitized.chars().count() > MAX_ERROR_SUMMARY_CHARS {
+/// Truncate `s` to at most `max_chars` Unicode scalar values, appending `"..."` if trimmed.
+fn truncate_to(s: &str, max_chars: usize) -> String {
+    let truncated: String = s.chars().take(max_chars).collect();
+    if s.chars().count() > max_chars {
         format!("{truncated}...")
     } else {
         truncated
     }
+}
+
+fn sanitize_error_summary(input: &str) -> String {
+    let sanitized = replace_control_chars(input);
+    let sanitized = redact_credentials(&sanitized);
+    truncate_to(&sanitized, MAX_ERROR_SUMMARY_CHARS)
 }
 
 fn total_request_budget(timeout: Duration, policy: &RetryPolicy) -> Duration {
