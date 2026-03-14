@@ -21,7 +21,7 @@ use crate::{
     state::{AgentTokenUsage, NewsData, SentimentData},
 };
 
-use super::common::{usage_from_response, validate_summary_content};
+use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
 
 const MAX_TOOL_TURNS: usize = 6;
 
@@ -92,13 +92,15 @@ impl SentimentAnalyst {
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
+        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+
         Self {
             handle,
             finnhub,
-            symbol: symbol.into(),
-            target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::from_config(llm_config),
+            symbol: runtime.symbol,
+            target_date: runtime.target_date,
+            timeout: runtime.timeout,
+            retry_policy: runtime.retry_policy,
             cached_news,
         }
     }
@@ -407,5 +409,95 @@ mod tests {
         let serialized = serde_json::to_string(&original).expect("serialise");
         let roundtripped: SentimentData = serde_json::from_str(&serialized).expect("deserialise");
         assert_eq!(original, roundtripped);
+    }
+
+    // TC-9: overall_score at positive boundary 1.0 is valid
+    #[test]
+    fn overall_score_at_positive_boundary_is_valid() {
+        let json = r#"{"overall_score": 1.0, "source_breakdown": [], "engagement_peaks": [], "summary": "boundary"}"#;
+        assert!(
+            parse_sentiment(json).is_ok(),
+            "overall_score = 1.0 must be accepted (inclusive upper bound)"
+        );
+    }
+
+    // TC-9: overall_score at negative boundary -1.0 is valid
+    #[test]
+    fn overall_score_at_negative_boundary_is_valid() {
+        let json = r#"{"overall_score": -1.0, "source_breakdown": [], "engagement_peaks": [], "summary": "boundary"}"#;
+        assert!(
+            parse_sentiment(json).is_ok(),
+            "overall_score = -1.0 must be accepted (inclusive lower bound)"
+        );
+    }
+
+    // TC-10: source score at positive boundary 1.0 is valid
+    #[test]
+    fn source_score_at_positive_boundary_is_valid() {
+        let json = r#"{
+            "overall_score": 0.0,
+            "source_breakdown": [{"source_name": "x", "score": 1.0, "sample_size": 1}],
+            "engagement_peaks": [],
+            "summary": "boundary"
+        }"#;
+        assert!(
+            parse_sentiment(json).is_ok(),
+            "source score = 1.0 must be accepted (inclusive upper bound)"
+        );
+    }
+
+    // TC-10: source score at negative boundary -1.0 is valid
+    #[test]
+    fn source_score_at_negative_boundary_is_valid() {
+        let json = r#"{
+            "overall_score": 0.0,
+            "source_breakdown": [{"source_name": "x", "score": -1.0, "sample_size": 1}],
+            "engagement_peaks": [],
+            "summary": "boundary"
+        }"#;
+        assert!(
+            parse_sentiment(json).is_ok(),
+            "source score = -1.0 must be accepted (inclusive lower bound)"
+        );
+    }
+
+    // TC-18: SentimentSource rejects extra fields
+    #[test]
+    fn sentiment_source_extra_fields_rejected() {
+        let json = r#"{
+            "overall_score": 0.0,
+            "source_breakdown": [{"source_name": "x", "score": 0.0, "sample_size": 1, "extra": "bad"}],
+            "engagement_peaks": [],
+            "summary": "should fail"
+        }"#;
+        let result = parse_sentiment(json);
+        assert!(
+            result.is_err(),
+            "extra field inside SentimentSource should be rejected"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    // TC-18: EngagementPeak rejects extra fields
+    #[test]
+    fn engagement_peak_extra_fields_rejected() {
+        let json = r#"{
+            "overall_score": 0.0,
+            "source_breakdown": [],
+            "engagement_peaks": [{"timestamp": "2026-01-01T00:00:00Z", "platform": "news", "intensity": 0.5, "extra": "bad"}],
+            "summary": "should fail"
+        }"#;
+        let result = parse_sentiment(json);
+        assert!(
+            result.is_err(),
+            "extra field inside EngagementPeak should be rejected"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
     }
 }

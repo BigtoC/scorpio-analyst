@@ -21,7 +21,7 @@ use crate::{
     state::{AgentTokenUsage, FundamentalData},
 };
 
-use super::common::{usage_from_response, validate_summary_content};
+use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
 
 const MAX_TOOL_TURNS: usize = 8;
 
@@ -87,13 +87,15 @@ impl FundamentalAnalyst {
         target_date: impl Into<String>,
         llm_config: &LlmConfig,
     ) -> Self {
+        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+
         Self {
             handle,
             finnhub,
-            symbol: symbol.into(),
-            target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::from_config(llm_config),
+            symbol: runtime.symbol,
+            target_date: runtime.target_date,
+            timeout: runtime.timeout,
+            retry_policy: runtime.retry_policy,
         }
     }
 
@@ -355,5 +357,67 @@ mod tests {
         let serialized = serde_json::to_string(&original).expect("serialise");
         let roundtripped: FundamentalData = serde_json::from_str(&serialized).expect("deserialise");
         assert_eq!(original, roundtripped);
+    }
+
+    // TC-19: TransactionType::P deserialises from "P"
+    #[test]
+    fn transaction_type_p_deserializes() {
+        let json = r#"{
+            "revenue_growth_pct": null, "pe_ratio": null, "eps": null, "current_ratio": null,
+            "debt_to_equity": null, "gross_margin": null, "net_income": null,
+            "insider_transactions": [
+                {"name": "Alice", "share_change": 500.0, "transaction_date": "2026-02-01", "transaction_type": "P"}
+            ],
+            "summary": "Purchase recorded."
+        }"#;
+        let data = parse_fundamental(json).expect("should parse");
+        assert_eq!(
+            data.insider_transactions[0].transaction_type,
+            TransactionType::P
+        );
+    }
+
+    // TC-3: TransactionType::Other deserialises from an unknown code like "G" (gift)
+    #[test]
+    fn transaction_type_other_deserializes_unknown_code() {
+        let json = r#"{
+            "revenue_growth_pct": null, "pe_ratio": null, "eps": null, "current_ratio": null,
+            "debt_to_equity": null, "gross_margin": null, "net_income": null,
+            "insider_transactions": [
+                {"name": "Bob", "share_change": 100.0, "transaction_date": "2026-03-01", "transaction_type": "G"}
+            ],
+            "summary": "Gift transaction captured as Other."
+        }"#;
+        let data = parse_fundamental(json).expect("should parse");
+        assert_eq!(
+            data.insider_transactions[0].transaction_type,
+            TransactionType::Other,
+            "unknown transaction code 'G' should deserialise to TransactionType::Other"
+        );
+    }
+
+    // TC-15: InsiderTransaction rejects extra fields (deny_unknown_fields)
+    #[test]
+    fn insider_transaction_extra_fields_rejected() {
+        let json = r#"{
+            "revenue_growth_pct": null, "pe_ratio": null, "eps": null, "current_ratio": null,
+            "debt_to_equity": null, "gross_margin": null, "net_income": null,
+            "insider_transactions": [
+                {
+                    "name": "Eve", "share_change": 200.0, "transaction_date": "2026-01-15",
+                    "transaction_type": "S", "unexpected_field": "rejected"
+                }
+            ],
+            "summary": "Should fail."
+        }"#;
+        let result = parse_fundamental(json);
+        assert!(
+            result.is_err(),
+            "extra field inside InsiderTransaction should be rejected"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
     }
 }

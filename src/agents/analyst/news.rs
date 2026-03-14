@@ -18,7 +18,7 @@ use crate::{
     state::{AgentTokenUsage, NewsData},
 };
 
-use super::common::{usage_from_response, validate_summary_content};
+use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
 
 const MAX_TOOL_TURNS: usize = 8;
 
@@ -90,13 +90,15 @@ impl NewsAnalyst {
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
+        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+
         Self {
             handle,
             finnhub,
-            symbol: symbol.into(),
-            target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::from_config(llm_config),
+            symbol: runtime.symbol,
+            target_date: runtime.target_date,
+            timeout: runtime.timeout,
+            retry_policy: runtime.retry_policy,
             cached_news,
         }
     }
@@ -411,5 +413,89 @@ mod tests {
         let serialized = serde_json::to_string(&original).expect("serialise");
         let roundtripped: NewsData = serde_json::from_str(&serialized).expect("deserialise");
         assert_eq!(original, roundtripped);
+    }
+
+    // TC-4: ImpactDirection::Neutral parses from "neutral"
+    #[test]
+    fn impact_direction_neutral_parses() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [{"event": "Sideways market", "impact_direction": "neutral", "confidence": 0.5}],
+            "summary": "No directional signal."
+        }"#;
+        let data = parse_news(json).expect("should parse");
+        assert_eq!(
+            data.macro_events[0].impact_direction,
+            ImpactDirection::Neutral
+        );
+    }
+
+    // TC-4: ImpactDirection::Uncertain parses from "uncertain"
+    #[test]
+    fn impact_direction_uncertain_parses() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [{"event": "Ambiguous policy", "impact_direction": "uncertain", "confidence": 0.4}],
+            "summary": "Outcome is unclear."
+        }"#;
+        let data = parse_news(json).expect("should parse");
+        assert_eq!(
+            data.macro_events[0].impact_direction,
+            ImpactDirection::Uncertain
+        );
+    }
+
+    // TC-11: confidence at exact lower boundary 0.0 is valid
+    #[test]
+    fn confidence_at_zero_boundary_is_valid() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [{"event": "test", "impact_direction": "neutral", "confidence": 0.0}],
+            "summary": "boundary test"
+        }"#;
+        assert!(
+            parse_news(json).is_ok(),
+            "confidence = 0.0 must be accepted (inclusive lower bound)"
+        );
+    }
+
+    // TC-11: confidence at exact upper boundary 1.0 is valid
+    #[test]
+    fn confidence_at_one_boundary_is_valid() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [{"event": "test", "impact_direction": "positive", "confidence": 1.0}],
+            "summary": "boundary test"
+        }"#;
+        assert!(
+            parse_news(json).is_ok(),
+            "confidence = 1.0 must be accepted (inclusive upper bound)"
+        );
+    }
+
+    // TC-17: NewsArticle rejects extra fields (deny_unknown_fields)
+    #[test]
+    fn news_article_extra_fields_rejected() {
+        let json = r#"{
+            "articles": [
+                {
+                    "title": "Test", "source": "Reuters",
+                    "published_at": "2026-03-14T00:00:00Z",
+                    "relevance_score": null, "snippet": "ok",
+                    "unexpected_field": "should fail"
+                }
+            ],
+            "macro_events": [],
+            "summary": "Should fail."
+        }"#;
+        let result = parse_news(json);
+        assert!(
+            result.is_err(),
+            "extra field inside NewsArticle should be rejected"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
     }
 }

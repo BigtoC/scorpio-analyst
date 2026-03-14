@@ -21,7 +21,7 @@ use crate::{
     state::{AgentTokenUsage, TechnicalData},
 };
 
-use super::common::{usage_from_response, validate_summary_content};
+use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
 
 const MAX_TOOL_TURNS: usize = 10;
 
@@ -107,13 +107,15 @@ impl TechnicalAnalyst {
         target_date: impl Into<String>,
         llm_config: &LlmConfig,
     ) -> Self {
+        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+
         Self {
             handle,
             yfinance,
-            symbol: symbol.into(),
-            target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::from_config(llm_config),
+            symbol: runtime.symbol,
+            target_date: runtime.target_date,
+            timeout: runtime.timeout,
+            retry_policy: runtime.retry_policy,
         }
     }
 
@@ -455,5 +457,76 @@ mod tests {
         let serialized = serde_json::to_string(&original).expect("serialise");
         let roundtripped: TechnicalData = serde_json::from_str(&serialized).expect("deserialise");
         assert_eq!(original, roundtripped);
+    }
+
+    // TC-12: RSI at exact lower boundary 0.0 is valid
+    #[test]
+    fn rsi_at_zero_boundary_is_valid() {
+        let json = r#"{
+            "rsi": 0.0, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "boundary"
+        }"#;
+        assert!(
+            parse_technical(json).is_ok(),
+            "RSI = 0.0 must be accepted (inclusive lower bound)"
+        );
+    }
+
+    // TC-12: RSI at exact upper boundary 100.0 is valid
+    #[test]
+    fn rsi_at_100_boundary_is_valid() {
+        let json = r#"{
+            "rsi": 100.0, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "boundary"
+        }"#;
+        assert!(
+            parse_technical(json).is_ok(),
+            "RSI = 100.0 must be accepted (inclusive upper bound)"
+        );
+    }
+
+    // TC-13: derive_start_date date arithmetic — the checked_sub_signed overflow
+    // branch is only reachable for dates near NaiveDate::MIN, which cannot be
+    // represented as a parseable "%Y-%m-%d" string (chrono requires 4-digit years
+    // for the %Y specifier, and NaiveDate::MIN is "-262143-01-01").
+    //
+    // This test documents that "0001-01-01" — the earliest parseable year — does
+    // NOT overflow when subtracting 365 days, confirming the branch is dead code
+    // for any valid real-world ISO 8601 input.
+    #[test]
+    fn derive_start_date_earliest_parseable_year_does_not_overflow() {
+        // Year 1 minus 365 days lands in year 0000 (proleptic Gregorian),
+        // which is representable in chrono and therefore does not overflow.
+        let result = derive_start_date("0001-01-01", 365);
+        assert!(
+            result.is_ok(),
+            "the earliest parseable year should not overflow; got: {result:?}"
+        );
+    }
+
+    // TC-16: MacdValues rejects extra fields (deny_unknown_fields)
+    #[test]
+    fn macd_values_extra_fields_rejected() {
+        let json = r#"{
+            "rsi": null,
+            "macd": {"macd_line": 0.1, "signal_line": 0.05, "histogram": 0.05, "extra": "bad"},
+            "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "should fail"
+        }"#;
+        let result = parse_technical(json);
+        assert!(
+            result.is_err(),
+            "extra field inside MacdValues should be rejected"
+        );
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
     }
 }

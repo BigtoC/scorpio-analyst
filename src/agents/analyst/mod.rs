@@ -349,14 +349,55 @@ mod tests {
 
     // ── flatten_task_result ──────────────────────────────────────────────
 
+    // TC-20: rename from the misleading "flatten_join_error_becomes_analyst_error"
+    // — this test exercises the *success* path, not a join error.
     #[test]
-    fn flatten_join_error_becomes_analyst_error() {
+    fn flatten_task_result_success_path() {
         let ok: Result<
             Result<Result<i32, TradingError>, tokio::time::error::Elapsed>,
             tokio::task::JoinError,
         > = Ok(Ok(Ok(42)));
         let result = flatten_task_result::<i32>("test", ok);
         assert_eq!(result.unwrap(), 42);
+    }
+
+    // TC-1: timeout branch → NetworkTimeout
+    #[tokio::test]
+    async fn flatten_task_result_timeout_becomes_network_timeout() {
+        use std::future::pending;
+        // Drive a zero-duration timeout to obtain a real Elapsed value.
+        let elapsed = tokio::time::timeout(Duration::ZERO, pending::<()>())
+            .await
+            .unwrap_err();
+        let timeout_result: Result<
+            Result<Result<i32, TradingError>, tokio::time::error::Elapsed>,
+            tokio::task::JoinError,
+        > = Ok(Err(elapsed));
+        let result = flatten_task_result::<i32>("Fundamental Analyst", timeout_result);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), TradingError::NetworkTimeout { .. }),
+            "timed-out task must map to NetworkTimeout"
+        );
+    }
+
+    // TC-2: JoinError branch → AnalystError
+    #[tokio::test]
+    async fn flatten_task_result_join_error_becomes_analyst_error() {
+        // A task that panics produces a JoinError when awaited.
+        let join_err = tokio::spawn(async { panic!("deliberate test panic") })
+            .await
+            .unwrap_err();
+        let join_result: Result<
+            Result<Result<i32, TradingError>, tokio::time::error::Elapsed>,
+            tokio::task::JoinError,
+        > = Err(join_err);
+        let result = flatten_task_result::<i32>("Sentiment Analyst", join_result);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), TradingError::AnalystError { .. }),
+            "panicked task must map to AnalystError"
+        );
     }
 
     #[test]
@@ -544,5 +585,55 @@ mod tests {
         assert!(names.contains(&"Sentiment Analyst"));
         assert!(names.contains(&"News Analyst"));
         assert!(names.contains(&"Technical Analyst"));
+    }
+
+    // ── Task 6.2 (extended): three and four failures also abort ─────────
+
+    #[tokio::test]
+    async fn three_failures_abort() {
+        let mut state = TradingState::new("AAPL", "2026-03-14");
+        let handles = state.analyst_handles();
+
+        let result = apply_analyst_results(
+            Err(TradingError::Rig("err1".to_owned())),
+            Err(TradingError::Rig("err2".to_owned())),
+            Err(TradingError::Rig("err3".to_owned())),
+            Ok((sample_technical(), sample_usage("Technical Analyst"))),
+            &handles,
+            &mut state,
+            "gpt-4o-mini",
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, TradingError::AnalystError { .. }),
+            "three failures must abort with AnalystError"
+        );
+    }
+
+    #[tokio::test]
+    async fn four_failures_abort() {
+        let mut state = TradingState::new("AAPL", "2026-03-14");
+        let handles = state.analyst_handles();
+
+        let result = apply_analyst_results(
+            Err(TradingError::Rig("err1".to_owned())),
+            Err(TradingError::Rig("err2".to_owned())),
+            Err(TradingError::Rig("err3".to_owned())),
+            Err(TradingError::Rig("err4".to_owned())),
+            &handles,
+            &mut state,
+            "gpt-4o-mini",
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, TradingError::AnalystError { .. }),
+            "four failures must abort with AnalystError"
+        );
     }
 }
