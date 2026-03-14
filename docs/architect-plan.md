@@ -28,6 +28,12 @@ sequenced to minimize code conflicts and maximize parallel work.
    `mod.rs` files) so downstream implementations only fill in their own files.
 4. **Parallelism by file ownership** — each change after the foundation owns a distinct set of
    source files/directories, preventing merge conflicts.
+5. **Cross-owner modifications allowed with approval** — a change proposal MAY modify files owned
+   by another change, but only when there is a clear technical justification. The justification must
+   be stated explicitly in `proposal.md` under a `## Cross-Owner Changes` section. Implementation
+   **must not begin** until the file owner (or a project maintainer) approves the modification in
+   the proposal review. Approved cross-owner edits are reflected in the owner's `tasks.md` as a
+   note for awareness.
 
 ---
 
@@ -502,8 +508,28 @@ The only scenario where conflicts could arise:
 | `src/state/mod.rs`     | `add-project-foundation` | Read-only (import types)                          |
 | `src/main.rs`          | `add-cli`                | Only CLI changes this file                        |
 
-The pre-declared skeleton strategy means **zero shared-file modifications** after the foundation.
-Each downstream spec only creates or fills in files within its owned directory.
+The pre-declared skeleton strategy minimises shared-file modifications after the foundation.
+Each downstream spec primarily creates or fills in files within its owned directory.
+
+### Cross-Owner File Modifications
+
+Modifying a file owned by a different change is **permitted** when technically justified, but the
+following gate must be passed before any implementation work begins:
+
+1. **Document in `proposal.md`** — add a `## Cross-Owner Changes` section listing every
+   foreign-owned file to be modified, the owning change ID, and a concise technical justification
+   (e.g., "adds a missing `pub use` re-export that the foundation skeleton did not anticipate").
+2. **Await approval** — do not touch the foreign file until a project maintainer or the owner of
+   that change explicitly approves the edit in the proposal review thread.
+3. **Notify the owner** — after approval, add a note to the owner's `tasks.md` under a
+   `### Cross-Owner Touch-points` heading so they are aware of the external modification.
+4. **Keep changes minimal** — edits to foreign-owned files must be as small as possible; prefer
+   additive changes (new re-exports, new feature flags) over restructuring existing code.
+
+Typical legitimate reasons for cross-owner modifications:
+- The foundation skeleton omitted a required `pub use` or `pub mod` declaration.
+- A shared `Cargo.toml` feature flag must be enabled for a new capability.
+- A bug in a foundation type (wrong field name/type) blocks downstream compilation.
 
 ---
 
