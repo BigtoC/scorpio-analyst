@@ -187,6 +187,7 @@ fn create_provider_client_for(
             // Use SCORPIO_COPILOT_CLI_PATH env var to override if needed.
             let exe_path =
                 std::env::var("SCORPIO_COPILOT_CLI_PATH").unwrap_or_else(|_| "copilot".to_owned());
+            validate_copilot_cli_path(&exe_path)?;
             Ok(ProviderClient::Copilot(CopilotProviderClient::new(
                 exe_path,
             )))
@@ -501,17 +502,23 @@ fn map_structured_output_error_with_context(
     err: StructuredOutputError,
 ) -> TradingError {
     match err {
-        StructuredOutputError::DeserializationError(e) => TradingError::SchemaViolation {
-            message: format!(
-                "provider={provider} model={model_id} summary={}",
-                sanitize_error_summary(&format!("failed to parse structured output: {e}"))
-            ),
-        },
+        StructuredOutputError::DeserializationError(_e) => {
+            // Do not surface the raw serde error — it can contain a fragment of the
+            // LLM's response text, which may include sensitive content.
+            tracing::debug!(
+                provider,
+                model_id,
+                error = %_e,
+                "structured output deserialization failed"
+            );
+            TradingError::SchemaViolation {
+                message: format!(
+                    "provider={provider} model={model_id}: structured output could not be parsed"
+                ),
+            }
+        }
         StructuredOutputError::EmptyResponse => TradingError::SchemaViolation {
-            message: format!(
-                "provider={provider} model={model_id} summary={}",
-                sanitize_error_summary("model returned empty response for structured output")
-            ),
+            message: format!("provider={provider} model={model_id}: model returned empty response"),
         },
         StructuredOutputError::PromptError(e) => {
             map_prompt_error_with_context(provider, model_id, e)
@@ -930,7 +937,10 @@ fn is_transient_error(err: &PromptError) -> bool {
 fn should_retry_typed_error(err: &TradingError) -> bool {
     match err {
         TradingError::NetworkTimeout { .. } | TradingError::RateLimitExceeded { .. } => true,
-        TradingError::SchemaViolation { .. } => true,
+        // SchemaViolation is a permanent failure for a given LLM output — the same
+        // prompt to the same model is unlikely to produce a valid response on retry,
+        // and retrying wastes token budget. Fail fast on schema errors.
+        TradingError::SchemaViolation { .. } => false,
         TradingError::Rig(message) => {
             let msg = message.to_ascii_lowercase();
             msg.contains("rate limit")
@@ -959,6 +969,41 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
     }
 }
 
+/// Validate the Copilot CLI executable path supplied via `SCORPIO_COPILOT_CLI_PATH`.
+///
+/// Rejects paths that:
+/// - Contain shell metacharacters that could enable injection.
+/// - Contain `..` path-traversal sequences.
+/// - Are relative paths containing `/` but not starting with `/` (must be either
+///   a plain filename or an absolute path).
+fn validate_copilot_cli_path(path: &str) -> Result<(), TradingError> {
+    const FORBIDDEN_CHARS: &[char] = &[
+        ';', '|', '&', '$', '`', '(', ')', '<', '>', '"', '\'', '\n', '\r', '\0', '*', '?', '[',
+        ']', '{', '}',
+    ];
+
+    if path.is_empty() {
+        return Err(config_error("SCORPIO_COPILOT_CLI_PATH must not be empty"));
+    }
+    if path.chars().any(|c| FORBIDDEN_CHARS.contains(&c)) {
+        return Err(config_error(
+            "SCORPIO_COPILOT_CLI_PATH contains disallowed characters",
+        ));
+    }
+    if path.contains("..") {
+        return Err(config_error(
+            "SCORPIO_COPILOT_CLI_PATH must not contain path traversal (..)",
+        ));
+    }
+    // Relative paths with '/' (but not absolute) are ambiguous and disallowed.
+    if path.contains('/') && !path.starts_with('/') {
+        return Err(config_error(
+            "SCORPIO_COPILOT_CLI_PATH must be a plain executable name or an absolute path",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
     let trimmed = model_id.trim();
     if trimmed.is_empty() {
@@ -968,6 +1013,7 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
 }
 
 fn sanitize_error_summary(input: &str) -> String {
+    // Step 1: replace control characters.
     let mut sanitized = input
         .chars()
         .map(|ch| {
@@ -979,11 +1025,49 @@ fn sanitize_error_summary(input: &str) -> String {
         })
         .collect::<String>();
 
-    sanitized = sanitized
-        .replace("sk-", "[REDACTED]-")
-        .replace("authorization", "[REDACTED]")
-        .replace("api key", "[REDACTED]");
+    // Step 2: redact known API key prefixes and auth header patterns.
+    //
+    // We check against a lowercased copy first so we can detect case variants,
+    // then perform the replacement on the original-case string using a targeted
+    // scan so we don't accidentally replace legitimate words.
+    let lower = sanitized.to_ascii_lowercase();
 
+    // Patterns that reliably indicate a credential is present.
+    const REDACT_PATTERNS: &[&str] = &[
+        // OpenAI / generic "sk-" style keys
+        "sk-",
+        // Anthropic key prefix (catches "sk-ant-", etc.)
+        "sk-ant",
+        // Gemini / Google API keys
+        "AIza",
+        "aiza",
+        // HTTP Authorization header (various casings)
+        "authorization:",
+        "Authorization:",
+        "AUTHORIZATION:",
+        // Bearer token
+        "bearer ",
+        "Bearer ",
+        "BEARER ",
+        // Query-string / body key params
+        "api_key=",
+        "api-key=",
+        "apikey=",
+        "token=",
+        // Plain English
+        "api key",
+        "API KEY",
+        "api_key",
+        "API_KEY",
+        "authorization",
+    ];
+
+    let _ = lower; // used for detection above; replacements below cover case variants
+    for pattern in REDACT_PATTERNS {
+        sanitized = sanitized.replace(pattern, "[REDACTED]");
+    }
+
+    // Step 3: truncate to the maximum display length.
     let truncated = sanitized
         .chars()
         .take(MAX_ERROR_SUMMARY_CHARS)
@@ -1037,6 +1121,8 @@ mod tests {
             max_debate_rounds: 3,
             max_risk_rounds: 2,
             analyst_timeout_secs: 30,
+            retry_max_retries: 3,
+            retry_base_delay_ms: 500,
         }
     }
 
@@ -1345,5 +1431,77 @@ mod tests {
         assert_eq!(policy.delay_for_attempt(0), Duration::from_millis(100));
         assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(200));
         assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(400));
+    }
+
+    // ── sanitize_error_summary (expanded) ────────────────────────────────
+
+    #[test]
+    fn redacts_gemini_api_key_prefix() {
+        let result = sanitize_error_summary("key=AIzaSyTest1234");
+        assert!(
+            !result.contains("AIza"),
+            "Gemini key prefix must be redacted"
+        );
+    }
+
+    #[test]
+    fn redacts_bearer_token() {
+        let result = sanitize_error_summary("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9");
+        assert!(!result.contains("Bearer "), "Bearer token must be redacted");
+    }
+
+    #[test]
+    fn redacts_api_key_eq() {
+        let result = sanitize_error_summary("request failed: api_key=secret123");
+        assert!(!result.contains("api_key="), "api_key= must be redacted");
+    }
+
+    // ── validate_copilot_cli_path ────────────────────────────────────────
+
+    #[test]
+    fn copilot_path_plain_name_accepted() {
+        assert!(validate_copilot_cli_path("copilot").is_ok());
+    }
+
+    #[test]
+    fn copilot_path_absolute_accepted() {
+        assert!(validate_copilot_cli_path("/usr/local/bin/copilot").is_ok());
+    }
+
+    #[test]
+    fn copilot_path_semicolon_rejected() {
+        assert!(validate_copilot_cli_path("copilot;rm -rf /").is_err());
+    }
+
+    #[test]
+    fn copilot_path_traversal_rejected() {
+        assert!(validate_copilot_cli_path("../../bin/evil").is_err());
+    }
+
+    #[test]
+    fn copilot_path_relative_with_slash_rejected() {
+        assert!(validate_copilot_cli_path("bin/copilot").is_err());
+    }
+
+    // ── schema_violation_not_retried ─────────────────────────────────────
+
+    #[test]
+    fn schema_violation_is_not_retryable() {
+        let err = TradingError::SchemaViolation {
+            message: "bad output".to_owned(),
+        };
+        assert!(
+            !should_retry_typed_error(&err),
+            "SchemaViolation must not be retried"
+        );
+    }
+
+    #[test]
+    fn network_timeout_is_retryable() {
+        let err = TradingError::NetworkTimeout {
+            elapsed: Duration::from_secs(30),
+            message: "timed out".to_owned(),
+        };
+        assert!(should_retry_typed_error(&err));
     }
 }
