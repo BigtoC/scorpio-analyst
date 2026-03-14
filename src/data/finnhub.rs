@@ -20,8 +20,8 @@ use crate::{
     error::TradingError,
     rate_limit::SharedRateLimiter,
     state::{
-        FundamentalData, InsiderTransaction as OurInsiderTransaction, MacroEvent, NewsArticle,
-        NewsData,
+        FundamentalData, ImpactDirection, InsiderTransaction as OurInsiderTransaction, MacroEvent,
+        NewsArticle, NewsData, TransactionType,
     },
 };
 
@@ -247,15 +247,15 @@ impl FinnhubClient {
 
         if let Some(latest) = interest_data.data.last() {
             let impact_direction = if latest.value > 3.0 {
-                "negative"
+                ImpactDirection::Negative
             } else {
-                "positive"
+                ImpactDirection::Positive
             };
             push_macro_event(
                 &mut events,
                 MacroEvent {
                     event: "Interest-rate policy shift".to_owned(),
-                    impact_direction: impact_direction.to_owned(),
+                    impact_direction,
                     confidence: 0.7,
                 },
             );
@@ -263,15 +263,15 @@ impl FinnhubClient {
 
         if let Some(latest) = inflation_data.data.last() {
             let impact_direction = if latest.value > 3.0 {
-                "negative"
+                ImpactDirection::Negative
             } else {
-                "positive"
+                ImpactDirection::Positive
             };
             push_macro_event(
                 &mut events,
                 MacroEvent {
                     event: "Inflation signal".to_owned(),
-                    impact_direction: impact_direction.to_owned(),
+                    impact_direction,
                     confidence: 0.7,
                 },
             );
@@ -324,7 +324,11 @@ fn map_insider_transactions(
             name: t.name,
             share_change: t.change.unwrap_or(0) as f64,
             transaction_date: t.transaction_date,
-            transaction_type: t.transaction_code,
+            transaction_type: match t.transaction_code.as_str() {
+                "S" => TransactionType::S,
+                "P" => TransactionType::P,
+                _ => TransactionType::Other,
+            },
         })
         .collect()
 }
@@ -540,17 +544,17 @@ fn derive_macro_events(articles: &[NewsArticle]) -> Vec<crate::state::MacroEvent
             || text.contains("interest rate")
         {
             let impact_direction = if text.contains("cut") {
-                "positive"
+                ImpactDirection::Positive
             } else if text.contains("hike") || text.contains("higher for longer") {
-                "negative"
+                ImpactDirection::Negative
             } else {
-                "neutral"
+                ImpactDirection::Neutral
             };
             push_macro_event(
                 &mut events,
                 MacroEvent {
                     event: "Interest-rate policy shift".to_owned(),
-                    impact_direction: impact_direction.to_owned(),
+                    impact_direction,
                     confidence: KEYWORD_SIGNAL_CONFIDENCE,
                 },
             );
@@ -561,7 +565,7 @@ fn derive_macro_events(articles: &[NewsArticle]) -> Vec<crate::state::MacroEvent
                 &mut events,
                 MacroEvent {
                     event: "Inflation signal".to_owned(),
-                    impact_direction: "negative".to_owned(),
+                    impact_direction: ImpactDirection::Negative,
                     confidence: KEYWORD_SIGNAL_CONFIDENCE,
                 },
             );
@@ -576,7 +580,7 @@ fn derive_macro_events(articles: &[NewsArticle]) -> Vec<crate::state::MacroEvent
                 &mut events,
                 MacroEvent {
                     event: "Geopolitical trade pressure".to_owned(),
-                    impact_direction: "negative".to_owned(),
+                    impact_direction: ImpactDirection::Negative,
                     confidence: KEYWORD_SIGNAL_CONFIDENCE,
                 },
             );
@@ -1101,7 +1105,7 @@ mod tests {
                 name: "Jane Doe".to_owned(),
                 share_change: -1200.0,
                 transaction_date: "2024-01-15".to_owned(),
-                transaction_type: "S".to_owned(),
+                transaction_type: TransactionType::S,
             }],
         );
 

@@ -16,6 +16,22 @@ pub struct FundamentalData {
     pub summary: String,
 }
 
+/// Whether an insider bought (`P`) or sold (`S`) shares.
+///
+/// `S` and `P` are the transaction codes used in Finnhub / SEC Form 4 filings.
+/// Unknown codes (option exercises, gifts, etc.) are captured by `Other` without
+/// discarding the record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum TransactionType {
+    /// Purchase / buy.
+    S,
+    /// Sale / sell.
+    P,
+    /// Any other SEC Form 4 transaction code not explicitly modelled.
+    #[serde(other)]
+    Other,
+}
+
 /// A single insider buy/sell record.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -23,5 +39,5 @@ pub struct InsiderTransaction {
     pub name: String,
     pub share_change: f64,
     pub transaction_date: String,
-    pub transaction_type: String,
+    pub transaction_type: TransactionType,
 }
