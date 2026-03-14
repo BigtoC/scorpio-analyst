@@ -21,5 +21,6 @@ Review the corresponding OpenSpec proposal and implementation together.
 Return:
 - key findings by reviewer
 - severity for each issue
+- if cross-owner modifications are needed, specify the files and owners involved
 - missing tests or edge cases
 - a final go/no-go recommendation
