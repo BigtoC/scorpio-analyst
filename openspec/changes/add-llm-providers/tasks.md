@@ -76,3 +76,8 @@
 - [x] 7.8 Add tests proving raw `rig` errors do not escape the provider boundary and that surfaced error context is
       sanitized.
 - [x] 7.9 Run `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt -- --check` with no failures.
+
+### Cross-Owner Touch-points
+
+- Approved for `add-analyst-team` to update `src/providers/factory.rs` so analyst agents can use retryable typed
+  output helpers and capture completion usage metadata required by the `analyst-team` spec.

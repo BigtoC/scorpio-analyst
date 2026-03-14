@@ -33,13 +33,29 @@ use super::utils::last_valid;
 ///
 /// Returns `TradingError::SchemaViolation` for an empty candle array or an
 /// unrecognised indicator name.
+/// Maximum length for a caller-supplied indicator name.
+///
+/// Limits the surface area for error-message injection via the `indicator`
+/// field of `CalculateIndicatorByNameArgs`.
+const MAX_INDICATOR_NAME_LEN: usize = 64;
+
 pub fn calculate_indicator_by_name(
     name: &str,
     candles: &[Candle],
 ) -> Result<NamedIndicatorOutput, TradingError> {
+    // Reject excessively long names before they appear in any error message.
+    if name.len() > MAX_INDICATOR_NAME_LEN {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "indicator name exceeds {MAX_INDICATOR_NAME_LEN} characters; \
+                 supported names: close_50_sma, close_200_sma, close_10_ema, \
+                 macd, macds, macdh, rsi, boll, boll_ub, boll_lb, atr, vwma"
+            ),
+        });
+    }
     if candles.is_empty() {
         return Err(TradingError::SchemaViolation {
-            message: format!("cannot compute {name}: empty candle array"),
+            message: "cannot compute indicator: empty candle array".to_owned(),
         });
     }
     let values: Vec<Option<f64>> = match name {
@@ -49,16 +65,32 @@ pub fn calculate_indicator_by_name(
         "rsi" => calculate_rsi(candles, 14)?,
         "atr" => calculate_atr(candles, 14)?,
         "vwma" => calculate_vwma(candles, 20)?,
-        "macd" => calculate_macd(candles, 12, 26, 9)?.macd_line,
-        "macds" => calculate_macd(candles, 12, 26, 9)?.signal_line,
-        "macdh" => calculate_macd(candles, 12, 26, 9)?.histogram,
-        "boll" => calculate_bollinger_bands(candles, 20, 2.0)?.middle,
-        "boll_ub" => calculate_bollinger_bands(candles, 20, 2.0)?.upper,
-        "boll_lb" => calculate_bollinger_bands(candles, 20, 2.0)?.lower,
+        // Compute MACD once for the whole family; pick the requested sub-series.
+        "macd" | "macds" | "macdh" => {
+            let result = calculate_macd(candles, 12, 26, 9)?;
+            match name {
+                "macds" => result.signal_line,
+                "macdh" => result.histogram,
+                _ => result.macd_line,
+            }
+        }
+        // Compute Bollinger Bands once for the whole family; pick the requested band.
+        "boll" | "boll_ub" | "boll_lb" => {
+            let result = calculate_bollinger_bands(candles, 20, 2.0)?;
+            match name {
+                "boll_ub" => result.upper,
+                "boll_lb" => result.lower,
+                _ => result.middle,
+            }
+        }
         other => {
+            // Truncate the reflected name so that large values cannot inflate
+            // the error message. The full name has already been length-checked
+            // above, but this provides an extra explicit bound.
+            let display: String = other.chars().take(32).collect();
             return Err(TradingError::SchemaViolation {
                 message: format!(
-                    "unknown indicator name: {other:?}. Supported: \
+                    "unknown indicator name: {display:?}. Supported: \
                      close_50_sma, close_200_sma, close_10_ema, \
                      macd, macds, macdh, rsi, boll, boll_ub, boll_lb, atr, vwma"
                 ),

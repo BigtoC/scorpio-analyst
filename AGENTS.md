@@ -105,4 +105,14 @@ Detailed Rust coding conventions are in `.github/instructions/rust.instructions.
 - Use enums over flags/booleans for type safety.
 - Warnings are treated as errors in CI (`-D warnings`).
 
+## Cross-Owner File Modifications
+
+You **may** modify files owned by a different change proposal, but you **must**:
+1. Add a `## Cross-Owner Changes` section to `proposal.md` listing each file, its owner, and a technical justification.
+2. **Wait for approval** from the file owner or a project maintainer before touching the file.
+3. Add a `### Cross-Owner Touch-points` note to the owner's `tasks.md` after approval.
+4. Keep edits minimal and additive (prefer new re-exports or feature flags over restructuring).
+
+See `docs/architect-plan.md` § *Cross-Owner File Modifications* for the full policy.
+
 <!-- OPENSPEC:END -->

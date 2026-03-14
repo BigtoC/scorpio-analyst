@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::{
@@ -9,7 +11,9 @@ use super::{
 /// A single message entry in a debate or risk discussion history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DebateMessage {
+    /// The speaker role, e.g. `"bullish_researcher"`, `"bearish_researcher"`, or `"moderator"`.
     pub role: String,
+    /// The free-text content of the message produced by the LLM agent.
     pub content: String,
 }
 
@@ -47,6 +51,15 @@ pub struct TradingState {
     pub token_usage: TokenUsageTracker,
 }
 
+/// Concurrent write handles for the analyst-owned Phase 1 fields.
+#[derive(Debug, Clone)]
+pub struct AnalystStateHandles {
+    pub fundamental_metrics: Arc<RwLock<Option<FundamentalData>>>,
+    pub technical_indicators: Arc<RwLock<Option<TechnicalData>>>,
+    pub market_sentiment: Arc<RwLock<Option<SentimentData>>>,
+    pub macro_news: Arc<RwLock<Option<NewsData>>>,
+}
+
 impl TradingState {
     /// Create a new empty state for a trading cycle.
     pub fn new(asset_symbol: impl Into<String>, target_date: impl Into<String>) -> Self {
@@ -68,5 +81,43 @@ impl TradingState {
             final_execution_status: None,
             token_usage: TokenUsageTracker::default(),
         }
+    }
+
+    /// Create per-field async locks for concurrent analyst fan-out writes.
+    ///
+    /// **Invariant**: this method is intended for use at the start of Phase 1 when all
+    /// analyst fields are `None`. The handles are seeded from the current field values,
+    /// so calling this mid-pipeline (e.g. during backtesting multi-cycle reuse) would
+    /// carry stale data into the new analysis cycle.
+    #[must_use]
+    pub fn analyst_handles(&self) -> AnalystStateHandles {
+        debug_assert!(
+            self.fundamental_metrics.is_none()
+                && self.technical_indicators.is_none()
+                && self.market_sentiment.is_none()
+                && self.macro_news.is_none(),
+            "analyst_handles() called on a TradingState that already has analyst data; \
+             did you forget to call TradingState::new() for this analysis cycle?"
+        );
+        // The four clones below are near-zero cost: all fields are None at this
+        // point (enforced by the debug_assert above), so each clone is just
+        // Option::None — a single-byte copy with no heap allocation.
+        AnalystStateHandles {
+            fundamental_metrics: Arc::new(RwLock::new(self.fundamental_metrics.clone())),
+            technical_indicators: Arc::new(RwLock::new(self.technical_indicators.clone())),
+            market_sentiment: Arc::new(RwLock::new(self.market_sentiment.clone())),
+            macro_news: Arc::new(RwLock::new(self.macro_news.clone())),
+        }
+    }
+
+    /// Merge concurrent analyst results back into the main state after fan-out completes.
+    pub async fn apply_analyst_handles(&mut self, handles: &AnalystStateHandles) {
+        // All four tasks have already finished (their JoinHandles were awaited before
+        // this call), so these `.read()` locks are uncontested: no task holds a write
+        // lock at this point.  They still use `.await` to satisfy the async RwLock API.
+        self.fundamental_metrics = handles.fundamental_metrics.read().await.clone();
+        self.technical_indicators = handles.technical_indicators.read().await.clone();
+        self.market_sentiment = handles.market_sentiment.read().await.clone();
+        self.macro_news = handles.macro_news.read().await.clone();
     }
 }

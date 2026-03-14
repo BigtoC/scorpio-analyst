@@ -10,8 +10,10 @@
 use std::time::{Duration, Instant};
 
 use rig::{
+    agent::{PromptResponse, TypedPromptResponse},
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
     providers::{anthropic, gemini, openai},
+    tool::ToolDyn,
 };
 use secrecy::ExposeSecret;
 use serde::de::DeserializeOwned;
@@ -185,6 +187,7 @@ fn create_provider_client_for(
             // Use SCORPIO_COPILOT_CLI_PATH env var to override if needed.
             let exe_path =
                 std::env::var("SCORPIO_COPILOT_CLI_PATH").unwrap_or_else(|_| "copilot".to_owned());
+            validate_copilot_cli_path(&exe_path)?;
             Ok(ProviderClient::Copilot(CopilotProviderClient::new(
                 exe_path,
             )))
@@ -236,6 +239,60 @@ impl LlmAgent {
         }
     }
 
+    /// Send a one-shot prompt and return text plus aggregated usage details.
+    pub async fn prompt_details(&self, prompt: &str) -> Result<PromptResponse, PromptError> {
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::Gemini(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::Copilot(agent) => agent.prompt(prompt).extended_details().await,
+        }
+    }
+
+    /// Send a typed prompt and return parsed output plus aggregated usage details.
+    pub async fn prompt_typed_details<T>(
+        &self,
+        prompt: &str,
+        max_turns: usize,
+    ) -> Result<TypedPromptResponse<T>, TradingError>
+    where
+        T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    {
+        use rig::completion::TypedPrompt;
+
+        // Capture the error-mapping closure once so each arm stays a single expression.
+        let map_err = |err| {
+            map_structured_output_error_with_context(self.provider_name(), self.model_id(), err)
+        };
+
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(map_err),
+            LlmAgentInner::Anthropic(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(map_err),
+            LlmAgentInner::Gemini(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(map_err),
+            LlmAgentInner::Copilot(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(map_err),
+        }
+    }
+
     /// Send a prompt with chat history and return the response text.
     pub async fn chat(
         &self,
@@ -273,46 +330,88 @@ pub struct LlmAgent {
 /// Returns `TradingError::Config` if the provider is unknown or the API key is missing
 /// (delegated to [`create_provider_client`]).
 pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAgent {
+    build_agent_inner(handle, system_prompt, None)
+}
+
+/// Build a configured [`LlmAgent`] with a set of tools attached.
+///
+/// Tools are passed as `Vec<Box<dyn ToolDyn>>` to avoid type-parameter explosion —
+/// rig's `AgentBuilder::tools()` accepts this and uses the `ToolServer` internally
+/// to dispatch tool calls at runtime.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let agent = build_agent_with_tools(
+///     &handle,
+///     "You are a financial analyst.",
+///     vec![Box::new(StockPriceTool::new(client.clone()))],
+/// );
+/// ```
+pub fn build_agent_with_tools(
+    handle: &CompletionModelHandle,
+    system_prompt: &str,
+    tools: Vec<Box<dyn ToolDyn>>,
+) -> LlmAgent {
+    build_agent_inner(handle, system_prompt, Some(tools))
+}
+
+/// Shared builder core for [`build_agent`] and [`build_agent_with_tools`].
+///
+/// When `tools` is `None` the agent is constructed without tool bindings;
+/// when `Some` the tools are attached via `AgentBuilder::tools`.
+///
+/// # Typestate note
+///
+/// `rig`'s `AgentBuilder` uses a typestate pattern: calling `.tools()` changes
+/// the builder's type parameter from `NoToolConfig` to `WithBuilderTools`, making
+/// it impossible to assign back to the same `let mut` binding. The macro therefore
+/// has two branches — one for `None` (no tools) and one for `Some(t)` (with tools)
+/// — rather than a conditional `builder = builder.tools(t)`.
+fn build_agent_inner(
+    handle: &CompletionModelHandle,
+    system_prompt: &str,
+    tools: Option<Vec<Box<dyn ToolDyn>>>,
+) -> LlmAgent {
+    // Produces the base builder (without Anthropic's extra `.max_tokens`) and
+    // dispatches on `tools` to avoid the typestate assignment problem.
+    macro_rules! make_agent {
+        ($client:expr, $base_builder:expr, $variant:ident) => {{
+            let agent = match tools {
+                None => $base_builder.build(),
+                Some(t) => $base_builder.tools(t).build(),
+            };
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::$variant(agent),
+            }
+        }};
+    }
+
     match &handle.client {
         ProviderClient::OpenAI(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::OpenAI(agent),
-            }
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, OpenAI)
         }
         ProviderClient::Anthropic(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c
+            let base = c
                 .agent(handle.model_id())
                 .preamble(system_prompt)
-                .max_tokens(4096)
-                .build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Anthropic(agent),
-            }
+                .max_tokens(4096);
+            make_agent!(c, base, Anthropic)
         }
         ProviderClient::Gemini(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Gemini(agent),
-            }
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, Gemini)
         }
         ProviderClient::Copilot(c) => {
             use rig::prelude::CompletionClient;
-            let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::Copilot(agent),
-            }
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, Copilot)
         }
     }
 }
@@ -349,17 +448,23 @@ fn map_structured_output_error_with_context(
     err: StructuredOutputError,
 ) -> TradingError {
     match err {
-        StructuredOutputError::DeserializationError(e) => TradingError::SchemaViolation {
-            message: format!(
-                "provider={provider} model={model_id} summary={}",
-                sanitize_error_summary(&format!("failed to parse structured output: {e}"))
-            ),
-        },
+        StructuredOutputError::DeserializationError(_e) => {
+            // Do not surface the raw serde error — it can contain a fragment of the
+            // LLM's response text, which may include sensitive content.
+            tracing::debug!(
+                provider,
+                model_id,
+                error = %_e,
+                "structured output deserialization failed"
+            );
+            TradingError::SchemaViolation {
+                message: format!(
+                    "provider={provider} model={model_id}: structured output could not be parsed"
+                ),
+            }
+        }
         StructuredOutputError::EmptyResponse => TradingError::SchemaViolation {
-            message: format!(
-                "provider={provider} model={model_id} summary={}",
-                sanitize_error_summary("model returned empty response for structured output")
-            ),
+            message: format!("provider={provider} model={model_id}: model returned empty response"),
         },
         StructuredOutputError::PromptError(e) => {
             map_prompt_error_with_context(provider, model_id, e)
@@ -391,14 +496,60 @@ pub async fn prompt_with_retry(
     prompt_with_retry_budget(agent, prompt, timeout, total_budget, policy).await
 }
 
-pub async fn prompt_with_retry_budget(
+/// Send a one-shot prompt with timeout/retry and return extended details including usage.
+pub async fn prompt_with_retry_details(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+) -> Result<PromptResponse, TradingError> {
+    let total_budget = total_request_budget(timeout, policy);
+    prompt_with_retry_details_budget(agent, prompt, timeout, total_budget, policy).await
+}
+
+pub(crate) async fn prompt_with_retry_details_budget(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+) -> Result<PromptResponse, TradingError> {
+    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
+        agent.prompt_details(prompt)
+    })
+    .await
+}
+
+pub(crate) async fn prompt_with_retry_budget(
     agent: &LlmAgent,
     prompt: &str,
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<String, TradingError> {
-    let mut last_err = None;
+    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
+        agent.prompt(prompt)
+    })
+    .await
+}
+
+/// Shared retry-loop core for [`prompt_with_retry_budget`] and
+/// [`prompt_with_retry_details_budget`].
+///
+/// `call_fn` is invoked on each attempt and must return a `Future` that resolves to
+/// `Result<R, PromptError>`. The two callers differ only in which `LlmAgent` method
+/// they invoke (`prompt` vs `prompt_details`).
+async fn retry_prompt_budget_loop<R, F, Fut>(
+    agent: &LlmAgent,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+    call_fn: F,
+) -> Result<R, TradingError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<R, PromptError>>,
+{
     let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
@@ -423,16 +574,11 @@ pub async fn prompt_with_retry_budget(
         }
         let attempt_timeout = timeout.min(remaining_budget);
 
-        match tokio::time::timeout(attempt_timeout, agent.prompt(prompt)).await {
+        match tokio::time::timeout(attempt_timeout, call_fn()).await {
             Ok(Ok(response)) => return Ok(response),
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
-                    last_err = Some(map_prompt_error_with_context(
-                        agent.provider_name(),
-                        agent.model_id(),
-                        err,
-                    ));
                     continue;
                 }
                 return Err(map_prompt_error_with_context(
@@ -451,7 +597,6 @@ pub async fn prompt_with_retry_budget(
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "prompt timed out, will retry");
-                    last_err = Some(err);
                     continue;
                 }
                 return Err(err);
@@ -459,8 +604,10 @@ pub async fn prompt_with_retry_budget(
         }
     }
 
-    // Should not reach here, but handle gracefully.
-    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+    // The loop runs for `0..=max_retries` iterations. Every iteration either
+    // returns early or continues. Reaching here requires zero iterations,
+    // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
 /// Send a chat prompt (with history) with timeout and exponential-backoff retry.
@@ -490,7 +637,6 @@ pub async fn chat_with_retry_budget(
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<String, TradingError> {
-    let mut last_err = None;
     let started_at = Instant::now();
 
     for attempt in 0..=policy.max_retries {
@@ -521,11 +667,6 @@ pub async fn chat_with_retry_budget(
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat error, will retry");
-                    last_err = Some(map_prompt_error_with_context(
-                        agent.provider_name(),
-                        agent.model_id(),
-                        err,
-                    ));
                     continue;
                 }
                 return Err(map_prompt_error_with_context(
@@ -544,7 +685,6 @@ pub async fn chat_with_retry_budget(
                 };
                 if attempt < policy.max_retries {
                     warn!(attempt, "chat timed out, will retry");
-                    last_err = Some(err);
                     continue;
                 }
                 return Err(err);
@@ -552,7 +692,10 @@ pub async fn chat_with_retry_budget(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+    // The loop runs for `0..=max_retries` iterations. Every iteration either
+    // returns early or continues. Reaching here requires zero iterations,
+    // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
 /// Prompt for a typed (structured) response, mapping schema failures to
@@ -584,6 +727,81 @@ where
             map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
         }),
     }
+}
+
+/// Prompt for a typed response and return usage metadata from the underlying agent loop.
+pub async fn prompt_typed_with_retry<T>(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+    max_turns: usize,
+) -> Result<TypedPromptResponse<T>, TradingError>
+where
+    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+{
+    let total_budget = total_request_budget(timeout, policy);
+    let started_at = Instant::now();
+
+    for attempt in 0..=policy.max_retries {
+        if attempt > 0 {
+            let delay = policy.delay_for_attempt(attempt - 1);
+            if started_at.elapsed().saturating_add(delay) > total_budget {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "typed prompt retry budget exhausted before next attempt".to_owned(),
+                });
+            }
+            warn!(
+                attempt,
+                ?delay,
+                "retrying typed prompt after transient error"
+            );
+            tokio::time::sleep(delay).await;
+        }
+
+        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+        if remaining_budget.is_zero() {
+            return Err(TradingError::NetworkTimeout {
+                elapsed: started_at.elapsed(),
+                message: "typed prompt retry budget exhausted".to_owned(),
+            });
+        }
+
+        let attempt_timeout = timeout.min(remaining_budget);
+        match tokio::time::timeout(
+            attempt_timeout,
+            agent.prompt_typed_details::<T>(prompt, max_turns),
+        )
+        .await
+        {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(err)) => {
+                if should_retry_typed_error(&err) && attempt < policy.max_retries {
+                    continue;
+                }
+                return Err(err);
+            }
+            Err(_elapsed) => {
+                let err = TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: format!(
+                        "typed prompt timed out on attempt {attempt} for model {}",
+                        agent.model_id()
+                    ),
+                };
+                if attempt < policy.max_retries {
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    // The loop runs for `0..=max_retries` iterations. Every iteration either
+    // returns early or continues. Reaching here requires zero iterations,
+    // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -618,6 +836,29 @@ fn is_transient_error(err: &PromptError) -> bool {
     }
 }
 
+fn should_retry_typed_error(err: &TradingError) -> bool {
+    match err {
+        TradingError::NetworkTimeout { .. } | TradingError::RateLimitExceeded { .. } => true,
+        // SchemaViolation is a permanent failure for a given LLM output — the same
+        // prompt to the same model is unlikely to produce a valid response on retry,
+        // and retrying wastes token budget. Fail fast on schema errors.
+        TradingError::SchemaViolation { .. } => false,
+        TradingError::Rig(message) => {
+            let msg = message.to_ascii_lowercase();
+            msg.contains("rate limit")
+                || msg.contains("429")
+                || msg.contains("too many requests")
+                || msg.contains("timeout")
+                || msg.contains("connection")
+                || msg.contains("500")
+                || msg.contains("502")
+                || msg.contains("503")
+                || msg.contains("504")
+        }
+        TradingError::AnalystError { .. } | TradingError::Config(_) => false,
+    }
+}
+
 fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "openai" => Ok(ProviderId::OpenAI),
@@ -630,6 +871,41 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
     }
 }
 
+/// Validate the Copilot CLI executable path supplied via `SCORPIO_COPILOT_CLI_PATH`.
+///
+/// Rejects paths that:
+/// - Contain shell metacharacters that could enable injection.
+/// - Contain `..` path-traversal sequences.
+/// - Are relative paths containing `/` but not starting with `/` (must be either
+///   a plain filename or an absolute path).
+fn validate_copilot_cli_path(path: &str) -> Result<(), TradingError> {
+    const FORBIDDEN_CHARS: &[char] = &[
+        ';', '|', '&', '$', '`', '(', ')', '<', '>', '"', '\'', '\n', '\r', '\0', '*', '?', '[',
+        ']', '{', '}',
+    ];
+
+    if path.is_empty() {
+        return Err(config_error("SCORPIO_COPILOT_CLI_PATH must not be empty"));
+    }
+    if path.chars().any(|c| FORBIDDEN_CHARS.contains(&c)) {
+        return Err(config_error(
+            "SCORPIO_COPILOT_CLI_PATH contains disallowed characters",
+        ));
+    }
+    if path.contains("..") {
+        return Err(config_error(
+            "SCORPIO_COPILOT_CLI_PATH must not contain path traversal (..)",
+        ));
+    }
+    // Relative paths with '/' (but not absolute) are ambiguous and disallowed.
+    if path.contains('/') && !path.starts_with('/') {
+        return Err(config_error(
+            "SCORPIO_COPILOT_CLI_PATH must be a plain executable name or an absolute path",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
     let trimmed = model_id.trim();
     if trimmed.is_empty() {
@@ -638,9 +914,9 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
     Ok(trimmed.to_owned())
 }
 
-fn sanitize_error_summary(input: &str) -> String {
-    let mut sanitized = input
-        .chars()
+/// Replace ASCII/Unicode control characters (except `\n` and `\t`) with a space.
+fn replace_control_chars(s: &str) -> String {
+    s.chars()
         .map(|ch| {
             if ch.is_control() && ch != '\n' && ch != '\t' {
                 ' '
@@ -648,22 +924,62 @@ fn sanitize_error_summary(input: &str) -> String {
                 ch
             }
         })
-        .collect::<String>();
+        .collect()
+}
 
-    sanitized = sanitized
-        .replace("sk-", "[REDACTED]-")
-        .replace("authorization", "[REDACTED]")
-        .replace("api key", "[REDACTED]");
+/// Redact known credential patterns (API key prefixes, auth headers, bearer tokens).
+fn redact_credentials(s: &str) -> String {
+    // Patterns that reliably indicate a credential is present.
+    const REDACT_PATTERNS: &[&str] = &[
+        // OpenAI / generic "sk-" style keys
+        "sk-",
+        // Anthropic key prefix (catches "sk-ant-", etc.)
+        "sk-ant",
+        // Gemini / Google API keys
+        "AIza",
+        "aiza",
+        // HTTP Authorization header (various casings)
+        "authorization:",
+        "Authorization:",
+        "AUTHORIZATION:",
+        // Bearer token
+        "bearer ",
+        "Bearer ",
+        "BEARER ",
+        // Query-string / body key params
+        "api_key=",
+        "api-key=",
+        "apikey=",
+        "token=",
+        // Plain English
+        "api key",
+        "API KEY",
+        "api_key",
+        "API_KEY",
+        "authorization",
+    ];
 
-    let truncated = sanitized
-        .chars()
-        .take(MAX_ERROR_SUMMARY_CHARS)
-        .collect::<String>();
-    if sanitized.chars().count() > MAX_ERROR_SUMMARY_CHARS {
+    let mut out = s.to_owned();
+    for pattern in REDACT_PATTERNS {
+        out = out.replace(pattern, "[REDACTED]");
+    }
+    out
+}
+
+/// Truncate `s` to at most `max_chars` Unicode scalar values, appending `"..."` if trimmed.
+fn truncate_to(s: &str, max_chars: usize) -> String {
+    let truncated: String = s.chars().take(max_chars).collect();
+    if s.chars().count() > max_chars {
         format!("{truncated}...")
     } else {
         truncated
     }
+}
+
+fn sanitize_error_summary(input: &str) -> String {
+    let sanitized = replace_control_chars(input);
+    let sanitized = redact_credentials(&sanitized);
+    truncate_to(&sanitized, MAX_ERROR_SUMMARY_CHARS)
 }
 
 fn total_request_budget(timeout: Duration, policy: &RetryPolicy) -> Duration {
@@ -707,7 +1023,9 @@ mod tests {
             deep_thinking_model: "o3".to_owned(),
             max_debate_rounds: 3,
             max_risk_rounds: 2,
-            agent_timeout_secs: 30,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 3,
+            retry_base_delay_ms: 500,
         }
     }
 
@@ -1016,5 +1334,77 @@ mod tests {
         assert_eq!(policy.delay_for_attempt(0), Duration::from_millis(100));
         assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(200));
         assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(400));
+    }
+
+    // ── sanitize_error_summary (expanded) ────────────────────────────────
+
+    #[test]
+    fn redacts_gemini_api_key_prefix() {
+        let result = sanitize_error_summary("key=AIzaSyTest1234");
+        assert!(
+            !result.contains("AIza"),
+            "Gemini key prefix must be redacted"
+        );
+    }
+
+    #[test]
+    fn redacts_bearer_token() {
+        let result = sanitize_error_summary("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9");
+        assert!(!result.contains("Bearer "), "Bearer token must be redacted");
+    }
+
+    #[test]
+    fn redacts_api_key_eq() {
+        let result = sanitize_error_summary("request failed: api_key=secret123");
+        assert!(!result.contains("api_key="), "api_key= must be redacted");
+    }
+
+    // ── validate_copilot_cli_path ────────────────────────────────────────
+
+    #[test]
+    fn copilot_path_plain_name_accepted() {
+        assert!(validate_copilot_cli_path("copilot").is_ok());
+    }
+
+    #[test]
+    fn copilot_path_absolute_accepted() {
+        assert!(validate_copilot_cli_path("/usr/local/bin/copilot").is_ok());
+    }
+
+    #[test]
+    fn copilot_path_semicolon_rejected() {
+        assert!(validate_copilot_cli_path("copilot;rm -rf /").is_err());
+    }
+
+    #[test]
+    fn copilot_path_traversal_rejected() {
+        assert!(validate_copilot_cli_path("../../bin/evil").is_err());
+    }
+
+    #[test]
+    fn copilot_path_relative_with_slash_rejected() {
+        assert!(validate_copilot_cli_path("bin/copilot").is_err());
+    }
+
+    // ── schema_violation_not_retried ─────────────────────────────────────
+
+    #[test]
+    fn schema_violation_is_not_retryable() {
+        let err = TradingError::SchemaViolation {
+            message: "bad output".to_owned(),
+        };
+        assert!(
+            !should_retry_typed_error(&err),
+            "SchemaViolation must not be retried"
+        );
+    }
+
+    #[test]
+    fn network_timeout_is_retryable() {
+        let err = TradingError::NetworkTimeout {
+            elapsed: Duration::from_secs(30),
+            message: "timed out".to_owned(),
+        };
+        assert!(should_retry_typed_error(&err));
     }
 }

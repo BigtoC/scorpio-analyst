@@ -116,6 +116,12 @@ drawdown on backtests) while preserving full decision auditability.
   post-MVP follow-ups stay visible without expanding current scope
 - Bug fixes, typos, and non-breaking dependency updates can be done directly without proposals
 - Archive completed changes after deployment (`openspec archive <change-id>`)
+- **Cross-owner file modifications** — modifying a file owned by a different change proposal is allowed, but requires:
+  1. A `## Cross-Owner Changes` section in `proposal.md` listing each foreign-owned file, its owner, and a technical
+     justification
+  2. Explicit approval from the file owner or a project maintainer before any implementation begins
+  3. A `### Cross-Owner Touch-points` note in the owning change's `tasks.md` for awareness
+  4. Changes kept minimal and preferably additive (new re-exports or feature flags over restructuring)
 
 ## Domain Context
 
