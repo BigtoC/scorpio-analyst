@@ -312,6 +312,21 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_only_summary_returns_schema_violation() {
+        let json = r#"{
+            "revenue_growth_pct": null, "pe_ratio": null, "eps": null, "current_ratio": null,
+            "debt_to_equity": null, "gross_margin": null, "net_income": null,
+            "insider_transactions": [], "summary": "   "
+        }"#;
+        let result = parse_fundamental(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
     fn extra_fields_in_json_are_rejected() {
         let json = r#"{
             "revenue_growth_pct": null,

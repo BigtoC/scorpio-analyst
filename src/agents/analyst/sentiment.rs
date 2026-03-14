@@ -317,6 +317,62 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn extra_fields_in_json_are_rejected() {
+        // deny_unknown_fields must reject any unknown key
+        let json = r#"{
+            "overall_score": 0.0,
+            "source_breakdown": [],
+            "engagement_peaks": [],
+            "summary": "ok",
+            "unexpected_field": "should fail"
+        }"#;
+        let result = parse_sentiment(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn overall_score_out_of_range_returns_schema_violation() {
+        let json = r#"{"overall_score": 2.5, "source_breakdown": [], "engagement_peaks": [], "summary": "x"}"#;
+        let result = parse_sentiment(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn source_score_out_of_range_returns_schema_violation() {
+        let json = r#"{
+            "overall_score": 0.0,
+            "source_breakdown": [{"source_name": "x", "score": 1.5, "sample_size": 1}],
+            "engagement_peaks": [],
+            "summary": "x"
+        }"#;
+        let result = parse_sentiment(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn whitespace_only_summary_returns_schema_violation() {
+        let json = r#"{"overall_score": 0.0, "source_breakdown": [], "engagement_peaks": [], "summary": "   "}"#;
+        let result = parse_sentiment(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
     // ── Struct round-trip ─────────────────────────────────────────────────
 
     #[test]

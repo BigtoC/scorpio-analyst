@@ -82,8 +82,21 @@ impl TradingState {
     }
 
     /// Create per-field async locks for concurrent analyst fan-out writes.
+    ///
+    /// **Invariant**: this method is intended for use at the start of Phase 1 when all
+    /// analyst fields are `None`. The handles are seeded from the current field values,
+    /// so calling this mid-pipeline (e.g. during backtesting multi-cycle reuse) would
+    /// carry stale data into the new analysis cycle.
     #[must_use]
     pub fn analyst_handles(&self) -> AnalystStateHandles {
+        debug_assert!(
+            self.fundamental_metrics.is_none()
+                && self.technical_indicators.is_none()
+                && self.market_sentiment.is_none()
+                && self.macro_news.is_none(),
+            "analyst_handles() called on a TradingState that already has analyst data; \
+             did you forget to call TradingState::new() for this analysis cycle?"
+        );
         AnalystStateHandles {
             fundamental_metrics: Arc::new(RwLock::new(self.fundamental_metrics.clone())),
             technical_indicators: Arc::new(RwLock::new(self.technical_indicators.clone())),

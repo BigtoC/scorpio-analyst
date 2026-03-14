@@ -51,6 +51,19 @@ impl RetryPolicy {
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         self.base_delay * 2u32.saturating_pow(attempt)
     }
+
+    /// Total wall-clock budget required to execute all attempts including backoff delays.
+    ///
+    /// Use this as the outer `tokio::time::timeout` duration so the per-attempt
+    /// timeout and retry backoff fit entirely within the outer limit.
+    pub fn total_budget(&self, base_timeout: Duration) -> Duration {
+        let attempts = self.max_retries.saturating_add(1);
+        let base_budget = base_timeout.saturating_mul(attempts);
+        let backoff_budget = (0..self.max_retries).fold(Duration::ZERO, |acc, attempt| {
+            acc.saturating_add(self.delay_for_attempt(attempt))
+        });
+        base_budget.saturating_add(backoff_budget)
+    }
 }
 
 /// Result of an analyst fan-out where some agents may have failed.

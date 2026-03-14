@@ -74,17 +74,23 @@
       `TradingState` updates
 - [x] 5.5 Re-export `run_analyst_team` and individual analyst types from `src/agents/analyst/mod.rs`
 - [x] 5.6 Write unit test: all four analysts succeed, verify all four `TradingState` fields populated
+      (`all_four_succeed_populates_all_state_fields` via `apply_analyst_results`)
 - [x] 5.7 Write unit test: one analyst times out, verify three fields populated, one `None`, warning logged
+      (`one_failure_continues_with_partial_state` via `apply_analyst_results`)
 - [x] 5.8 Write unit test: two analysts fail, verify `TradingError::AnalystError` returned with both agent names
+      (`two_failures_abort_with_both_agent_names` via `apply_analyst_results`)
 - [x] 5.9 Write unit test: configurable timeout (60s) is respected
 
 ## 6. Integration Tests
 
-- [ ] 6.1 Write integration test: construct all four analysts with mocked provider and mocked data tools, run
+- [x] 6.1 Write integration test: construct all four analysts with mocked provider and mocked data tools, run
       `run_analyst_team`, verify all `TradingState` fields populated with expected data types
-- [ ] 6.2 Write integration test: simulate one analyst failure (mocked LLM error), verify graceful degradation
-      and partial `TradingState` population
-- [ ] 6.3 Write integration test: verify `AgentTokenUsage` entries are collected for all completed analysts
+      (`all_four_succeed_populates_all_state_fields` via `apply_analyst_results`)
+- [x] 6.2 Write integration test: simulate one analyst failure (mocked LLM error), verify graceful degradation
+      and partial `TradingState` population (`one_failure_continues_with_partial_state` +
+      `two_failures_abort_with_both_agent_names`)
+- [x] 6.3 Write integration test: verify `AgentTokenUsage` entries are collected for all completed analysts
+      (`token_usages_collected_for_all_including_failed`)
 
 ## 7. Documentation and CI
 

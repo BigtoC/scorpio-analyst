@@ -302,6 +302,63 @@ mod tests {
     }
 
     #[test]
+    fn extra_fields_in_json_are_rejected() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [],
+            "summary": "ok",
+            "unexpected_field": "should fail"
+        }"#;
+        let result = parse_news(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn confidence_out_of_range_returns_schema_violation() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [{"event": "test", "impact_direction": "positive", "confidence": 1.5}],
+            "summary": "x"
+        }"#;
+        let result = parse_news(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn negative_confidence_returns_schema_violation() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [{"event": "test", "impact_direction": "negative", "confidence": -0.1}],
+            "summary": "x"
+        }"#;
+        let result = parse_news(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn whitespace_only_summary_returns_schema_violation() {
+        let json = r#"{"articles": [], "macro_events": [], "summary": "  "}"#;
+        let result = parse_news(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
     fn json_with_wrong_types_returns_schema_violation() {
         // `confidence` should be f64, not a string
         let result = parse_news(

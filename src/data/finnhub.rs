@@ -825,15 +825,21 @@ fn validate_scoped_symbol(
     requested_symbol: &str,
     tool_name: &str,
 ) -> Result<(), TradingError> {
-    if let Some(expected) = allowed_symbol
-        && expected != requested_symbol
-    {
-        return Err(TradingError::SchemaViolation {
+    match allowed_symbol {
+        // No scope set — tool was constructed via ::new() which is only for definition
+        // inspection (e.g. tests calling .definition()). Calling it at runtime without
+        // a symbol scope is a programming error.
+        None => Err(TradingError::SchemaViolation {
+            message: format!(
+                "{tool_name} must be created via ::scoped() for runtime use; \
+                 no symbol scope is set"
+            ),
+        }),
+        Some(expected) if expected != requested_symbol => Err(TradingError::SchemaViolation {
             message: format!("{tool_name} is scoped to symbol {expected}, got {requested_symbol}"),
-        });
+        }),
+        Some(_) => Ok(()),
     }
-
-    Ok(())
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -995,6 +1001,23 @@ mod tests {
 
     #[tokio::test]
     async fn tool_call_without_client_returns_config_error() {
+        // Use a scoped tool so that scope validation passes and we reach the client check.
+        let tool = GetFundamentals {
+            client: None,
+            allowed_symbol: Some("AAPL".to_owned()),
+        };
+        let result = tool
+            .call(SymbolArgs {
+                symbol: "AAPL".to_owned(),
+            })
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn tool_call_without_scope_returns_schema_violation() {
+        // Tools constructed via ::new() (no scope) must reject runtime calls.
         let tool = GetFundamentals {
             client: None,
             allowed_symbol: None,
@@ -1005,7 +1028,29 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_call_wrong_symbol_returns_schema_violation() {
+        // Scoped to AAPL but called with MSFT should be rejected.
+        let tool = GetFundamentals {
+            client: None,
+            allowed_symbol: Some("AAPL".to_owned()),
+        };
+        let result = tool
+            .call(SymbolArgs {
+                symbol: "MSFT".to_owned(),
+            })
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
     }
 
     /// Verify that `get_fundamentals` awaits the limiter exactly twice

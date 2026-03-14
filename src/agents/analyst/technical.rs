@@ -366,6 +366,71 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn extra_fields_in_json_are_rejected() {
+        let json = r#"{
+            "rsi": null, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "ok",
+            "unexpected_field": "should fail"
+        }"#;
+        let result = parse_technical(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn rsi_above_100_returns_schema_violation() {
+        let json = r#"{
+            "rsi": 101.0, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "invalid rsi"
+        }"#;
+        let result = parse_technical(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn rsi_below_zero_returns_schema_violation() {
+        let json = r#"{
+            "rsi": -1.0, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "invalid rsi"
+        }"#;
+        let result = parse_technical(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn whitespace_only_summary_returns_schema_violation() {
+        let json = r#"{
+            "rsi": null, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
+            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
+            "support_level": null, "resistance_level": null, "volume_avg": null,
+            "summary": "   "
+        }"#;
+        let result = parse_technical(json);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
     // ── Struct round-trip ─────────────────────────────────────────────────
 
     #[test]

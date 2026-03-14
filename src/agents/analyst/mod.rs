@@ -32,9 +32,12 @@ use tracing::warn;
 use crate::{
     config::LlmConfig,
     data::{FinnhubClient, YFinanceClient},
-    error::TradingError,
+    error::{RetryPolicy, TradingError},
     providers::factory::CompletionModelHandle,
-    state::{AgentTokenUsage, TradingState},
+    state::{
+        AgentTokenUsage, AnalystStateHandles, FundamentalData, NewsData, SentimentData,
+        TechnicalData, TradingState,
+    },
 };
 
 /// Run all four analyst agents concurrently and write results into `state`.
@@ -59,10 +62,16 @@ pub async fn run_analyst_team(
     state: &mut TradingState,
     llm_config: &LlmConfig,
 ) -> Result<Vec<AgentTokenUsage>, TradingError> {
-    let timeout = Duration::from_secs(llm_config.analyst_timeout_secs);
+    // The inner retry policy sets the per-attempt timeout; the outer task timeout
+    // must cover all attempts plus backoff so it never fires before the inner budget
+    // is exhausted.
+    let inner_timeout = Duration::from_secs(llm_config.analyst_timeout_secs);
+    let outer_timeout = RetryPolicy::default().total_budget(inner_timeout);
+
     let symbol = state.asset_symbol.clone();
     let target_date = state.target_date.clone();
     let analyst_handles = state.analyst_handles();
+    let model_id = handle.model_id().to_owned();
 
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
@@ -74,7 +83,7 @@ pub async fn run_analyst_team(
             target_date.clone(),
             llm_config,
         );
-        tokio::spawn(async move { tokio::time::timeout(timeout, analyst.run()).await })
+        tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
     let sentiment_task = {
@@ -85,7 +94,7 @@ pub async fn run_analyst_team(
             target_date.clone(),
             llm_config,
         );
-        tokio::spawn(async move { tokio::time::timeout(timeout, analyst.run()).await })
+        tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
     let news_task = {
@@ -96,7 +105,7 @@ pub async fn run_analyst_team(
             target_date.clone(),
             llm_config,
         );
-        tokio::spawn(async move { tokio::time::timeout(timeout, analyst.run()).await })
+        tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
     let technical_task = {
@@ -107,7 +116,7 @@ pub async fn run_analyst_team(
             target_date.clone(),
             llm_config,
         );
-        tokio::spawn(async move { tokio::time::timeout(timeout, analyst.run()).await })
+        tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
     // ── Await all tasks ───────────────────────────────────────────────────
@@ -122,56 +131,64 @@ pub async fn run_analyst_team(
     let news_result = flatten_task_result("News Analyst", news_join);
     let technical_result = flatten_task_result("Technical Analyst", technical_join);
 
-    // ── Count failures and apply degradation policy ───────────────────────
+    apply_analyst_results(
+        fundamental_result,
+        sentiment_result,
+        news_result,
+        technical_result,
+        &analyst_handles,
+        state,
+        &model_id,
+    )
+    .await
+}
 
+/// Collect four analyst results into `state`, emit warnings for failures,
+/// capture a best-effort [`AgentTokenUsage`] for every run (success or error),
+/// and apply the degradation policy.
+///
+/// Extracted from [`run_analyst_team`] so it can be tested without a live
+/// LLM by supplying pre-built `Result` values directly.
+pub(crate) async fn apply_analyst_results(
+    fundamental: Result<(FundamentalData, AgentTokenUsage), TradingError>,
+    sentiment: Result<(SentimentData, AgentTokenUsage), TradingError>,
+    news: Result<(NewsData, AgentTokenUsage), TradingError>,
+    technical: Result<(TechnicalData, AgentTokenUsage), TradingError>,
+    handles: &AnalystStateHandles,
+    state: &mut TradingState,
+    model_id: &str,
+) -> Result<Vec<AgentTokenUsage>, TradingError> {
     let mut token_usages: Vec<AgentTokenUsage> = Vec::new();
     let mut failed_agents: Vec<String> = Vec::new();
 
-    match fundamental_result {
-        Ok((data, usage)) => {
-            *analyst_handles.fundamental_metrics.write().await = Some(data);
-            token_usages.push(usage);
-        }
-        Err(err) => {
-            warn!(agent = "Fundamental Analyst", error = %err, "analyst failed");
-            failed_agents.push("Fundamental Analyst".to_owned());
-        }
+    macro_rules! handle_result {
+        ($result:expr, $name:literal, $field:expr) => {
+            match $result {
+                Ok((data, usage)) => {
+                    *$field.write().await = Some(data);
+                    token_usages.push(usage);
+                }
+                Err(err) => {
+                    warn!(agent = $name, error = %err, "analyst failed");
+                    failed_agents.push($name.to_owned());
+                    // Always record a best-effort usage entry so the phase tracker
+                    // accounts for every analyst, successful or not.
+                    token_usages.push(AgentTokenUsage::unavailable($name, model_id, 0));
+                }
+            }
+        };
     }
 
-    match sentiment_result {
-        Ok((data, usage)) => {
-            *analyst_handles.market_sentiment.write().await = Some(data);
-            token_usages.push(usage);
-        }
-        Err(err) => {
-            warn!(agent = "Sentiment Analyst", error = %err, "analyst failed");
-            failed_agents.push("Sentiment Analyst".to_owned());
-        }
-    }
+    handle_result!(
+        fundamental,
+        "Fundamental Analyst",
+        handles.fundamental_metrics
+    );
+    handle_result!(sentiment, "Sentiment Analyst", handles.market_sentiment);
+    handle_result!(news, "News Analyst", handles.macro_news);
+    handle_result!(technical, "Technical Analyst", handles.technical_indicators);
 
-    match news_result {
-        Ok((data, usage)) => {
-            *analyst_handles.macro_news.write().await = Some(data);
-            token_usages.push(usage);
-        }
-        Err(err) => {
-            warn!(agent = "News Analyst", error = %err, "analyst failed");
-            failed_agents.push("News Analyst".to_owned());
-        }
-    }
-
-    match technical_result {
-        Ok((data, usage)) => {
-            *analyst_handles.technical_indicators.write().await = Some(data);
-            token_usages.push(usage);
-        }
-        Err(err) => {
-            warn!(agent = "Technical Analyst", error = %err, "analyst failed");
-            failed_agents.push("Technical Analyst".to_owned());
-        }
-    }
-
-    state.apply_analyst_handles(&analyst_handles).await;
+    state.apply_analyst_handles(handles).await;
 
     if failed_agents.len() >= 2 {
         return Err(TradingError::AnalystError {
@@ -218,14 +235,104 @@ fn flatten_task_result<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::TradingError;
+    use crate::{
+        error::TradingError,
+        state::{
+            FundamentalData, InsiderTransaction, MacdValues, MacroEvent, NewsArticle, NewsData,
+            SentimentData, SentimentSource, TechnicalData,
+        },
+    };
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    fn sample_fundamental() -> FundamentalData {
+        FundamentalData {
+            revenue_growth_pct: Some(0.12),
+            pe_ratio: Some(28.5),
+            eps: Some(6.1),
+            current_ratio: Some(1.3),
+            debt_to_equity: None,
+            gross_margin: Some(0.43),
+            net_income: Some(9.5e10),
+            insider_transactions: vec![InsiderTransaction {
+                name: "Jane".to_owned(),
+                share_change: -1000.0,
+                transaction_date: "2026-01-01".to_owned(),
+                transaction_type: "S".to_owned(),
+            }],
+            summary: "Strong fundamentals.".to_owned(),
+        }
+    }
+
+    fn sample_sentiment() -> SentimentData {
+        SentimentData {
+            overall_score: 0.6,
+            source_breakdown: vec![SentimentSource {
+                source_name: "Finnhub News".to_owned(),
+                score: 0.6,
+                sample_size: 12,
+            }],
+            engagement_peaks: vec![],
+            summary: "Mildly bullish.".to_owned(),
+        }
+    }
+
+    fn sample_news() -> NewsData {
+        NewsData {
+            articles: vec![NewsArticle {
+                title: "Record Revenue".to_owned(),
+                source: "Reuters".to_owned(),
+                published_at: "2026-03-14T10:00:00Z".to_owned(),
+                relevance_score: Some(0.9),
+                snippet: "Record quarterly results.".to_owned(),
+            }],
+            macro_events: vec![MacroEvent {
+                event: "Interest-rate policy shift".to_owned(),
+                impact_direction: "positive".to_owned(),
+                confidence: 0.75,
+            }],
+            summary: "Positive earnings and rate backdrop.".to_owned(),
+        }
+    }
+
+    fn sample_technical() -> TechnicalData {
+        TechnicalData {
+            rsi: Some(55.0),
+            macd: Some(MacdValues {
+                macd_line: 0.1,
+                signal_line: 0.05,
+                histogram: 0.05,
+            }),
+            atr: Some(1.5),
+            sma_20: Some(150.0),
+            sma_50: None,
+            ema_12: Some(151.0),
+            ema_26: Some(149.0),
+            bollinger_upper: Some(160.0),
+            bollinger_lower: Some(140.0),
+            support_level: None,
+            resistance_level: None,
+            volume_avg: Some(500_000.0),
+            summary: "Neutral trend.".to_owned(),
+        }
+    }
+
+    fn sample_usage(agent: &str) -> AgentTokenUsage {
+        AgentTokenUsage {
+            agent_name: agent.to_owned(),
+            model_id: "gpt-4o-mini".to_owned(),
+            token_counts_available: true,
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            latency_ms: 300,
+        }
+    }
 
     // ── flatten_task_result ──────────────────────────────────────────────
 
     #[test]
     fn flatten_join_error_becomes_analyst_error() {
-        // Simulate a JoinError by using an aborted task handle.
-        // We can't construct JoinError directly, so test via the Ok(Ok(…)) path first.
         let ok: Result<
             Result<Result<i32, TradingError>, tokio::time::error::Elapsed>,
             tokio::task::JoinError,
@@ -245,7 +352,19 @@ mod tests {
         assert!(matches!(result.unwrap_err(), TradingError::Rig(_)));
     }
 
-    // ── run_analyst_team (unit-level): configurable timeout ──────────────
+    // ── outer timeout is larger than inner budget ─────────────────────────
+
+    #[test]
+    fn outer_timeout_exceeds_inner_timeout() {
+        let inner = Duration::from_secs(30);
+        let outer = RetryPolicy::default().total_budget(inner);
+        // With max_retries=3 and base 500 ms: outer = 30×4 + 3.5s = 123.5s
+        assert!(
+            outer > inner,
+            "outer timeout must be larger than per-attempt timeout"
+        );
+        assert_eq!(outer, Duration::from_millis(123_500));
+    }
 
     #[test]
     fn timeout_duration_derived_from_config() {
@@ -258,7 +377,151 @@ mod tests {
             max_risk_rounds: 2,
             analyst_timeout_secs: 60,
         };
-        let timeout = Duration::from_secs(config.analyst_timeout_secs);
-        assert_eq!(timeout, Duration::from_secs(60));
+        let inner = Duration::from_secs(config.analyst_timeout_secs);
+        let outer = RetryPolicy::default().total_budget(inner);
+        assert!(outer > inner);
+    }
+
+    // ── Task 5.6 / 6.1: all four analysts succeed ────────────────────────
+
+    #[tokio::test]
+    async fn all_four_succeed_populates_all_state_fields() {
+        let mut state = TradingState::new("AAPL", "2026-03-14");
+        let handles = state.analyst_handles();
+
+        let result = apply_analyst_results(
+            Ok((sample_fundamental(), sample_usage("Fundamental Analyst"))),
+            Ok((sample_sentiment(), sample_usage("Sentiment Analyst"))),
+            Ok((sample_news(), sample_usage("News Analyst"))),
+            Ok((sample_technical(), sample_usage("Technical Analyst"))),
+            &handles,
+            &mut state,
+            "gpt-4o-mini",
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let usages = result.unwrap();
+        // All four succeeded → four usage entries, all with token_counts_available
+        assert_eq!(usages.len(), 4);
+        assert!(usages.iter().all(|u| u.token_counts_available));
+        // State fields populated
+        assert!(state.fundamental_metrics.is_some());
+        assert!(state.market_sentiment.is_some());
+        assert!(state.macro_news.is_some());
+        assert!(state.technical_indicators.is_some());
+    }
+
+    // ── Task 5.7 / 6.2: one analyst fails — partial data, continues ──────
+
+    #[tokio::test]
+    async fn one_failure_continues_with_partial_state() {
+        let mut state = TradingState::new("AAPL", "2026-03-14");
+        let handles = state.analyst_handles();
+
+        let result = apply_analyst_results(
+            Ok((sample_fundamental(), sample_usage("Fundamental Analyst"))),
+            Err(TradingError::NetworkTimeout {
+                elapsed: Duration::from_secs(30),
+                message: "simulated timeout".to_owned(),
+            }),
+            Ok((sample_news(), sample_usage("News Analyst"))),
+            Ok((sample_technical(), sample_usage("Technical Analyst"))),
+            &handles,
+            &mut state,
+            "gpt-4o-mini",
+        )
+        .await;
+
+        // Should succeed despite one failure
+        assert!(result.is_ok());
+        let usages = result.unwrap();
+        // Four entries — three real, one unavailable fallback
+        assert_eq!(usages.len(), 4);
+        // The failed analyst's fallback entry has token_counts_available = false
+        let failed_usage = usages
+            .iter()
+            .find(|u| u.agent_name == "Sentiment Analyst")
+            .expect("fallback usage for failed analyst must be present");
+        assert!(!failed_usage.token_counts_available);
+        // The failed field is None; the others are populated
+        assert!(state.fundamental_metrics.is_some());
+        assert!(
+            state.market_sentiment.is_none(),
+            "failed analyst field must be None"
+        );
+        assert!(state.macro_news.is_some());
+        assert!(state.technical_indicators.is_some());
+    }
+
+    // ── Task 5.8 / 6.2: two failures → abort with both agent names ───────
+
+    #[tokio::test]
+    async fn two_failures_abort_with_both_agent_names() {
+        let mut state = TradingState::new("AAPL", "2026-03-14");
+        let handles = state.analyst_handles();
+
+        let result = apply_analyst_results(
+            Err(TradingError::Rig("fundamental LLM error".to_owned())),
+            Ok((sample_sentiment(), sample_usage("Sentiment Analyst"))),
+            Err(TradingError::SchemaViolation {
+                message: "news output malformed".to_owned(),
+            }),
+            Ok((sample_technical(), sample_usage("Technical Analyst"))),
+            &handles,
+            &mut state,
+            "gpt-4o-mini",
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match &err {
+            TradingError::AnalystError { agent, message } => {
+                assert!(
+                    agent.contains("Fundamental Analyst"),
+                    "error must name Fundamental Analyst; got: {agent}"
+                );
+                assert!(
+                    agent.contains("News Analyst"),
+                    "error must name News Analyst; got: {agent}"
+                );
+                assert!(
+                    message.contains("2/4"),
+                    "message must show failure count; got: {message}"
+                );
+            }
+            other => panic!("expected AnalystError, got: {other:?}"),
+        }
+    }
+
+    // ── Task 6.3: AgentTokenUsage collected for all analysts ─────────────
+
+    #[tokio::test]
+    async fn token_usages_collected_for_all_including_failed() {
+        let mut state = TradingState::new("AAPL", "2026-03-14");
+        let handles = state.analyst_handles();
+
+        // Only one failure — still returns Ok
+        let result = apply_analyst_results(
+            Err(TradingError::Rig("error".to_owned())),
+            Ok((sample_sentiment(), sample_usage("Sentiment Analyst"))),
+            Ok((sample_news(), sample_usage("News Analyst"))),
+            Ok((sample_technical(), sample_usage("Technical Analyst"))),
+            &handles,
+            &mut state,
+            "gpt-4o-mini",
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let usages = result.unwrap();
+        // Exactly 4 entries — one per analyst regardless of success/failure
+        assert_eq!(usages.len(), 4, "must have one usage entry per analyst");
+        let names: Vec<&str> = usages.iter().map(|u| u.agent_name.as_str()).collect();
+        assert!(names.contains(&"Fundamental Analyst"));
+        assert!(names.contains(&"Sentiment Analyst"));
+        assert!(names.contains(&"News Analyst"));
+        assert!(names.contains(&"Technical Analyst"));
     }
 }
