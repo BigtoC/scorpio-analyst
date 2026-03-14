@@ -25,6 +25,12 @@ pub struct LlmConfig {
     pub max_risk_rounds: u32,
     #[serde(default = "default_agent_timeout", alias = "agent_timeout_secs")]
     pub analyst_timeout_secs: u64,
+    /// Maximum number of LLM call retries on transient errors (default: 3).
+    #[serde(default = "default_retry_max_retries")]
+    pub retry_max_retries: u32,
+    /// Base delay in milliseconds for exponential back-off between retries (default: 500).
+    #[serde(default = "default_retry_base_delay_ms")]
+    pub retry_base_delay_ms: u64,
 }
 
 fn default_debate_rounds() -> u32 {
@@ -35,6 +41,12 @@ fn default_risk_rounds() -> u32 {
 }
 fn default_agent_timeout() -> u64 {
     30
+}
+fn default_retry_max_retries() -> u32 {
+    3
+}
+fn default_retry_base_delay_ms() -> u64 {
+    500
 }
 
 /// Trading-specific parameters.
