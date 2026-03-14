@@ -12,6 +12,7 @@
 //! | [`GetEarnings`] | `rig` tool: fetch quarterly earnings |
 //! | [`GetInsiderTransactions`] | `rig` tool: fetch insider transactions |
 //! | [`GetNews`] | `rig` tool: fetch company news |
+//! | [`GetCachedNews`] | `rig` tool: serve pre-fetched news from cache (avoids duplicate Finnhub call) |
 //! | [`GetMarketNews`] | `rig` tool: fetch general market news |
 //! | [`GetEconomicIndicators`] | `rig` tool: fetch macro-economic indicator snapshot |
 //! | [`YFinanceClient`] | Async wrapper for Yahoo Finance OHLCV data |
@@ -24,7 +25,7 @@ mod symbol;
 pub mod yfinance;
 
 pub use finnhub::{
-    FinnhubClient, GetEarnings, GetEconomicIndicators, GetFundamentals, GetInsiderTransactions,
-    GetMarketNews, GetNews, SymbolArgs,
+    FinnhubClient, GetCachedNews, GetEarnings, GetEconomicIndicators, GetFundamentals,
+    GetInsiderTransactions, GetMarketNews, GetNews, SymbolArgs,
 };
 pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};

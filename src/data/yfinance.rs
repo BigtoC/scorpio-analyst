@@ -202,9 +202,14 @@ pub struct OhlcvArgs {
 }
 
 /// Shared analysis-scoped OHLCV cache populated by the retrieval tool and consumed by indicator tools.
+///
+/// The inner value is wrapped in a second `Arc` so that each call to [`load`](OhlcvToolContext::load)
+/// returns a cheap pointer-bump clone rather than a full `Vec<Candle>` copy (~220 KB per analyst
+/// run).  The outer `Arc<RwLock<…>>` provides shared ownership of the slot across tool instances;
+/// the inner `Arc<Vec<Candle>>` avoids allocating a new `Vec` every time an indicator tool reads it.
 #[derive(Debug, Clone, Default)]
 pub struct OhlcvToolContext {
-    candles: Arc<RwLock<Option<Vec<Candle>>>>,
+    candles: Arc<RwLock<Option<Arc<Vec<Candle>>>>>,
 }
 
 impl OhlcvToolContext {
@@ -213,11 +218,31 @@ impl OhlcvToolContext {
         Self::default()
     }
 
-    pub async fn store(&self, candles: Vec<Candle>) {
-        *self.candles.write().await = Some(candles);
+    /// Store OHLCV candles in the context.
+    ///
+    /// Returns an error if candles have already been stored (write-once
+    /// semantics). This prevents a manipulated LLM from overwriting the
+    /// trusted first fetch with adversarial data by calling `get_ohlcv`
+    /// a second time.
+    pub async fn store(&self, candles: Vec<Candle>) -> Result<(), TradingError> {
+        let mut lock = self.candles.write().await;
+        if lock.is_some() {
+            return Err(TradingError::SchemaViolation {
+                message: "OHLCV data has already been fetched for this analysis; \
+                          get_ohlcv may only be called once per analysis cycle"
+                    .to_owned(),
+            });
+        }
+        *lock = Some(Arc::new(candles));
+        Ok(())
     }
 
-    pub async fn load(&self) -> Result<Vec<Candle>, TradingError> {
+    /// Load the pre-fetched OHLCV candles.
+    ///
+    /// Returns an `Arc`-wrapped reference to avoid copying the full `Vec` on every
+    /// indicator tool call. Callers can dereference via `&*candles` or `candles.as_slice()`
+    /// to obtain a `&[Candle]` slice.
+    pub async fn load(&self) -> Result<Arc<Vec<Candle>>, TradingError> {
         self.candles
             .read()
             .await
@@ -275,8 +300,9 @@ impl GetOhlcv {
     }
 
     fn validate_scope(&self, args: &OhlcvArgs) -> Result<(), TradingError> {
+        // Symbol comparison is case-insensitive so "aapl" and "AAPL" are equivalent.
         if let Some(symbol) = &self.allowed_symbol
-            && args.symbol != *symbol
+            && !args.symbol.eq_ignore_ascii_case(symbol)
         {
             return Err(TradingError::SchemaViolation {
                 message: format!(
@@ -351,7 +377,7 @@ impl Tool for GetOhlcv {
             .get_ohlcv(&args.symbol, &args.start, &args.end)
             .await?;
         if let Some(context) = &self.context {
-            context.store(candles.clone()).await;
+            context.store(candles.clone()).await?;
         }
         Ok(candles)
     }
@@ -480,11 +506,12 @@ mod tests {
 
     #[tokio::test]
     async fn tool_call_without_client_returns_config_error() {
+        // Use a fully scoped tool so scope validation passes and we reach the client check.
         let tool = GetOhlcv {
             client: None,
-            allowed_symbol: None,
-            allowed_start: None,
-            allowed_end: None,
+            allowed_symbol: Some("AAPL".to_owned()),
+            allowed_start: Some("2024-01-01".to_owned()),
+            allowed_end: Some("2024-01-31".to_owned()),
             context: None,
         };
         let result = tool
@@ -495,6 +522,52 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn ohlcv_context_store_write_once_rejects_second_write() {
+        let ctx = OhlcvToolContext::new();
+        let candles = vec![Candle {
+            date: "2024-01-01".to_owned(),
+            open: 100.0,
+            high: 105.0,
+            low: 98.0,
+            close: 103.0,
+            volume: None,
+        }];
+
+        // First store succeeds.
+        ctx.store(candles.clone())
+            .await
+            .expect("first store must succeed");
+        // Second store must fail — write-once semantics.
+        let result = ctx.store(candles).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn symbol_case_insensitive_scope_match() {
+        // Scoped to "AAPL" (uppercase) but called with "aapl" (lowercase) should pass.
+        let tool = GetOhlcv {
+            client: None,
+            allowed_symbol: Some("AAPL".to_owned()),
+            allowed_start: Some("2024-01-01".to_owned()),
+            allowed_end: Some("2024-01-31".to_owned()),
+            context: None,
+        };
+        let result = tool
+            .call(OhlcvArgs {
+                symbol: "aapl".to_owned(),
+                start: "2024-01-01".to_owned(),
+                end: "2024-01-31".to_owned(),
+            })
+            .await;
+        // Should reach the "client not set" error, not a scope error.
         assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
     }
 
