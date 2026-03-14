@@ -6,12 +6,12 @@
 //! data directly, preserving the separation between the `financial-data` and
 //! `technical-analysis` capabilities.
 
+use crate::data::yfinance::OhlcvToolContext;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::data::yfinance::Candle;
 use crate::error::TradingError;
 use crate::state::TechnicalData;
 
@@ -23,14 +23,23 @@ use super::types::{BollingerResult, MacdResult, NamedIndicatorOutput};
 
 /// Args for the `calculate_all_indicators` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateAllIndicatorsArgs {
-    /// Pre-fetched OHLCV candles (output of the `get_ohlcv` tool).
-    pub candles: Vec<Candle>,
-}
+pub struct CalculateAllIndicatorsArgs {}
 
 /// `rig` tool: compute all technical indicators from pre-fetched OHLCV candles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateAllIndicators;
+pub struct CalculateAllIndicators {
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
+}
+
+impl CalculateAllIndicators {
+    #[must_use]
+    pub fn new(context: OhlcvToolContext) -> Self {
+        Self {
+            context: Some(context),
+        }
+    }
+}
 
 impl Tool for CalculateAllIndicators {
     const NAME: &'static str = "calculate_all_indicators";
@@ -47,31 +56,21 @@ impl Tool for CalculateAllIndicators {
                 .to_owned(),
             parameters: json!({
                 "type": "object",
-                "properties": {
-                    "candles": {
-                        "type": "array",
-                        "description": "OHLCV candles previously fetched via get_ohlcv",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "date":   { "type": "string" },
-                                "open":   { "type": "number" },
-                                "high":   { "type": "number" },
-                                "low":    { "type": "number" },
-                                "close":  { "type": "number" },
-                                "volume": { "type": ["integer", "null"] }
-                            },
-                            "required": ["date", "open", "high", "low", "close"]
-                        }
-                    }
-                },
-                "required": ["candles"]
+                "properties": {},
+                "additionalProperties": false
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        calculate_all_indicators(&args.candles)
+        let _ = args;
+        let candles = self
+            .context
+            .as_ref()
+            .ok_or_else(|| TradingError::Config(anyhow::anyhow!("missing OHLCV tool context")))?
+            .load()
+            .await?;
+        calculate_all_indicators(&candles)
     }
 }
 
@@ -80,8 +79,6 @@ impl Tool for CalculateAllIndicators {
 /// Args for the `calculate_rsi` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculateRsiArgs {
-    /// Pre-fetched OHLCV candles.
-    pub candles: Vec<Candle>,
     /// RSI period (default: 14).
     #[serde(default = "default_rsi_period")]
     pub period: usize,
@@ -93,7 +90,19 @@ fn default_rsi_period() -> usize {
 
 /// `rig` tool: compute RSI from pre-fetched OHLCV candle data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateRsi;
+pub struct CalculateRsi {
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
+}
+
+impl CalculateRsi {
+    #[must_use]
+    pub fn new(context: OhlcvToolContext) -> Self {
+        Self {
+            context: Some(context),
+        }
+    }
+}
 
 impl Tool for CalculateRsi {
     const NAME: &'static str = "calculate_rsi";
@@ -111,16 +120,21 @@ impl Tool for CalculateRsi {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "candles": { "type": "array", "description": "OHLCV candles from get_ohlcv" },
                     "period":  { "type": "integer", "description": "RSI period (default 14)", "default": 14 }
                 },
-                "required": ["candles"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        calculate_rsi(&args.candles, args.period)
+        let candles = self
+            .context
+            .as_ref()
+            .ok_or_else(|| TradingError::Config(anyhow::anyhow!("missing OHLCV tool context")))?
+            .load()
+            .await?;
+        calculate_rsi(&candles, args.period)
     }
 }
 
@@ -129,8 +143,6 @@ impl Tool for CalculateRsi {
 /// Args for the `calculate_macd` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculateMacdArgs {
-    /// Pre-fetched OHLCV candles.
-    pub candles: Vec<Candle>,
     /// Fast EMA period (default: 12).
     #[serde(default = "default_macd_fast")]
     pub fast: usize,
@@ -154,7 +166,19 @@ fn default_macd_signal() -> usize {
 
 /// `rig` tool: compute MACD from pre-fetched OHLCV candle data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateMacd;
+pub struct CalculateMacd {
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
+}
+
+impl CalculateMacd {
+    #[must_use]
+    pub fn new(context: OhlcvToolContext) -> Self {
+        Self {
+            context: Some(context),
+        }
+    }
+}
 
 impl Tool for CalculateMacd {
     const NAME: &'static str = "calculate_macd";
@@ -172,18 +196,23 @@ impl Tool for CalculateMacd {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "candles": { "type": "array", "description": "OHLCV candles from get_ohlcv" },
                     "fast":    { "type": "integer", "description": "Fast EMA period (default 12)", "default": 12 },
                     "slow":    { "type": "integer", "description": "Slow EMA period (default 26)", "default": 26 },
                     "signal":  { "type": "integer", "description": "Signal line period (default 9)", "default": 9 }
                 },
-                "required": ["candles"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        calculate_macd(&args.candles, args.fast, args.slow, args.signal)
+        let candles = self
+            .context
+            .as_ref()
+            .ok_or_else(|| TradingError::Config(anyhow::anyhow!("missing OHLCV tool context")))?
+            .load()
+            .await?;
+        calculate_macd(&candles, args.fast, args.slow, args.signal)
     }
 }
 
@@ -192,8 +221,6 @@ impl Tool for CalculateMacd {
 /// Args for the `calculate_atr` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculateAtrArgs {
-    /// Pre-fetched OHLCV candles.
-    pub candles: Vec<Candle>,
     /// ATR period (default: 14).
     #[serde(default = "default_atr_period")]
     pub period: usize,
@@ -205,7 +232,19 @@ fn default_atr_period() -> usize {
 
 /// `rig` tool: compute ATR from pre-fetched OHLCV candle data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateAtr;
+pub struct CalculateAtr {
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
+}
+
+impl CalculateAtr {
+    #[must_use]
+    pub fn new(context: OhlcvToolContext) -> Self {
+        Self {
+            context: Some(context),
+        }
+    }
+}
 
 impl Tool for CalculateAtr {
     const NAME: &'static str = "calculate_atr";
@@ -223,16 +262,21 @@ impl Tool for CalculateAtr {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "candles": { "type": "array", "description": "OHLCV candles from get_ohlcv" },
                     "period":  { "type": "integer", "description": "ATR period (default 14)", "default": 14 }
                 },
-                "required": ["candles"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        calculate_atr(&args.candles, args.period)
+        let candles = self
+            .context
+            .as_ref()
+            .ok_or_else(|| TradingError::Config(anyhow::anyhow!("missing OHLCV tool context")))?
+            .load()
+            .await?;
+        calculate_atr(&candles, args.period)
     }
 }
 
@@ -241,8 +285,6 @@ impl Tool for CalculateAtr {
 /// Args for the `calculate_bollinger_bands` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculateBollingerArgs {
-    /// Pre-fetched OHLCV candles.
-    pub candles: Vec<Candle>,
     /// Bollinger period (default: 20).
     #[serde(default = "default_boll_period")]
     pub period: usize,
@@ -260,7 +302,19 @@ fn default_boll_std_dev() -> f64 {
 
 /// `rig` tool: compute Bollinger Bands from pre-fetched OHLCV candle data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateBollingerBands;
+pub struct CalculateBollingerBands {
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
+}
+
+impl CalculateBollingerBands {
+    #[must_use]
+    pub fn new(context: OhlcvToolContext) -> Self {
+        Self {
+            context: Some(context),
+        }
+    }
+}
 
 impl Tool for CalculateBollingerBands {
     const NAME: &'static str = "calculate_bollinger_bands";
@@ -277,17 +331,22 @@ impl Tool for CalculateBollingerBands {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "candles": { "type": "array", "description": "OHLCV candles from get_ohlcv" },
                     "period":  { "type": "integer", "description": "Bollinger period (default 20)", "default": 20 },
                     "std_dev": { "type": "number", "description": "Std-dev multiplier (default 2.0)", "default": 2.0 }
                 },
-                "required": ["candles"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        calculate_bollinger_bands(&args.candles, args.period, args.std_dev)
+        let candles = self
+            .context
+            .as_ref()
+            .ok_or_else(|| TradingError::Config(anyhow::anyhow!("missing OHLCV tool context")))?
+            .load()
+            .await?;
+        calculate_bollinger_bands(&candles, args.period, args.std_dev)
     }
 }
 
@@ -296,8 +355,6 @@ impl Tool for CalculateBollingerBands {
 /// Args for the `calculate_indicator_by_name` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculateIndicatorByNameArgs {
-    /// Pre-fetched OHLCV candles.
-    pub candles: Vec<Candle>,
     /// Prompt-compatible indicator name (e.g. `"rsi"`, `"close_50_sma"`).
     pub indicator: String,
 }
@@ -308,7 +365,19 @@ pub struct CalculateIndicatorByNameArgs {
 /// `close_50_sma`, `close_200_sma`, `close_10_ema`, `macd`, `macds`,
 /// `macdh`, `rsi`, `boll`, `boll_ub`, `boll_lb`, `atr`, `vwma`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalculateIndicatorByName;
+pub struct CalculateIndicatorByName {
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
+}
+
+impl CalculateIndicatorByName {
+    #[must_use]
+    pub fn new(context: OhlcvToolContext) -> Self {
+        Self {
+            context: Some(context),
+        }
+    }
+}
 
 impl Tool for CalculateIndicatorByName {
     const NAME: &'static str = "calculate_indicator_by_name";
@@ -327,10 +396,6 @@ impl Tool for CalculateIndicatorByName {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "candles": {
-                        "type": "array",
-                        "description": "OHLCV candles from get_ohlcv"
-                    },
                     "indicator": {
                         "type": "string",
                         "description": "Prompt-compatible indicator name",
@@ -342,13 +407,19 @@ impl Tool for CalculateIndicatorByName {
                         ]
                     }
                 },
-                "required": ["candles", "indicator"]
+                "required": ["indicator"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        calculate_indicator_by_name(&args.indicator, &args.candles)
+        let candles = self
+            .context
+            .as_ref()
+            .ok_or_else(|| TradingError::Config(anyhow::anyhow!("missing OHLCV tool context")))?
+            .load()
+            .await?;
+        calculate_indicator_by_name(&args.indicator, &candles)
     }
 }
 
@@ -357,55 +428,61 @@ impl Tool for CalculateIndicatorByName {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::OhlcvToolContext;
     use crate::indicators::test_utils::*;
+
+    async fn seeded_context(count: usize) -> OhlcvToolContext {
+        let context = OhlcvToolContext::new();
+        context.store(rising_candles(count, 100.0, 1.0)).await;
+        context
+    }
 
     #[tokio::test]
     async fn tool_calculate_all_indicators_name() {
-        let tool = CalculateAllIndicators;
+        let tool = CalculateAllIndicators::new(seeded_context(200).await);
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "calculate_all_indicators");
     }
 
     #[tokio::test]
     async fn tool_calculate_rsi_name() {
-        let tool = CalculateRsi;
+        let tool = CalculateRsi::new(seeded_context(50).await);
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "calculate_rsi");
     }
 
     #[tokio::test]
     async fn tool_calculate_macd_name() {
-        let tool = CalculateMacd;
+        let tool = CalculateMacd::new(seeded_context(50).await);
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "calculate_macd");
     }
 
     #[tokio::test]
     async fn tool_calculate_atr_name() {
-        let tool = CalculateAtr;
+        let tool = CalculateAtr::new(seeded_context(50).await);
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "calculate_atr");
     }
 
     #[tokio::test]
     async fn tool_calculate_bollinger_name() {
-        let tool = CalculateBollingerBands;
+        let tool = CalculateBollingerBands::new(seeded_context(50).await);
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "calculate_bollinger_bands");
     }
 
     #[tokio::test]
     async fn tool_calculate_indicator_by_name_name() {
-        let tool = CalculateIndicatorByName;
+        let tool = CalculateIndicatorByName::new(seeded_context(50).await);
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "calculate_indicator_by_name");
     }
 
     #[tokio::test]
     async fn tool_call_calculate_all_indicators() {
-        let tool = CalculateAllIndicators;
-        let candles = rising_candles(200, 50.0, 1.0);
-        let result = tool.call(CalculateAllIndicatorsArgs { candles }).await;
+        let tool = CalculateAllIndicators::new(seeded_context(200).await);
+        let result = tool.call(CalculateAllIndicatorsArgs {}).await;
         assert!(result.is_ok(), "Tool call failed: {:?}", result.err());
         let td = result.unwrap();
         assert!(td.rsi.is_some());
@@ -413,25 +490,16 @@ mod tests {
 
     #[tokio::test]
     async fn tool_call_calculate_rsi() {
-        let tool = CalculateRsi;
-        let candles = rising_candles(50, 100.0, 1.0);
-        let result = tool
-            .call(CalculateRsiArgs {
-                candles,
-                period: 14,
-            })
-            .await
-            .unwrap();
+        let tool = CalculateRsi::new(seeded_context(50).await);
+        let result = tool.call(CalculateRsiArgs { period: 14 }).await.unwrap();
         assert_eq!(result.len(), 50);
     }
 
     #[tokio::test]
     async fn tool_call_calculate_indicator_by_name() {
-        let tool = CalculateIndicatorByName;
-        let candles = rising_candles(50, 100.0, 1.0);
+        let tool = CalculateIndicatorByName::new(seeded_context(50).await);
         let result = tool
             .call(CalculateIndicatorByNameArgs {
-                candles,
                 indicator: "rsi".to_owned(),
             })
             .await
