@@ -280,16 +280,26 @@ fn arb_agent_token_usage() -> impl Strategy<Value = AgentTokenUsage> {
     (
         "[a-z_]{3,15}",
         "[a-z0-9-]{3,15}",
+        any::<bool>(),
         0..10_000u64,
         0..10_000u64,
         0..20_000u64,
         0..5_000u64,
     )
         .prop_map(
-            |(agent_name, model_id, prompt_tokens, completion_tokens, total_tokens, latency_ms)| {
+            |(
+                agent_name,
+                model_id,
+                token_counts_available,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                latency_ms,
+            )| {
                 AgentTokenUsage {
                     agent_name,
                     model_id,
+                    token_counts_available,
                     prompt_tokens,
                     completion_tokens,
                     total_tokens,
