@@ -71,7 +71,7 @@ impl ModelTier {
     ///     deep_thinking_model: "o3".to_owned(),
     ///     max_debate_rounds: 3,
     ///     max_risk_rounds: 2,
-    ///     agent_timeout_secs: 30,
+    ///     analyst_timeout_secs: 30,
     /// };
     ///
     /// assert_eq!(ModelTier::QuickThinking.model_id(&llm), "gpt-4o-mini");
@@ -106,7 +106,7 @@ mod tests {
             deep_thinking_model: "o3".to_owned(),
             max_debate_rounds: 3,
             max_risk_rounds: 2,
-            agent_timeout_secs: 30,
+            analyst_timeout_secs: 30,
         }
     }
 

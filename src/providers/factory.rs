@@ -10,6 +10,7 @@
 use std::time::{Duration, Instant};
 
 use rig::{
+    agent::{PromptResponse, TypedPromptResponse},
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
     providers::{anthropic, gemini, openai},
     tool::ToolDyn,
@@ -234,6 +235,79 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Gemini(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Copilot(agent) => agent.prompt(prompt).await,
+        }
+    }
+
+    /// Send a one-shot prompt and return text plus aggregated usage details.
+    pub async fn prompt_details(&self, prompt: &str) -> Result<PromptResponse, PromptError> {
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::Gemini(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::Copilot(agent) => agent.prompt(prompt).extended_details().await,
+        }
+    }
+
+    /// Send a typed prompt and return parsed output plus aggregated usage details.
+    pub async fn prompt_typed_details<T>(
+        &self,
+        prompt: &str,
+        max_turns: usize,
+    ) -> Result<TypedPromptResponse<T>, TradingError>
+    where
+        T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    {
+        use rig::completion::TypedPrompt;
+
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(|err| {
+                    map_structured_output_error_with_context(
+                        self.provider_name(),
+                        self.model_id(),
+                        err,
+                    )
+                }),
+            LlmAgentInner::Anthropic(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(|err| {
+                    map_structured_output_error_with_context(
+                        self.provider_name(),
+                        self.model_id(),
+                        err,
+                    )
+                }),
+            LlmAgentInner::Gemini(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(|err| {
+                    map_structured_output_error_with_context(
+                        self.provider_name(),
+                        self.model_id(),
+                        err,
+                    )
+                }),
+            LlmAgentInner::Copilot(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(|err| {
+                    map_structured_output_error_with_context(
+                        self.provider_name(),
+                        self.model_id(),
+                        err,
+                    )
+                }),
         }
     }
 
@@ -469,6 +543,88 @@ pub async fn prompt_with_retry(
     prompt_with_retry_budget(agent, prompt, timeout, total_budget, policy).await
 }
 
+/// Send a one-shot prompt with timeout/retry and return extended details including usage.
+pub async fn prompt_with_retry_details(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+) -> Result<PromptResponse, TradingError> {
+    let total_budget = total_request_budget(timeout, policy);
+    prompt_with_retry_details_budget(agent, prompt, timeout, total_budget, policy).await
+}
+
+pub async fn prompt_with_retry_details_budget(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+) -> Result<PromptResponse, TradingError> {
+    let mut last_err = None;
+    let started_at = Instant::now();
+
+    for attempt in 0..=policy.max_retries {
+        if attempt > 0 {
+            let delay = policy.delay_for_attempt(attempt - 1);
+            if started_at.elapsed().saturating_add(delay) > total_budget {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "prompt retry budget exhausted before next attempt".to_owned(),
+                });
+            }
+            warn!(attempt, ?delay, "retrying prompt after transient error");
+            tokio::time::sleep(delay).await;
+        }
+
+        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+        if remaining_budget.is_zero() {
+            return Err(TradingError::NetworkTimeout {
+                elapsed: started_at.elapsed(),
+                message: "prompt retry budget exhausted".to_owned(),
+            });
+        }
+
+        let attempt_timeout = timeout.min(remaining_budget);
+        match tokio::time::timeout(attempt_timeout, agent.prompt_details(prompt)).await {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(err)) => {
+                if is_transient_error(&err) && attempt < policy.max_retries {
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
+                    last_err = Some(map_prompt_error_with_context(
+                        agent.provider_name(),
+                        agent.model_id(),
+                        err,
+                    ));
+                    continue;
+                }
+                return Err(map_prompt_error_with_context(
+                    agent.provider_name(),
+                    agent.model_id(),
+                    err,
+                ));
+            }
+            Err(_elapsed) => {
+                let err = TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: format!(
+                        "prompt timed out on attempt {attempt} for model {}",
+                        agent.model_id()
+                    ),
+                };
+                if attempt < policy.max_retries {
+                    warn!(attempt, "prompt timed out, will retry");
+                    last_err = Some(err);
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+}
+
 pub async fn prompt_with_retry_budget(
     agent: &LlmAgent,
     prompt: &str,
@@ -664,6 +820,81 @@ where
     }
 }
 
+/// Prompt for a typed response and return usage metadata from the underlying agent loop.
+pub async fn prompt_typed_with_retry<T>(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+    max_turns: usize,
+) -> Result<TypedPromptResponse<T>, TradingError>
+where
+    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+{
+    let total_budget = total_request_budget(timeout, policy);
+    let mut last_err = None;
+    let started_at = Instant::now();
+
+    for attempt in 0..=policy.max_retries {
+        if attempt > 0 {
+            let delay = policy.delay_for_attempt(attempt - 1);
+            if started_at.elapsed().saturating_add(delay) > total_budget {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "typed prompt retry budget exhausted before next attempt".to_owned(),
+                });
+            }
+            warn!(
+                attempt,
+                ?delay,
+                "retrying typed prompt after transient error"
+            );
+            tokio::time::sleep(delay).await;
+        }
+
+        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+        if remaining_budget.is_zero() {
+            return Err(TradingError::NetworkTimeout {
+                elapsed: started_at.elapsed(),
+                message: "typed prompt retry budget exhausted".to_owned(),
+            });
+        }
+
+        let attempt_timeout = timeout.min(remaining_budget);
+        match tokio::time::timeout(
+            attempt_timeout,
+            agent.prompt_typed_details::<T>(prompt, max_turns),
+        )
+        .await
+        {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(err)) => {
+                if should_retry_typed_error(&err) && attempt < policy.max_retries {
+                    last_err = Some(err);
+                    continue;
+                }
+                return Err(err);
+            }
+            Err(_elapsed) => {
+                let err = TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: format!(
+                        "typed prompt timed out on attempt {attempt} for model {}",
+                        agent.model_id()
+                    ),
+                };
+                if attempt < policy.max_retries {
+                    last_err = Some(err);
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| TradingError::Rig("retry loop exhausted".to_owned())))
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
@@ -693,6 +924,26 @@ fn is_transient_error(err: &PromptError) -> bool {
         | PromptError::ToolServerError(_)
         | PromptError::MaxTurnsError { .. }
         | PromptError::PromptCancelled { .. } => false,
+    }
+}
+
+fn should_retry_typed_error(err: &TradingError) -> bool {
+    match err {
+        TradingError::NetworkTimeout { .. } | TradingError::RateLimitExceeded { .. } => true,
+        TradingError::SchemaViolation { .. } => true,
+        TradingError::Rig(message) => {
+            let msg = message.to_ascii_lowercase();
+            msg.contains("rate limit")
+                || msg.contains("429")
+                || msg.contains("too many requests")
+                || msg.contains("timeout")
+                || msg.contains("connection")
+                || msg.contains("500")
+                || msg.contains("502")
+                || msg.contains("503")
+                || msg.contains("504")
+        }
+        TradingError::AnalystError { .. } | TradingError::Config(_) => false,
     }
 }
 
@@ -785,7 +1036,7 @@ mod tests {
             deep_thinking_model: "o3".to_owned(),
             max_debate_rounds: 3,
             max_risk_rounds: 2,
-            agent_timeout_secs: 30,
+            analyst_timeout_secs: 30,
         }
     }
 
