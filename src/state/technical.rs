@@ -1,7 +1,9 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Pre-calculated technical indicators derived from OHLCV data.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TechnicalData {
     pub rsi: Option<f64>,
     pub macd: Option<MacdValues>,
@@ -19,7 +21,8 @@ pub struct TechnicalData {
 }
 
 /// MACD indicator components.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MacdValues {
     pub macd_line: f64,
     pub signal_line: f64,

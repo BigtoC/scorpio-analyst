@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::{
@@ -47,6 +49,15 @@ pub struct TradingState {
     pub token_usage: TokenUsageTracker,
 }
 
+/// Concurrent write handles for the analyst-owned Phase 1 fields.
+#[derive(Debug, Clone)]
+pub struct AnalystStateHandles {
+    pub fundamental_metrics: Arc<RwLock<Option<FundamentalData>>>,
+    pub technical_indicators: Arc<RwLock<Option<TechnicalData>>>,
+    pub market_sentiment: Arc<RwLock<Option<SentimentData>>>,
+    pub macro_news: Arc<RwLock<Option<NewsData>>>,
+}
+
 impl TradingState {
     /// Create a new empty state for a trading cycle.
     pub fn new(asset_symbol: impl Into<String>, target_date: impl Into<String>) -> Self {
@@ -68,5 +79,24 @@ impl TradingState {
             final_execution_status: None,
             token_usage: TokenUsageTracker::default(),
         }
+    }
+
+    /// Create per-field async locks for concurrent analyst fan-out writes.
+    #[must_use]
+    pub fn analyst_handles(&self) -> AnalystStateHandles {
+        AnalystStateHandles {
+            fundamental_metrics: Arc::new(RwLock::new(self.fundamental_metrics.clone())),
+            technical_indicators: Arc::new(RwLock::new(self.technical_indicators.clone())),
+            market_sentiment: Arc::new(RwLock::new(self.market_sentiment.clone())),
+            macro_news: Arc::new(RwLock::new(self.macro_news.clone())),
+        }
+    }
+
+    /// Merge concurrent analyst results back into the main state after fan-out completes.
+    pub async fn apply_analyst_handles(&mut self, handles: &AnalystStateHandles) {
+        self.fundamental_metrics = handles.fundamental_metrics.read().await.clone();
+        self.technical_indicators = handles.technical_indicators.read().await.clone();
+        self.market_sentiment = handles.market_sentiment.read().await.clone();
+        self.macro_news = handles.macro_news.read().await.clone();
     }
 }

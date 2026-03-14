@@ -25,6 +25,7 @@ pub struct PhaseTokenUsage {
 pub struct AgentTokenUsage {
     pub agent_name: String,
     pub model_id: String,
+    pub token_counts_available: bool,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
