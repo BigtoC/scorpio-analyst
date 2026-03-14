@@ -15,25 +15,25 @@ tools and populate `TradingState` fields with structured outputs. The agents run
 ## Goals / Non-Goals
 
 - **Goals:**
-  - Implement four `rig` agents (Fundamental, Sentiment, News, Technical) each with a domain-specific system prompt
-    derived from `docs/prompts.md`, typed tool bindings, and structured JSON output extraction.
-  - Use the `QuickThinking` tier from `llm-providers` for all analyst agents.
-  - Provide a `run_analyst_team` function that spawns all four analysts concurrently via `tokio::spawn`, collects
-    results, applies the graceful degradation policy, and writes outputs to `TradingState` using per-field
-    `Arc<RwLock<Option<T>>>` locking.
-  - Record `AgentTokenUsage` for each analyst immediately after each LLM completion returns.
-  - Enforce a per-analyst 30-second timeout via `tokio::time::timeout` (configurable through `Config.llm`).
-  - Confine all implementation to `src/agents/analyst/` without modifying foundation, provider, data, or indicator
-    files.
+    - Implement four `rig` agents (Fundamental, Sentiment, News, Technical) each with a domain-specific system prompt
+      derived from `docs/prompts.md`, typed tool bindings, and structured JSON output extraction.
+    - Use the `QuickThinking` tier from `llm-providers` for all analyst agents.
+    - Provide a `run_analyst_team` function that spawns all four analysts concurrently via `tokio::spawn`, collects
+      results, applies the graceful degradation policy, and writes outputs to `TradingState` using per-field
+      `Arc<RwLock<Option<T>>>` locking.
+    - Record `AgentTokenUsage` for each analyst immediately after each LLM completion returns.
+    - Enforce a per-analyst 30-second timeout via `tokio::time::timeout` (configurable through `Config.llm`).
+    - Confine all implementation to `src/agents/analyst/` without modifying foundation, provider, data, or indicator
+      files.
 
 - **Non-Goals:**
-  - Implementing the `graph_flow::Task` wrapper — belongs to `add-graph-orchestration`.
-  - Implementing the debate loop or any downstream agent — belongs to respective agent changes.
-  - Fetching data directly from APIs — analysts invoke tools that delegate to the `financial-data` and
-    `technical-analysis` layers.
-  - Direct Reddit/X social-platform ingestion — deferred to future improvements; the MVP Sentiment Analyst uses
-    company-specific news from existing data sources.
-  - Per-agent provider overrides — the MVP uses tier-level provider config only.
+    - Implementing the `graph_flow::Task` wrapper — belongs to `add-graph-orchestration`.
+    - Implementing the debate loop or any downstream agent — belongs to respective agent changes.
+    - Fetching data directly from APIs — analysts invoke tools that delegate to the `financial-data` and
+      `technical-analysis` layers.
+    - Direct Reddit/X social-platform ingestion — deferred to future improvements; the MVP Sentiment Analyst uses
+      company-specific news from existing data sources.
+    - Per-agent provider overrides — the MVP uses tier-level provider config only.
 
 ## Architectural Overview
 
@@ -51,11 +51,12 @@ src/agents/analyst/
 Each analyst follows a uniform construction pattern:
 
 1. Obtain a `QuickThinking` completion model from the provider factory.
-2. Build a `rig` agent via the agent builder helper with:
-   - A system prompt sourced from constants matching `docs/prompts.md`.
-   - Typed tool bindings from `financial-data` or `technical-analysis`.
-3. Invoke the agent via `prompt_with_retry` (one-shot prompt, no chat history needed for analysts).
-4. Extract the structured output into the corresponding `core-types` data struct.
+2. Build a `rig` agent via `build_agent_with_tools` with:
+    - A system prompt sourced from constants matching `docs/prompts.md`.
+    - Typed tool bindings from `financial-data` or `technical-analysis` passed to the agent at construction time.
+3. Issue a task prompt (no serialized data context — the LLM calls the bound tools at inference time to gather data).
+4. Await the agent's structured output: the LLM calls tools, receives results, and then emits the final JSON.
+5. Extract the structured output into the corresponding `core-types` data struct.
 5. Record `AgentTokenUsage` (model ID, token counts from rig completion response, wall-clock latency).
 6. Return `Result<T, TradingError>` where `T` is the agent's output data struct.
 
@@ -81,12 +82,12 @@ run_analyst_team(state, config, providers, data_clients, rate_limiter)
 
 ### Data Dependencies Per Analyst
 
-| Analyst       | Tools Bound                                                      | Output Type       | TradingState Field          |
-|---------------|------------------------------------------------------------------|-------------------|-----------------------------|
-| Fundamental   | Finnhub fundamentals, earnings, insider transactions             | `FundamentalData` | `fundamental_metrics`       |
-| Sentiment     | Finnhub news, Yahoo Finance news (company-specific)              | `SentimentData`   | `market_sentiment`          |
-| News          | Finnhub market news, economic indicators                         | `NewsData`        | `macro_news`                |
-| Technical     | kand batch/individual indicator calculators (using pre-fetched OHLCV) | `TechnicalData`   | `technical_indicators`      |
+| Analyst     | Tools Bound                                                           | Output Type       | TradingState Field     |
+|-------------|-----------------------------------------------------------------------|-------------------|------------------------|
+| Fundamental | Finnhub fundamentals, earnings, insider transactions                  | `FundamentalData` | `fundamental_metrics`  |
+| Sentiment   | Finnhub news, Yahoo Finance news (company-specific)                   | `SentimentData`   | `market_sentiment`     |
+| News        | Finnhub market news, economic indicators                              | `NewsData`        | `macro_news`           |
+| Technical   | Yahoo Finance OHLCV retrieval + kand indicator calculators (batch and individual) called by LLM at inference time | `TechnicalData`   | `technical_indicators` |
 
 ### Timeout and Degradation
 
@@ -124,9 +125,11 @@ the `TradingState.asset_symbol`, `TradingState.target_date`, and the registered 
   the `core-types` definition. The provider layer's structured output validation catches malformed responses and
   surfaces `TradingError::SchemaViolation`, triggering retry via `prompt_with_retry`.
 
-- **Tools are injected, not constructed**: Analyst agents receive pre-constructed tool objects from the data and
-  indicator layers. This preserves the module boundary — analysts import tool types but never directly call Finnhub
-  or kand APIs.
+- **Tools are bound to the agent, not pre-fetched**: Analyst agents receive pre-constructed tool objects from the data
+  and indicator layers via `build_agent_with_tools`. The LLM calls these tools at inference time — Rust does not
+  fetch or process any data before handing control to the agent. This preserves the module boundary: analysts import
+  tool types but never directly call Finnhub or kand APIs; all data access is mediated through the tool-calling
+  protocol.
 
 - **MVP Sentiment uses news-based analysis**: The Sentiment Analyst consumes the same company-specific news inputs
   available from the `financial-data` layer (Finnhub news, Yahoo Finance news). This avoids expanding the data layer

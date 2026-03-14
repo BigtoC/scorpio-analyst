@@ -9,58 +9,58 @@
 
 ## 1. Fundamental Analyst Agent (`src/agents/analyst/fundamental.rs`)
 
-- [ ] 1.1 Define the Fundamental Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
+- [x] 1.1 Define the Fundamental Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
       (Fundamentals Analyst section), with placeholders for `{current_date}`, `{ticker}`, and `{tool_names}`
-- [ ] 1.2 Implement `FundamentalAnalyst` struct with a constructor that accepts provider factory references,
+- [x] 1.2 Implement `FundamentalAnalyst` struct with a constructor that accepts provider factory references,
       pre-constructed Finnhub tool objects (fundamentals, earnings, insider transactions), and runtime parameters
       (asset symbol, target date)
-- [ ] 1.3 Implement `run(&self) -> Result<(FundamentalData, AgentTokenUsage), TradingError>` that constructs a
+- [x] 1.3 Implement `run(&self) -> Result<(FundamentalData, AgentTokenUsage), TradingError>` that constructs a
       `rig` agent via the agent builder helper with the system prompt and Finnhub tools, invokes
       `prompt_with_retry`, extracts `FundamentalData` from the structured output, and records `AgentTokenUsage`
-- [ ] 1.4 Write unit tests with mocked LLM responses verifying correct `FundamentalData` extraction
-- [ ] 1.5 Write unit tests verifying `AgentTokenUsage` is recorded with correct agent name and model ID
-- [ ] 1.6 Write unit tests for `TradingError::SchemaViolation` when LLM returns malformed JSON
+- [x] 1.4 Write unit tests with mocked LLM responses verifying correct `FundamentalData` extraction
+- [x] 1.5 Write unit tests verifying `AgentTokenUsage` is recorded with correct agent name and model ID
+- [x] 1.6 Write unit tests for `TradingError::SchemaViolation` when LLM returns malformed JSON
 
 ## 2. Sentiment Analyst Agent (`src/agents/analyst/sentiment.rs`)
 
-- [ ] 2.1 Define the Sentiment Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
+- [x] 2.1 Define the Sentiment Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
       (Social Media Analyst section, modified for news-based MVP), with placeholders for runtime parameters
-- [ ] 2.2 Implement `SentimentAnalyst` struct with a constructor that accepts provider factory references,
+- [x] 2.2 Implement `SentimentAnalyst` struct with a constructor that accepts provider factory references,
       pre-constructed news tool objects (Finnhub news), and runtime parameters
-- [ ] 2.3 Implement `run(&self) -> Result<(SentimentData, AgentTokenUsage), TradingError>` that constructs a
+- [x] 2.3 Implement `run(&self) -> Result<(SentimentData, AgentTokenUsage), TradingError>` that constructs a
       `rig` agent via the agent builder helper, invokes `prompt_with_retry`, extracts `SentimentData`, and
       records `AgentTokenUsage`
-- [ ] 2.4 Write unit tests with mocked LLM responses verifying correct `SentimentData` extraction from news inputs
-- [ ] 2.5 Write unit tests verifying the agent does not attempt social-platform access
-- [ ] 2.6 Write unit tests for empty news input producing valid neutral `SentimentData`
+- [x] 2.4 Write unit tests with mocked LLM responses verifying correct `SentimentData` extraction from news inputs
+- [x] 2.5 Write unit tests verifying the agent does not attempt social-platform access
+- [x] 2.6 Write unit tests for empty news input producing valid neutral `SentimentData`
 
 ## 3. News Analyst Agent (`src/agents/analyst/news.rs`)
 
-- [ ] 3.1 Define the News Analyst system prompt as a `const &str`, adapted from `docs/prompts.md` (News Analyst
+- [x] 3.1 Define the News Analyst system prompt as a `const &str`, adapted from `docs/prompts.md` (News Analyst
       section), with placeholders for runtime parameters
-- [ ] 3.2 Implement `NewsAnalyst` struct with a constructor that accepts provider factory references,
+- [x] 3.2 Implement `NewsAnalyst` struct with a constructor that accepts provider factory references,
       pre-constructed Finnhub news tool objects, and runtime parameters
-- [ ] 3.3 Implement `run(&self) -> Result<(NewsData, AgentTokenUsage), TradingError>` that constructs a `rig`
+- [x] 3.3 Implement `run(&self) -> Result<(NewsData, AgentTokenUsage), TradingError>` that constructs a `rig`
       agent via the agent builder helper, invokes `prompt_with_retry`, extracts `NewsData`, and records
       `AgentTokenUsage`
-- [ ] 3.4 Write unit tests with mocked LLM responses verifying correct `NewsData` extraction with causal
+- [x] 3.4 Write unit tests with mocked LLM responses verifying correct `NewsData` extraction with causal
       relationships
-- [ ] 3.5 Write unit tests for `AgentTokenUsage` recording
+- [x] 3.5 Write unit tests for `AgentTokenUsage` recording
 
 ## 4. Technical Analyst Agent (`src/agents/analyst/technical.rs`)
 
-- [ ] 4.1 Define the Technical Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
+- [x] 4.1 Define the Technical Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
       (Market / Technical Analyst section), with placeholders for runtime parameters
-- [ ] 4.2 Implement `TechnicalAnalyst` struct with a constructor that accepts provider factory references,
+- [x] 4.2 Implement `TechnicalAnalyst` struct with a constructor that accepts provider factory references,
       the `financial-data` client (for direct OHLCV fetching), and runtime parameters
-- [ ] 4.3 Implement `run(&self) -> Result<(TechnicalData, AgentTokenUsage), TradingError>` that first retrieves
+- [x] 4.3 Implement `run(&self) -> Result<(TechnicalData, AgentTokenUsage), TradingError>` that first retrieves
       OHLCV data via the `financial-data` client, instantiates indicator calculation tool objects with the data,
       constructs a `rig` agent via the agent builder helper with the indicator tools, invokes `prompt_with_retry`,
       extracts `TechnicalData`, and records `AgentTokenUsage`
-- [ ] 4.4 Write unit tests with mocked LLM responses verifying correct `TechnicalData` extraction including RSI,
+- [x] 4.4 Write unit tests with mocked LLM responses verifying correct `TechnicalData` extraction including RSI,
       MACD, ATR, support/resistance
-- [ ] 4.5 Write unit tests verifying the agent uses prompt-compatible indicator names (`rsi`, `macd`, etc.)
-- [ ] 4.6 Write unit tests for partial indicator results when OHLCV data is insufficient
+- [x] 4.5 Write unit tests verifying the agent uses prompt-compatible indicator names (`rsi`, `macd`, etc.)
+- [x] 4.6 Write unit tests for partial indicator results when OHLCV data is insufficient
 
 ## 5. Fan-Out Execution (`src/agents/analyst/mod.rs`)
 
@@ -93,3 +93,20 @@
 - [x] 7.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [x] 7.3 Ensure `cargo fmt -- --check` passes
 - [x] 7.4 Ensure `cargo test` passes all new and existing tests
+
+## 9. Analyst Tool-Calling Refactor
+
+- [x] 9.1 Refactor `FundamentalAnalyst::run` to use `build_agent_with_tools` with `GetFundamentals`,
+      `GetEarnings`, and `GetInsiderTransactions` tools; remove pre-fetch and serialised-context approach
+- [x] 9.2 Refactor `SentimentAnalyst::run` to use `build_agent_with_tools` with `GetNews` tool; remove
+      pre-fetch and serialised-context approach
+- [x] 9.3 Refactor `NewsAnalyst::run` to use `build_agent_with_tools` with `GetNews` tool; remove
+      pre-fetch and serialised-context approach
+- [x] 9.4 Refactor `TechnicalAnalyst::run` to use `build_agent_with_tools` with `GetOhlcv`,
+      `CalculateAllIndicators`, `CalculateRsi`, `CalculateMacd`, `CalculateAtr`, `CalculateBollingerBands`,
+      and `CalculateIndicatorByName` tools; remove OHLCV pre-fetch, in-Rust indicator computation,
+      and `format_indicator_context` helper; keep `derive_start_date` for prompt construction
+- [x] 9.5 Ensure `cargo build`, `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt -- --check` all pass
+- [x] 9.6 Update all documentation and spec files to reflect tool-calling workflow: `PRD.md`, `docs/prompts.md`,
+      `openspec/changes/add-analyst-team/design.md`, `openspec/changes/add-analyst-team/proposal.md`,
+      and `openspec/changes/add-analyst-team/specs/analyst-team/spec.md`

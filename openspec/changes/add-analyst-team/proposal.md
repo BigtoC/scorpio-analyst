@@ -20,8 +20,9 @@ using the fan-out pattern defined in the architect plan.
 - Implement `NewsAnalyst` agent (`src/agents/analyst/news.rs`) — uses `QuickThinking` tier, binds Finnhub market news
   and economic indicator tools, writes `NewsData` to `TradingState::macro_news`.
 - Implement `TechnicalAnalyst` agent (`src/agents/analyst/technical.rs`) — uses `QuickThinking` tier, binds Yahoo
-  Finance OHLCV tool from `financial-data` and indicator calculation tools from `technical-analysis`, writes
-  `TechnicalData` to `TradingState::technical_indicators`.
+  Finance OHLCV retrieval tool from `financial-data` and indicator calculation tools (`calculate_all_indicators`,
+  individual RSI/MACD/ATR/Bollinger tools) from `technical-analysis`; the LLM calls these tools at inference time to
+  fetch candles and compute indicators, writes `TechnicalData` to `TradingState::technical_indicators`.
 - Wire the analyst module's public API through `src/agents/analyst/mod.rs`, exposing a `run_analyst_team` fan-out
   function and individual analyst entry points.
 - Each agent records `AgentTokenUsage` (model ID, prompt/completion tokens, latency) for the `TokenUsageTracker`.

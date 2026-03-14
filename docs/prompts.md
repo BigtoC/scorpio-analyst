@@ -654,7 +654,10 @@ let prompt = FUNDAMENTAL_SYSTEM_PROMPT
 ```
 
 When useful, modules may also inject serialized state snippets such as `{fundamental_report}` or `{debate_history}` at
-agent construction or invocation time.
+agent construction or invocation time. Note that this pattern applies to downstream agents (Researchers, Trader, Risk
+Management, Fund Manager) that consume pre-populated `TradingState` fields. Analyst agents do **not** receive
+serialized data snapshots; instead, they are given tool bindings and call those tools at inference time to gather data
+themselves.
 
 ### Data Flow And Handoff Patterns
 

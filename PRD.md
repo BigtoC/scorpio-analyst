@@ -181,8 +181,9 @@ programming interfaces. The Rust implementation must leverage highly optimized H
 ### Technical Analysis and Quantitative Mathematics
 
 Deep learning models and LLMs lack the inherent architectural capacity to perform precise mathematical calculations on
-large time-series arrays. To emulate the Technical Analyst agent, the system must pre-calculate technical indicators
-before injecting them into the LLM context.
+large time-series arrays. To emulate the Technical Analyst agent, the system exposes indicator calculation as callable
+tools — the LLM invokes these tools at inference time and interprets the results, rather than performing the math
+itself or receiving pre-computed arrays injected into context.
 
 The Python ecosystem relies on libraries like `pandas-ta`, which operate on dataframes. The Rust ecosystem offers
 several alternatives, including `ta`, `rust_ti`, and `kand`. The `kand` crate (v0.2) is selected as the quantitative
@@ -444,15 +445,18 @@ The News Analyst contextualizes the asset within the broader global macroeconomi
 
 The Technical Analyst identifies actionable entry and exit signals based entirely on historical price action and volume.
 
-* **Tool Bindings**: Operates the `yfinance-rs` crate to fetch high-resolution OHLCV arrays, which are immediately
-  passed to the `kand` crate for mathematical processing.
-* **Execution Logic**: The agent analyzes the `f64` arrays of the Relative Strength Index (identifying overbought > 70
-  or oversold < 30 conditions), the Moving Average Convergence Divergence (identifying trend reversals via signal line
-  crossovers), and the Average True Range (measuring historical volatility). The LLM does not perform the math; it
-  simply interprets the statistical output provided by `kand`, producing a definitive summary of momentum and
-  support/resistance boundaries. This MVP interpretation path is designed for traditional long-term investing workflows;
-  crypto-native interpretation concerns such as logarithmic scaling, 24/7 market structure, and MVRV-style on-chain
-  metrics are intentionally deferred beyond the MVP.
+* **Tool Bindings**: Exposes `yfinance-rs` OHLCV retrieval and `kand` indicator calculation as callable tools bound
+  to the `rig` agent. The LLM calls `get_ohlcv` at inference time to fetch historical candles, then calls
+  `calculate_all_indicators` (or individual indicator tools such as `calculate_rsi`, `calculate_macd`,
+  `calculate_atr`, `calculate_bollinger_bands`) on those candles. Rust does not pre-fetch or pre-compute anything
+  before the agent is invoked.
+* **Execution Logic**: The LLM calls the OHLCV and indicator tools during its reasoning pass, then interprets the
+  `f64` statistical outputs — RSI overbought/oversold conditions (>70 / <30), MACD signal-line crossovers, ATR
+  historical volatility, and Bollinger Band support/resistance boundaries — producing a definitive structured summary.
+  The LLM does not perform the mathematical calculations; it invokes the tools and interprets the results. This MVP
+  interpretation path is designed for traditional long-term investing workflows; crypto-native interpretation concerns
+  such as logarithmic scaling, 24/7 market structure, and MVRV-style on-chain metrics are intentionally deferred
+  beyond the MVP.
 * **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis

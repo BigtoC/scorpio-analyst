@@ -107,11 +107,16 @@ MUST be constructed via the agent builder helper from `llm-providers` with:
 - Typed tool bindings for Yahoo Finance OHLCV retrieval from the `financial-data` capability and for indicator
   calculation functions (batch and individual) from the `technical-analysis` capability.
 
-The Technical Analyst struct's `run` method MUST first retrieve historical OHLCV data directly from the `financial-data` client (avoiding massive token consumption by NOT exposing raw OHLCV data to the LLM context). The agent then uses this pre-fetched data to instantiate the indicator calculation tools, which are bound to the `rig` agent. The LLM interprets the statistical outputs (RSI overbought/oversold
-conditions, MACD crossovers, ATR volatility, support/resistance levels) but does not perform mathematical calculations
-itself. The output MUST be a structured `TechnicalData` struct written to `TradingState::technical_indicators`. The
-agent MUST record `AgentTokenUsage`. This agent's interpretation is designed for traditional OHLCV-based long-term
-investing workflows; crypto-native analysis is deferred.
+The Technical Analyst struct's `run` method constructs the tool objects and passes them to `build_agent_with_tools`.
+A task prompt (including the computed lookback start date) is then issued; the LLM calls `get_ohlcv` to retrieve
+historical candles and subsequently calls `calculate_all_indicators` (or individual indicator tools such as
+`calculate_rsi`, `calculate_macd`, `calculate_atr`, `calculate_bollinger_bands`, `calculate_indicator_by_name`) on
+those candles. Rust does not pre-fetch OHLCV data or pre-compute indicators before the agent is invoked. The LLM
+interprets the statistical outputs (RSI overbought/oversold conditions, MACD crossovers, ATR volatility,
+support/resistance levels) but does not perform the mathematical calculations itself. The output MUST be a structured
+`TechnicalData` struct written to `TradingState::technical_indicators`. The agent MUST record `AgentTokenUsage`. This
+agent's interpretation is designed for traditional OHLCV-based long-term investing workflows; crypto-native analysis
+is deferred.
 
 #### Scenario: Successful Technical Analysis With Full Indicator Suite
 
