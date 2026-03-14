@@ -32,7 +32,7 @@ use tracing::warn;
 use crate::{
     config::LlmConfig,
     data::{FinnhubClient, YFinanceClient},
-    error::{TradingError, check_analyst_degradation},
+    error::TradingError,
     providers::factory::CompletionModelHandle,
     state::{AgentTokenUsage, TradingState},
 };
@@ -59,9 +59,10 @@ pub async fn run_analyst_team(
     state: &mut TradingState,
     llm_config: &LlmConfig,
 ) -> Result<Vec<AgentTokenUsage>, TradingError> {
-    let timeout = Duration::from_secs(llm_config.agent_timeout_secs);
+    let timeout = Duration::from_secs(llm_config.analyst_timeout_secs);
     let symbol = state.asset_symbol.clone();
     let target_date = state.target_date.clone();
+    let analyst_handles = state.analyst_handles();
 
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
@@ -116,57 +117,67 @@ pub async fn run_analyst_team(
 
     // ── Unwrap JoinError, then timeout, then analyst error ────────────────
 
-    let fundamental_result = flatten_task_result("fundamental", fundamental_join);
-    let sentiment_result = flatten_task_result("sentiment", sentiment_join);
-    let news_result = flatten_task_result("news", news_join);
-    let technical_result = flatten_task_result("technical", technical_join);
+    let fundamental_result = flatten_task_result("Fundamental Analyst", fundamental_join);
+    let sentiment_result = flatten_task_result("Sentiment Analyst", sentiment_join);
+    let news_result = flatten_task_result("News Analyst", news_join);
+    let technical_result = flatten_task_result("Technical Analyst", technical_join);
 
     // ── Count failures and apply degradation policy ───────────────────────
 
-    let failure_count = [
-        fundamental_result.is_err(),
-        sentiment_result.is_err(),
-        news_result.is_err(),
-        technical_result.is_err(),
-    ]
-    .iter()
-    .filter(|&&failed| failed)
-    .count();
-
-    if let Err(ref e) = fundamental_result {
-        warn!(agent = "fundamental", error = %e, "analyst failed");
-    }
-    if let Err(ref e) = sentiment_result {
-        warn!(agent = "sentiment", error = %e, "analyst failed");
-    }
-    if let Err(ref e) = news_result {
-        warn!(agent = "news", error = %e, "analyst failed");
-    }
-    if let Err(ref e) = technical_result {
-        warn!(agent = "technical", error = %e, "analyst failed");
-    }
-
-    check_analyst_degradation(4, failure_count)?;
-
-    // ── Write successful results to state ─────────────────────────────────
-
     let mut token_usages: Vec<AgentTokenUsage> = Vec::new();
+    let mut failed_agents: Vec<String> = Vec::new();
 
-    if let Ok((data, usage)) = fundamental_result {
-        state.fundamental_metrics = Some(data);
-        token_usages.push(usage);
+    match fundamental_result {
+        Ok((data, usage)) => {
+            *analyst_handles.fundamental_metrics.write().await = Some(data);
+            token_usages.push(usage);
+        }
+        Err(err) => {
+            warn!(agent = "Fundamental Analyst", error = %err, "analyst failed");
+            failed_agents.push("Fundamental Analyst".to_owned());
+        }
     }
-    if let Ok((data, usage)) = sentiment_result {
-        state.market_sentiment = Some(data);
-        token_usages.push(usage);
+
+    match sentiment_result {
+        Ok((data, usage)) => {
+            *analyst_handles.market_sentiment.write().await = Some(data);
+            token_usages.push(usage);
+        }
+        Err(err) => {
+            warn!(agent = "Sentiment Analyst", error = %err, "analyst failed");
+            failed_agents.push("Sentiment Analyst".to_owned());
+        }
     }
-    if let Ok((data, usage)) = news_result {
-        state.macro_news = Some(data);
-        token_usages.push(usage);
+
+    match news_result {
+        Ok((data, usage)) => {
+            *analyst_handles.macro_news.write().await = Some(data);
+            token_usages.push(usage);
+        }
+        Err(err) => {
+            warn!(agent = "News Analyst", error = %err, "analyst failed");
+            failed_agents.push("News Analyst".to_owned());
+        }
     }
-    if let Ok((data, usage)) = technical_result {
-        state.technical_indicators = Some(data);
-        token_usages.push(usage);
+
+    match technical_result {
+        Ok((data, usage)) => {
+            *analyst_handles.technical_indicators.write().await = Some(data);
+            token_usages.push(usage);
+        }
+        Err(err) => {
+            warn!(agent = "Technical Analyst", error = %err, "analyst failed");
+            failed_agents.push("Technical Analyst".to_owned());
+        }
+    }
+
+    state.apply_analyst_handles(&analyst_handles).await;
+
+    if failed_agents.len() >= 2 {
+        return Err(TradingError::AnalystError {
+            agent: failed_agents.join(", "),
+            message: format!("{}/4 analysts failed — aborting cycle", failed_agents.len()),
+        });
     }
 
     Ok(token_usages)
@@ -176,8 +187,7 @@ pub async fn run_analyst_team(
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Flatten a `JoinHandle` result: converts `JoinError` and timeout into
-/// `TradingError::AnalystError`.
+/// Flatten a `JoinHandle` result: converts task-level failures into typed trading errors.
 fn flatten_task_result<T>(
     agent_name: &str,
     join_result: Result<
@@ -192,9 +202,9 @@ fn flatten_task_result<T>(
             message: format!("task panicked or was cancelled: {join_err}"),
         }),
         // Task completed but timed out.
-        Ok(Err(_elapsed)) => Err(TradingError::AnalystError {
-            agent: agent_name.to_owned(),
-            message: "analyst task timed out".to_owned(),
+        Ok(Err(_elapsed)) => Err(TradingError::NetworkTimeout {
+            elapsed: Duration::ZERO,
+            message: format!("{agent_name} task timed out"),
         }),
         // Task completed successfully — propagate inner result.
         Ok(Ok(inner)) => inner,
@@ -235,23 +245,6 @@ mod tests {
         assert!(matches!(result.unwrap_err(), TradingError::Rig(_)));
     }
 
-    // ── check_analyst_degradation delegation ────────────────────────────
-
-    #[test]
-    fn zero_failures_passes_degradation() {
-        assert!(check_analyst_degradation(4, 0).is_ok());
-    }
-
-    #[test]
-    fn one_failure_passes_degradation() {
-        assert!(check_analyst_degradation(4, 1).is_ok());
-    }
-
-    #[test]
-    fn two_failures_aborts() {
-        assert!(check_analyst_degradation(4, 2).is_err());
-    }
-
     // ── run_analyst_team (unit-level): configurable timeout ──────────────
 
     #[test]
@@ -263,9 +256,9 @@ mod tests {
             deep_thinking_model: "o3".to_owned(),
             max_debate_rounds: 3,
             max_risk_rounds: 2,
-            agent_timeout_secs: 60,
+            analyst_timeout_secs: 60,
         };
-        let timeout = Duration::from_secs(config.agent_timeout_secs);
+        let timeout = Duration::from_secs(config.analyst_timeout_secs);
         assert_eq!(timeout, Duration::from_secs(60));
     }
 }

@@ -13,9 +13,11 @@ use crate::{
     config::LlmConfig,
     data::{FinnhubClient, GetEarnings, GetFundamentals, GetInsiderTransactions},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
     state::{AgentTokenUsage, FundamentalData},
 };
+
+const MAX_TOOL_TURNS: usize = 8;
 
 /// System prompt for the Fundamental Analyst, adapted from `docs/prompts.md`.
 const FUNDAMENTAL_SYSTEM_PROMPT: &str = "\
@@ -82,7 +84,7 @@ impl FundamentalAnalyst {
             finnhub,
             symbol: symbol.into(),
             target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.agent_timeout_secs),
+            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
             retry_policy: RetryPolicy::default(),
         }
     }
@@ -96,14 +98,21 @@ impl FundamentalAnalyst {
     pub async fn run(&self) -> Result<(FundamentalData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        // ── 1. Build tools ────────────────────────────────────────────────
         let tools: Vec<Box<dyn ToolDyn>> = vec![
-            Box::new(GetFundamentals::new(self.finnhub.clone())),
-            Box::new(GetEarnings::new(self.finnhub.clone())),
-            Box::new(GetInsiderTransactions::new(self.finnhub.clone())),
+            Box::new(GetFundamentals::scoped(
+                self.finnhub.clone(),
+                self.symbol.clone(),
+            )),
+            Box::new(GetEarnings::scoped(
+                self.finnhub.clone(),
+                self.symbol.clone(),
+            )),
+            Box::new(GetInsiderTransactions::scoped(
+                self.finnhub.clone(),
+                self.symbol.clone(),
+            )),
         ];
 
-        // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let system_prompt = FUNDAMENTAL_SYSTEM_PROMPT
             .replace("{ticker}", &self.symbol)
             .replace("{current_date}", &self.target_date);
@@ -116,26 +125,54 @@ impl FundamentalAnalyst {
             self.symbol, self.target_date
         );
 
-        let raw = prompt_with_retry(&agent, &prompt, self.timeout, &self.retry_policy).await?;
+        let response = prompt_typed_with_retry::<FundamentalData>(
+            &agent,
+            &prompt,
+            self.timeout,
+            &self.retry_policy,
+            MAX_TOOL_TURNS,
+        )
+        .await?;
 
-        // ── 3. Parse structured output ────────────────────────────────────
-        let data: FundamentalData =
-            serde_json::from_str(raw.trim()).map_err(|e| TradingError::SchemaViolation {
-                message: format!("FundamentalAnalyst: failed to parse LLM output: {e}"),
-            })?;
+        validate_fundamental(&response.output)?;
 
-        // ── 4. Record token usage (counts unavailable from provider) ───────
-        let latency_ms = started_at.elapsed().as_millis() as u64;
-        let usage = AgentTokenUsage {
-            agent_name: "fundamental".to_owned(),
-            model_id: self.handle.model_id().to_owned(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms,
-        };
+        let usage = usage_from_response(
+            "Fundamental Analyst",
+            self.handle.model_id(),
+            response.usage,
+            started_at,
+        );
 
-        Ok((data, usage))
+        Ok((response.output, usage))
+    }
+}
+
+fn validate_fundamental(data: &FundamentalData) -> Result<(), TradingError> {
+    if data.summary.trim().is_empty() {
+        return Err(TradingError::SchemaViolation {
+            message: "FundamentalAnalyst: summary must not be empty".to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+fn usage_from_response(
+    agent_name: &str,
+    model_id: &str,
+    usage: rig::completion::Usage,
+    started_at: Instant,
+) -> AgentTokenUsage {
+    AgentTokenUsage {
+        agent_name: agent_name.to_owned(),
+        model_id: model_id.to_owned(),
+        token_counts_available: usage.total_tokens > 0
+            || usage.input_tokens > 0
+            || usage.output_tokens > 0,
+        prompt_tokens: usage.input_tokens,
+        completion_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        latency_ms: started_at.elapsed().as_millis() as u64,
     }
 }
 
@@ -148,9 +185,11 @@ mod tests {
 
     /// Parse a valid JSON string that matches `FundamentalData` schema.
     fn parse_fundamental(json: &str) -> Result<FundamentalData, TradingError> {
-        serde_json::from_str(json).map_err(|e| TradingError::SchemaViolation {
-            message: format!("FundamentalAnalyst: failed to parse LLM output: {e}"),
-        })
+        serde_json::from_str(json)
+            .map_err(|e| TradingError::SchemaViolation {
+                message: format!("FundamentalAnalyst: failed to parse LLM output: {e}"),
+            })
+            .and_then(|data| validate_fundamental(&data).map(|()| data))
     }
 
     // ── Task 1.4: Correct FundamentalData extraction ─────────────────────
@@ -233,14 +272,15 @@ mod tests {
     #[test]
     fn agent_token_usage_fields() {
         let usage = AgentTokenUsage {
-            agent_name: "fundamental".to_owned(),
+            agent_name: "Fundamental Analyst".to_owned(),
             model_id: "gpt-4o-mini".to_owned(),
+            token_counts_available: false,
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 250,
         };
-        assert_eq!(usage.agent_name, "fundamental");
+        assert_eq!(usage.agent_name, "Fundamental Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");
         assert_eq!(usage.prompt_tokens, 0);
         assert_eq!(usage.completion_tokens, 0);
@@ -272,8 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_fields_in_json_are_ignored() {
-        // serde ignores unknown fields by default
+    fn extra_fields_in_json_are_rejected() {
         let json = r#"{
             "revenue_growth_pct": null,
             "pe_ratio": null,
@@ -287,7 +326,7 @@ mod tests {
             "unexpected_field": "ignored"
         }"#;
         let result = parse_fundamental(json);
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     // ── Struct round-trip ─────────────────────────────────────────────────

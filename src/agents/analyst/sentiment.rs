@@ -16,9 +16,11 @@ use crate::{
     config::LlmConfig,
     data::{FinnhubClient, GetNews},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
     state::{AgentTokenUsage, SentimentData},
 };
+
+const MAX_TOOL_TURNS: usize = 6;
 
 /// System prompt for the Sentiment Analyst, adapted from `docs/prompts.md`.
 const SENTIMENT_SYSTEM_PROMPT: &str = "\
@@ -85,7 +87,7 @@ impl SentimentAnalyst {
             finnhub,
             symbol: symbol.into(),
             target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.agent_timeout_secs),
+            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
             retry_policy: RetryPolicy::default(),
         }
     }
@@ -102,8 +104,10 @@ impl SentimentAnalyst {
     pub async fn run(&self) -> Result<(SentimentData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        // ── 1. Build tools ────────────────────────────────────────────────
-        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(GetNews::new(self.finnhub.clone()))];
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(GetNews::scoped(
+            self.finnhub.clone(),
+            self.symbol.clone(),
+        ))];
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let system_prompt = SENTIMENT_SYSTEM_PROMPT
@@ -118,27 +122,59 @@ impl SentimentAnalyst {
             self.symbol, self.target_date
         );
 
-        let raw = prompt_with_retry(&agent, &prompt, self.timeout, &self.retry_policy).await?;
+        let response = prompt_typed_with_retry::<SentimentData>(
+            &agent,
+            &prompt,
+            self.timeout,
+            &self.retry_policy,
+            MAX_TOOL_TURNS,
+        )
+        .await?;
 
-        // ── 3. Parse structured output ────────────────────────────────────
-        let data: SentimentData =
-            serde_json::from_str(raw.trim()).map_err(|e| TradingError::SchemaViolation {
-                message: format!("SentimentAnalyst: failed to parse LLM output: {e}"),
-            })?;
+        validate_sentiment(&response.output)?;
 
-        // ── 4. Record token usage (counts unavailable from provider) ───────
-        let latency_ms = started_at.elapsed().as_millis() as u64;
-        let usage = AgentTokenUsage {
-            agent_name: "sentiment".to_owned(),
-            model_id: self.handle.model_id().to_owned(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms,
-        };
-
-        Ok((data, usage))
+        Ok((
+            response.output,
+            AgentTokenUsage {
+                agent_name: "Sentiment Analyst".to_owned(),
+                model_id: self.handle.model_id().to_owned(),
+                token_counts_available: response.usage.total_tokens > 0
+                    || response.usage.input_tokens > 0
+                    || response.usage.output_tokens > 0,
+                prompt_tokens: response.usage.input_tokens,
+                completion_tokens: response.usage.output_tokens,
+                total_tokens: response.usage.total_tokens,
+                latency_ms: started_at.elapsed().as_millis() as u64,
+            },
+        ))
     }
+}
+
+fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
+    if !(-1.0..=1.0).contains(&data.overall_score) {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "SentimentAnalyst: overall_score {} must be within [-1.0, 1.0]",
+                data.overall_score
+            ),
+        });
+    }
+    if data.summary.trim().is_empty() {
+        return Err(TradingError::SchemaViolation {
+            message: "SentimentAnalyst: summary must not be empty".to_owned(),
+        });
+    }
+    for source in &data.source_breakdown {
+        if !(-1.0..=1.0).contains(&source.score) {
+            return Err(TradingError::SchemaViolation {
+                message: format!(
+                    "SentimentAnalyst: source score {} must be within [-1.0, 1.0]",
+                    source.score
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -149,9 +185,11 @@ mod tests {
     use crate::state::{EngagementPeak, SentimentData, SentimentSource};
 
     fn parse_sentiment(json: &str) -> Result<SentimentData, TradingError> {
-        serde_json::from_str(json).map_err(|e| TradingError::SchemaViolation {
-            message: format!("SentimentAnalyst: failed to parse LLM output: {e}"),
-        })
+        serde_json::from_str(json)
+            .map_err(|e| TradingError::SchemaViolation {
+                message: format!("SentimentAnalyst: failed to parse LLM output: {e}"),
+            })
+            .and_then(|data| validate_sentiment(&data).map(|()| data))
     }
 
     // ── Task 2.4: Correct SentimentData extraction from news inputs ───────
@@ -244,14 +282,15 @@ mod tests {
     #[test]
     fn agent_token_usage_fields() {
         let usage = AgentTokenUsage {
-            agent_name: "sentiment".to_owned(),
+            agent_name: "Sentiment Analyst".to_owned(),
             model_id: "gpt-4o-mini".to_owned(),
+            token_counts_available: false,
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 180,
         };
-        assert_eq!(usage.agent_name, "sentiment");
+        assert_eq!(usage.agent_name, "Sentiment Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");
     }
 

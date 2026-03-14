@@ -11,20 +11,22 @@ use rig::tool::ToolDyn;
 
 use crate::{
     config::LlmConfig,
-    data::{GetOhlcv, YFinanceClient},
+    data::{GetOhlcv, OhlcvToolContext, YFinanceClient},
     error::{RetryPolicy, TradingError},
     indicators::{
         CalculateAllIndicators, CalculateAtr, CalculateBollingerBands, CalculateIndicatorByName,
         CalculateMacd, CalculateRsi,
     },
-    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
     state::{AgentTokenUsage, TechnicalData},
 };
+
+const MAX_TOOL_TURNS: usize = 10;
 
 /// System prompt for the Technical Analyst, adapted from `docs/prompts.md`.
 const TECHNICAL_SYSTEM_PROMPT: &str = "\
 You are the Technical Analyst for {ticker} as of {current_date}.
-Your job is to interpret precomputed or tool-computed technical signals and return a `TechnicalData` JSON object.
+Your job is to interpret tool-computed technical signals and return a `TechnicalData` JSON object.
 
 Use only the technical tools bound for the run. Current runtime tools may include:
 - `get_ohlcv`
@@ -108,7 +110,7 @@ impl TechnicalAnalyst {
             yfinance,
             symbol: symbol.into(),
             target_date: target_date.into(),
-            timeout: std::time::Duration::from_secs(llm_config.agent_timeout_secs),
+            timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
             retry_policy: RetryPolicy::default(),
         }
     }
@@ -122,21 +124,25 @@ impl TechnicalAnalyst {
     pub async fn run(&self) -> Result<(TechnicalData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        // ── 1. Compute lookback start date for the prompt ─────────────────
         let start_date = derive_start_date(&self.target_date, OHLCV_LOOKBACK_DAYS)?;
+        let ohlcv_context = OhlcvToolContext::new();
 
-        // ── 2. Build tools ────────────────────────────────────────────────
         let tools: Vec<Box<dyn ToolDyn>> = vec![
-            Box::new(GetOhlcv::new(self.yfinance.clone())),
-            Box::new(CalculateAllIndicators),
-            Box::new(CalculateRsi),
-            Box::new(CalculateMacd),
-            Box::new(CalculateAtr),
-            Box::new(CalculateBollingerBands),
-            Box::new(CalculateIndicatorByName),
+            Box::new(GetOhlcv::scoped(
+                self.yfinance.clone(),
+                self.symbol.clone(),
+                start_date.clone(),
+                self.target_date.clone(),
+                ohlcv_context.clone(),
+            )),
+            Box::new(CalculateAllIndicators::new(ohlcv_context.clone())),
+            Box::new(CalculateRsi::new(ohlcv_context.clone())),
+            Box::new(CalculateMacd::new(ohlcv_context.clone())),
+            Box::new(CalculateAtr::new(ohlcv_context.clone())),
+            Box::new(CalculateBollingerBands::new(ohlcv_context.clone())),
+            Box::new(CalculateIndicatorByName::new(ohlcv_context)),
         ];
 
-        // ── 3. Build agent with tools and invoke LLM ──────────────────────
         let system_prompt = TECHNICAL_SYSTEM_PROMPT
             .replace("{ticker}", &self.symbol)
             .replace("{current_date}", &self.target_date);
@@ -149,27 +155,48 @@ impl TechnicalAnalyst {
             self.symbol, start_date, self.target_date
         );
 
-        let raw = prompt_with_retry(&agent, &prompt, self.timeout, &self.retry_policy).await?;
+        let response = prompt_typed_with_retry::<TechnicalData>(
+            &agent,
+            &prompt,
+            self.timeout,
+            &self.retry_policy,
+            MAX_TOOL_TURNS,
+        )
+        .await?;
 
-        // ── 4. Parse structured output ────────────────────────────────────
-        let data: TechnicalData =
-            serde_json::from_str(raw.trim()).map_err(|e| TradingError::SchemaViolation {
-                message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-            })?;
+        validate_technical(&response.output)?;
 
-        // ── 5. Record token usage ─────────────────────────────────────────
-        let latency_ms = started_at.elapsed().as_millis() as u64;
-        let usage = AgentTokenUsage {
-            agent_name: "technical".to_owned(),
-            model_id: self.handle.model_id().to_owned(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms,
-        };
-
-        Ok((data, usage))
+        Ok((
+            response.output,
+            AgentTokenUsage {
+                agent_name: "Technical Analyst".to_owned(),
+                model_id: self.handle.model_id().to_owned(),
+                token_counts_available: response.usage.total_tokens > 0
+                    || response.usage.input_tokens > 0
+                    || response.usage.output_tokens > 0,
+                prompt_tokens: response.usage.input_tokens,
+                completion_tokens: response.usage.output_tokens,
+                total_tokens: response.usage.total_tokens,
+                latency_ms: started_at.elapsed().as_millis() as u64,
+            },
+        ))
     }
+}
+
+fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
+    if data.summary.trim().is_empty() {
+        return Err(TradingError::SchemaViolation {
+            message: "TechnicalAnalyst: summary must not be empty".to_owned(),
+        });
+    }
+    if let Some(rsi) = data.rsi
+        && !(0.0..=100.0).contains(&rsi)
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!("TechnicalAnalyst: RSI {rsi} must be within [0, 100]"),
+        });
+    }
+    Ok(())
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -199,9 +226,11 @@ mod tests {
     use crate::state::{MacdValues, TechnicalData};
 
     fn parse_technical(json: &str) -> Result<TechnicalData, TradingError> {
-        serde_json::from_str(json).map_err(|e| TradingError::SchemaViolation {
-            message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-        })
+        serde_json::from_str(json)
+            .map_err(|e| TradingError::SchemaViolation {
+                message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+            })
+            .and_then(|data| validate_technical(&data).map(|()| data))
     }
 
     // ── Task 4.4: Correct TechnicalData extraction ────────────────────────
@@ -302,14 +331,15 @@ mod tests {
     #[test]
     fn agent_token_usage_fields() {
         let usage = AgentTokenUsage {
-            agent_name: "technical".to_owned(),
+            agent_name: "Technical Analyst".to_owned(),
             model_id: "gpt-4o-mini".to_owned(),
+            token_counts_available: false,
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 300,
         };
-        assert_eq!(usage.agent_name, "technical");
+        assert_eq!(usage.agent_name, "Technical Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");
     }
 
