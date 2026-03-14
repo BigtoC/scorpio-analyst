@@ -5,13 +5,14 @@
 //! structured [`NewsData`] JSON object capturing the most relevant articles
 //! and macro events.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use rig::tool::ToolDyn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, GetEconomicIndicators, GetMarketNews, GetNews},
+    data::{FinnhubClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
     state::{AgentTokenUsage, NewsData},
@@ -62,6 +63,10 @@ pub struct NewsAnalyst {
     target_date: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
+    /// Pre-fetched news from `run_analyst_team`.  When `Some`, a
+    /// [`GetCachedNews`] tool is bound instead of the live [`GetNews`] tool,
+    /// saving one Finnhub API call per cycle.
+    cached_news: Option<Arc<NewsData>>,
 }
 
 impl NewsAnalyst {
@@ -73,12 +78,15 @@ impl NewsAnalyst {
     /// - `symbol` – asset ticker symbol.
     /// - `target_date` – analysis date string.
     /// - `llm_config` – LLM configuration, used for timeout.
+    /// - `cached_news` – optional pre-fetched news; when `Some`, the live
+    ///   [`GetNews`] tool is replaced with a zero-cost [`GetCachedNews`] tool.
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
         symbol: impl Into<String>,
         target_date: impl Into<String>,
         llm_config: &LlmConfig,
+        cached_news: Option<Arc<NewsData>>,
     ) -> Self {
         Self {
             handle,
@@ -86,7 +94,11 @@ impl NewsAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::default(),
+            retry_policy: RetryPolicy {
+                max_retries: llm_config.retry_max_retries,
+                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
+            },
+            cached_news,
         }
     }
 
@@ -99,8 +111,12 @@ impl NewsAnalyst {
     pub async fn run(&self) -> Result<(NewsData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
+        let news_tool: Box<dyn ToolDyn> = match &self.cached_news {
+            Some(arc) => Box::new(GetCachedNews::new(arc.clone(), self.symbol.clone())),
+            None => Box::new(GetNews::scoped(self.finnhub.clone(), self.symbol.clone())),
+        };
         let tools: Vec<Box<dyn ToolDyn>> = vec![
-            Box::new(GetNews::scoped(self.finnhub.clone(), self.symbol.clone())),
+            news_tool,
             Box::new(GetMarketNews::new(self.finnhub.clone())),
             Box::new(GetEconomicIndicators::new(self.finnhub.clone())),
         ];
@@ -145,12 +161,15 @@ impl NewsAnalyst {
     }
 }
 
+const MAX_SUMMARY_CHARS: usize = 4_096;
+
 fn validate_news(data: &NewsData) -> Result<(), TradingError> {
     if data.summary.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "NewsAnalyst: summary must not be empty".to_owned(),
         });
     }
+    validate_summary_content("NewsAnalyst", &data.summary)?;
     for event in &data.macro_events {
         if !(0.0..=1.0).contains(&event.confidence) {
             return Err(TradingError::SchemaViolation {
@@ -160,6 +179,23 @@ fn validate_news(data: &NewsData) -> Result<(), TradingError> {
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
+    if summary.chars().count() > MAX_SUMMARY_CHARS {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
+        });
+    }
+    if summary
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary contains disallowed control characters"),
+        });
     }
     Ok(())
 }

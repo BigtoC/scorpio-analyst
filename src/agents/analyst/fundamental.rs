@@ -1,9 +1,13 @@
 //! Fundamental Analyst agent.
 //!
-//! Binds Finnhub data-fetching tools (`get_fundamentals`, `get_earnings`,
-//! `get_insider_transactions`) to a quick-thinking LLM agent so the model can
-//! call them during inference and return a structured [`FundamentalData`] JSON
-//! object.
+//! Binds Finnhub data-fetching tools (`get_fundamentals`, `get_earnings`) to a
+//! quick-thinking LLM agent so the model can call them during inference and
+//! return a structured [`FundamentalData`] JSON object.
+//!
+//! Note: `get_insider_transactions` is intentionally **not** bound as a
+//! standalone tool.  `get_fundamentals` already fetches insider data internally
+//! via `tokio::try_join!` and populates `FundamentalData.insider_transactions`,
+//! so binding both would double the Finnhub quota usage.
 
 use std::time::Instant;
 
@@ -11,7 +15,7 @@ use rig::tool::ToolDyn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, GetEarnings, GetFundamentals, GetInsiderTransactions},
+    data::{FinnhubClient, GetEarnings, GetFundamentals},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
     state::{AgentTokenUsage, FundamentalData},
@@ -27,7 +31,9 @@ Your job is to turn raw company financial data into a concise, evidence-backed `
 Use only the tools bound for this run. When available, the runtime tool names are typically:
 - `get_fundamentals`
 - `get_earnings`
-- `get_insider_transactions`
+
+Note: `get_fundamentals` already includes insider transaction data in its response.
+Do not call a separate insider-transactions tool.
 
 Populate only these schema fields:
 - `revenue_growth_pct`
@@ -85,7 +91,10 @@ impl FundamentalAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::default(),
+            retry_policy: RetryPolicy {
+                max_retries: llm_config.retry_max_retries,
+                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
+            },
         }
     }
 
@@ -104,10 +113,6 @@ impl FundamentalAnalyst {
                 self.symbol.clone(),
             )),
             Box::new(GetEarnings::scoped(
-                self.finnhub.clone(),
-                self.symbol.clone(),
-            )),
-            Box::new(GetInsiderTransactions::scoped(
                 self.finnhub.clone(),
                 self.symbol.clone(),
             )),
@@ -147,13 +152,36 @@ impl FundamentalAnalyst {
     }
 }
 
+/// Maximum characters allowed in any LLM-generated summary field.
+///
+/// Prevents adversarial overflow of downstream state buffers and limits the
+/// extent of prompt-injection content that can propagate through phases.
+const MAX_SUMMARY_CHARS: usize = 4_096;
+
 fn validate_fundamental(data: &FundamentalData) -> Result<(), TradingError> {
     if data.summary.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "FundamentalAnalyst: summary must not be empty".to_owned(),
         });
     }
+    validate_summary_content("FundamentalAnalyst", &data.summary)
+}
 
+/// Validate that a summary is within length bounds and free of control characters.
+fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
+    if summary.chars().count() > MAX_SUMMARY_CHARS {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
+        });
+    }
+    if summary
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary contains disallowed control characters"),
+        });
+    }
     Ok(())
 }
 

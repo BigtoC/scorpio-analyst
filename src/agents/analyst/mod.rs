@@ -25,6 +25,7 @@ pub use news::NewsAnalyst;
 pub use sentiment::SentimentAnalyst;
 pub use technical::TechnicalAnalyst;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::warn;
@@ -66,12 +67,23 @@ pub async fn run_analyst_team(
     // must cover all attempts plus backoff so it never fires before the inner budget
     // is exhausted.
     let inner_timeout = Duration::from_secs(llm_config.analyst_timeout_secs);
-    let outer_timeout = RetryPolicy::default().total_budget(inner_timeout);
+    let retry_policy = RetryPolicy {
+        max_retries: llm_config.retry_max_retries,
+        base_delay: Duration::from_millis(llm_config.retry_base_delay_ms),
+    };
+    let outer_timeout = retry_policy.total_budget(inner_timeout);
 
     let symbol = state.asset_symbol.clone();
     let target_date = state.target_date.clone();
     let analyst_handles = state.analyst_handles();
     let model_id = handle.model_id().to_owned();
+
+    // ── Pre-fetch news once; both Sentiment and News analysts share the result ─
+    //
+    // This eliminates the duplicate Finnhub `get_news` call (P1).  If the
+    // pre-fetch fails the analysts fall back to their live `GetNews` tool.
+    let cached_news: Option<Arc<crate::state::NewsData>> =
+        finnhub.get_news(&symbol).await.map(Arc::new).ok();
 
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
@@ -93,6 +105,7 @@ pub async fn run_analyst_team(
             symbol.clone(),
             target_date.clone(),
             llm_config,
+            cached_news.clone(),
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
@@ -104,6 +117,7 @@ pub async fn run_analyst_team(
             symbol.clone(),
             target_date.clone(),
             llm_config,
+            cached_news,
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
@@ -188,14 +202,17 @@ pub(crate) async fn apply_analyst_results(
     handle_result!(news, "News Analyst", handles.macro_news);
     handle_result!(technical, "Technical Analyst", handles.technical_indicators);
 
-    state.apply_analyst_handles(handles).await;
-
+    // Check the degradation policy *before* committing partial results to the
+    // shared state. This ensures that if we abort, the caller's TradingState is
+    // never partially poisoned with data from a cycle that will not complete.
     if failed_agents.len() >= 2 {
         return Err(TradingError::AnalystError {
             agent: failed_agents.join(", "),
             message: format!("{}/4 analysts failed — aborting cycle", failed_agents.len()),
         });
     }
+
+    state.apply_analyst_handles(handles).await;
 
     Ok(token_usages)
 }
@@ -376,9 +393,15 @@ mod tests {
             max_debate_rounds: 3,
             max_risk_rounds: 2,
             analyst_timeout_secs: 60,
+            retry_max_retries: 3,
+            retry_base_delay_ms: 500,
         };
         let inner = Duration::from_secs(config.analyst_timeout_secs);
-        let outer = RetryPolicy::default().total_budget(inner);
+        let retry_policy = RetryPolicy {
+            max_retries: config.retry_max_retries,
+            base_delay: Duration::from_millis(config.retry_base_delay_ms),
+        };
+        let outer = retry_policy.total_budget(inner);
         assert!(outer > inner);
     }
 

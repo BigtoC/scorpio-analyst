@@ -8,16 +8,17 @@
 //! **MVP constraint:** no direct social-platform access (Reddit, X/Twitter,
 //! StockTwits). Sentiment is derived solely from news articles.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use rig::tool::ToolDyn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, GetNews},
+    data::{FinnhubClient, GetCachedNews, GetNews},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
-    state::{AgentTokenUsage, SentimentData},
+    state::{AgentTokenUsage, NewsData, SentimentData},
 };
 
 const MAX_TOOL_TURNS: usize = 6;
@@ -64,6 +65,10 @@ pub struct SentimentAnalyst {
     target_date: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
+    /// Pre-fetched news from `run_analyst_team`.  When `Some`, a
+    /// [`GetCachedNews`] tool is bound instead of the live [`GetNews`] tool,
+    /// saving one Finnhub API call per cycle.
+    cached_news: Option<Arc<NewsData>>,
 }
 
 impl SentimentAnalyst {
@@ -75,12 +80,15 @@ impl SentimentAnalyst {
     /// - `symbol` – asset ticker symbol.
     /// - `target_date` – analysis date string.
     /// - `llm_config` – LLM configuration, used for timeout.
+    /// - `cached_news` – optional pre-fetched news; when `Some`, the live
+    ///   [`GetNews`] tool is replaced with a zero-cost [`GetCachedNews`] tool.
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
         symbol: impl Into<String>,
         target_date: impl Into<String>,
         llm_config: &LlmConfig,
+        cached_news: Option<Arc<NewsData>>,
     ) -> Self {
         Self {
             handle,
@@ -88,7 +96,11 @@ impl SentimentAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::default(),
+            retry_policy: RetryPolicy {
+                max_retries: llm_config.retry_max_retries,
+                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
+            },
+            cached_news,
         }
     }
 
@@ -104,10 +116,16 @@ impl SentimentAnalyst {
     pub async fn run(&self) -> Result<(SentimentData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(GetNews::scoped(
-            self.finnhub.clone(),
-            self.symbol.clone(),
-        ))];
+        let tools: Vec<Box<dyn ToolDyn>> = match &self.cached_news {
+            Some(arc) => vec![Box::new(GetCachedNews::new(
+                arc.clone(),
+                self.symbol.clone(),
+            ))],
+            None => vec![Box::new(GetNews::scoped(
+                self.finnhub.clone(),
+                self.symbol.clone(),
+            ))],
+        };
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let system_prompt = SENTIMENT_SYSTEM_PROMPT
@@ -150,6 +168,8 @@ impl SentimentAnalyst {
     }
 }
 
+const MAX_SUMMARY_CHARS: usize = 4_096;
+
 fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
     if !(-1.0..=1.0).contains(&data.overall_score) {
         return Err(TradingError::SchemaViolation {
@@ -164,6 +184,7 @@ fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
             message: "SentimentAnalyst: summary must not be empty".to_owned(),
         });
     }
+    validate_summary_content("SentimentAnalyst", &data.summary)?;
     for source in &data.source_breakdown {
         if !(-1.0..=1.0).contains(&source.score) {
             return Err(TradingError::SchemaViolation {
@@ -173,6 +194,23 @@ fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
+    if summary.chars().count() > MAX_SUMMARY_CHARS {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
+        });
+    }
+    if summary
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary contains disallowed control characters"),
+        });
     }
     Ok(())
 }

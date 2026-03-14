@@ -111,7 +111,10 @@ impl TechnicalAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy::default(),
+            retry_policy: RetryPolicy {
+                max_retries: llm_config.retry_max_retries,
+                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
+            },
         }
     }
 
@@ -183,17 +186,37 @@ impl TechnicalAnalyst {
     }
 }
 
+const MAX_SUMMARY_CHARS: usize = 4_096;
+
 fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
     if data.summary.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "TechnicalAnalyst: summary must not be empty".to_owned(),
         });
     }
+    validate_summary_content("TechnicalAnalyst", &data.summary)?;
     if let Some(rsi) = data.rsi
         && !(0.0..=100.0).contains(&rsi)
     {
         return Err(TradingError::SchemaViolation {
             message: format!("TechnicalAnalyst: RSI {rsi} must be within [0, 100]"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
+    if summary.chars().count() > MAX_SUMMARY_CHARS {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
+        });
+    }
+    if summary
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: summary contains disallowed control characters"),
         });
     }
     Ok(())
