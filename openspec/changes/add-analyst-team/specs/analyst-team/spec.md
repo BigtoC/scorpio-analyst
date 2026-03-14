@@ -107,8 +107,7 @@ MUST be constructed via the agent builder helper from `llm-providers` with:
 - Typed tool bindings for Yahoo Finance OHLCV retrieval from the `financial-data` capability and for indicator
   calculation functions (batch and individual) from the `technical-analysis` capability.
 
-The agent MUST first retrieve historical OHLCV data via the OHLCV tool, then invoke indicator calculation tools to
-compute the selected technical indicators. The LLM interprets the statistical outputs (RSI overbought/oversold
+The Technical Analyst struct's `run` method MUST first retrieve historical OHLCV data directly from the `financial-data` client (avoiding massive token consumption by NOT exposing raw OHLCV data to the LLM context). The agent then uses this pre-fetched data to instantiate the indicator calculation tools, which are bound to the `rig` agent. The LLM interprets the statistical outputs (RSI overbought/oversold
 conditions, MACD crossovers, ATR volatility, support/resistance levels) but does not perform mathematical calculations
 itself. The output MUST be a structured `TechnicalData` struct written to `TradingState::technical_indicators`. The
 agent MUST record `AgentTokenUsage`. This agent's interpretation is designed for traditional OHLCV-based long-term

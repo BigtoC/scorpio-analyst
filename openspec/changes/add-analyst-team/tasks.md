@@ -52,10 +52,10 @@
 - [ ] 4.1 Define the Technical Analyst system prompt as a `const &str`, adapted from `docs/prompts.md`
       (Market / Technical Analyst section), with placeholders for runtime parameters
 - [ ] 4.2 Implement `TechnicalAnalyst` struct with a constructor that accepts provider factory references,
-      pre-constructed OHLCV tool object (from `financial-data`) and indicator calculation tool objects
-      (batch + individual + named-indicator from `technical-analysis`), and runtime parameters
-- [ ] 4.3 Implement `run(&self) -> Result<(TechnicalData, AgentTokenUsage), TradingError>` that constructs a
-      `rig` agent via the agent builder helper with the OHLCV and indicator tools, invokes `prompt_with_retry`,
+      the `financial-data` client (for direct OHLCV fetching), and runtime parameters
+- [ ] 4.3 Implement `run(&self) -> Result<(TechnicalData, AgentTokenUsage), TradingError>` that first retrieves
+      OHLCV data via the `financial-data` client, instantiates indicator calculation tool objects with the data,
+      constructs a `rig` agent via the agent builder helper with the indicator tools, invokes `prompt_with_retry`,
       extracts `TechnicalData`, and records `AgentTokenUsage`
 - [ ] 4.4 Write unit tests with mocked LLM responses verifying correct `TechnicalData` extraction including RSI,
       MACD, ATR, support/resistance

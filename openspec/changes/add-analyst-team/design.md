@@ -86,7 +86,7 @@ run_analyst_team(state, config, providers, data_clients, rate_limiter)
 | Fundamental   | Finnhub fundamentals, earnings, insider transactions             | `FundamentalData` | `fundamental_metrics`       |
 | Sentiment     | Finnhub news, Yahoo Finance news (company-specific)              | `SentimentData`   | `market_sentiment`          |
 | News          | Finnhub market news, economic indicators                         | `NewsData`        | `macro_news`                |
-| Technical     | Yahoo Finance OHLCV, kand batch/individual indicator calculators | `TechnicalData`   | `technical_indicators`      |
+| Technical     | kand batch/individual indicator calculators (using pre-fetched OHLCV) | `TechnicalData`   | `technical_indicators`      |
 
 ### Timeout and Degradation
 
