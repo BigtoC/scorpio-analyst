@@ -23,8 +23,8 @@ pub struct LlmConfig {
     pub max_debate_rounds: u32,
     #[serde(default = "default_risk_rounds")]
     pub max_risk_rounds: u32,
-    #[serde(default = "default_agent_timeout")]
-    pub agent_timeout_secs: u64,
+    #[serde(default = "default_agent_timeout", alias = "agent_timeout_secs")]
+    pub analyst_timeout_secs: u64,
 }
 
 fn default_debate_rounds() -> u32 {
