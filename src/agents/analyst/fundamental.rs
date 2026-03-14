@@ -1,16 +1,19 @@
 //! Fundamental Analyst agent.
 //!
-//! Fetches raw financial data from Finnhub (fundamentals, earnings, insider
-//! transactions), serialises it as context, and passes it to a quick-thinking
-//! LLM agent that returns a structured [`FundamentalData`] JSON object.
+//! Binds Finnhub data-fetching tools (`get_fundamentals`, `get_earnings`,
+//! `get_insider_transactions`) to a quick-thinking LLM agent so the model can
+//! call them during inference and return a structured [`FundamentalData`] JSON
+//! object.
 
 use std::time::Instant;
 
+use rig::tool::ToolDyn;
+
 use crate::{
     config::LlmConfig,
-    data::FinnhubClient,
+    data::{FinnhubClient, GetEarnings, GetFundamentals, GetInsiderTransactions},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, build_agent, prompt_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_with_retry},
     state::{AgentTokenUsage, FundamentalData},
 };
 
@@ -47,8 +50,8 @@ Do not include any trade recommendation, target price, or final transaction prop
 
 /// The Fundamental Analyst agent.
 ///
-/// Pre-fetches financial data from Finnhub, then invokes an LLM to interpret
-/// that data and produce a structured [`FundamentalData`] output.
+/// Binds Finnhub tools to the LLM so it can call them during inference to
+/// fetch the data it needs and produce a structured [`FundamentalData`] output.
 pub struct FundamentalAnalyst {
     handle: CompletionModelHandle,
     finnhub: FinnhubClient,
@@ -84,56 +87,44 @@ impl FundamentalAnalyst {
         }
     }
 
-    /// Run the analyst: fetch data, prompt the LLM, parse and return output.
+    /// Run the analyst: bind Finnhub tools to the LLM, prompt it, parse and return output.
     ///
     /// # Errors
     ///
-    /// - [`TradingError::AnalystError`] when Finnhub data fetching fails.
     /// - [`TradingError::Rig`] / [`TradingError::NetworkTimeout`] for LLM failures.
     /// - [`TradingError::SchemaViolation`] when the LLM returns malformed JSON.
     pub async fn run(&self) -> Result<(FundamentalData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        // ── 1. Fetch data from Finnhub ────────────────────────────────────
-        let (fundamentals, earnings, insider) = tokio::try_join!(
-            self.finnhub.get_fundamentals(&self.symbol),
-            self.finnhub.get_earnings(&self.symbol),
-            self.finnhub.get_insider_transactions(&self.symbol),
-        )
-        .map_err(|e| TradingError::AnalystError {
-            agent: "fundamental".to_owned(),
-            message: e.to_string(),
-        })?;
+        // ── 1. Build tools ────────────────────────────────────────────────
+        let tools: Vec<Box<dyn ToolDyn>> = vec![
+            Box::new(GetFundamentals::new(self.finnhub.clone())),
+            Box::new(GetEarnings::new(self.finnhub.clone())),
+            Box::new(GetInsiderTransactions::new(self.finnhub.clone())),
+        ];
 
-        // ── 2. Serialize context ──────────────────────────────────────────
-        let context = format!(
-            "## Fundamentals\n{}\n\n## Earnings (latest EPS)\n{}\n\n## Insider Transactions\n{}",
-            serde_json::to_string_pretty(&fundamentals).unwrap_or_default(),
-            serde_json::to_string_pretty(&earnings).unwrap_or_default(),
-            serde_json::to_string_pretty(&insider).unwrap_or_default(),
-        );
-
-        // ── 3. Build agent and invoke LLM ─────────────────────────────────
+        // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let system_prompt = FUNDAMENTAL_SYSTEM_PROMPT
             .replace("{ticker}", &self.symbol)
             .replace("{current_date}", &self.target_date);
 
-        let agent = build_agent(&self.handle, &system_prompt);
+        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
 
         let prompt = format!(
-            "Using the financial data below, produce a `FundamentalData` JSON object for {} as of {}.\n\n{}",
-            self.symbol, self.target_date, context
+            "Analyse {} as of {}. Use the available tools to fetch the data you need, \
+             then produce a FundamentalData JSON object.",
+            self.symbol, self.target_date
         );
 
         let raw = prompt_with_retry(&agent, &prompt, self.timeout, &self.retry_policy).await?;
 
-        // ── 4. Parse structured output ────────────────────────────────────
+        // ── 3. Parse structured output ────────────────────────────────────
         let data: FundamentalData =
             serde_json::from_str(raw.trim()).map_err(|e| TradingError::SchemaViolation {
                 message: format!("FundamentalAnalyst: failed to parse LLM output: {e}"),
             })?;
 
-        // ── 5. Record token usage (counts unavailable from provider) ───────
+        // ── 4. Record token usage (counts unavailable from provider) ───────
         let latency_ms = started_at.elapsed().as_millis() as u64;
         let usage = AgentTokenUsage {
             agent_name: "fundamental".to_owned(),

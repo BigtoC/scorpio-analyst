@@ -1,16 +1,19 @@
 //! News Analyst agent.
 //!
-//! Fetches recent company news from Finnhub, serialises it as context, and
-//! passes it to a quick-thinking LLM that returns a structured [`NewsData`]
-//! JSON object capturing the most relevant articles and macro events.
+//! Binds a Finnhub news tool (`get_news`) to a quick-thinking LLM agent so
+//! the model can fetch recent company news during inference and return a
+//! structured [`NewsData`] JSON object capturing the most relevant articles
+//! and macro events.
 
 use std::time::Instant;
 
+use rig::tool::ToolDyn;
+
 use crate::{
     config::LlmConfig,
-    data::FinnhubClient,
+    data::{FinnhubClient, GetNews},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, build_agent, prompt_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_with_retry},
     state::{AgentTokenUsage, NewsData},
 };
 
@@ -43,8 +46,9 @@ Do not include any trade recommendation, target price, or final transaction prop
 
 /// The News Analyst agent.
 ///
-/// Uses Finnhub company news and returns a structured [`NewsData`] output
-/// highlighting causal relationships and macro events.
+/// Binds a Finnhub news tool to the LLM so it can fetch news during inference
+/// and return a structured [`NewsData`] output highlighting causal
+/// relationships and macro events.
 pub struct NewsAnalyst {
     handle: CompletionModelHandle,
     finnhub: FinnhubClient,
@@ -80,51 +84,40 @@ impl NewsAnalyst {
         }
     }
 
-    /// Run the analyst: fetch news, prompt the LLM, parse and return output.
+    /// Run the analyst: bind Finnhub news tool to the LLM, prompt it, parse and return output.
     ///
     /// # Errors
     ///
-    /// - [`TradingError::AnalystError`] when Finnhub news fetching fails.
     /// - [`TradingError::Rig`] / [`TradingError::NetworkTimeout`] for LLM failures.
     /// - [`TradingError::SchemaViolation`] when the LLM returns malformed JSON.
     pub async fn run(&self) -> Result<(NewsData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        // ── 1. Fetch news from Finnhub ────────────────────────────────────
-        let news_data =
-            self.finnhub
-                .get_news(&self.symbol)
-                .await
-                .map_err(|e| TradingError::AnalystError {
-                    agent: "news".to_owned(),
-                    message: e.to_string(),
-                })?;
+        // ── 1. Build tools ────────────────────────────────────────────────
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(GetNews::new(self.finnhub.clone()))];
 
-        // ── 2. Serialize context ──────────────────────────────────────────
-        let context = serde_json::to_string_pretty(&news_data).unwrap_or_default();
-
-        // ── 3. Build agent and invoke LLM ─────────────────────────────────
+        // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let system_prompt = NEWS_SYSTEM_PROMPT
             .replace("{ticker}", &self.symbol)
             .replace("{current_date}", &self.target_date);
 
-        let agent = build_agent(&self.handle, &system_prompt);
+        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
 
         let prompt = format!(
-            "Using the news data below, identify the most relevant developments for {} as of {} \
-             and produce a `NewsData` JSON object.\n\n{}",
-            self.symbol, self.target_date, context
+            "Fetch and analyse recent news for {} as of {} using the available tools, \
+             then produce a NewsData JSON object.",
+            self.symbol, self.target_date
         );
 
         let raw = prompt_with_retry(&agent, &prompt, self.timeout, &self.retry_policy).await?;
 
-        // ── 4. Parse structured output ────────────────────────────────────
+        // ── 3. Parse structured output ────────────────────────────────────
         let data: NewsData =
             serde_json::from_str(raw.trim()).map_err(|e| TradingError::SchemaViolation {
                 message: format!("NewsAnalyst: failed to parse LLM output: {e}"),
             })?;
 
-        // ── 5. Record token usage (counts unavailable from provider) ───────
+        // ── 4. Record token usage (counts unavailable from provider) ───────
         let latency_ms = started_at.elapsed().as_millis() as u64;
         let usage = AgentTokenUsage {
             agent_name: "news".to_owned(),

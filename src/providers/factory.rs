@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use rig::{
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
     providers::{anthropic, gemini, openai},
+    tool::ToolDyn,
 };
 use secrecy::ExposeSecret;
 use serde::de::DeserializeOwned;
@@ -308,6 +309,83 @@ pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAg
         ProviderClient::Copilot(c) => {
             use rig::prelude::CompletionClient;
             let agent = c.agent(handle.model_id()).preamble(system_prompt).build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::Copilot(agent),
+            }
+        }
+    }
+}
+
+/// Build a configured [`LlmAgent`] with a set of tools attached.
+///
+/// Tools are passed as `Vec<Box<dyn ToolDyn>>` to avoid type-parameter explosion —
+/// rig's `AgentBuilder::tools()` accepts this and uses the `ToolServer` internally
+/// to dispatch tool calls at runtime.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let agent = build_agent_with_tools(
+///     &handle,
+///     "You are a financial analyst.",
+///     vec![Box::new(StockPriceTool::new(client.clone()))],
+/// );
+/// ```
+pub fn build_agent_with_tools(
+    handle: &CompletionModelHandle,
+    system_prompt: &str,
+    tools: Vec<Box<dyn ToolDyn>>,
+) -> LlmAgent {
+    match &handle.client {
+        ProviderClient::OpenAI(c) => {
+            use rig::prelude::CompletionClient;
+            let agent = c
+                .agent(handle.model_id())
+                .preamble(system_prompt)
+                .tools(tools)
+                .build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::OpenAI(agent),
+            }
+        }
+        ProviderClient::Anthropic(c) => {
+            use rig::prelude::CompletionClient;
+            let agent = c
+                .agent(handle.model_id())
+                .preamble(system_prompt)
+                .max_tokens(4096)
+                .tools(tools)
+                .build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::Anthropic(agent),
+            }
+        }
+        ProviderClient::Gemini(c) => {
+            use rig::prelude::CompletionClient;
+            let agent = c
+                .agent(handle.model_id())
+                .preamble(system_prompt)
+                .tools(tools)
+                .build();
+            LlmAgent {
+                provider: handle.provider_id(),
+                model_id: handle.model_id().to_owned(),
+                inner: LlmAgentInner::Gemini(agent),
+            }
+        }
+        ProviderClient::Copilot(c) => {
+            use rig::prelude::CompletionClient;
+            let agent = c
+                .agent(handle.model_id())
+                .preamble(system_prompt)
+                .tools(tools)
+                .build();
             LlmAgent {
                 provider: handle.provider_id(),
                 model_id: handle.model_id().to_owned(),
