@@ -110,3 +110,14 @@
 - [x] 9.6 Update all documentation and spec files to reflect tool-calling workflow: `PRD.md`, `docs/prompts.md`,
       `openspec/changes/add-analyst-team/design.md`, `openspec/changes/add-analyst-team/proposal.md`,
       and `openspec/changes/add-analyst-team/specs/analyst-team/spec.md`
+- [x] 9.7 Refactor analyst runs to use retryable typed structured output with provider usage metadata instead of raw
+      text parsing, and record `AgentTokenUsage` with display names plus unavailable-token semantics when providers do
+      not report authoritative counts
+- [x] 9.8 Scope analyst-bound Finnhub and Yahoo Finance tools to the assigned symbol/date window so the LLM cannot
+      query arbitrary assets or ranges during inference
+- [x] 9.9 Refactor Technical Analyst tool flow to use an analysis-scoped OHLCV context shared between `get_ohlcv` and
+      indicator tools, eliminating trust in arbitrary LLM-supplied candle payloads
+- [x] 9.10 Expand News Analyst tool coverage to include company news, general market news, and macro-economic indicator
+      retrieval so the implementation matches the analyst-team spec's macro-analysis requirements
+- [x] 9.11 Update analyst fan-out execution to preserve failed analyst identities, use per-field async state handles for
+      Phase 1 writes, and merge concurrent analyst outputs back into `TradingState`
