@@ -81,3 +81,7 @@
 
 - Approved for `add-analyst-team` to update `src/providers/factory.rs` so analyst agents can use retryable typed
   output helpers and capture completion usage metadata required by the `analyst-team` spec.
+- Approved for `add-researcher-debate` to update `src/providers/factory.rs` so researcher agents can capture
+  retry-wrapped chat usage metadata for Bullish/Bearish debate rounds (for example via a `chat_with_retry_details`
+  helper and any supporting provider-agnostic chat-details surface) without duplicating provider-specific chat logic in
+  `src/agents/researcher/*`.

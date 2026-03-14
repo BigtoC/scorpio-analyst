@@ -15,9 +15,12 @@ MUST be constructed via the agent builder helper from `llm-providers` with:
 The agent MUST receive serialized analyst outputs (`FundamentalData`, `TechnicalData`, `SentimentData`, `NewsData`)
 from `TradingState` as prompt context, along with the current debate history and the Bearish Researcher's latest
 argument. The agent MUST produce a plain-text bullish argument suitable for storage as `DebateMessage.content` with
-`role = "bullish_researcher"`. The agent MUST use the `chat_with_retry` invocation path from `llm-providers` to
-maintain conversation history across debate rounds, enabling direct counter-argument exchange. The agent MUST record
-`AgentTokenUsage` (agent name "Bullish Researcher", model ID, prompt/completion/total tokens, wall-clock latency).
+`role = "bullish_researcher"`. The agent MUST use the history-aware retry-wrapped chat path from `llm-providers` to
+maintain conversation history across debate rounds, enabling direct counter-argument exchange. That provider path MUST
+also expose usage metadata needed for `AgentTokenUsage` recording. The agent MUST record `AgentTokenUsage` (agent name
+"Bullish Researcher", model ID, prompt/completion/total tokens, wall-clock latency).
+Before writing the output into `TradingState::debate_history`, the agent MUST reject disallowed control characters and
+lengths that exceed the module's documented bounded-summary policy by returning `TradingError::SchemaViolation`.
 
 #### Scenario: First Round Bullish Argument
 
@@ -51,9 +54,12 @@ MUST be constructed via the agent builder helper from `llm-providers` with:
 The agent MUST receive serialized analyst outputs from `TradingState` as prompt context, along with the current
 debate history and the Bullish Researcher's latest argument. The agent MUST produce a plain-text bearish
 counter-argument suitable for storage as `DebateMessage.content` with `role = "bearish_researcher"`. The agent MUST
-use the `chat_with_retry` invocation path to maintain conversation history across debate rounds. The agent MUST
+use the history-aware retry-wrapped chat path from `llm-providers` to maintain conversation history across debate
+rounds. That provider path MUST also expose usage metadata needed for `AgentTokenUsage` recording. The agent MUST
 record `AgentTokenUsage` (agent name "Bearish Researcher", model ID, prompt/completion/total tokens, wall-clock
 latency).
+Before writing the output into `TradingState::debate_history`, the agent MUST reject disallowed control characters and
+lengths that exceed the module's documented bounded-summary policy by returning `TradingError::SchemaViolation`.
 
 #### Scenario: First Round Bearish Argument
 
@@ -95,6 +101,9 @@ tone), select the prevailing perspective, and produce a plain-text consensus sum
 The Debate Moderator MUST use the `prompt_with_retry` invocation path (one-shot, not chat) since it evaluates the
 complete debate at once. The agent MUST record `AgentTokenUsage` (agent name "Debate Moderator", model ID,
 prompt/completion/total tokens, wall-clock latency).
+Before writing the output into `TradingState::consensus_summary`, the moderator MUST reject disallowed control
+characters and lengths that exceed the module's documented bounded-summary policy by returning
+`TradingError::SchemaViolation`.
 
 #### Scenario: Moderator Produces Consensus After Full Debate
 
@@ -126,7 +135,7 @@ the Bullish Researcher, Bearish Researcher, and Debate Moderator. The function M
    b. Append the bullish `DebateMessage` to `TradingState::debate_history`.
    c. Invoke the Bearish Researcher with the updated debate history and the bull's latest argument.
    d. Append the bearish `DebateMessage` to `TradingState::debate_history`.
-3. After all rounds complete, invoke the Debate Moderator with the full `TradingState`.
+3. After all rounds complete, invoke the Debate Moderator with the full `TradingState` exactly once.
 4. Write the moderator's consensus summary to `TradingState::consensus_summary`.
 5. Return `Result<Vec<AgentTokenUsage>, TradingError>` containing all token usage entries from all researcher
    invocations (2 per round) plus the moderator invocation.
@@ -134,7 +143,7 @@ the Bullish Researcher, Bearish Researcher, and Debate Moderator. The function M
 The Bullish and Bearish researchers MUST execute sequentially within each round (not in parallel) because each must
 respond to the other's latest argument. This sequential execution is fundamental to the adversarial debate dynamic.
 
-If any researcher invocation fails (LLM error, timeout, schema violation), the debate MUST abort with the
+If any researcher or moderator invocation fails (LLM error, timeout, schema violation), the debate MUST abort with the
 corresponding `TradingError` — partial debate results are not usable for downstream synthesis.
 
 #### Scenario: Three-Round Debate Completes Successfully
@@ -174,7 +183,12 @@ returns. The entry MUST contain the agent's display name ("Bullish Researcher", 
 Moderator"), the model ID used for the completion, and wall-clock latency measured from prompt/chat submission to
 response receipt. When the provider exposes authoritative prompt/completion/total token counts, those MUST be
 recorded. When the provider does not expose authoritative counts, the agent MUST preserve the documented
-unavailable-token representation from `core-types`.
+unavailable-token representation from `core-types`, including correctly setting `AgentTokenUsage.token_counts_available`
+to `false`.
+
+For Bullish and Bearish researcher chat turns, the provider layer MUST expose a retry-wrapped history-aware chat path
+that returns both response content and usage metadata, so the researcher module does not need to reimplement
+provider-specific chat handling to satisfy token accounting.
 
 The `run_researcher_debate` function MUST return token usage entries with per-invocation granularity (not aggregated
 per round) so the upstream `add-graph-orchestration` change can construct per-round `PhaseTokenUsage` entries
@@ -196,11 +210,14 @@ per round) so the upstream `add-graph-orchestration` change can construct per-ro
 
 This capability's implementation MUST remain limited to researcher agent concerns within
 `src/agents/researcher/mod.rs`, `src/agents/researcher/bullish.rs`, `src/agents/researcher/bearish.rs`, and
-`src/agents/researcher/moderator.rs`. It MUST re-export the `run_researcher_debate` function and individual
+`src/agents/researcher/moderator.rs`. It MAY add private helper modules under `src/agents/researcher/` when needed for
+shared prompt formatting, output validation, or token-accounting logic, provided those helpers are not re-exported as
+public API. It MUST re-export the `run_researcher_debate` function and individual
 researcher types from `src/agents/researcher/mod.rs` for consumption by the downstream `add-graph-orchestration`
 change. The researcher module MUST NOT modify foundation-owned files (`src/config.rs`, `src/error.rs`, `src/state/*`,
-`src/rate_limit.rs`), provider-owned files (`src/providers/*`), data-layer files (`src/data/*`), indicator files
-(`src/indicators/*`), or analyst-owned files (`src/agents/analyst/*`).
+`src/rate_limit.rs`), data-layer files (`src/data/*`), indicator files (`src/indicators/*`), or analyst-owned files
+(`src/agents/analyst/*`). It MAY make the approved minimal cross-owner change in `src/providers/factory.rs` to obtain
+retry-wrapped chat usage metadata required by researcher token accounting.
 
 #### Scenario: Downstream Orchestrator Import Path
 
@@ -208,10 +225,10 @@ change. The researcher module MUST NOT modify foundation-owned files (`src/confi
 - **THEN** it uses `use scorpio_analyst::agents::researcher::{run_researcher_debate, ...}` and receives the
   debate loop function and researcher types through the agent module path
 
-#### Scenario: No Foundation Or Upstream File Modifications
+#### Scenario: Only Approved Provider Cross-Owner Change Is Allowed
 
 - **WHEN** the researcher debate module is implemented
 - **THEN** the foundation-owned `Cargo.toml`, `src/lib.rs`, `src/state/*`, `src/config.rs`, `src/error.rs`,
-  `src/rate_limit.rs`, the provider-owned `src/providers/*`, the data-layer `src/data/*`, the indicator
-  `src/indicators/*`, and the analyst-owned `src/agents/analyst/*` files all remain unmodified, as all dependencies
-  and module declarations were pre-declared by `add-project-foundation`
+  `src/rate_limit.rs`, the data-layer `src/data/*`, the indicator `src/indicators/*`, and the analyst-owned
+  `src/agents/analyst/*` files all remain unmodified, and any provider-layer change is limited to the approved minimal
+  touch-point in `src/providers/factory.rs`

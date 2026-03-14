@@ -6,6 +6,8 @@
       config with `max_debate_rounds`)
 - [ ] `add-llm-providers` is complete (provider factory, agent builder helper, `DeepThinking` tier,
       `chat_with_retry` and `prompt_with_retry` helpers)
+- [ ] Approved cross-owner provider touch-point is available in `src/providers/factory.rs` so retry-wrapped chat calls
+      can also return usage metadata for researcher token accounting
 
 ## 1. Bullish Researcher Agent (`src/agents/researcher/bullish.rs`)
 
@@ -17,13 +19,15 @@
       and runtime parameters (asset symbol, target date, serialized analyst data snapshots)
 - [ ] 1.3 Implement `run(&mut self, debate_history: &[DebateMessage], bear_argument: Option<&str>)
       -> Result<(DebateMessage, AgentTokenUsage), TradingError>` that builds/continues a `rig` chat session
-      via `chat_with_retry`, extracts the plain-text response as `DebateMessage { role: "bullish_researcher",
-      content }`, and records `AgentTokenUsage`
+      via the retry-wrapped chat-details helper, extracts the plain-text response as
+      `DebateMessage { role: "bullish_researcher", content }`, and records `AgentTokenUsage`
 - [ ] 1.4 Write unit tests with mocked LLM responses verifying correct `DebateMessage` construction with
       `role = "bullish_researcher"`
 - [ ] 1.5 Write unit tests verifying chat history accumulates across multiple `run` invocations
 - [ ] 1.6 Write unit tests verifying `AgentTokenUsage` is recorded with agent name "Bullish Researcher"
       and correct model ID
+- [ ] 1.7 Write unit tests verifying oversized or control-character-containing bullish outputs are rejected with
+      `TradingError::SchemaViolation`
 
 ## 2. Bearish Researcher Agent (`src/agents/researcher/bearish.rs`)
 
@@ -33,12 +37,14 @@
       and runtime parameters (asset symbol, target date, serialized analyst data snapshots)
 - [ ] 2.3 Implement `run(&mut self, debate_history: &[DebateMessage], bull_argument: Option<&str>)
       -> Result<(DebateMessage, AgentTokenUsage), TradingError>` that builds/continues a `rig` chat session
-      via `chat_with_retry`, extracts the plain-text response as `DebateMessage { role: "bearish_researcher",
-      content }`, and records `AgentTokenUsage`
+      via the retry-wrapped chat-details helper, extracts the plain-text response as
+      `DebateMessage { role: "bearish_researcher", content }`, and records `AgentTokenUsage`
 - [ ] 2.4 Write unit tests with mocked LLM responses verifying correct `DebateMessage` construction with
       `role = "bearish_researcher"`
 - [ ] 2.5 Write unit tests verifying chat history accumulates across multiple `run` invocations
 - [ ] 2.6 Write unit tests verifying `AgentTokenUsage` is recorded with agent name "Bearish Researcher"
+- [ ] 2.7 Write unit tests verifying oversized or control-character-containing bearish outputs are rejected with
+      `TradingError::SchemaViolation`
 
 ## 3. Debate Moderator Agent (`src/agents/researcher/moderator.rs`)
 
@@ -54,6 +60,8 @@
 - [ ] 3.5 Write unit tests verifying the moderator's output includes an explicit stance (`Buy`, `Sell`, or
       `Hold`) as required by the prompt specification
 - [ ] 3.6 Write unit tests verifying `AgentTokenUsage` is recorded with agent name "Debate Moderator"
+- [ ] 3.7 Write unit tests verifying oversized or control-character-containing consensus summaries are rejected with
+      `TradingError::SchemaViolation`
 
 ## 4. Cyclic Debate Loop (`src/agents/researcher/mod.rs`)
 
@@ -75,8 +83,9 @@
       to produce a consensus from analyst data alone
 - [ ] 4.9 Write unit test: LLM failure on Bullish Researcher in round 2 propagates as
       `TradingError` and aborts the debate
-- [ ] 4.10 Write unit test: verify `AgentTokenUsage` entries total `2 * max_debate_rounds + 1` (researchers
-       + moderator)
+- [ ] 4.10 Write unit test: verify `AgentTokenUsage` entries total `2 * max_debate_rounds + 1` (researchers + moderator)
+- [ ] 4.11 Write unit test: verify researcher token entries preserve `token_counts_available = false` when the provider
+       does not expose authoritative counts
 
 ## 5. Integration Tests
 
@@ -88,10 +97,19 @@
 - [ ] 5.3 Write integration test: verify `AgentTokenUsage` entries are collected for all invocations
       including the moderator
 
+## 5a. Approved Cross-Owner Provider Touch-point (`src/providers/factory.rs`)
+
+- [ ] 5a.1 Add a minimal provider-layer surface for retry-wrapped chat usage details (for example,
+      `chat_with_retry_details` and any supporting provider-agnostic `LlmAgent` chat-details method)
+- [ ] 5a.2 Add provider-layer tests verifying the chat-details helper preserves the same retry/timeout/error-mapping
+      semantics as `chat_with_retry` while also surfacing usage metadata when available
+
 ## 6. Documentation and CI
 
 - [ ] 6.1 Add inline doc comments (`///`) for all public types and functions in `mod.rs`, `bullish.rs`,
       `bearish.rs`, and `moderator.rs`
+- [ ] 6.1a If shared formatting or validation helpers are added, keep them in a private `src/agents/researcher/common.rs`
+        module and do not re-export them publicly
 - [ ] 6.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [ ] 6.3 Ensure `cargo fmt -- --check` passes
 - [ ] 6.4 Ensure `cargo test` passes all new and existing tests
