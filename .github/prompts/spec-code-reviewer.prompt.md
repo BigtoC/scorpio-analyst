@@ -20,5 +20,6 @@ Review the corresponding OpenSpec proposal and implementation together from 5 pe
 Return:
 - key findings grouped by review perspective
 - severity for each issue
+- if cross-owner modifications are needed, specify the files and owners involved
 - missing tests or edge cases
 - a final go or no-go recommendation
