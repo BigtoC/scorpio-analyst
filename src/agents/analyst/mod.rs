@@ -15,6 +15,7 @@
 //! - [`news`] – News Analyst (articles and macro events)
 //! - [`technical`] – Technical Analyst (OHLCV → indicators → LLM summary)
 
+mod common;
 mod fundamental;
 mod news;
 mod sentiment;
@@ -33,7 +34,7 @@ use tracing::warn;
 use crate::{
     config::LlmConfig,
     data::{FinnhubClient, YFinanceClient},
-    error::{RetryPolicy, TradingError},
+    error::{RetryPolicy, TradingError, check_analyst_degradation},
     providers::factory::CompletionModelHandle,
     state::{
         AgentTokenUsage, AnalystStateHandles, FundamentalData, NewsData, SentimentData,
@@ -67,10 +68,7 @@ pub async fn run_analyst_team(
     // must cover all attempts plus backoff so it never fires before the inner budget
     // is exhausted.
     let inner_timeout = Duration::from_secs(llm_config.analyst_timeout_secs);
-    let retry_policy = RetryPolicy {
-        max_retries: llm_config.retry_max_retries,
-        base_delay: Duration::from_millis(llm_config.retry_base_delay_ms),
-    };
+    let retry_policy = RetryPolicy::from_config(llm_config);
     let outer_timeout = retry_policy.total_budget(inner_timeout);
 
     let symbol = state.asset_symbol.clone();
@@ -82,8 +80,13 @@ pub async fn run_analyst_team(
     //
     // This eliminates the duplicate Finnhub `get_news` call (P1).  If the
     // pre-fetch fails the analysts fall back to their live `GetNews` tool.
-    let cached_news: Option<Arc<crate::state::NewsData>> =
-        finnhub.get_news(&symbol).await.map(Arc::new).ok();
+    let cached_news: Option<Arc<crate::state::NewsData>> = match finnhub.get_news(&symbol).await {
+        Ok(data) => Some(Arc::new(data)),
+        Err(err) => {
+            warn!(error = %err, "news pre-fetch failed; analysts will use live tool calls");
+            None
+        }
+    };
 
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
@@ -126,8 +129,8 @@ pub async fn run_analyst_team(
         let analyst = TechnicalAnalyst::new(
             handle.clone(),
             yfinance.clone(),
-            symbol.clone(),
-            target_date.clone(),
+            symbol,      // moved — last use; avoids a fourth clone
+            target_date, // moved — last use; avoids a fourth clone
             llm_config,
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
@@ -205,12 +208,7 @@ pub(crate) async fn apply_analyst_results(
     // Check the degradation policy *before* committing partial results to the
     // shared state. This ensures that if we abort, the caller's TradingState is
     // never partially poisoned with data from a cycle that will not complete.
-    if failed_agents.len() >= 2 {
-        return Err(TradingError::AnalystError {
-            agent: failed_agents.join(", "),
-            message: format!("{}/4 analysts failed — aborting cycle", failed_agents.len()),
-        });
-    }
+    check_analyst_degradation(4, &failed_agents)?;
 
     state.apply_analyst_handles(handles).await;
 
@@ -237,6 +235,9 @@ fn flatten_task_result<T>(
         }),
         // Task completed but timed out.
         Ok(Err(_elapsed)) => Err(TradingError::NetworkTimeout {
+            // tokio::time::error::Elapsed does not expose the wall time of the
+            // deadline; Duration::ZERO is a sentinel value — callers must infer
+            // the actual elapsed time from context (e.g., the outer_timeout value).
             elapsed: Duration::ZERO,
             message: format!("{agent_name} task timed out"),
         }),
@@ -255,8 +256,8 @@ mod tests {
     use crate::{
         error::TradingError,
         state::{
-            FundamentalData, InsiderTransaction, MacdValues, MacroEvent, NewsArticle, NewsData,
-            SentimentData, SentimentSource, TechnicalData,
+            FundamentalData, ImpactDirection, InsiderTransaction, MacdValues, MacroEvent,
+            NewsArticle, NewsData, SentimentData, SentimentSource, TechnicalData, TransactionType,
         },
     };
 
@@ -275,7 +276,7 @@ mod tests {
                 name: "Jane".to_owned(),
                 share_change: -1000.0,
                 transaction_date: "2026-01-01".to_owned(),
-                transaction_type: "S".to_owned(),
+                transaction_type: TransactionType::S,
             }],
             summary: "Strong fundamentals.".to_owned(),
         }
@@ -305,7 +306,7 @@ mod tests {
             }],
             macro_events: vec![MacroEvent {
                 event: "Interest-rate policy shift".to_owned(),
-                impact_direction: "positive".to_owned(),
+                impact_direction: ImpactDirection::Positive,
                 confidence: 0.75,
             }],
             summary: "Positive earnings and rate backdrop.".to_owned(),
@@ -397,10 +398,7 @@ mod tests {
             retry_base_delay_ms: 500,
         };
         let inner = Duration::from_secs(config.analyst_timeout_secs);
-        let retry_policy = RetryPolicy {
-            max_retries: config.retry_max_retries,
-            base_delay: Duration::from_millis(config.retry_base_delay_ms),
-        };
+        let retry_policy = RetryPolicy::from_config(&config);
         let outer = retry_policy.total_budget(inner);
         assert!(outer > inner);
     }

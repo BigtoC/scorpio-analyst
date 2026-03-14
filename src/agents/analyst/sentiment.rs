@@ -21,6 +21,8 @@ use crate::{
     state::{AgentTokenUsage, NewsData, SentimentData},
 };
 
+use super::common::{usage_from_response, validate_summary_content};
+
 const MAX_TOOL_TURNS: usize = 6;
 
 /// System prompt for the Sentiment Analyst, adapted from `docs/prompts.md`.
@@ -96,10 +98,7 @@ impl SentimentAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy {
-                max_retries: llm_config.retry_max_retries,
-                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
-            },
+            retry_policy: RetryPolicy::from_config(llm_config),
             cached_news,
         }
     }
@@ -151,24 +150,16 @@ impl SentimentAnalyst {
 
         validate_sentiment(&response.output)?;
 
-        Ok((
-            response.output,
-            AgentTokenUsage {
-                agent_name: "Sentiment Analyst".to_owned(),
-                model_id: self.handle.model_id().to_owned(),
-                token_counts_available: response.usage.total_tokens > 0
-                    || response.usage.input_tokens > 0
-                    || response.usage.output_tokens > 0,
-                prompt_tokens: response.usage.input_tokens,
-                completion_tokens: response.usage.output_tokens,
-                total_tokens: response.usage.total_tokens,
-                latency_ms: started_at.elapsed().as_millis() as u64,
-            },
-        ))
+        let usage = usage_from_response(
+            "Sentiment Analyst",
+            self.handle.model_id(),
+            response.usage,
+            started_at,
+        );
+
+        Ok((response.output, usage))
     }
 }
-
-const MAX_SUMMARY_CHARS: usize = 4_096;
 
 fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
     if !(-1.0..=1.0).contains(&data.overall_score) {
@@ -194,23 +185,6 @@ fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
                 ),
             });
         }
-    }
-    Ok(())
-}
-
-fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
-    if summary.chars().count() > MAX_SUMMARY_CHARS {
-        return Err(TradingError::SchemaViolation {
-            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
-        });
-    }
-    if summary
-        .chars()
-        .any(|c| c.is_control() && c != '\n' && c != '\t')
-    {
-        return Err(TradingError::SchemaViolation {
-            message: format!("{context}: summary contains disallowed control characters"),
-        });
     }
     Ok(())
 }

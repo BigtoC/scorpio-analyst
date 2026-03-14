@@ -18,6 +18,8 @@ use crate::{
     state::{AgentTokenUsage, NewsData},
 };
 
+use super::common::{usage_from_response, validate_summary_content};
+
 const MAX_TOOL_TURNS: usize = 8;
 
 /// System prompt for the News Analyst, adapted from `docs/prompts.md`.
@@ -94,10 +96,7 @@ impl NewsAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy {
-                max_retries: llm_config.retry_max_retries,
-                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
-            },
+            retry_policy: RetryPolicy::from_config(llm_config),
             cached_news,
         }
     }
@@ -144,24 +143,16 @@ impl NewsAnalyst {
 
         validate_news(&response.output)?;
 
-        Ok((
-            response.output,
-            AgentTokenUsage {
-                agent_name: "News Analyst".to_owned(),
-                model_id: self.handle.model_id().to_owned(),
-                token_counts_available: response.usage.total_tokens > 0
-                    || response.usage.input_tokens > 0
-                    || response.usage.output_tokens > 0,
-                prompt_tokens: response.usage.input_tokens,
-                completion_tokens: response.usage.output_tokens,
-                total_tokens: response.usage.total_tokens,
-                latency_ms: started_at.elapsed().as_millis() as u64,
-            },
-        ))
+        let usage = usage_from_response(
+            "News Analyst",
+            self.handle.model_id(),
+            response.usage,
+            started_at,
+        );
+
+        Ok((response.output, usage))
     }
 }
-
-const MAX_SUMMARY_CHARS: usize = 4_096;
 
 fn validate_news(data: &NewsData) -> Result<(), TradingError> {
     if data.summary.trim().is_empty() {
@@ -183,29 +174,12 @@ fn validate_news(data: &NewsData) -> Result<(), TradingError> {
     Ok(())
 }
 
-fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
-    if summary.chars().count() > MAX_SUMMARY_CHARS {
-        return Err(TradingError::SchemaViolation {
-            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
-        });
-    }
-    if summary
-        .chars()
-        .any(|c| c.is_control() && c != '\n' && c != '\t')
-    {
-        return Err(TradingError::SchemaViolation {
-            message: format!("{context}: summary contains disallowed control characters"),
-        });
-    }
-    Ok(())
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{MacroEvent, NewsArticle, NewsData};
+    use crate::state::{ImpactDirection, MacroEvent, NewsArticle, NewsData};
 
     fn parse_news(json: &str) -> Result<NewsData, TradingError> {
         serde_json::from_str(json)
@@ -244,7 +218,10 @@ mod tests {
         assert_eq!(data.articles[0].title, "Apple Reports Record Revenue");
         assert_eq!(data.articles[0].source, "Reuters");
         assert_eq!(data.macro_events.len(), 1);
-        assert_eq!(data.macro_events[0].impact_direction, "positive");
+        assert_eq!(
+            data.macro_events[0].impact_direction,
+            ImpactDirection::Positive
+        );
         assert!(!data.summary.is_empty());
     }
 
@@ -425,7 +402,7 @@ mod tests {
             }],
             macro_events: vec![MacroEvent {
                 event: "Fed rate decision".to_owned(),
-                impact_direction: "mixed".to_owned(),
+                impact_direction: ImpactDirection::Mixed,
                 confidence: 0.65,
             }],
             summary: "Notable earnings and rate news.".to_owned(),

@@ -21,6 +21,8 @@ use crate::{
     state::{AgentTokenUsage, FundamentalData},
 };
 
+use super::common::{usage_from_response, validate_summary_content};
+
 const MAX_TOOL_TURNS: usize = 8;
 
 /// System prompt for the Fundamental Analyst, adapted from `docs/prompts.md`.
@@ -91,10 +93,7 @@ impl FundamentalAnalyst {
             symbol: symbol.into(),
             target_date: target_date.into(),
             timeout: std::time::Duration::from_secs(llm_config.analyst_timeout_secs),
-            retry_policy: RetryPolicy {
-                max_retries: llm_config.retry_max_retries,
-                base_delay: std::time::Duration::from_millis(llm_config.retry_base_delay_ms),
-            },
+            retry_policy: RetryPolicy::from_config(llm_config),
         }
     }
 
@@ -152,12 +151,6 @@ impl FundamentalAnalyst {
     }
 }
 
-/// Maximum characters allowed in any LLM-generated summary field.
-///
-/// Prevents adversarial overflow of downstream state buffers and limits the
-/// extent of prompt-injection content that can propagate through phases.
-const MAX_SUMMARY_CHARS: usize = 4_096;
-
 fn validate_fundamental(data: &FundamentalData) -> Result<(), TradingError> {
     if data.summary.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
@@ -167,49 +160,12 @@ fn validate_fundamental(data: &FundamentalData) -> Result<(), TradingError> {
     validate_summary_content("FundamentalAnalyst", &data.summary)
 }
 
-/// Validate that a summary is within length bounds and free of control characters.
-fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
-    if summary.chars().count() > MAX_SUMMARY_CHARS {
-        return Err(TradingError::SchemaViolation {
-            message: format!("{context}: summary exceeds maximum {MAX_SUMMARY_CHARS} characters"),
-        });
-    }
-    if summary
-        .chars()
-        .any(|c| c.is_control() && c != '\n' && c != '\t')
-    {
-        return Err(TradingError::SchemaViolation {
-            message: format!("{context}: summary contains disallowed control characters"),
-        });
-    }
-    Ok(())
-}
-
-fn usage_from_response(
-    agent_name: &str,
-    model_id: &str,
-    usage: rig::completion::Usage,
-    started_at: Instant,
-) -> AgentTokenUsage {
-    AgentTokenUsage {
-        agent_name: agent_name.to_owned(),
-        model_id: model_id.to_owned(),
-        token_counts_available: usage.total_tokens > 0
-            || usage.input_tokens > 0
-            || usage.output_tokens > 0,
-        prompt_tokens: usage.input_tokens,
-        completion_tokens: usage.output_tokens,
-        total_tokens: usage.total_tokens,
-        latency_ms: started_at.elapsed().as_millis() as u64,
-    }
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{FundamentalData, InsiderTransaction};
+    use crate::state::{FundamentalData, InsiderTransaction, TransactionType};
 
     /// Parse a valid JSON string that matches `FundamentalData` schema.
     fn parse_fundamental(json: &str) -> Result<FundamentalData, TradingError> {
@@ -292,7 +248,10 @@ mod tests {
         let data = parse_fundamental(json).expect("should parse");
         assert_eq!(data.insider_transactions.len(), 2);
         assert_eq!(data.insider_transactions[0].name, "Alice");
-        assert_eq!(data.insider_transactions[1].transaction_type, "S");
+        assert_eq!(
+            data.insider_transactions[1].transaction_type,
+            TransactionType::S
+        );
     }
 
     // ── Task 1.5: AgentTokenUsage recording ──────────────────────────────
@@ -388,7 +347,7 @@ mod tests {
                 name: "Jane".to_owned(),
                 share_change: -1000.0,
                 transaction_date: "2026-01-01".to_owned(),
-                transaction_type: "S".to_owned(),
+                transaction_type: TransactionType::S,
             }],
             summary: "Strong fundamentals.".to_owned(),
         };
