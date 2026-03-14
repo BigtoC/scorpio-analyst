@@ -12,6 +12,8 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfClient, YfError};
 
@@ -199,12 +201,47 @@ pub struct OhlcvArgs {
     pub end: String,
 }
 
+/// Shared analysis-scoped OHLCV cache populated by the retrieval tool and consumed by indicator tools.
+#[derive(Debug, Clone, Default)]
+pub struct OhlcvToolContext {
+    candles: Arc<RwLock<Option<Vec<Candle>>>>,
+}
+
+impl OhlcvToolContext {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn store(&self, candles: Vec<Candle>) {
+        *self.candles.write().await = Some(candles);
+    }
+
+    pub async fn load(&self) -> Result<Vec<Candle>, TradingError> {
+        self.candles
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| TradingError::SchemaViolation {
+                message: "OHLCV context is empty; call get_ohlcv before indicator tools".to_owned(),
+            })
+    }
+}
+
 /// `rig` tool: fetch historical daily OHLCV bars for a symbol and date range.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetOhlcv {
     /// The underlying client used to satisfy tool calls.
     #[serde(skip)]
     client: Option<YFinanceClient>,
+    #[serde(skip)]
+    allowed_symbol: Option<String>,
+    #[serde(skip)]
+    allowed_start: Option<String>,
+    #[serde(skip)]
+    allowed_end: Option<String>,
+    #[serde(skip)]
+    context: Option<OhlcvToolContext>,
 }
 
 impl GetOhlcv {
@@ -213,7 +250,60 @@ impl GetOhlcv {
     pub fn new(client: YFinanceClient) -> Self {
         Self {
             client: Some(client),
+            allowed_symbol: None,
+            allowed_start: None,
+            allowed_end: None,
+            context: None,
         }
+    }
+
+    #[must_use]
+    pub fn scoped(
+        client: YFinanceClient,
+        symbol: impl Into<String>,
+        start: impl Into<String>,
+        end: impl Into<String>,
+        context: OhlcvToolContext,
+    ) -> Self {
+        Self {
+            client: Some(client),
+            allowed_symbol: Some(symbol.into()),
+            allowed_start: Some(start.into()),
+            allowed_end: Some(end.into()),
+            context: Some(context),
+        }
+    }
+
+    fn validate_scope(&self, args: &OhlcvArgs) -> Result<(), TradingError> {
+        if let Some(symbol) = &self.allowed_symbol
+            && args.symbol != *symbol
+        {
+            return Err(TradingError::SchemaViolation {
+                message: format!(
+                    "get_ohlcv tool is scoped to symbol {symbol}, got {}",
+                    args.symbol
+                ),
+            });
+        }
+        if let Some(start) = &self.allowed_start
+            && args.start != *start
+        {
+            return Err(TradingError::SchemaViolation {
+                message: format!(
+                    "get_ohlcv tool is scoped to start {start}, got {}",
+                    args.start
+                ),
+            });
+        }
+        if let Some(end) = &self.allowed_end
+            && args.end != *end
+        {
+            return Err(TradingError::SchemaViolation {
+                message: format!("get_ohlcv tool is scoped to end {end}, got {}", args.end),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -253,10 +343,17 @@ impl Tool for GetOhlcv {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.validate_scope(&args)?;
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!("YFinanceClient not set on GetOhlcv tool"))
         })?;
-        client.get_ohlcv(&args.symbol, &args.start, &args.end).await
+        let candles = client
+            .get_ohlcv(&args.symbol, &args.start, &args.end)
+            .await?;
+        if let Some(context) = &self.context {
+            context.store(candles.clone()).await;
+        }
+        Ok(candles)
     }
 }
 
@@ -370,14 +467,26 @@ mod tests {
 
     #[tokio::test]
     async fn get_ohlcv_tool_name() {
-        let tool = GetOhlcv { client: None };
+        let tool = GetOhlcv {
+            client: None,
+            allowed_symbol: None,
+            allowed_start: None,
+            allowed_end: None,
+            context: None,
+        };
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "get_ohlcv");
     }
 
     #[tokio::test]
     async fn tool_call_without_client_returns_config_error() {
-        let tool = GetOhlcv { client: None };
+        let tool = GetOhlcv {
+            client: None,
+            allowed_symbol: None,
+            allowed_start: None,
+            allowed_end: None,
+            context: None,
+        };
         let result = tool
             .call(OhlcvArgs {
                 symbol: "AAPL".to_owned(),

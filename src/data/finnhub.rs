@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use finnhub::FinnhubClient as FhClient;
+use finnhub::models::news::NewsCategory;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use secrecy::ExposeSecret;
@@ -18,7 +19,10 @@ use crate::{
     config::ApiConfig,
     error::TradingError,
     rate_limit::SharedRateLimiter,
-    state::{FundamentalData, InsiderTransaction as OurInsiderTransaction, NewsArticle, NewsData},
+    state::{
+        FundamentalData, InsiderTransaction as OurInsiderTransaction, MacroEvent, NewsArticle,
+        NewsData,
+    },
 };
 
 use super::symbol::validate_symbol;
@@ -167,6 +171,90 @@ impl FinnhubClient {
             .map_err(map_finnhub_err)?;
 
         Ok(build_news_data(symbol, raw, &from, &to))
+    }
+
+    /// Fetch general market news and map it into the shared `NewsData` shape.
+    pub async fn get_market_news(&self) -> Result<NewsData, TradingError> {
+        self.limiter.acquire().await;
+        let raw = self
+            .inner
+            .news()
+            .market_news(NewsCategory::General, None)
+            .await
+            .map_err(map_finnhub_err)?;
+
+        let articles = raw
+            .into_iter()
+            .take(20)
+            .map(|n| NewsArticle {
+                title: n.headline,
+                source: n.source,
+                published_at: n.datetime.to_string(),
+                relevance_score: None,
+                snippet: n.summary,
+            })
+            .collect::<Vec<_>>();
+        let macro_events = derive_macro_events(&articles);
+        let article_count = articles.len();
+        let macro_count = macro_events.len();
+
+        Ok(NewsData {
+            articles,
+            macro_events,
+            summary: format!(
+                "general market news: {article_count} articles and {macro_count} derived macro events"
+            ),
+        })
+    }
+
+    /// Fetch a small, fixed macro-economic snapshot from Finnhub economic endpoints.
+    pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
+        const INDICATORS: [(&str, &str); 2] = [
+            ("MA-USA-656880", "Interest-rate policy shift"),
+            ("MA-USA-CPALTT01-USM657N", "Inflation signal"),
+        ];
+
+        let mut events = Vec::new();
+        for (code, event_name) in INDICATORS {
+            self.limiter.acquire().await;
+            let data = self
+                .inner
+                .economic()
+                .data(code)
+                .await
+                .map_err(map_finnhub_err)?;
+
+            if let Some(latest) = data.data.last() {
+                let impact_direction = match event_name {
+                    "Interest-rate policy shift" => {
+                        if latest.value > 3.0 {
+                            "negative"
+                        } else {
+                            "positive"
+                        }
+                    }
+                    "Inflation signal" => {
+                        if latest.value > 3.0 {
+                            "negative"
+                        } else {
+                            "positive"
+                        }
+                    }
+                    _ => "neutral",
+                };
+
+                push_macro_event(
+                    &mut events,
+                    MacroEvent {
+                        event: event_name.to_owned(),
+                        impact_direction: impact_direction.to_owned(),
+                        confidence: 0.7,
+                    },
+                );
+            }
+        }
+
+        Ok(events)
     }
 }
 
@@ -418,6 +506,8 @@ pub struct GetFundamentals {
     /// The underlying client used to satisfy tool calls.
     #[serde(skip)]
     client: Option<FinnhubClient>,
+    #[serde(skip)]
+    allowed_symbol: Option<String>,
 }
 
 impl GetFundamentals {
@@ -426,6 +516,15 @@ impl GetFundamentals {
     pub fn new(client: FinnhubClient) -> Self {
         Self {
             client: Some(client),
+            allowed_symbol: None,
+        }
+    }
+
+    #[must_use]
+    pub fn scoped(client: FinnhubClient, symbol: impl Into<String>) -> Self {
+        Self {
+            client: Some(client),
+            allowed_symbol: Some(symbol.into()),
         }
     }
 }
@@ -448,6 +547,7 @@ impl Tool for GetFundamentals {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_scoped_symbol(self.allowed_symbol.as_deref(), &args.symbol, Self::NAME)?;
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!(
                 "FinnhubClient not set on GetFundamentals tool"
@@ -465,6 +565,8 @@ pub struct GetEarnings {
     /// The underlying client used to satisfy tool calls.
     #[serde(skip)]
     client: Option<FinnhubClient>,
+    #[serde(skip)]
+    allowed_symbol: Option<String>,
 }
 
 impl GetEarnings {
@@ -473,6 +575,15 @@ impl GetEarnings {
     pub fn new(client: FinnhubClient) -> Self {
         Self {
             client: Some(client),
+            allowed_symbol: None,
+        }
+    }
+
+    #[must_use]
+    pub fn scoped(client: FinnhubClient, symbol: impl Into<String>) -> Self {
+        Self {
+            client: Some(client),
+            allowed_symbol: Some(symbol.into()),
         }
     }
 }
@@ -494,6 +605,7 @@ impl Tool for GetEarnings {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_scoped_symbol(self.allowed_symbol.as_deref(), &args.symbol, Self::NAME)?;
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!("FinnhubClient not set on GetEarnings tool"))
         })?;
@@ -509,6 +621,8 @@ pub struct GetInsiderTransactions {
     /// The underlying client used to satisfy tool calls.
     #[serde(skip)]
     client: Option<FinnhubClient>,
+    #[serde(skip)]
+    allowed_symbol: Option<String>,
 }
 
 impl GetInsiderTransactions {
@@ -517,6 +631,15 @@ impl GetInsiderTransactions {
     pub fn new(client: FinnhubClient) -> Self {
         Self {
             client: Some(client),
+            allowed_symbol: None,
+        }
+    }
+
+    #[must_use]
+    pub fn scoped(client: FinnhubClient, symbol: impl Into<String>) -> Self {
+        Self {
+            client: Some(client),
+            allowed_symbol: Some(symbol.into()),
         }
     }
 }
@@ -539,6 +662,7 @@ impl Tool for GetInsiderTransactions {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_scoped_symbol(self.allowed_symbol.as_deref(), &args.symbol, Self::NAME)?;
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!(
                 "FinnhubClient not set on GetInsiderTransactions tool"
@@ -556,6 +680,8 @@ pub struct GetNews {
     /// The underlying client used to satisfy tool calls.
     #[serde(skip)]
     client: Option<FinnhubClient>,
+    #[serde(skip)]
+    allowed_symbol: Option<String>,
 }
 
 impl GetNews {
@@ -564,6 +690,15 @@ impl GetNews {
     pub fn new(client: FinnhubClient) -> Self {
         Self {
             client: Some(client),
+            allowed_symbol: None,
+        }
+    }
+
+    #[must_use]
+    pub fn scoped(client: FinnhubClient, symbol: impl Into<String>) -> Self {
+        Self {
+            client: Some(client),
+            allowed_symbol: Some(symbol.into()),
         }
     }
 }
@@ -586,11 +721,119 @@ impl Tool for GetNews {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_scoped_symbol(self.allowed_symbol.as_deref(), &args.symbol, Self::NAME)?;
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!("FinnhubClient not set on GetNews tool"))
         })?;
         client.get_news(&args.symbol).await
     }
+}
+
+/// `rig` tool: fetch recent general market news.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GetMarketNews {
+    #[serde(skip)]
+    client: Option<FinnhubClient>,
+}
+
+impl GetMarketNews {
+    #[must_use]
+    pub fn new(client: FinnhubClient) -> Self {
+        Self {
+            client: Some(client),
+        }
+    }
+}
+
+impl Tool for GetMarketNews {
+    const NAME: &'static str = "get_market_news";
+
+    type Error = TradingError;
+    type Args = ();
+    type Output = NewsData;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_owned(),
+            description: "Fetch recent general market news from Finnhub for macro analysis."
+                .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let client = self.client.as_ref().ok_or_else(|| {
+            TradingError::Config(anyhow::anyhow!(
+                "FinnhubClient not set on GetMarketNews tool"
+            ))
+        })?;
+        client.get_market_news().await
+    }
+}
+
+/// `rig` tool: fetch a fixed macro-economic indicator snapshot from Finnhub.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GetEconomicIndicators {
+    #[serde(skip)]
+    client: Option<FinnhubClient>,
+}
+
+impl GetEconomicIndicators {
+    #[must_use]
+    pub fn new(client: FinnhubClient) -> Self {
+        Self {
+            client: Some(client),
+        }
+    }
+}
+
+impl Tool for GetEconomicIndicators {
+    const NAME: &'static str = "get_economic_indicators";
+
+    type Error = TradingError;
+    type Args = ();
+    type Output = Vec<MacroEvent>;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_owned(),
+            description: "Fetch a fixed set of macro-economic indicators from Finnhub and summarize them as macro events.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let client = self.client.as_ref().ok_or_else(|| {
+            TradingError::Config(anyhow::anyhow!(
+                "FinnhubClient not set on GetEconomicIndicators tool"
+            ))
+        })?;
+        client.get_economic_indicators().await
+    }
+}
+
+fn validate_scoped_symbol(
+    allowed_symbol: Option<&str>,
+    requested_symbol: &str,
+    tool_name: &str,
+) -> Result<(), TradingError> {
+    if let Some(expected) = allowed_symbol
+        && expected != requested_symbol
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{tool_name} is scoped to symbol {expected}, got {requested_symbol}"),
+        });
+    }
+
+    Ok(())
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -710,28 +953,40 @@ mod tests {
 
     #[tokio::test]
     async fn get_fundamentals_tool_name() {
-        let tool = GetFundamentals { client: None };
+        let tool = GetFundamentals {
+            client: None,
+            allowed_symbol: None,
+        };
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "get_fundamentals");
     }
 
     #[tokio::test]
     async fn get_earnings_tool_name() {
-        let tool = GetEarnings { client: None };
+        let tool = GetEarnings {
+            client: None,
+            allowed_symbol: None,
+        };
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "get_earnings");
     }
 
     #[tokio::test]
     async fn get_insider_transactions_tool_name() {
-        let tool = GetInsiderTransactions { client: None };
+        let tool = GetInsiderTransactions {
+            client: None,
+            allowed_symbol: None,
+        };
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "get_insider_transactions");
     }
 
     #[tokio::test]
     async fn get_news_tool_name() {
-        let tool = GetNews { client: None };
+        let tool = GetNews {
+            client: None,
+            allowed_symbol: None,
+        };
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "get_news");
     }
@@ -740,7 +995,10 @@ mod tests {
 
     #[tokio::test]
     async fn tool_call_without_client_returns_config_error() {
-        let tool = GetFundamentals { client: None };
+        let tool = GetFundamentals {
+            client: None,
+            allowed_symbol: None,
+        };
         let result = tool
             .call(SymbolArgs {
                 symbol: "AAPL".to_owned(),
