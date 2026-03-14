@@ -306,6 +306,45 @@ impl LlmAgent {
             LlmAgentInner::Copilot(agent) => agent.chat(prompt, chat_history).await,
         }
     }
+
+    /// Send a prompt with mutable chat history and return response text plus usage details.
+    ///
+    /// The `chat_history` is updated in place: the new user message and the assistant
+    /// response are appended so callers can pass the same `Vec<Message>` across rounds.
+    pub async fn chat_details(
+        &self,
+        prompt: &str,
+        chat_history: &mut Vec<Message>,
+    ) -> Result<PromptResponse, PromptError> {
+        use rig::agent::PromptRequest;
+
+        match &self.inner {
+            LlmAgentInner::OpenAI(agent) => {
+                PromptRequest::from_agent(agent, prompt)
+                    .with_history(chat_history)
+                    .extended_details()
+                    .await
+            }
+            LlmAgentInner::Anthropic(agent) => {
+                PromptRequest::from_agent(agent, prompt)
+                    .with_history(chat_history)
+                    .extended_details()
+                    .await
+            }
+            LlmAgentInner::Gemini(agent) => {
+                PromptRequest::from_agent(agent, prompt)
+                    .with_history(chat_history)
+                    .extended_details()
+                    .await
+            }
+            LlmAgentInner::Copilot(agent) => {
+                PromptRequest::from_agent(agent, prompt)
+                    .with_history(chat_history)
+                    .extended_details()
+                    .await
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -695,6 +734,103 @@ pub async fn chat_with_retry_budget(
     // The loop runs for `0..=max_retries` iterations. Every iteration either
     // returns early or continues. Reaching here requires zero iterations,
     // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
+}
+
+/// Send a chat prompt (with mutable history) with timeout/retry and return response plus usage.
+///
+/// The `chat_history` is updated in place by appending each new message pair. This is the
+/// correct API for multi-turn debates where callers maintain history across rounds.
+///
+/// # Errors
+///
+/// Same as [`chat_with_retry`].
+pub async fn chat_with_retry_details(
+    agent: &LlmAgent,
+    prompt: &str,
+    chat_history: &mut Vec<Message>,
+    timeout: Duration,
+    policy: &RetryPolicy,
+) -> Result<PromptResponse, TradingError> {
+    let total_budget = total_request_budget(timeout, policy);
+    chat_with_retry_details_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
+}
+
+/// Budget-constrained variant of [`chat_with_retry_details`].
+pub async fn chat_with_retry_details_budget(
+    agent: &LlmAgent,
+    prompt: &str,
+    chat_history: &mut Vec<Message>,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+) -> Result<PromptResponse, TradingError> {
+    let started_at = Instant::now();
+
+    // Snapshot the history length before each attempt so we can truncate on retry.
+    let initial_len = chat_history.len();
+
+    for attempt in 0..=policy.max_retries {
+        if attempt > 0 {
+            let delay = policy.delay_for_attempt(attempt - 1);
+            if started_at.elapsed().saturating_add(delay) > total_budget {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "chat-details retry budget exhausted before next attempt".to_owned(),
+                });
+            }
+            warn!(
+                attempt,
+                ?delay,
+                "retrying chat-details after transient error"
+            );
+            // Truncate any partial messages that were appended during the failed attempt.
+            chat_history.truncate(initial_len);
+            tokio::time::sleep(delay).await;
+        }
+
+        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+        if remaining_budget.is_zero() {
+            return Err(TradingError::NetworkTimeout {
+                elapsed: started_at.elapsed(),
+                message: "chat-details retry budget exhausted".to_owned(),
+            });
+        }
+        let attempt_timeout = timeout.min(remaining_budget);
+
+        match tokio::time::timeout(attempt_timeout, agent.chat_details(prompt, chat_history)).await
+        {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(err)) => {
+                if is_transient_error(&err) && attempt < policy.max_retries {
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat-details error, will retry");
+                    continue;
+                }
+                return Err(map_prompt_error_with_context(
+                    agent.provider_name(),
+                    agent.model_id(),
+                    err,
+                ));
+            }
+            Err(_elapsed) => {
+                // On timeout, also truncate any partial messages.
+                chat_history.truncate(initial_len);
+                let err = TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: format!(
+                        "chat-details timed out on attempt {attempt} for model {}",
+                        agent.model_id()
+                    ),
+                };
+                if attempt < policy.max_retries {
+                    warn!(attempt, "chat-details timed out, will retry");
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
