@@ -88,17 +88,18 @@ fn retry_zero_base_delay_yields_zero() {
 
 #[test]
 fn degradation_zero_total_zero_failures_is_ok() {
-    assert!(check_analyst_degradation(0, 0).is_ok());
+    assert!(check_analyst_degradation(0, &[]).is_ok());
 }
 
 #[test]
 fn degradation_one_of_one_failure_aborts() {
     // 1 total, 1 failure = total failure → abort
-    assert!(check_analyst_degradation(1, 1).is_err());
+    assert!(check_analyst_degradation(1, &["Agent".to_owned()]).is_err());
 }
 
 #[test]
 fn degradation_boundary_at_two_failures() {
-    assert!(check_analyst_degradation(4, 1).is_ok());
-    assert!(check_analyst_degradation(4, 2).is_err());
+    assert!(check_analyst_degradation(4, &["Fundamental Analyst".to_owned()]).is_ok());
+    let two = vec!["Fundamental Analyst".to_owned(), "News Analyst".to_owned()];
+    assert!(check_analyst_degradation(4, &two).is_err());
 }

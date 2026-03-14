@@ -21,14 +21,18 @@ fn arb_insider_transaction() -> impl Strategy<Value = InsiderTransaction> {
         "[a-zA-Z ]{1,20}",
         arb_f64(),
         "2024-0[1-9]-[0-2][0-9]",
-        prop::sample::select(vec!["Buy", "Sell", "Option Exercise"]),
+        prop::sample::select(vec![
+            TransactionType::S,
+            TransactionType::P,
+            TransactionType::Other,
+        ]),
     )
         .prop_map(|(name, share_change, transaction_date, transaction_type)| {
             InsiderTransaction {
                 name,
                 share_change,
                 transaction_date,
-                transaction_type: transaction_type.to_owned(),
+                transaction_type,
             }
         })
 }
@@ -187,12 +191,18 @@ fn arb_news_article() -> impl Strategy<Value = NewsArticle> {
 fn arb_macro_event() -> impl Strategy<Value = MacroEvent> {
     (
         "[a-z ]{5,20}",
-        prop::sample::select(vec!["positive", "negative", "neutral"]),
+        prop::sample::select(vec![
+            ImpactDirection::Positive,
+            ImpactDirection::Negative,
+            ImpactDirection::Neutral,
+            ImpactDirection::Mixed,
+            ImpactDirection::Uncertain,
+        ]),
         arb_f64(),
     )
         .prop_map(|(event, impact_direction, confidence)| MacroEvent {
             event,
-            impact_direction: impact_direction.to_owned(),
+            impact_direction,
             confidence,
         })
 }
