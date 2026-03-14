@@ -53,3 +53,9 @@
 - [x] 7.2 Configure `proptest` coverage for foundational state/data serialization boundaries.
 - [x] 7.3 Define `mockall`-based mocking patterns for provider and service traits owned by later changes.
 - [x] 7.4 Add focused tests for secret redaction and foundational error/timeout edge cases.
+
+### Cross-Owner Touch-points
+
+- Approved for `add-analyst-team` to update `src/state/token_usage.rs`, `src/state/trading_state.rs`, and
+  `src/config.rs` to align token-accounting semantics, analyst timeout naming, and analyst fan-out state writes with
+  the `analyst-team` spec.

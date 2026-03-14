@@ -65,3 +65,8 @@
 - [x] 5.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [x] 5.3 Ensure `cargo fmt -- --check` passes
 - [x] 5.4 Ensure `cargo test` passes all new and existing tests
+
+### Cross-Owner Touch-points
+
+- Approved for `add-analyst-team` to update `src/data/finnhub.rs` and `src/data/yfinance.rs` so analyst-bound tools can
+  enforce symbol/date scoping and satisfy the analyst-team runtime safety requirements.

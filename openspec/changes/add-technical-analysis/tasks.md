@@ -96,3 +96,8 @@
 - [x] 7.3 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [x] 7.4 Ensure `cargo fmt -- --check` passes
 - [x] 7.5 Ensure `cargo test` passes all new and existing tests
+
+### Cross-Owner Touch-points
+
+- Approved for `add-analyst-team` to update `src/indicators/tools.rs` so technical indicator tools can avoid trusting
+  arbitrary LLM-supplied candle payloads and instead operate on validated analysis-scoped inputs.
