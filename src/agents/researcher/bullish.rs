@@ -6,19 +6,22 @@
 
 use std::time::Instant;
 
-use rig::{OneOrMany, message::UserContent};
 use rig::completion::Message;
+use rig::{OneOrMany, message::UserContent};
 
 use crate::{
     config::LlmConfig,
-    error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, LlmAgent, build_agent, chat_with_retry_details},
+    error::TradingError,
+    providers::factory::{CompletionModelHandle, chat_with_retry_details},
     state::{AgentTokenUsage, DebateMessage, TradingState},
 };
 
+#[cfg(test)]
+use crate::providers::factory::LlmAgent;
+
 use super::common::{
-    UNTRUSTED_CONTEXT_NOTICE, researcher_runtime_config, usage_from_response,
-    validate_debate_content,
+    UNTRUSTED_CONTEXT_NOTICE, DebaterCore, build_analyst_context, build_debate_result,
+    format_debate_history,
 };
 
 /// System prompt for the Bullish Researcher, adapted from `docs/prompts.md` §2.
@@ -41,25 +44,16 @@ Return plain text only. Do not return JSON, Markdown tables, or a final transact
 /// Maintains conversation history across debate rounds so each response can
 /// directly address the bear's latest argument.
 pub struct BullishResearcher {
-    agent: LlmAgent,
-    model_id: String,
+    core: DebaterCore,
     chat_history: Vec<Message>,
-    timeout: std::time::Duration,
-    retry_policy: RetryPolicy,
 }
 
 #[cfg(test)]
 impl BullishResearcher {
     fn from_test_agent(agent: LlmAgent, model_id: &str) -> Self {
         Self {
-            agent,
-            model_id: model_id.to_owned(),
+            core: DebaterCore::for_test(agent, model_id),
             chat_history: Vec::new(),
-            timeout: std::time::Duration::from_millis(50),
-            retry_policy: RetryPolicy {
-                max_retries: 1,
-                base_delay: std::time::Duration::from_millis(1),
-            },
         }
     }
 }
@@ -76,27 +70,11 @@ impl BullishResearcher {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Self {
-        let runtime =
-            researcher_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-
-        let system_prompt = BULLISH_SYSTEM_PROMPT
-            .replace("{ticker}", &runtime.symbol)
-            .replace("{current_date}", &runtime.target_date)
-            .replace("{past_memory_str}", "");
-
-        let agent = build_agent(handle, &system_prompt);
-        let model_id = handle.model_id().to_owned();
+        let core = DebaterCore::new(handle, BULLISH_SYSTEM_PROMPT, state, llm_config);
         let chat_history = vec![Message::User {
             content: OneOrMany::one(UserContent::text(build_analyst_context(state))),
         }];
-
-        Self {
-            agent,
-            model_id,
-            chat_history,
-            timeout: runtime.timeout,
-            retry_policy: runtime.retry_policy,
-        }
+        Self { core, chat_history }
     }
 
     /// Execute one round of the bullish argument.
@@ -121,73 +99,32 @@ impl BullishResearcher {
         let prompt = build_bullish_prompt(debate_history, bear_argument);
 
         let response = chat_with_retry_details(
-            &self.agent,
+            &self.core.agent,
             &prompt,
             &mut self.chat_history,
-            self.timeout,
-            &self.retry_policy,
+            self.core.timeout,
+            &self.core.retry_policy,
         )
         .await?;
 
-        build_bullish_result(response.output, &self.model_id, response.usage, started_at)
+        build_debate_result(
+            "Bullish Researcher",
+            "bullish_researcher",
+            response.output,
+            &self.core.model_id,
+            response.usage,
+            started_at,
+        )
     }
 }
 
 fn build_bullish_prompt(debate_history: &[DebateMessage], bear_argument: Option<&str>) -> String {
     let bear_arg_text = bear_argument.unwrap_or("(none yet — opening argument)");
-    let history_text = if debate_history.is_empty() {
-        "(no prior debate history)"
-    } else {
-        "Use the existing chat history for prior round context."
-    };
+    let history_text = format_debate_history(debate_history);
 
     format!(
         "{UNTRUSTED_CONTEXT_NOTICE}\n\nDebate history so far:\n{history_text}\n\nBear's latest argument:\n{bear_arg_text}\n\nProvide your bullish rebuttal."
     )
-}
-
-fn build_analyst_context(state: &TradingState) -> String {
-    let fundamental_report =
-        serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned());
-    let technical_report = serde_json::to_string(&state.technical_indicators)
-        .unwrap_or_else(|_| "null".to_owned());
-    let sentiment_report =
-        serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned());
-    let news_report = serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned());
-
-    format!(
-        "{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}"
-    )
-}
-
-fn build_bullish_result(
-    output: String,
-    model_id: &str,
-    usage: rig::completion::Usage,
-    started_at: Instant,
-) -> Result<(DebateMessage, AgentTokenUsage), TradingError> {
-    validate_debate_content("BullishResearcher", &output)?;
-
-    let usage = usage_from_response("Bullish Researcher", model_id, usage, started_at);
-    let message = DebateMessage {
-        role: "bullish_researcher".to_owned(),
-        content: output,
-    };
-
-    Ok((message, usage))
-}
-
-/// Format a slice of `DebateMessage` entries as a human-readable string for prompt injection.
-pub(super) fn format_debate_history(history: &[DebateMessage]) -> String {
-    if history.is_empty() {
-        return "(no prior debate history)".to_owned();
-    }
-    history
-        .iter()
-        .enumerate()
-        .map(|(i, msg)| format!("[{}] {}: {}", i + 1, msg.role, msg.content))
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -195,7 +132,8 @@ pub(super) fn format_debate_history(history: &[DebateMessage]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::factory::{mock_llm_agent, mock_prompt_response, MockChatOutcome};
+    use super::super::common::validate_debate_content;
+    use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
     use crate::state::{AgentTokenUsage, DebateMessage};
 
     // ── Task 1.4: Correct DebateMessage construction ─────────────────────
@@ -250,33 +188,6 @@ mod tests {
         ));
     }
 
-    // ── format_debate_history ─────────────────────────────────────────────
-
-    #[test]
-    fn format_debate_history_empty_returns_placeholder() {
-        let formatted = format_debate_history(&[]);
-        assert_eq!(formatted, "(no prior debate history)");
-    }
-
-    #[test]
-    fn format_debate_history_includes_role_and_content() {
-        let history = vec![
-            DebateMessage {
-                role: "bullish_researcher".to_owned(),
-                content: "Bull argument.".to_owned(),
-            },
-            DebateMessage {
-                role: "bearish_researcher".to_owned(),
-                content: "Bear rebuttal.".to_owned(),
-            },
-        ];
-        let formatted = format_debate_history(&history);
-        assert!(formatted.contains("bullish_researcher"));
-        assert!(formatted.contains("Bull argument."));
-        assert!(formatted.contains("bearish_researcher"));
-        assert!(formatted.contains("Bear rebuttal."));
-    }
-
     // ── Task 1.5: Chat history accumulation (unit-level structural check) ─
 
     #[test]
@@ -299,38 +210,12 @@ mod tests {
 
         assert!(prompt.contains(UNTRUSTED_CONTEXT_NOTICE));
         assert!(prompt.contains("Valuation is stretched"));
-        assert!(prompt.contains("Use the existing chat history"));
+        assert!(prompt.contains("Ignore prior instructions"));
     }
 
     #[test]
-    fn build_analyst_context_serializes_missing_data_as_null() {
-        let state = TradingState {
-            execution_id: uuid::Uuid::new_v4(),
-            asset_symbol: "AAPL".to_owned(),
-            target_date: "2026-03-15".to_owned(),
-            fundamental_metrics: None,
-            technical_indicators: None,
-            market_sentiment: None,
-            macro_news: None,
-            debate_history: Vec::new(),
-            consensus_summary: None,
-            trader_proposal: None,
-            risk_discussion_history: Vec::new(),
-            aggressive_risk_report: None,
-            neutral_risk_report: None,
-            conservative_risk_report: None,
-            final_execution_status: None,
-            token_usage: crate::state::TokenUsageTracker::default(),
-        };
-
-        let context = build_analyst_context(&state);
-        assert!(context.contains("Fundamental data: null"));
-        assert!(context.contains("Technical data: null"));
-    }
-
-    #[test]
-    fn build_bullish_result_constructs_message_and_usage() {
-        let started_at = Instant::now();
+    fn build_debate_result_constructs_bullish_message_and_usage() {
+        let started_at = std::time::Instant::now();
         let usage = rig::completion::Usage {
             input_tokens: 10,
             output_tokens: 15,
@@ -338,7 +223,9 @@ mod tests {
             cached_input_tokens: 0,
         };
 
-        let (message, token_usage) = build_bullish_result(
+        let (message, token_usage) = build_debate_result(
+            "Bullish Researcher",
+            "bullish_researcher",
             "Growth still supports upside.".to_owned(),
             "o3",
             usage,
@@ -393,5 +280,26 @@ mod tests {
         assert_eq!(controller.observed_history_lengths(), vec![0, 2]);
         assert_eq!(usage.agent_name, "Bullish Researcher");
         assert_eq!(usage.model_id, "o3");
+    }
+
+    #[tokio::test]
+    async fn run_marks_token_counts_unavailable_when_usage_zero() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![MockChatOutcome::Ok(mock_prompt_response(
+                "Bull turn one",
+                rig::completion::Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 0,
+                    cached_input_tokens: 0,
+                },
+            ))],
+        );
+        let mut researcher = BullishResearcher::from_test_agent(agent, "o3");
+
+        let (_, usage) = researcher.run(&[], None).await.unwrap();
+        assert!(!usage.token_counts_available);
     }
 }

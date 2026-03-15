@@ -274,7 +274,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 1, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 1, &mut exec,
+            ))
             .unwrap();
 
         assert_eq!(state.debate_history.len(), 2);
@@ -293,7 +295,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 3, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 3, &mut exec,
+            ))
             .unwrap();
 
         assert_eq!(state.debate_history.len(), 6);
@@ -314,7 +318,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 0, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 0, &mut exec,
+            ))
             .unwrap();
 
         assert_eq!(state.debate_history.len(), 0);
@@ -328,7 +334,9 @@ mod tests {
         let mut state = make_state();
         let mut exec = MockDebateExecutor::with_bear_failure(2);
 
-        let result = rt.block_on(run_researcher_debate_with_executor(&mut state, 3, &mut exec));
+        let result = rt.block_on(run_researcher_debate_with_executor(
+            &mut state, 3, &mut exec,
+        ));
 
         assert!(matches!(result, Err(TradingError::Rig(_))));
         assert_eq!(state.debate_history.len(), 3);

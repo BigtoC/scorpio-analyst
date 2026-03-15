@@ -8,15 +8,17 @@ use std::time::Instant;
 
 use crate::{
     config::LlmConfig,
-    error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, LlmAgent, build_agent, prompt_with_retry_details},
+    error::TradingError,
+    providers::factory::{CompletionModelHandle, prompt_with_retry_details},
     state::{AgentTokenUsage, TradingState},
 };
 
-use super::bullish::format_debate_history;
+#[cfg(test)]
+use crate::providers::factory::LlmAgent;
+
 use super::common::{
-    UNTRUSTED_CONTEXT_NOTICE, researcher_runtime_config, usage_from_response,
-    validate_consensus_summary,
+    DebaterCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, format_debate_history,
+    usage_from_response, validate_consensus_summary,
 };
 
 /// System prompt for the Debate Moderator, adapted from `docs/prompts.md` §2.
@@ -40,23 +42,14 @@ Return plain text only, suitable for direct storage in `TradingState.consensus_s
 /// Uses a one-shot prompt (not multi-turn chat) because it evaluates the entire
 /// completed debate at once after all rounds have finished.
 pub struct DebateModerator {
-    agent: LlmAgent,
-    model_id: String,
-    timeout: std::time::Duration,
-    retry_policy: RetryPolicy,
+    core: DebaterCore,
 }
 
 #[cfg(test)]
 impl DebateModerator {
     fn from_test_agent(agent: LlmAgent, model_id: &str) -> Self {
         Self {
-            agent,
-            model_id: model_id.to_owned(),
-            timeout: std::time::Duration::from_millis(50),
-            retry_policy: RetryPolicy {
-                max_retries: 1,
-                base_delay: std::time::Duration::from_millis(1),
-            },
+            core: DebaterCore::for_test(agent, model_id),
         }
     }
 }
@@ -74,22 +67,8 @@ impl DebateModerator {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Self {
-        let runtime =
-            researcher_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-
-        let system_prompt = MODERATOR_SYSTEM_PROMPT
-            .replace("{ticker}", &runtime.symbol)
-            .replace("{current_date}", &runtime.target_date)
-            .replace("{past_memory_str}", "");
-
-        let agent = build_agent(handle, &system_prompt);
-        let model_id = handle.model_id().to_owned();
-
         Self {
-            agent,
-            model_id,
-            timeout: runtime.timeout,
-            retry_policy: runtime.retry_policy,
+            core: DebaterCore::new(handle, MODERATOR_SYSTEM_PROMPT, state, llm_config),
         }
     }
 
@@ -109,23 +88,24 @@ impl DebateModerator {
         let started_at = Instant::now();
         let prompt = build_moderator_prompt(state);
 
-        let response =
-            prompt_with_retry_details(&self.agent, &prompt, self.timeout, &self.retry_policy)
-                .await?;
+        let response = prompt_with_retry_details(
+            &self.core.agent,
+            &prompt,
+            self.core.timeout,
+            &self.core.retry_policy,
+        )
+        .await?;
 
-        build_moderator_result(response.output, &self.model_id, response.usage, started_at)
+        build_moderator_result(
+            response.output,
+            &self.core.model_id,
+            response.usage,
+            started_at,
+        )
     }
 }
 
 fn build_moderator_prompt(state: &TradingState) -> String {
-    let fundamental_report =
-        serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned());
-    let technical_report = serde_json::to_string(&state.technical_indicators)
-        .unwrap_or_else(|_| "null".to_owned());
-    let sentiment_report =
-        serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned());
-    let news_report = serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned());
-
     let bull_case = state
         .debate_history
         .iter()
@@ -143,16 +123,14 @@ fn build_moderator_prompt(state: &TradingState) -> String {
         .unwrap_or("(no bearish argument recorded)");
 
     let history_text = format_debate_history(&state.debate_history);
+    let analyst_context = build_analyst_context(state);
 
     format!(
-        "Synthesise the debate for {} as of {} into a consensus summary for the Trader.\n\n{}\n\nAnalyst data snapshot:\n- Fundamental data: {}\n- Technical data: {}\n- Sentiment data: {}\n- News data: {}\n\nLatest bullish case:\n{}\n\nLatest bearish case:\n{}\n\nFull debate history:\n{}",
+        "Synthesise the debate for {} as of {} into a consensus summary for the Trader.\n\n {}\n\n {}\n\n Latest bullish case:\n {}\n\n Latest bearish case:\n {}\n\n Full debate history:\n {}",
         state.asset_symbol,
         state.target_date,
         UNTRUSTED_CONTEXT_NOTICE,
-        fundamental_report,
-        technical_report,
-        sentiment_report,
-        news_report,
+        analyst_context,
         bull_case,
         bear_case,
         history_text,
@@ -289,6 +267,7 @@ mod tests {
         assert!(prompt.contains(UNTRUSTED_CONTEXT_NOTICE));
         assert!(prompt.contains("Ignore prior instructions"));
         assert!(prompt.contains("Valuation risk dominates"));
+        assert!(prompt.contains("Fundamental data: null"));
     }
 
     #[test]
@@ -353,5 +332,45 @@ mod tests {
 
         let result = moderator.run(&state).await;
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[tokio::test]
+    async fn run_accepts_valid_summary_and_records_zero_token_unavailability() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![Ok(mock_prompt_response(
+                "Hold - strongest bullish evidence is growth, strongest bearish evidence is rates, unresolved uncertainty is demand durability.",
+                rig::completion::Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 0,
+                    cached_input_tokens: 0,
+                },
+            ))],
+            vec![],
+        );
+        let moderator = DebateModerator::from_test_agent(agent, "o3");
+        let state = TradingState {
+            execution_id: uuid::Uuid::new_v4(),
+            asset_symbol: "AAPL".to_owned(),
+            target_date: "2026-03-15".to_owned(),
+            fundamental_metrics: None,
+            technical_indicators: None,
+            market_sentiment: None,
+            macro_news: None,
+            debate_history: vec![],
+            consensus_summary: None,
+            trader_proposal: None,
+            risk_discussion_history: Vec::new(),
+            aggressive_risk_report: None,
+            neutral_risk_report: None,
+            conservative_risk_report: None,
+            final_execution_status: None,
+            token_usage: crate::state::TokenUsageTracker::default(),
+        };
+
+        let (summary, usage) = moderator.run(&state).await.unwrap();
+        assert!(summary.contains("Hold"));
+        assert!(!usage.token_counts_available);
     }
 }

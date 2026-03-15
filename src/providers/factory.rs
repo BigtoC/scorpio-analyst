@@ -10,16 +10,19 @@
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use std::{collections::VecDeque, sync::{Arc, Mutex}};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
+#[cfg(test)]
+use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
     providers::{anthropic, gemini, openai},
     tool::ToolDyn,
 };
-#[cfg(test)]
-use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
 use secrecy::ExposeSecret;
 use serde::de::DeserializeOwned;
 use tracing::{info, warn};
@@ -440,12 +443,17 @@ impl MockLlmAgent {
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or_else(|| Ok(mock_prompt_response("", rig::completion::Usage {
-                input_tokens: 0,
-                output_tokens: 0,
-                total_tokens: 0,
-                cached_input_tokens: 0,
-            })))
+            .unwrap_or_else(|| {
+                Ok(mock_prompt_response(
+                    "",
+                    rig::completion::Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                    },
+                ))
+            })
     }
 
     async fn chat_details(
@@ -1784,9 +1792,7 @@ mod tests {
             vec![],
             vec![
                 MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
-                    rig::completion::CompletionError::ResponseError(
-                        "rate limit 429".to_owned(),
-                    ),
+                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
                 )),
                 MockChatOutcome::Ok(mock_prompt_response(
                     "Recovered response",
@@ -1819,6 +1825,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.output, "Recovered response");
+        assert_eq!(response.usage.total_tokens, 15);
+        assert_eq!(response.usage.output_tokens, 5);
         assert_eq!(history.len(), 3);
         assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
     }
