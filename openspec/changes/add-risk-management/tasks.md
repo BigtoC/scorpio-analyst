@@ -134,3 +134,15 @@
 - [x] 7.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [x] 7.3 Ensure `cargo fmt -- --check` passes
 - [x] 7.4 Ensure `cargo test` passes all new and existing tests
+
+## 8. Post-Review Remediation
+
+- [x] 8.1 Align persona-turn orchestration with the approved spec by passing serialized peer `RiskReport`
+      context between rounds and restoring the required `DebateMessage.role` values
+- [x] 8.2 Harden prompt/storage secret redaction and bound reinjected risk-history context to avoid
+      unbounded prompt growth
+- [x] 8.3 Enforce the Risk Moderator's required Conservative+Neutral violation-status sentence and
+      sanitize prompt-bound symbol/date values
+- [x] 8.4 Add regression tests covering same-round peer-view propagation, malformed persona JSON,
+      oversized adjustments, repeated persona chat history, moderator failure propagation, and
+      redaction-on-write behavior
