@@ -81,28 +81,28 @@
       (2 per round) and a populated `consensus_summary`
 - [x] 4.8 Write unit test: `max_debate_rounds = 0`, verify no debate messages, moderator still invoked
       to produce a consensus from analyst data alone
-- [x] 4.9 Write unit test: LLM failure on Bullish Researcher in round 2 propagates as
+- [x] 4.9 Write unit test: researcher failure on Bearish Researcher in round 2 propagates as
       `TradingError` and aborts the debate
 - [x] 4.10 Write unit test: verify `AgentTokenUsage` entries total `2 * max_debate_rounds + 1` (researchers + moderator)
 - [x] 4.11 Write unit test: verify researcher token entries preserve `token_counts_available = false` when the provider
        does not expose authoritative counts
 
-## 5. Integration Tests
+## 5. End-to-End Debate Tests
 
-- [x] 5.1 Write integration test: construct all three researcher agents with mocked provider, run
-      `run_researcher_debate` with 2 rounds, verify `debate_history` has 4 entries and
-      `consensus_summary` is populated
-- [x] 5.2 Write integration test: simulate partial analyst data (one `None` field on `TradingState`),
-      verify debate completes without error and researchers acknowledge the gap
-- [x] 5.3 Write integration test: verify `AgentTokenUsage` entries are collected for all invocations
-      including the moderator
+- [x] 5.1 Write end-to-end orchestration test (via a test-only debate executor seam) that runs
+      `run_researcher_debate` logic for multiple rounds and verifies `debate_history` entry count,
+      alternating roles, and populated `consensus_summary`
+- [x] 5.2 Write mocked-provider researcher tests covering partial analyst data serialization as `null`,
+      untrusted-context prompt framing, and repeated `run` invocations with accumulated chat history
+- [x] 5.3 Write end-to-end token usage tests verifying per-invocation `AgentTokenUsage` collection
+      order and moderator inclusion
 
 ## 5a. Approved Cross-Owner Provider Touch-point (`src/providers/factory.rs`)
 
 - [x] 5a.1 Add a minimal provider-layer surface for retry-wrapped chat usage details (for example,
       `chat_with_retry_details` and any supporting provider-agnostic `LlmAgent` chat-details method)
-- [x] 5a.2 Add provider-layer tests verifying the chat-details helper preserves the same retry/timeout/error-mapping
-      semantics as `chat_with_retry` while also surfacing usage metadata when available
+- [x] 5a.2 Add provider-layer tests verifying the chat-details helper retries transient failures,
+      truncates partial chat history before retry, and surfaces usage metadata when available
 
 ## 6. Documentation and CI
 
