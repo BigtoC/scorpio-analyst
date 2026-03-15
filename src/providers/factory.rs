@@ -9,12 +9,17 @@
 
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use std::{collections::VecDeque, sync::{Arc, Mutex}};
+
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
     providers::{anthropic, gemini, openai},
     tool::ToolDyn,
 };
+#[cfg(test)]
+use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
 use secrecy::ExposeSecret;
 use serde::de::DeserializeOwned;
 use tracing::{info, warn};
@@ -218,6 +223,68 @@ enum LlmAgentInner {
     Gemini(rig::agent::Agent<GeminiModel>),
     /// Agent backed by GitHub Copilot via ACP.
     Copilot(rig::agent::Agent<CopilotCompletionModel>),
+    #[cfg(test)]
+    Mock(MockLlmAgent),
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct MockLlmAgent {
+    prompt_results: Arc<Mutex<VecDeque<Result<PromptResponse, PromptError>>>>,
+    chat_results: Arc<Mutex<VecDeque<MockChatOutcome>>>,
+    observed_prompts: Arc<Mutex<Vec<String>>>,
+    observed_history_lengths: Arc<Mutex<Vec<usize>>>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct MockLlmAgentController {
+    observed_history_lengths: Arc<Mutex<Vec<usize>>>,
+}
+
+#[cfg(test)]
+pub(crate) enum MockChatOutcome {
+    Ok(PromptResponse),
+    PartialUserThenErr(PromptError),
+}
+
+#[cfg(test)]
+impl MockLlmAgentController {
+    pub(crate) fn observed_history_lengths(&self) -> Vec<usize> {
+        self.observed_history_lengths.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn mock_prompt_response(output: &str, usage: rig::completion::Usage) -> PromptResponse {
+    PromptResponse::new(output, usage)
+}
+
+#[cfg(test)]
+pub(crate) fn mock_llm_agent(
+    model_id: &str,
+    prompt_results: Vec<Result<PromptResponse, PromptError>>,
+    chat_results: Vec<MockChatOutcome>,
+) -> (LlmAgent, MockLlmAgentController) {
+    let observed_prompts = Arc::new(Mutex::new(Vec::new()));
+    let observed_history_lengths = Arc::new(Mutex::new(Vec::new()));
+    let inner = MockLlmAgent {
+        prompt_results: Arc::new(Mutex::new(prompt_results.into())),
+        chat_results: Arc::new(Mutex::new(chat_results.into())),
+        observed_prompts: Arc::clone(&observed_prompts),
+        observed_history_lengths: Arc::clone(&observed_history_lengths),
+    };
+
+    (
+        LlmAgent {
+            provider: ProviderId::OpenAI,
+            model_id: model_id.to_owned(),
+            inner: LlmAgentInner::Mock(inner),
+        },
+        MockLlmAgentController {
+            observed_history_lengths,
+        },
+    )
 }
 
 impl LlmAgent {
@@ -236,6 +303,8 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Gemini(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Copilot(agent) => agent.prompt(prompt).await,
+            #[cfg(test)]
+            LlmAgentInner::Mock(agent) => Ok(agent.prompt_details(prompt).await?.output),
         }
     }
 
@@ -246,6 +315,8 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).extended_details().await,
             LlmAgentInner::Gemini(agent) => agent.prompt(prompt).extended_details().await,
             LlmAgentInner::Copilot(agent) => agent.prompt(prompt).extended_details().await,
+            #[cfg(test)]
+            LlmAgentInner::Mock(agent) => agent.prompt_details(prompt).await,
         }
     }
 
@@ -290,6 +361,10 @@ impl LlmAgent {
                 .extended_details()
                 .await
                 .map_err(map_err),
+            #[cfg(test)]
+            LlmAgentInner::Mock(_) => Err(TradingError::Config(anyhow::anyhow!(
+                "typed prompt not supported for mock llm agent"
+            ))),
         }
     }
 
@@ -304,6 +379,11 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.chat(prompt, chat_history).await,
             LlmAgentInner::Gemini(agent) => agent.chat(prompt, chat_history).await,
             LlmAgentInner::Copilot(agent) => agent.chat(prompt, chat_history).await,
+            #[cfg(test)]
+            LlmAgentInner::Mock(agent) => {
+                let mut history = chat_history;
+                Ok(agent.chat_details(prompt, &mut history).await?.output)
+            }
         }
     }
 
@@ -343,6 +423,75 @@ impl LlmAgent {
                     .extended_details()
                     .await
             }
+            #[cfg(test)]
+            LlmAgentInner::Mock(agent) => agent.chat_details(prompt, chat_history).await,
+        }
+    }
+}
+
+#[cfg(test)]
+impl MockLlmAgent {
+    async fn prompt_details(&self, prompt: &str) -> Result<PromptResponse, PromptError> {
+        self.observed_prompts
+            .lock()
+            .unwrap()
+            .push(prompt.to_owned());
+        self.prompt_results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Ok(mock_prompt_response("", rig::completion::Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: 0,
+                cached_input_tokens: 0,
+            })))
+    }
+
+    async fn chat_details(
+        &self,
+        prompt: &str,
+        chat_history: &mut Vec<Message>,
+    ) -> Result<PromptResponse, PromptError> {
+        self.observed_prompts
+            .lock()
+            .unwrap()
+            .push(prompt.to_owned());
+        self.observed_history_lengths
+            .lock()
+            .unwrap()
+            .push(chat_history.len());
+
+        let outcome = self
+            .chat_results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| {
+                MockChatOutcome::Ok(mock_prompt_response(
+                    "",
+                    rig::completion::Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                    },
+                ))
+            });
+
+        chat_history.push(Message::User {
+            content: OneOrMany::one(UserContent::text(prompt)),
+        });
+
+        match outcome {
+            MockChatOutcome::Ok(response) => {
+                chat_history.push(Message::Assistant {
+                    content: OneOrMany::one(AssistantContent::text(response.output.clone())),
+                    id: None,
+                });
+                Ok(response)
+            }
+            MockChatOutcome::PartialUserThenErr(err) => Err(err),
         }
     }
 }
@@ -862,6 +1011,10 @@ where
         LlmAgentInner::Copilot(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
             map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
         }),
+        #[cfg(test)]
+        LlmAgentInner::Mock(_) => Err(TradingError::Config(anyhow::anyhow!(
+            "typed prompt not supported for mock llm agent"
+        ))),
     }
 }
 
@@ -1065,40 +1218,101 @@ fn replace_control_chars(s: &str) -> String {
 
 /// Redact known credential patterns (API key prefixes, auth headers, bearer tokens).
 fn redact_credentials(s: &str) -> String {
-    // Patterns that reliably indicate a credential is present.
-    const REDACT_PATTERNS: &[&str] = &[
-        // OpenAI / generic "sk-" style keys
-        "sk-",
-        // Anthropic key prefix (catches "sk-ant-", etc.)
-        "sk-ant",
-        // Gemini / Google API keys
-        "AIza",
-        "aiza",
-        // HTTP Authorization header (various casings)
-        "authorization:",
-        "Authorization:",
-        "AUTHORIZATION:",
-        // Bearer token
-        "bearer ",
-        "Bearer ",
-        "BEARER ",
-        // Query-string / body key params
-        "api_key=",
-        "api-key=",
-        "apikey=",
-        "token=",
-        // Plain English
-        "api key",
-        "API KEY",
-        "api_key",
-        "API_KEY",
-        "authorization",
-    ];
+    fn mask_prefixed_token(input: &str, prefix: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let prefix_bytes = prefix.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i..].starts_with(prefix_bytes) {
+                out.push_str("[REDACTED]");
+                i += prefix_bytes.len();
+                while i < bytes.len() {
+                    let ch = input[i..].chars().next().unwrap();
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                        i += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                let ch = input[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+
+        out
+    }
+
+    fn mask_assignment(input: &str, key: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let key_bytes = key.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i..].starts_with(key_bytes) {
+                out.push_str("[REDACTED]");
+                i += key_bytes.len();
+                while i < bytes.len() {
+                    let ch = input[i..].chars().next().unwrap();
+                    if ch.is_whitespace() || matches!(ch, '&' | ',' | ';' | ')' | ']' | '}') {
+                        break;
+                    }
+                    i += ch.len_utf8();
+                }
+            } else {
+                let ch = input[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+
+        out
+    }
+
+    fn mask_bearer(input: &str, prefix: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let prefix_bytes = prefix.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i..].starts_with(prefix_bytes) {
+                out.push_str("[REDACTED]");
+                i += prefix_bytes.len();
+                while i < bytes.len() {
+                    let ch = input[i..].chars().next().unwrap();
+                    if ch == '\n' || ch == '\r' || ch == '\t' || ch == ' ' {
+                        break;
+                    }
+                    i += ch.len_utf8();
+                }
+            } else {
+                let ch = input[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+
+        out
+    }
 
     let mut out = s.to_owned();
-    for pattern in REDACT_PATTERNS {
-        out = out.replace(pattern, "[REDACTED]");
+    for prefix in ["sk-ant-", "sk-", "AIza", "aiza"] {
+        out = mask_prefixed_token(&out, prefix);
     }
+    for key in ["api_key=", "api-key=", "apikey=", "token="] {
+        out = mask_assignment(&out, key);
+    }
+    for prefix in ["Bearer ", "bearer ", "BEARER "] {
+        out = mask_bearer(&out, prefix);
+    }
+    out = out.replace("Authorization:", "[REDACTED]");
+    out = out.replace("authorization:", "[REDACTED]");
+    out = out.replace("AUTHORIZATION:", "[REDACTED]");
     out
 }
 
@@ -1481,18 +1695,37 @@ mod tests {
             !result.contains("AIza"),
             "Gemini key prefix must be redacted"
         );
+        assert!(
+            !result.contains("SyTest1234"),
+            "Gemini key body must be redacted"
+        );
     }
 
     #[test]
     fn redacts_bearer_token() {
         let result = sanitize_error_summary("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9");
         assert!(!result.contains("Bearer "), "Bearer token must be redacted");
+        assert!(
+            !result.contains("eyJhbGciOiJIUzI1NiJ9"),
+            "Bearer token body must be redacted"
+        );
     }
 
     #[test]
     fn redacts_api_key_eq() {
         let result = sanitize_error_summary("request failed: api_key=secret123");
         assert!(!result.contains("api_key="), "api_key= must be redacted");
+        assert!(
+            !result.contains("secret123"),
+            "api_key value must be redacted"
+        );
+    }
+
+    #[test]
+    fn redacts_openai_style_key_body() {
+        let result = sanitize_error_summary("provider said sk-live-abc123XYZ failed");
+        assert!(!result.contains("sk-live-abc123XYZ"));
+        assert!(!result.contains("abc123XYZ"));
     }
 
     // ── validate_copilot_cli_path ────────────────────────────────────────
@@ -1542,5 +1775,51 @@ mod tests {
             message: "timed out".to_owned(),
         };
         assert!(should_retry_typed_error(&err));
+    }
+
+    #[tokio::test]
+    async fn chat_with_retry_details_retries_and_truncates_partial_history() {
+        let (agent, controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![
+                MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
+                    rig::completion::CompletionError::ResponseError(
+                        "rate limit 429".to_owned(),
+                    ),
+                )),
+                MockChatOutcome::Ok(mock_prompt_response(
+                    "Recovered response",
+                    rig::completion::Usage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        total_tokens: 15,
+                        cached_input_tokens: 0,
+                    },
+                )),
+            ],
+        );
+
+        let mut history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("initial context")),
+        }];
+
+        let response = chat_with_retry_details_budget(
+            &agent,
+            "next prompt",
+            &mut history,
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.output, "Recovered response");
+        assert_eq!(history.len(), 3);
+        assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
     }
 }
