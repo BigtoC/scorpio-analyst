@@ -20,7 +20,7 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    UNTRUSTED_CONTEXT_NOTICE, DebaterCore, build_analyst_context, build_debate_result,
+    DebaterCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, build_debate_result,
     format_debate_history,
 };
 
@@ -138,11 +138,11 @@ fn build_bullish_prompt(debate_history: &[DebateMessage], bear_argument: Option<
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::common::validate_debate_content;
+    use super::*;
     use crate::config::{ApiConfig, LlmConfig};
-    use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+    use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::{AgentTokenUsage, DebateMessage};
     use secrecy::SecretString;
 

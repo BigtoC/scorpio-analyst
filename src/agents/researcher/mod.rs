@@ -320,7 +320,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 5, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 5, &mut exec,
+            ))
             .unwrap();
 
         assert_eq!(state.debate_history.len(), 10);
@@ -371,7 +373,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 3, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 3, &mut exec,
+            ))
             .unwrap();
 
         assert_eq!(usages.len(), 7);
@@ -387,7 +391,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 1, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 1, &mut exec,
+            ))
             .unwrap();
 
         assert!(usages.iter().all(|usage| !usage.token_counts_available));
@@ -402,7 +408,9 @@ mod tests {
         let mut exec = MockDebateExecutor::new();
 
         let usages = rt
-            .block_on(run_researcher_debate_with_executor(&mut state, 2, &mut exec))
+            .block_on(run_researcher_debate_with_executor(
+                &mut state, 2, &mut exec,
+            ))
             .unwrap();
 
         assert_eq!(usages.len(), 5);

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::{
     config::LlmConfig,
     error::{RetryPolicy, TradingError},
-    providers::factory::{build_agent, CompletionModelHandle, LlmAgent},
+    providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
     state::{AgentTokenUsage, DebateMessage, TradingState},
 };
 

@@ -159,8 +159,8 @@ fn build_moderator_result(
 mod tests {
     use super::*;
     use crate::config::{ApiConfig, LlmConfig};
-    use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::providers::factory::{mock_llm_agent, mock_prompt_response};
+    use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::AgentTokenUsage;
     use secrecy::SecretString;
 
