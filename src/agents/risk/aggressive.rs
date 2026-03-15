@@ -7,7 +7,6 @@
 use std::time::Instant;
 
 use rig::completion::Message;
-use rig::{OneOrMany, message::UserContent};
 
 use crate::{
     config::LlmConfig,
@@ -20,8 +19,9 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, format_risk_history,
-    sanitize_prompt_context, usage_from_response, validate_risk_text,
+    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, format_risk_history, initial_untrusted_history,
+    redact_risk_report_for_storage, sanitize_prompt_context, usage_from_response,
+    validate_raw_model_output_size, validate_risk_text,
 };
 
 /// System prompt for the Aggressive Risk Analyst, from `docs/prompts.md` §4.
@@ -89,9 +89,7 @@ impl AggressiveRiskAgent {
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         let core = RiskAgentCore::new(handle, AGGRESSIVE_SYSTEM_PROMPT, state, llm_config)?;
-        let chat_history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text(build_analyst_context(state))),
-        }];
+        let chat_history = initial_untrusted_history(state);
         Ok(Self { core, chat_history })
     }
 
@@ -174,6 +172,7 @@ fn build_aggressive_result(
     usage: rig::completion::Usage,
     started_at: Instant,
 ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
+    validate_raw_model_output_size("AggressiveRiskAgent", &output)?;
     let report: RiskReport =
         serde_json::from_str(&output).map_err(|e| TradingError::SchemaViolation {
             message: format!("AggressiveRiskAgent: failed to parse RiskReport JSON: {e}"),
@@ -196,6 +195,7 @@ fn build_aggressive_result(
         )?;
     }
 
+    let report = redact_risk_report_for_storage(report);
     let token_usage = usage_from_response("Aggressive Risk Analyst", model_id, usage, started_at);
     Ok((report, token_usage))
 }
@@ -371,7 +371,7 @@ mod tests {
     fn build_aggressive_prompt_redacts_secret_like_substrings() {
         let mut state = sample_state_with_proposal();
         state.risk_discussion_history.push(DebateMessage {
-            role: "aggressive_risk_analyst".to_owned(),
+            role: "aggressive_risk".to_owned(),
             content: "Authorization: Bearer sk-1234abcd".to_owned(),
         });
         let proposal = state.trader_proposal.as_ref().unwrap().clone();
@@ -392,6 +392,75 @@ mod tests {
         );
         assert!(prompt.contains("Capital at risk"));
         assert!(prompt.contains("Balanced view"));
+    }
+
+    #[test]
+    fn build_aggressive_prompt_handles_serialized_peer_reports() {
+        let state = sample_state_with_proposal();
+        let proposal = state.trader_proposal.as_ref().unwrap().clone();
+        let prompt = build_aggressive_prompt(
+            &state,
+            &proposal,
+            Some(
+                r#"{"risk_level":"Conservative","assessment":"Capital at risk","recommended_adjustments":["Reduce size"],"flags_violation":true}"#,
+            ),
+            Some(
+                r#"{"risk_level":"Neutral","assessment":"Balanced","recommended_adjustments":["Tighten stop"],"flags_violation":false}"#,
+            ),
+        );
+        assert!(prompt.contains("flags_violation"));
+        assert!(prompt.contains("Reduce size"));
+    }
+
+    #[tokio::test]
+    async fn run_accumulates_chat_history_across_invocations() {
+        let (agent, ctrl) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![
+                MockChatOutcome::Ok(mock_prompt_response(
+                    &valid_aggressive_json(),
+                    mock_usage(20),
+                )),
+                MockChatOutcome::Ok(mock_prompt_response(
+                    &valid_aggressive_json(),
+                    mock_usage(20),
+                )),
+            ],
+        );
+        let mut analyst = AggressiveRiskAgent::from_test_agent(agent, "o3");
+        let state = sample_state_with_proposal();
+
+        analyst.run(&state, None, None).await.unwrap();
+        analyst.run(&state, None, None).await.unwrap();
+
+        assert_eq!(ctrl.observed_history_lengths(), vec![0, 2]);
+    }
+
+    #[test]
+    fn build_aggressive_result_rejects_malformed_json() {
+        let result =
+            build_aggressive_result("not json".to_owned(), "o3", mock_usage(2), Instant::now());
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn build_aggressive_result_rejects_oversized_adjustment() {
+        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
+        let json = format!(
+            r#"{{"risk_level":"Aggressive","assessment":"Fine.","recommended_adjustments":["{big}"],"flags_violation":false}}"#
+        );
+        let result = build_aggressive_result(json, "o3", mock_usage(2), Instant::now());
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn build_aggressive_result_redacts_secret_from_stored_output() {
+        let json = r#"{"risk_level":"Aggressive","assessment":"api_key=abcd1234","recommended_adjustments":["token=qwerty"],"flags_violation":false}"#;
+        let (report, _) =
+            build_aggressive_result(json.to_owned(), "o3", mock_usage(2), Instant::now()).unwrap();
+        assert_eq!(report.assessment, "api_key=[REDACTED]");
+        assert_eq!(report.recommended_adjustments, vec!["token=[REDACTED]"]);
     }
 
     // ── Task 1.9: assessment / recommended_adjustments validation ─────────

@@ -4,11 +4,14 @@
 
 use std::time::{Duration, Instant};
 
+use rig::completion::Message;
+use rig::{OneOrMany, message::UserContent};
+
 use crate::{
     config::LlmConfig,
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
-    state::{AgentTokenUsage, TradingState},
+    state::{AgentTokenUsage, DebateMessage, RiskReport, TradingState},
 };
 
 /// Marker inserted before untrusted analyst/proposal content in prompts.
@@ -20,6 +23,15 @@ pub(super) const MAX_RISK_CHARS: usize = 8_192;
 
 /// Maximum characters for a single injected prompt context snippet.
 const MAX_PROMPT_CONTEXT_CHARS: usize = 2_048;
+
+/// Maximum characters allowed in a raw model response before local parsing.
+const MAX_RAW_MODEL_OUTPUT_CHARS: usize = MAX_RISK_CHARS * 4;
+
+/// Maximum number of recent discussion messages to reinject into prompts.
+const MAX_RISK_HISTORY_MESSAGES: usize = 8;
+
+/// Maximum total characters allotted to the formatted risk-history block.
+const MAX_RISK_HISTORY_CHARS: usize = 4_096;
 
 // ─── Runtime config ───────────────────────────────────────────────────────────
 
@@ -127,7 +139,10 @@ pub(super) fn validate_risk_text(context: &str, content: &str) -> Result<(), Tra
 }
 
 /// Validate a moderator plain-text synthesis output.
-pub(super) fn validate_moderator_output(content: &str) -> Result<(), TradingError> {
+pub(super) fn validate_moderator_output(
+    content: &str,
+    expect_both_violation: bool,
+) -> Result<(), TradingError> {
     if content.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "RiskModerator: output must not be empty".to_owned(),
@@ -144,6 +159,32 @@ pub(super) fn validate_moderator_output(content: &str) -> Result<(), TradingErro
     {
         return Err(TradingError::SchemaViolation {
             message: "RiskModerator: output contains disallowed control characters".to_owned(),
+        });
+    }
+    let expected_sentence = expected_moderator_violation_sentence(expect_both_violation);
+    if !content
+        .to_ascii_lowercase()
+        .contains(&expected_sentence.to_ascii_lowercase())
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "RiskModerator: output must include exact violation-status sentence: \"{expected_sentence}\""
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Validate a raw model response size before local JSON parsing.
+pub(super) fn validate_raw_model_output_size(
+    context: &str,
+    content: &str,
+) -> Result<(), TradingError> {
+    if content.chars().count() > MAX_RAW_MODEL_OUTPUT_CHARS {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "{context}: raw model output exceeds maximum {MAX_RAW_MODEL_OUTPUT_CHARS} characters"
+            ),
         });
     }
     Ok(())
@@ -193,24 +234,63 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
     )
 }
 
+/// Build the initial user message that seeds each persona chat with untrusted analyst context.
+pub(super) fn initial_untrusted_history(state: &TradingState) -> Vec<Message> {
+    vec![Message::User {
+        content: OneOrMany::one(UserContent::text(format!(
+            "{UNTRUSTED_CONTEXT_NOTICE}\n\n{}",
+            build_analyst_context(state)
+        ))),
+    }]
+}
+
+/// Serialize a latest-risk-report view for prompt context.
+pub(super) fn serialize_risk_report_context(report: Option<&RiskReport>) -> Option<String> {
+    report.map(|value| {
+        sanitize_prompt_context(&serde_json::to_string(value).unwrap_or_else(|_| "null".to_owned()))
+    })
+}
+
 /// Format a slice of risk discussion messages as readable prompt context.
-pub(super) fn format_risk_history(history: &[crate::state::DebateMessage]) -> String {
+pub(super) fn format_risk_history(history: &[DebateMessage]) -> String {
     if history.is_empty() {
         return "(no prior risk discussion history)".to_owned();
     }
-    history
-        .iter()
-        .enumerate()
-        .map(|(i, msg)| {
-            format!(
-                "[{}] {}: {}",
-                i + 1,
-                sanitize_prompt_context(&msg.role),
-                sanitize_prompt_context(&msg.content)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+
+    let mut selected: Vec<String> = Vec::new();
+    let mut total_chars = 0usize;
+    let mut truncated = false;
+
+    for (i, msg) in history.iter().enumerate().rev() {
+        if selected.len() >= MAX_RISK_HISTORY_MESSAGES {
+            truncated = true;
+            break;
+        }
+
+        let entry = format!(
+            "[{}] {}: {}",
+            i + 1,
+            sanitize_prompt_context(&msg.role),
+            sanitize_prompt_context(&msg.content)
+        );
+        let entry_chars = entry.chars().count();
+
+        if !selected.is_empty() && total_chars.saturating_add(entry_chars) > MAX_RISK_HISTORY_CHARS
+        {
+            truncated = true;
+            break;
+        }
+
+        total_chars = total_chars.saturating_add(entry_chars);
+        selected.push(entry);
+    }
+
+    selected.reverse();
+    if truncated {
+        selected.insert(0, "[... earlier risk discussion truncated ...]".to_owned());
+    }
+
+    selected.join("\n\n")
 }
 
 pub(super) fn sanitize_prompt_context(input: &str) -> String {
@@ -225,7 +305,32 @@ pub(super) fn sanitize_prompt_context(input: &str) -> String {
     redacted.chars().take(MAX_PROMPT_CONTEXT_CHARS).collect()
 }
 
-fn sanitize_symbol_for_prompt(symbol: &str) -> String {
+/// Redact secret-like substrings from validated model output before storing it in state/history.
+pub(super) fn redact_text_for_storage(input: &str) -> String {
+    redact_secret_like_values(input)
+}
+
+/// Redact secret-like substrings from a validated `RiskReport` before storing it in state.
+pub(super) fn redact_risk_report_for_storage(mut report: RiskReport) -> RiskReport {
+    report.assessment = redact_text_for_storage(&report.assessment);
+    report.recommended_adjustments = report
+        .recommended_adjustments
+        .into_iter()
+        .map(|item| redact_text_for_storage(&item))
+        .collect();
+    report
+}
+
+/// Exact sentence the moderator must include to record the dual-violation status.
+pub(super) fn expected_moderator_violation_sentence(expect_both_violation: bool) -> &'static str {
+    if expect_both_violation {
+        "Violation status: Conservative and Neutral both flag a material violation."
+    } else {
+        "Violation status: Conservative and Neutral do not both flag a material violation."
+    }
+}
+
+pub(super) fn sanitize_symbol_for_prompt(symbol: &str) -> String {
     let filtered: String = symbol
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
@@ -238,7 +343,7 @@ fn sanitize_symbol_for_prompt(symbol: &str) -> String {
     }
 }
 
-fn sanitize_date_for_prompt(target_date: &str) -> String {
+pub(super) fn sanitize_date_for_prompt(target_date: &str) -> String {
     let filtered: String = target_date
         .chars()
         .filter(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | 'T' | 'Z' | '/' | ' '))
@@ -252,6 +357,10 @@ fn sanitize_date_for_prompt(target_date: &str) -> String {
 }
 
 fn redact_secret_like_values(input: &str) -> String {
+    fn is_secret_char(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~' | '/' | '+' | '=' | ':')
+    }
+
     fn mask_prefixed_token(input: &str, prefix: &str) -> String {
         let mut out = String::with_capacity(input.len());
         let bytes = input.as_bytes();
@@ -264,7 +373,36 @@ fn redact_secret_like_values(input: &str) -> String {
                 i += prefix_bytes.len();
                 while i < bytes.len() {
                     let ch = input[i..].chars().next().unwrap();
-                    if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                    if is_secret_char(ch) {
+                        i += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                let ch = input[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+
+        out
+    }
+
+    fn mask_assignment_token(input: &str, prefix: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let prefix_bytes = prefix.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i..].starts_with(prefix_bytes) {
+                out.push_str(prefix);
+                out.push_str("[REDACTED]");
+                i += prefix_bytes.len();
+                while i < bytes.len() {
+                    let ch = input[i..].chars().next().unwrap();
+                    if is_secret_char(ch) {
                         i += ch.len_utf8();
                     } else {
                         break;
@@ -281,13 +419,23 @@ fn redact_secret_like_values(input: &str) -> String {
     }
 
     let mut out = input.to_owned();
-    for prefix in ["sk-ant-", "sk-", "AIza", "Bearer ", "bearer ", "BEARER "] {
+    for prefix in [
+        "sk-ant-",
+        "sk-",
+        "AIza",
+        "Bearer ",
+        "bearer ",
+        "BEARER ",
+        "ghp_",
+        "github_pat_",
+    ] {
         out = mask_prefixed_token(&out, prefix);
     }
-    out = out.replace("api_key=", "[REDACTED]");
-    out = out.replace("api-key=", "[REDACTED]");
-    out = out.replace("apikey=", "[REDACTED]");
-    out = out.replace("token=", "[REDACTED]");
+    for prefix in [
+        "api_key=", "api-key=", "apikey=", "token=", "API_KEY=", "TOKEN=",
+    ] {
+        out = mask_assignment_token(&out, prefix);
+    }
     out
 }
 
@@ -409,7 +557,7 @@ mod tests {
     #[test]
     fn validate_moderator_output_rejects_empty() {
         assert!(matches!(
-            validate_moderator_output(""),
+            validate_moderator_output("", true),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
@@ -418,7 +566,7 @@ mod tests {
     fn validate_moderator_output_rejects_oversized() {
         let big = "y".repeat(MAX_RISK_CHARS + 1);
         assert!(matches!(
-            validate_moderator_output(&big),
+            validate_moderator_output(&big, true),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
@@ -426,7 +574,7 @@ mod tests {
     #[test]
     fn validate_moderator_output_rejects_control_char() {
         assert!(matches!(
-            validate_moderator_output("bad\x00output"),
+            validate_moderator_output("bad\x00output", true),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
@@ -434,9 +582,20 @@ mod tests {
     #[test]
     fn validate_moderator_output_accepts_valid() {
         assert!(
-            validate_moderator_output("Conservative and Neutral both flag a material violation.")
-                .is_ok()
+            validate_moderator_output(
+                "Violation status: Conservative and Neutral both flag a material violation.",
+                true,
+            )
+            .is_ok()
         );
+    }
+
+    #[test]
+    fn validate_moderator_output_rejects_missing_required_violation_sentence() {
+        assert!(matches!(
+            validate_moderator_output("Short summary without required sentence.", true),
+            Err(TradingError::SchemaViolation { .. })
+        ));
     }
 
     #[test]
@@ -484,17 +643,32 @@ mod tests {
     fn format_risk_history_includes_role_and_content() {
         let history = vec![
             crate::state::DebateMessage {
-                role: "aggressive_risk_analyst".to_owned(),
+                role: "aggressive_risk".to_owned(),
                 content: "Upside dominates.".to_owned(),
             },
             crate::state::DebateMessage {
-                role: "conservative_risk_analyst".to_owned(),
+                role: "conservative_risk".to_owned(),
                 content: "Capital at risk.".to_owned(),
             },
         ];
         let formatted = format_risk_history(&history);
-        assert!(formatted.contains("aggressive_risk_analyst"));
+        assert!(formatted.contains("aggressive_risk"));
         assert!(formatted.contains("Capital at risk."));
+    }
+
+    #[test]
+    fn format_risk_history_truncates_older_entries_when_history_is_large() {
+        let history = (0..16)
+            .map(|i| crate::state::DebateMessage {
+                role: format!("role_{i}"),
+                content: format!("content_{i}"),
+            })
+            .collect::<Vec<_>>();
+
+        let formatted = format_risk_history(&history);
+        assert!(formatted.contains("truncated"));
+        assert!(!formatted.contains("role_0"));
+        assert!(formatted.contains("role_15"));
     }
 
     #[test]
@@ -503,6 +677,36 @@ mod tests {
         let result = sanitize_prompt_context(input);
         assert!(!result.contains("sk-1234abcd"));
         assert!(result.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn sanitize_prompt_context_redacts_query_style_secret_values() {
+        let input = "https://example.com?api_key=abcd1234&token=qwerty";
+        let result = sanitize_prompt_context(input);
+        assert!(!result.contains("abcd1234"));
+        assert!(!result.contains("qwerty"));
+        assert!(result.contains("api_key=[REDACTED]"));
+        assert!(result.contains("token=[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_text_for_storage_masks_query_style_secret_values() {
+        let input = "api_key=abcd1234 token=qwerty";
+        let redacted = redact_text_for_storage(input);
+        assert_eq!(redacted, "api_key=[REDACTED] token=[REDACTED]");
+    }
+
+    #[test]
+    fn initial_untrusted_history_prefixes_notice() {
+        let state = make_state();
+        let history = initial_untrusted_history(&state);
+        match &history[0] {
+            Message::User { content } => {
+                let rendered = format!("{content:?}");
+                assert!(rendered.contains("untrusted model/data output"));
+            }
+            other => panic!("unexpected seed history message: {other:?}"),
+        }
     }
 
     #[test]

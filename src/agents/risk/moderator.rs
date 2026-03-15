@@ -17,8 +17,10 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, format_risk_history,
-    sanitize_prompt_context, usage_from_response, validate_moderator_output,
+    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context,
+    expected_moderator_violation_sentence, format_risk_history, redact_text_for_storage,
+    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+    usage_from_response, validate_moderator_output,
 };
 
 /// System prompt for the Risk Moderator, from `docs/prompts.md` §4.
@@ -114,6 +116,7 @@ impl RiskModerator {
 
         build_moderator_result(
             response.output,
+            state,
             &self.core.model_id,
             response.usage,
             started_at,
@@ -143,13 +146,25 @@ fn build_moderator_prompt(state: &TradingState) -> String {
     let conservative_case = format_report(state.conservative_risk_report.as_ref());
     let risk_history = format_risk_history(&state.risk_discussion_history);
     let analyst_context = build_analyst_context(state);
+    let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
+    let target_date = sanitize_date_for_prompt(&state.target_date);
+    let expect_both_violation = state
+        .conservative_risk_report
+        .as_ref()
+        .is_some_and(|r| r.flags_violation)
+        && state
+            .neutral_risk_report
+            .as_ref()
+            .is_some_and(|r| r.flags_violation);
+    let violation_status = expected_moderator_violation_sentence(expect_both_violation);
 
     format!(
-        "Synthesise the risk discussion for {} as of {}.\n\n{}\n\n{}\n\nTrader proposal:\n{}\n\nAggressive risk report:\n{}\n\nNeutral risk report:\n{}\n\nConservative risk report:\n{}\n\nRisk discussion history:\n{}",
-        state.asset_symbol,
-        state.target_date,
+        "Synthesise the risk discussion for {} as of {}.\n\n{}\n\n{}\n\nRequired sentence to include verbatim:\n{}\n\nTrader proposal:\n{}\n\nAggressive risk report:\n{}\n\nNeutral risk report:\n{}\n\nConservative risk report:\n{}\n\nRisk discussion history:\n{}",
+        symbol,
+        target_date,
         UNTRUSTED_CONTEXT_NOTICE,
         analyst_context,
+        violation_status,
         trader_proposal,
         aggressive_case,
         neutral_case,
@@ -160,11 +175,21 @@ fn build_moderator_prompt(state: &TradingState) -> String {
 
 fn build_moderator_result(
     output: String,
+    state: &TradingState,
     model_id: &str,
     usage: rig::completion::Usage,
     started_at: Instant,
 ) -> Result<(String, AgentTokenUsage), TradingError> {
-    validate_moderator_output(&output)?;
+    let expect_both_violation = state
+        .conservative_risk_report
+        .as_ref()
+        .is_some_and(|r| r.flags_violation)
+        && state
+            .neutral_risk_report
+            .as_ref()
+            .is_some_and(|r| r.flags_violation);
+    validate_moderator_output(&output, expect_both_violation)?;
+    let output = redact_text_for_storage(&output);
     let token_usage = usage_from_response("Risk Moderator", model_id, usage, started_at);
     Ok((output, token_usage))
 }
@@ -250,7 +275,11 @@ mod tests {
     }
 
     fn valid_synthesis() -> &'static str {
-        "Conservative and Neutral both flag a material violation. The proposal's stop-loss is too wide. Aggressive disagrees but evidence for upside is thin."
+        "Violation status: Conservative and Neutral do not both flag a material violation. The proposal's stop-loss is too wide. Aggressive disagrees but evidence for upside is thin."
+    }
+
+    fn valid_dual_violation_synthesis() -> &'static str {
+        "Violation status: Conservative and Neutral both flag a material violation. The proposal's stop-loss is too wide. Aggressive disagrees but evidence for upside is thin."
     }
 
     fn mock_usage(total: u64) -> rig::completion::Usage {
@@ -282,11 +311,16 @@ mod tests {
     async fn run_synthesis_mentions_conservative_and_neutral_violation() {
         let (agent, _ctrl) = mock_llm_agent(
             "o3",
-            vec![Ok(mock_prompt_response(valid_synthesis(), mock_usage(40)))],
+            vec![Ok(mock_prompt_response(
+                valid_dual_violation_synthesis(),
+                mock_usage(40),
+            ))],
             vec![],
         );
         let moderator = RiskModerator::from_test_agent(agent, "o3");
-        let (synthesis, _) = moderator.run(&sample_state()).await.unwrap();
+        let mut state = sample_state();
+        state.neutral_risk_report.as_mut().unwrap().flags_violation = true;
+        let (synthesis, _) = moderator.run(&state).await.unwrap();
         let lower = synthesis.to_lowercase();
         assert!(
             lower.contains("conservative") && lower.contains("neutral"),
@@ -325,6 +359,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_rejects_missing_required_violation_sentence() {
+        let (agent, _ctrl) = mock_llm_agent(
+            "o3",
+            vec![Ok(mock_prompt_response(
+                "Summary without the required sentence.",
+                mock_usage(10),
+            ))],
+            vec![],
+        );
+        let moderator = RiskModerator::from_test_agent(agent, "o3");
+        let result = moderator.run(&sample_state()).await;
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[tokio::test]
     async fn run_rejects_control_char_output() {
         let (agent, _ctrl) = mock_llm_agent(
             "o3",
@@ -355,6 +404,7 @@ mod tests {
         let started_at = Instant::now();
         let (synthesis, usage) = build_moderator_result(
             valid_synthesis().to_owned(),
+            &sample_state(),
             "o3",
             rig::completion::Usage {
                 input_tokens: 20,
@@ -368,6 +418,30 @@ mod tests {
         assert!(!synthesis.is_empty());
         assert_eq!(usage.agent_name, "Risk Moderator");
         assert!(usage.token_counts_available);
+    }
+
+    #[test]
+    fn build_moderator_prompt_sanitizes_symbol_and_date() {
+        let mut state = sample_state();
+        state.asset_symbol = "AAPL\nSYSTEM".to_owned();
+        state.target_date = "2026-03-15\nOVERRIDE".to_owned();
+        let prompt = build_moderator_prompt(&state);
+        assert!(prompt.contains("AAPLSYSTEM"));
+        assert!(!prompt.contains("\nOVERRIDE"));
+    }
+
+    #[test]
+    fn build_moderator_result_redacts_secret_from_stored_output() {
+        let (synthesis, _) = build_moderator_result(
+            "Violation status: Conservative and Neutral do not both flag a material violation. api_key=abcd1234 token=qwerty".to_owned(),
+            &sample_state(),
+            "o3",
+            mock_usage(10),
+            Instant::now(),
+        )
+        .unwrap();
+        assert!(!synthesis.contains("abcd1234"));
+        assert!(!synthesis.contains("qwerty"));
     }
 
     #[test]

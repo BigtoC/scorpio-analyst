@@ -32,6 +32,8 @@ pub use conservative::ConservativeRiskAgent;
 pub use moderator::RiskModerator;
 pub use neutral::NeutralRiskAgent;
 
+use common::{redact_text_for_storage, serialize_risk_report_context};
+
 use crate::{
     config::Config,
     error::TradingError,
@@ -139,39 +141,53 @@ where
     let mut all_usages: Vec<AgentTokenUsage> = Vec::with_capacity(capacity);
 
     for _round in 0..max_rounds {
-        // Aggressive goes first; no peer views available yet this round.
-        let (agg_report, agg_usage) = executor.aggressive_turn(state, None, None).await?;
+        let prior_conservative =
+            serialize_risk_report_context(state.conservative_risk_report.as_ref());
+        let prior_neutral = serialize_risk_report_context(state.neutral_risk_report.as_ref());
 
-        let agg_summary = agg_report.assessment.clone();
+        // Aggressive sees the latest available conservative and neutral views.
+        let (agg_report, agg_usage) = executor
+            .aggressive_turn(
+                state,
+                prior_conservative.as_deref(),
+                prior_neutral.as_deref(),
+            )
+            .await?;
+
+        let agg_summary = redact_text_for_storage(&agg_report.assessment);
+        let agg_context = serialize_risk_report_context(Some(&agg_report));
         state.aggressive_risk_report = Some(agg_report);
         state.risk_discussion_history.push(DebateMessage {
-            role: "aggressive_risk_analyst".to_owned(),
-            content: agg_summary.clone(),
+            role: "aggressive_risk".to_owned(),
+            content: agg_summary,
         });
         all_usages.push(agg_usage);
 
-        // Conservative sees the aggressive view from this round.
+        let latest_neutral = serialize_risk_report_context(state.neutral_risk_report.as_ref());
+
+        // Conservative sees the aggressive view from this round and the latest neutral view.
         let (con_report, con_usage) = executor
-            .conservative_turn(state, Some(&agg_summary), None)
+            .conservative_turn(state, agg_context.as_deref(), latest_neutral.as_deref())
             .await?;
 
-        let con_summary = con_report.assessment.clone();
+        let con_summary = redact_text_for_storage(&con_report.assessment);
+        let con_context = serialize_risk_report_context(Some(&con_report));
         state.conservative_risk_report = Some(con_report);
         state.risk_discussion_history.push(DebateMessage {
-            role: "conservative_risk_analyst".to_owned(),
-            content: con_summary.clone(),
+            role: "conservative_risk".to_owned(),
+            content: con_summary,
         });
         all_usages.push(con_usage);
 
         // Neutral sees both aggressive and conservative views from this round.
         let (neu_report, neu_usage) = executor
-            .neutral_turn(state, Some(&agg_summary), Some(&con_summary))
+            .neutral_turn(state, agg_context.as_deref(), con_context.as_deref())
             .await?;
 
-        let neu_summary = neu_report.assessment.clone();
+        let neu_summary = redact_text_for_storage(&neu_report.assessment);
         state.neutral_risk_report = Some(neu_report);
         state.risk_discussion_history.push(DebateMessage {
-            role: "neutral_risk_analyst".to_owned(),
+            role: "neutral_risk".to_owned(),
             content: neu_summary,
         });
         all_usages.push(neu_usage);
@@ -181,7 +197,7 @@ where
     let (synthesis, mod_usage) = executor.moderate(state).await?;
     state.risk_discussion_history.push(DebateMessage {
         role: "risk_moderator".to_owned(),
-        content: synthesis,
+        content: redact_text_for_storage(&synthesis),
     });
     all_usages.push(mod_usage);
 
@@ -244,7 +260,11 @@ mod tests {
         mod_calls: usize,
         fail_agg_on_call: Option<usize>,
         fail_con_on_call: Option<usize>,
+        fail_mod_on_call: Option<usize>,
         token_counts_available: bool,
+        seen_aggressive_inputs: Vec<(Option<String>, Option<String>)>,
+        seen_conservative_inputs: Vec<(Option<String>, Option<String>)>,
+        seen_neutral_inputs: Vec<(Option<String>, Option<String>)>,
     }
 
     impl MockRiskExecutor {
@@ -256,7 +276,11 @@ mod tests {
                 mod_calls: 0,
                 fail_agg_on_call: None,
                 fail_con_on_call: None,
+                fail_mod_on_call: None,
                 token_counts_available: false,
+                seen_aggressive_inputs: Vec::new(),
+                seen_conservative_inputs: Vec::new(),
+                seen_neutral_inputs: Vec::new(),
             }
         }
 
@@ -274,9 +298,9 @@ mod tests {
             }
         }
 
-        fn with_token_counts() -> Self {
+        fn with_mod_failure(call: usize) -> Self {
             Self {
-                token_counts_available: true,
+                fail_mod_on_call: Some(call),
                 ..Self::new()
             }
         }
@@ -286,9 +310,13 @@ mod tests {
         async fn aggressive_turn(
             &mut self,
             _state: &TradingState,
-            _conservative_response: Option<&str>,
-            _neutral_response: Option<&str>,
+            conservative_response: Option<&str>,
+            neutral_response: Option<&str>,
         ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
+            self.seen_aggressive_inputs.push((
+                conservative_response.map(str::to_owned),
+                neutral_response.map(str::to_owned),
+            ));
             self.agg_calls += 1;
             if self.fail_agg_on_call == Some(self.agg_calls) {
                 return Err(TradingError::Rig(format!(
@@ -310,9 +338,13 @@ mod tests {
         async fn conservative_turn(
             &mut self,
             _state: &TradingState,
-            _aggressive_response: Option<&str>,
-            _neutral_response: Option<&str>,
+            aggressive_response: Option<&str>,
+            neutral_response: Option<&str>,
         ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
+            self.seen_conservative_inputs.push((
+                aggressive_response.map(str::to_owned),
+                neutral_response.map(str::to_owned),
+            ));
             self.con_calls += 1;
             if self.fail_con_on_call == Some(self.con_calls) {
                 return Err(TradingError::Rig(format!(
@@ -346,9 +378,13 @@ mod tests {
         async fn neutral_turn(
             &mut self,
             _state: &TradingState,
-            _aggressive_response: Option<&str>,
-            _conservative_response: Option<&str>,
+            aggressive_response: Option<&str>,
+            conservative_response: Option<&str>,
         ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
+            self.seen_neutral_inputs.push((
+                aggressive_response.map(str::to_owned),
+                conservative_response.map(str::to_owned),
+            ));
             self.neu_calls += 1;
             Ok((
                 RiskReport {
@@ -366,8 +402,11 @@ mod tests {
             _state: &TradingState,
         ) -> Result<(String, AgentTokenUsage), TradingError> {
             self.mod_calls += 1;
+            if self.fail_mod_on_call == Some(self.mod_calls) {
+                return Err(TradingError::Rig("moderator failed".to_owned()));
+            }
             Ok((
-                "Conservative and Neutral both flag a material violation. Proceed with caution."
+                "Violation status: Conservative and Neutral both flag a material violation. Proceed with caution."
                     .to_owned(),
                 AgentTokenUsage::unavailable("Risk Moderator", "o3", 1),
             ))
@@ -451,12 +490,12 @@ mod tests {
         assert_eq!(
             roles,
             vec![
-                "aggressive_risk_analyst",
-                "conservative_risk_analyst",
-                "neutral_risk_analyst",
-                "aggressive_risk_analyst",
-                "conservative_risk_analyst",
-                "neutral_risk_analyst",
+                "aggressive_risk",
+                "conservative_risk",
+                "neutral_risk",
+                "aggressive_risk",
+                "conservative_risk",
+                "neutral_risk",
                 "risk_moderator",
             ]
         );
@@ -583,10 +622,7 @@ mod tests {
             assert!(
                 matches!(
                     msg.role.as_str(),
-                    "aggressive_risk_analyst"
-                        | "conservative_risk_analyst"
-                        | "neutral_risk_analyst"
-                        | "risk_moderator"
+                    "aggressive_risk" | "conservative_risk" | "neutral_risk" | "risk_moderator"
                 ),
                 "unexpected role: {}",
                 msg.role
@@ -659,5 +695,82 @@ mod tests {
                 .flags_violation
         );
         assert!(!state.neutral_risk_report.as_ref().unwrap().flags_violation);
+    }
+
+    #[test]
+    fn same_round_peer_views_are_passed_as_serialized_reports() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut state = make_state_with_proposal();
+        state.conservative_risk_report = Some(RiskReport {
+            risk_level: RiskLevel::Conservative,
+            assessment: "Prior conservative view".to_owned(),
+            recommended_adjustments: vec!["Reduce size".to_owned()],
+            flags_violation: true,
+        });
+        state.neutral_risk_report = Some(RiskReport {
+            risk_level: RiskLevel::Neutral,
+            assessment: "Prior neutral view".to_owned(),
+            recommended_adjustments: vec!["Tighten stop".to_owned()],
+            flags_violation: false,
+        });
+        let mut exec = MockRiskExecutor::new();
+
+        rt.block_on(run_risk_discussion_with_executor(&mut state, 1, &mut exec))
+            .unwrap();
+
+        let aggressive_inputs = &exec.seen_aggressive_inputs[0];
+        assert!(
+            aggressive_inputs
+                .0
+                .as_ref()
+                .unwrap()
+                .contains("flags_violation")
+        );
+        assert!(
+            aggressive_inputs
+                .1
+                .as_ref()
+                .unwrap()
+                .contains("Tighten stop")
+        );
+
+        let conservative_inputs = &exec.seen_conservative_inputs[0];
+        assert!(
+            conservative_inputs
+                .0
+                .as_ref()
+                .unwrap()
+                .contains("Aggressive")
+        );
+        assert!(
+            conservative_inputs
+                .0
+                .as_ref()
+                .unwrap()
+                .contains("flags_violation")
+        );
+        assert!(
+            conservative_inputs
+                .1
+                .as_ref()
+                .unwrap()
+                .contains("Prior neutral view")
+        );
+
+        let neutral_inputs = &exec.seen_neutral_inputs[0];
+        assert!(neutral_inputs.0.as_ref().unwrap().contains("Aggressive"));
+        assert!(neutral_inputs.1.as_ref().unwrap().contains("Conservative"));
+    }
+
+    #[test]
+    fn moderator_failure_aborts_discussion() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut state = make_state_with_proposal();
+        let mut exec = MockRiskExecutor::with_mod_failure(1);
+
+        let result = rt.block_on(run_risk_discussion_with_executor(&mut state, 1, &mut exec));
+
+        assert!(matches!(result, Err(TradingError::Rig(_))));
+        assert_eq!(state.risk_discussion_history.len(), 3);
     }
 }

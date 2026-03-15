@@ -7,7 +7,6 @@
 use std::time::Instant;
 
 use rig::completion::Message;
-use rig::{OneOrMany, message::UserContent};
 
 use crate::{
     config::LlmConfig,
@@ -20,8 +19,9 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, format_risk_history,
-    sanitize_prompt_context, usage_from_response, validate_risk_text,
+    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, format_risk_history, initial_untrusted_history,
+    redact_risk_report_for_storage, sanitize_prompt_context, usage_from_response,
+    validate_raw_model_output_size, validate_risk_text,
 };
 
 /// System prompt for the Neutral Risk Analyst, from `docs/prompts.md` §4.
@@ -88,9 +88,7 @@ impl NeutralRiskAgent {
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         let core = RiskAgentCore::new(handle, NEUTRAL_SYSTEM_PROMPT, state, llm_config)?;
-        let chat_history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text(build_analyst_context(state))),
-        }];
+        let chat_history = initial_untrusted_history(state);
         Ok(Self { core, chat_history })
     }
 
@@ -172,6 +170,7 @@ fn build_neutral_result(
     usage: rig::completion::Usage,
     started_at: Instant,
 ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
+    validate_raw_model_output_size("NeutralRiskAgent", &output)?;
     let report: RiskReport =
         serde_json::from_str(&output).map_err(|e| TradingError::SchemaViolation {
             message: format!("NeutralRiskAgent: failed to parse RiskReport JSON: {e}"),
@@ -194,6 +193,7 @@ fn build_neutral_result(
         )?;
     }
 
+    let report = redact_risk_report_for_storage(report);
     let token_usage = usage_from_response("Neutral Risk Analyst", model_id, usage, started_at);
     Ok((report, token_usage))
 }
@@ -390,6 +390,48 @@ mod tests {
         );
         assert!(prompt.contains("Proceed boldly"));
         assert!(prompt.contains("Capital at risk"));
+    }
+
+    #[test]
+    fn build_neutral_result_rejects_malformed_json() {
+        let result =
+            build_neutral_result("not json".to_owned(), "o3", mock_usage(2), Instant::now());
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn build_neutral_result_rejects_oversized_assessment() {
+        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
+        let json = format!(
+            r#"{{"risk_level":"Neutral","assessment":"{big}","recommended_adjustments":[],"flags_violation":false}}"#
+        );
+        let result = build_neutral_result(json, "o3", mock_usage(2), Instant::now());
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn build_neutral_result_rejects_oversized_adjustment() {
+        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
+        let json = format!(
+            r#"{{"risk_level":"Neutral","assessment":"Balanced.","recommended_adjustments":["{big}"],"flags_violation":false}}"#
+        );
+        let result = build_neutral_result(json, "o3", mock_usage(2), Instant::now());
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn build_neutral_result_redacts_secret_from_stored_output() {
+        let json = r#"{"risk_level":"Neutral","assessment":"api_key=abcd1234","recommended_adjustments":["token=qwerty"],"flags_violation":false}"#;
+        let (report, _) =
+            build_neutral_result(json.to_owned(), "o3", mock_usage(2), Instant::now()).unwrap();
+        assert_eq!(report.assessment, "api_key=[REDACTED]");
+        assert_eq!(report.recommended_adjustments, vec!["token=[REDACTED]"]);
+    }
+
+    #[test]
+    fn neutral_system_prompt_mentions_balancing_extremes() {
+        assert!(NEUTRAL_SYSTEM_PROMPT.contains("too permissive"));
+        assert!(NEUTRAL_SYSTEM_PROMPT.contains("too restrictive"));
     }
 
     #[test]
