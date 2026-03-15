@@ -25,14 +25,24 @@ Fund Manager.
 - Implement `RiskModerator` agent (`src/agents/risk/moderator.rs`) — uses `DeepThinking` tier, synthesizes the three
   risk perspectives into a concise plain-text discussion summary. Explicitly notes whether Conservative and Neutral
   both flag a material violation (the Fund Manager's deterministic rejection rule).
+- Risk persona agents maintain internal multi-round chat history via `chat_with_retry_details`, then locally
+  deserialize the returned raw JSON string into `RiskReport` and validate it. Validation covers persona/risk-level
+  matching plus bounded text validation for `assessment` and each `recommended_adjustments` entry. The provider layer
+  currently exposes typed one-shot prompting, but not typed chat.
 - Wire the risk module's public API through `src/agents/risk/mod.rs`, exposing a `run_risk_discussion` function that
   orchestrates the cyclic discussion for `max_risk_rounds` iterations and then invokes the Risk Moderator once.
-  Workflow-level `graph_flow` loop routing remains the responsibility of `add-graph-orchestration`.
+  Workflow-level `graph_flow` phase wiring remains the responsibility of `add-graph-orchestration`.
+- Execute Aggressive -> Conservative -> Neutral sequentially within each discussion round so later agents can react to
+  earlier same-round outputs. This proposal implements the cyclic-discussion half of the Phase 4 design; it does not
+  add a same-round fan-out that would prevent cross-examination.
 - Each agent records `AgentTokenUsage` (model ID, prompt/completion tokens, latency, and availability metadata) for the
   `TokenUsageTracker`. The risk loop produces per-invocation `AgentTokenUsage` entries so the orchestrator can build
   per-round `PhaseTokenUsage` records.
 - The risk discussion loop uses `rig` chat history to enable each risk agent to directly address the other agents'
   arguments across rounds, building a progressively refined risk assessment.
+- Prompt-bound `TradeProposal`, analyst data, and risk-history context are sanitized before LLM injection: missing
+  analyst inputs remain explicit as `"null"`, injected context is treated as untrusted, secret-like substrings are
+  redacted, and discussion-history context is bounded to control prompt growth.
 
 ## Impact
 
@@ -47,6 +57,6 @@ Fund Manager.
 - No modifications to foundation-owned files (`src/config.rs`, `src/error.rs`, `src/state/*`), provider-owned files
   (`src/providers/*`), data-layer files (`src/data/*`), indicator files (`src/indicators/*`), analyst-owned files
   (`src/agents/analyst/*`), researcher-owned files (`src/agents/researcher/*`), or trader-owned files
-  (`src/agents/trader.rs`)
+  (`src/agents/trader/*`)
 - Downstream consumers: `add-graph-orchestration` (wraps risk agents into `graph_flow::Task` cyclic pattern),
   `add-fund-manager` (reads `RiskReport` objects and `risk_discussion_history` produced by the Risk Moderator)

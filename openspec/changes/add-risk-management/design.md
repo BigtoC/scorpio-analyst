@@ -13,6 +13,12 @@ The risk team follows the same cyclic debate pattern established by `add-researc
 three participants instead of two, structured JSON output (`RiskReport`) for the persona agents instead of plain text,
 and evaluation of a concrete `TradeProposal` rather than raw analyst data.
 
+The PRD and `openspec/project.md` describe Phase 4 at a high level as "fan-out + cyclic debate," but the risk-agent
+prompt contracts in `docs/prompts.md` explicitly require each persona to see the others' latest views. For this
+capability, that means the local phase runner executes sequential turns within a round (Aggressive -> Conservative ->
+Neutral) so same-round cross-examination is possible. The downstream orchestration layer still owns the broader Phase 4
+graph wiring and any future latency-oriented restructuring.
+
 **Stakeholders:** `add-graph-orchestration` (wraps risk discussion into `graph_flow::Task` cyclic nodes and owns
 `NextAction`/`GoBack` routing), `add-fund-manager` (consumes `RiskReport` objects and `risk_discussion_history`).
 
@@ -33,8 +39,9 @@ and evaluation of a concrete `TradeProposal` rather than raw analyst data.
     - Maintain chat history across rounds so each risk agent can directly address the other agents' prior positions.
     - Confine all implementation to `src/agents/risk/` without modifying foundation, provider, or other agent-owned
       files, while still allowing private helper modules inside `src/agents/risk/` when needed to reduce duplication.
-    - Use the provider layer's existing `prompt_with_retry_details` path (from `add-llm-providers`, extended by the
-      `add-researcher-debate` cross-owner addition) for structured JSON extraction with usage metadata.
+    - Use the provider layer's existing `chat_with_retry_details` path for multi-round persona turns and
+      `prompt_with_retry_details` for the one-shot moderator path, with local `serde_json` extraction of `RiskReport`
+      from persona-agent raw text responses because the provider layer does not expose typed chat.
 
 - **Non-Goals:**
     - Implementing the `graph_flow::Task` wrapper or `NextAction` routing — belongs to `add-graph-orchestration`.
@@ -65,9 +72,9 @@ Each risk persona agent follows a uniform construction pattern:
    `docs/prompts.md`. No tool bindings are attached; risk agents are pure reasoning agents.
 3. Serialize the `TradeProposal` and analyst outputs from `TradingState` (fundamental, technical, sentiment, news data)
    into prompt context, along with the other risk agents' latest views and the accumulated risk discussion history.
-4. Use the provider layer's `prompt_with_retry_details` for structured `RiskReport` JSON extraction, or
-   `chat_with_retry_details` for history-aware rounds. The chosen path must return both response content and usage
-   metadata.
+4. Use the provider layer's `chat_with_retry_details` for history-aware persona rounds and locally deserialize the
+   returned raw text into `RiskReport`; use `prompt_with_retry_details` for the Risk Moderator. Both paths must return
+   usage metadata.
 5. Validate the returned `RiskReport` JSON against the schema before writing to `TradingState`, rejecting malformed
    output with `TradingError::SchemaViolation`.
 6. Record `AgentTokenUsage` (model ID, token counts when available, `token_counts_available`, wall-clock latency).
@@ -129,12 +136,20 @@ Risk agents receive serialized data in their system prompt or as prompt context:
 Missing analyst outputs (from graceful degradation) are serialized as `"null"` — the risk agent prompts explicitly
 handle missing data per `docs/prompts.md`.
 
+All prompt-bound context is sanitized before injection:
+
+- asset symbol and date are normalized to prompt-safe character sets
+- analyst outputs, trade proposal JSON, and discussion history are treated as untrusted context rather than instructions
+- secret-like substrings are redacted before leaving the process
+- risk history is bounded so later rounds do not grow unbounded prompt context
+
 ### Output Strategy: Structured JSON vs. Plain Text
 
 Risk persona agents (Aggressive, Conservative, Neutral) produce **structured `RiskReport` JSON** because the Fund
 Manager needs machine-readable risk assessments for its deterministic fallback rule (reject if Conservative + Neutral
-both flag violation). The `RiskReport` is extracted using `rig`'s structured output extraction with
-`prompt_with_retry_details`.
+both flag violation). Because the provider layer does not currently expose typed chat, persona agents return raw text
+from `chat_with_retry_details`, and the risk module locally deserializes that text into `RiskReport` using
+`serde_json`, then applies persona-specific validation.
 
 The Risk Moderator produces **plain text** because its output is a human-readable discussion synthesis stored as a
 `DebateMessage.content` entry in `risk_discussion_history`, matching the runtime state model.
@@ -144,6 +159,9 @@ The Risk Moderator produces **plain text** because its output is a human-readabl
 - `RiskReport` JSON must be validated against the schema: `risk_level` must match the agent's persona
   (`Aggressive`, `Conservative`, or `Neutral`), `assessment` must be non-empty, `recommended_adjustments` must be
   a valid array, and `flags_violation` must be a valid boolean.
+- `assessment` and every `recommended_adjustments` entry must reject disallowed control characters and must stay within
+  the module's documented bounded-text policy before being written into `TradingState` or echoed back into later-round
+  prompts.
 - Risk moderator plain-text output must be rejected if it contains disallowed control characters or exceeds the
   module's documented bounded-summary policy, returning `TradingError::SchemaViolation`.
 - If implementation benefit justifies it, the risk module may add a private `common.rs` helper under
@@ -210,8 +228,9 @@ the upstream orchestrator can create per-round `PhaseTokenUsage` entries (e.g., 
   (vs. researcher's 3) keeps total calls comparable.
 
 - **RiskReport schema violations**: Deep-thinking models generally produce valid JSON, but malformed output is
-  possible. Mitigation: structured output extraction with schema validation; retry on schema violation up to the
-  configured retry limit.
+  possible. Mitigation: local `serde_json` deserialization plus persona-specific validation; deserialization failures
+  and risk-level mismatches surface as `TradingError::SchemaViolation`. Provider-layer chat retries apply only to
+  transient transport/provider errors, not to post-response schema violations.
 
 - **Missing TradeProposal**: If Phase 3 failed to produce a `TradeProposal`, the risk discussion cannot proceed
   meaningfully. Mitigation: `run_risk_discussion` should return an error if `trader_proposal` is `None`.

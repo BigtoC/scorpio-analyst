@@ -16,8 +16,8 @@
 - [ ] 1.2 Implement `AggressiveRiskAgent` struct with a constructor that accepts provider factory references
       and runtime parameters (asset symbol, target date, serialized analyst data, trade proposal)
 - [ ] 1.3 Implement `run(&mut self, state: &TradingState) -> Result<(RiskReport, AgentTokenUsage), TradingError>`
-      that constructs a `rig` agent via `prompt_with_retry_details` with structured `RiskReport` extraction,
-      validates that the returned `risk_level == Aggressive`, and records `AgentTokenUsage`
+      that constructs a `rig` agent via `chat_with_retry_details`, locally deserializes the raw JSON string into
+      `RiskReport`, validates that the returned `risk_level == Aggressive`, and records `AgentTokenUsage`
 - [ ] 1.4 Write unit tests with mocked LLM responses verifying correct `RiskReport` construction with
       `risk_level = Aggressive`
 - [ ] 1.5 Write unit tests verifying `RiskReport` with wrong `risk_level` is rejected with
@@ -25,6 +25,10 @@
 - [ ] 1.6 Write unit tests verifying `AgentTokenUsage` is recorded with agent name "Aggressive Risk Analyst"
       and correct model ID
 - [ ] 1.7 Write unit tests verifying that missing `trader_proposal` produces an appropriate error
+- [ ] 1.8 Write unit tests verifying prompt-bound context is sanitized, treats injected data as untrusted,
+      redacts secret-like substrings, and bounds discussion-history growth
+- [ ] 1.9 Write unit tests verifying `assessment` and each `recommended_adjustments` entry reject disallowed
+      control characters or oversized payloads with `TradingError::SchemaViolation`
 
 ## 2. Conservative Risk Agent (`src/agents/risk/conservative.rs`)
 
@@ -34,13 +38,15 @@
 - [ ] 2.2 Implement `ConservativeRiskAgent` struct with a constructor that accepts provider factory references
       and runtime parameters
 - [ ] 2.3 Implement `run(&mut self, state: &TradingState) -> Result<(RiskReport, AgentTokenUsage), TradingError>`
-      that constructs a `rig` agent via `prompt_with_retry_details` with structured `RiskReport` extraction,
-      validates that the returned `risk_level == Conservative`, and records `AgentTokenUsage`
+      that constructs a `rig` agent via `chat_with_retry_details`, locally deserializes the raw JSON string into
+      `RiskReport`, validates that the returned `risk_level == Conservative`, and records `AgentTokenUsage`
 - [ ] 2.4 Write unit tests with mocked LLM responses verifying correct `RiskReport` construction with
       `risk_level = Conservative`
 - [ ] 2.5 Write unit tests verifying `RiskReport` with wrong `risk_level` is rejected with
       `TradingError::SchemaViolation`
 - [ ] 2.6 Write unit tests verifying `AgentTokenUsage` is recorded with agent name "Conservative Risk Analyst"
+- [ ] 2.7 Write unit tests verifying `assessment` and each `recommended_adjustments` entry reject disallowed
+      control characters or oversized payloads with `TradingError::SchemaViolation`
 
 ## 3. Neutral Risk Agent (`src/agents/risk/neutral.rs`)
 
@@ -50,13 +56,15 @@
 - [ ] 3.2 Implement `NeutralRiskAgent` struct with a constructor that accepts provider factory references
       and runtime parameters
 - [ ] 3.3 Implement `run(&mut self, state: &TradingState) -> Result<(RiskReport, AgentTokenUsage), TradingError>`
-      that constructs a `rig` agent via `prompt_with_retry_details` with structured `RiskReport` extraction,
-      validates that the returned `risk_level == Neutral`, and records `AgentTokenUsage`
+      that constructs a `rig` agent via `chat_with_retry_details`, locally deserializes the raw JSON string into
+      `RiskReport`, validates that the returned `risk_level == Neutral`, and records `AgentTokenUsage`
 - [ ] 3.4 Write unit tests with mocked LLM responses verifying correct `RiskReport` construction with
       `risk_level = Neutral`
 - [ ] 3.5 Write unit tests verifying `RiskReport` with wrong `risk_level` is rejected with
       `TradingError::SchemaViolation`
 - [ ] 3.6 Write unit tests verifying `AgentTokenUsage` is recorded with agent name "Neutral Risk Analyst"
+- [ ] 3.7 Write unit tests verifying `assessment` and each `recommended_adjustments` entry reject disallowed
+      control characters or oversized payloads with `TradingError::SchemaViolation`
 
 ## 4. Risk Moderator Agent (`src/agents/risk/moderator.rs`)
 
@@ -89,6 +97,8 @@
 - [ ] 5.5 Return `Result<Vec<AgentTokenUsage>, TradingError>` containing all token usage entries from all
       rounds plus the moderator
 - [ ] 5.6 Re-export `run_risk_discussion` and individual risk agent types from `src/agents/risk/mod.rs`
+- [ ] 5.6a Document in the module-level API docs that persona turns are sequential within each round because prompts
+         depend on the other agents' latest same-round views
 - [ ] 5.7 Write unit test: 1 round discussion completes, verify 3 `RiskReport` fields populated in
       `TradingState` and risk discussion history contains entries
 - [ ] 5.8 Write unit test: 2 round discussion (default), verify 6 risk persona `DebateMessage` entries + 1
@@ -108,7 +118,8 @@
       `run_risk_discussion` logic for multiple rounds and verifies `risk_discussion_history` entry count,
       role correctness, and populated `RiskReport` fields
 - [ ] 6.2 Write mocked-provider risk tests covering partial analyst data serialization as `null`,
-      `TradeProposal` context injection, and repeated `run` invocations with accumulated discussion history
+      `TradeProposal` context injection, injected-context sanitization/redaction, and repeated `run` invocations with
+      accumulated discussion history
 - [ ] 6.3 Write end-to-end token usage tests verifying per-invocation `AgentTokenUsage` collection order
       and moderator inclusion
 - [ ] 6.4 Write test verifying that `RiskReport.flags_violation` values are correctly preserved through the

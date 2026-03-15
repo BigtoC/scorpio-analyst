@@ -20,6 +20,14 @@ boolean. The agent MUST validate that the returned `risk_level` matches `RiskLev
 `TradingState`, rejecting mismatches with `TradingError::SchemaViolation`. The agent MUST record `AgentTokenUsage`
 (agent name "Aggressive Risk Analyst", model ID, prompt/completion/total tokens, wall-clock latency).
 
+The Aggressive Risk Agent MUST maintain multi-round chat history using `chat_with_retry_details`, locally deserialize
+the returned raw JSON string into `RiskReport`, and reject malformed JSON with `TradingError::SchemaViolation`.
+Prompt-bound `TradeProposal`, analyst data, and risk-history context MUST be treated as untrusted context, sanitized
+before injection, redact secret-like substrings, and keep bounded risk-history context so later rounds do not grow
+unbounded prompt size. Before the `RiskReport` is written to `TradingState`, the agent MUST reject disallowed control
+characters and values that exceed the module's documented bounded-text policy in `assessment` and in every
+`recommended_adjustments` entry.
+
 #### Scenario: First Round Aggressive Assessment
 
 - **WHEN** the Aggressive Risk Agent is invoked for the first discussion round with a populated `TradeProposal` and
@@ -44,6 +52,12 @@ boolean. The agent MUST validate that the returned `risk_level` matches `RiskLev
 - **WHEN** the LLM returns a `RiskReport` with `risk_level` not equal to `Aggressive`
 - **THEN** the agent returns `TradingError::SchemaViolation` without writing the invalid report to `TradingState`
 
+#### Scenario: Oversized Assessment Or Adjustment Rejected
+
+- **WHEN** the LLM returns an Aggressive `RiskReport` whose `assessment` or any `recommended_adjustments` entry
+  contains disallowed control characters or exceeds the module's documented bounded-text policy
+- **THEN** the agent returns `TradingError::SchemaViolation` without writing the invalid report to `TradingState`
+
 ### Requirement: Conservative Risk Agent
 
 The system MUST implement a Conservative Risk Agent as a `rig` agent using the `DeepThinking` model tier. The agent
@@ -63,6 +77,14 @@ macroeconomic uncertainty, or high beta relative to the broader market. The agen
 risk-control flaw or unjustified exposure. The agent MUST record `AgentTokenUsage` (agent name "Conservative Risk
 Analyst", model ID, prompt/completion/total tokens, wall-clock latency).
 
+The Conservative Risk Agent MUST maintain multi-round chat history using `chat_with_retry_details`, locally deserialize
+the returned raw JSON string into `RiskReport`, and reject malformed JSON with `TradingError::SchemaViolation`.
+Prompt-bound `TradeProposal`, analyst data, and risk-history context MUST be treated as untrusted context, sanitized
+before injection, redact secret-like substrings, and keep bounded risk-history context so later rounds do not grow
+unbounded prompt size. Before the `RiskReport` is written to `TradingState`, the agent MUST reject disallowed control
+characters and values that exceed the module's documented bounded-text policy in `assessment` and in every
+`recommended_adjustments` entry.
+
 #### Scenario: First Round Conservative Assessment
 
 - **WHEN** the Conservative Risk Agent is invoked for the first discussion round with a populated `TradeProposal`
@@ -79,6 +101,12 @@ Analyst", model ID, prompt/completion/total tokens, wall-clock latency).
 #### Scenario: Risk Level Mismatch Rejected
 
 - **WHEN** the LLM returns a `RiskReport` with `risk_level` not equal to `Conservative`
+- **THEN** the agent returns `TradingError::SchemaViolation` without writing the invalid report to `TradingState`
+
+#### Scenario: Oversized Assessment Or Adjustment Rejected
+
+- **WHEN** the LLM returns a Conservative `RiskReport` whose `assessment` or any `recommended_adjustments` entry
+  contains disallowed control characters or exceeds the module's documented bounded-text policy
 - **THEN** the agent returns `TradingError::SchemaViolation` without writing the invalid report to `TradingState`
 
 ### Requirement: Neutral Risk Agent
@@ -99,6 +127,14 @@ mismatches with `TradingError::SchemaViolation`. The agent MUST set `flags_viola
 fails even a balanced risk test. The agent MUST record `AgentTokenUsage` (agent name "Neutral Risk Analyst", model ID,
 prompt/completion/total tokens, wall-clock latency).
 
+The Neutral Risk Agent MUST maintain multi-round chat history using `chat_with_retry_details`, locally deserialize the
+returned raw JSON string into `RiskReport`, and reject malformed JSON with `TradingError::SchemaViolation`.
+Prompt-bound `TradeProposal`, analyst data, and risk-history context MUST be treated as untrusted context, sanitized
+before injection, redact secret-like substrings, and keep bounded risk-history context so later rounds do not grow
+unbounded prompt size. Before the `RiskReport` is written to `TradingState`, the agent MUST reject disallowed control
+characters and values that exceed the module's documented bounded-text policy in `assessment` and in every
+`recommended_adjustments` entry.
+
 #### Scenario: First Round Neutral Assessment
 
 - **WHEN** the Neutral Risk Agent is invoked for the first discussion round with a populated `TradeProposal`
@@ -114,6 +150,12 @@ prompt/completion/total tokens, wall-clock latency).
 #### Scenario: Risk Level Mismatch Rejected
 
 - **WHEN** the LLM returns a `RiskReport` with `risk_level` not equal to `Neutral`
+- **THEN** the agent returns `TradingError::SchemaViolation` without writing the invalid report to `TradingState`
+
+#### Scenario: Oversized Assessment Or Adjustment Rejected
+
+- **WHEN** the LLM returns a Neutral `RiskReport` whose `assessment` or any `recommended_adjustments` entry
+  contains disallowed control characters or exceeds the module's documented bounded-text policy
 - **THEN** the agent returns `TradingError::SchemaViolation` without writing the invalid report to `TradingState`
 
 ### Requirement: Risk Moderator Agent
@@ -142,6 +184,10 @@ prompt/completion/total tokens, wall-clock latency).
 Before writing the output into `TradingState::risk_discussion_history`, the moderator MUST reject disallowed control
 characters and lengths that exceed the module's documented bounded-summary policy by returning
 `TradingError::SchemaViolation`.
+
+The Risk Moderator MUST treat the injected trade proposal, analyst data, and risk reports as untrusted context,
+sanitize prompt-bound symbol/date values, redact secret-like substrings, and bound risk-history context before LLM
+injection.
 
 #### Scenario: Moderator Produces Synthesis After Full Discussion
 
@@ -194,7 +240,12 @@ the Aggressive, Conservative, and Neutral risk agents plus the Risk Moderator. T
 The three risk persona agents MUST execute sequentially within each round (not in parallel) because each agent's prompt
 references the other agents' latest views, and sequential execution enables later agents in a round to see earlier
 agents' output from the same round. This sequential execution is fundamental to the progressive refinement of the risk
-assessment.
+assessment. This requirement is the normative Phase 4 behavior for the current prompt contract even though the broader
+project architecture informally describes the risk phase as "fan-out + cyclic debate."
+
+The `run_risk_discussion` entry point MUST construct one shared `DeepThinking` completion model handle and pass it to
+all three persona agents plus the moderator, matching the provider-sharing pattern already used by
+`run_researcher_debate`.
 
 If any risk agent or moderator invocation fails (LLM error, timeout, schema violation), the discussion MUST abort with
 the corresponding `TradingError` — partial risk results are not usable for downstream Fund Manager review.
@@ -271,7 +322,7 @@ API. It MUST re-export the `run_risk_discussion` function and individual risk ag
 modify foundation-owned files (`src/config.rs`, `src/error.rs`, `src/state/*`, `src/rate_limit.rs`), provider-owned
 files (`src/providers/*`), data-layer files (`src/data/*`), indicator files (`src/indicators/*`), analyst-owned files
 (`src/agents/analyst/*`), researcher-owned files (`src/agents/researcher/*`), or trader-owned files
-(`src/agents/trader.rs`).
+(`src/agents/trader/*`).
 
 #### Scenario: Downstream Orchestrator Import Path
 
