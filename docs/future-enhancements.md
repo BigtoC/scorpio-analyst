@@ -81,6 +81,26 @@ follow-up that should be revisited later.
 - **Revisit trigger**: After the sentiment and research-team modules are stable enough to evaluate whether whitelisted
   Hyperliquid signals improve debate quality without adding excessive complexity
 
+### Mixed sequential+parallel debate execution
+
+- **Status**: Deferred until after the MVP is finished
+- **Source**: `openspec/changes/add-researcher-debate/design.md` and
+  `openspec/changes/add-risk-management/design.md`
+- **Current baseline**: The MVP researcher and risk debate runners keep same-round turns sequential so later agents can
+  react directly to earlier agents' output within the same round and maintain straightforward shared-history updates.
+- **Why it was deferred**: A mixed execution model introduces synchronization, ordering, and state-merge complexity that
+  would expand the workflow surface before the core debate loops are stable.
+- **Why revisit later**: After the MVP, the team should explore whether a hybrid of sequential and parallel execution
+  can reduce latency for the Researcher Team and Risk Management Team without weakening rebuttal quality, moderator
+  synthesis quality, or auditability.
+- **Intentionally deferred details**:
+    - Which turns, if any, can safely run in parallel while preserving same-round rebuttal quality
+    - How shared debate history and latest-agent views should be synchronized when parallel branches rejoin
+    - Whether the mixed model should differ between the researcher debate and the risk discussion loops
+    - What latency, cost, and output-quality metrics should justify adopting the extra orchestration complexity
+- **Revisit trigger**: After the MVP researcher, risk, and workflow layers are stable enough to evaluate whether a
+  mixed sequential+parallel execution pattern is worth the added complexity
+
 ### Social-platform sentiment ingestion
 
 - **Status**: Deferred until after the MVP is finished
