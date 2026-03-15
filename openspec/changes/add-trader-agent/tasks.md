@@ -1,11 +1,11 @@
 # Tasks for `add-trader-agent`
 
-## Prerequisites
+## 0. Prerequisites
 
 - [ ] `add-project-foundation` is complete (core types including `TradeProposal`, `TradeAction`, `TradingState`,
       `AgentTokenUsage`, error handling, config)
 - [ ] `add-llm-providers` is complete (provider factory, agent builder helper, `DeepThinking` tier,
-      `prompt_with_retry` helper with structured output extraction and usage metadata)
+      `prompt_typed_with_retry` helper with structured output extraction and usage metadata)
 
 ## 1. Trader Agent (`src/agents/trader.rs`)
 
@@ -17,14 +17,17 @@
       and runtime parameters (asset symbol, target date)
 - [ ] 1.3 Implement context serialization helper that formats all `TradingState` fields into the prompt
       placeholders — missing analyst outputs serialized as `"null"`, missing `consensus_summary` serialized
-      as an explicit absence note
+      as an explicit absence note, and optional bounded debate-history context kept private to the module if used
 - [ ] 1.4 Implement `run(&self, state: &mut TradingState, config: &Config)
       -> Result<AgentTokenUsage, TradingError>` that builds a one-shot `rig` agent via the agent builder
-      helper, invokes `prompt_with_retry` to extract a `TradeProposal` JSON response, validates the
-      response, writes to `state.trader_proposal`, and records `AgentTokenUsage`
+      helper, invokes `prompt_typed_with_retry` to extract a typed `TradeProposal`, validates the
+      result, writes to `state.trader_proposal`, and records `AgentTokenUsage`
+- [ ] 1.4a Ensure the Trader prompt instructs the model to align with the moderator's stance unless analyst
+       evidence clearly justifies a different conclusion, and to explain any divergence in `rationale`
 - [ ] 1.5 Implement post-parse validation: `target_price > 0.0` and finite, `stop_loss > 0.0` and finite,
       `confidence` finite, `rationale` non-empty and within length bound, no disallowed control characters
-      in `rationale`; return `TradingError::SchemaViolation` on failure
+      in `rationale`; `Hold` still requires numeric monitoring levels for `target_price` and `stop_loss`;
+      return `TradingError::SchemaViolation` on failure
 - [ ] 1.6 Record `AgentTokenUsage` with agent name "Trader Agent", model ID from provider, token counts
       when available (respecting `token_counts_available` flag), and wall-clock latency
 
@@ -41,6 +44,8 @@
       deserialized and written to `state.trader_proposal`
 - [ ] 3.2 Write unit test verifying `action = Buy` produces `TradeAction::Buy`, and similarly for `Sell`
       and `Hold`
+- [ ] 3.2a Write unit test verifying a `Hold` proposal still requires numeric `target_price` and `stop_loss`
+       values and preserves them as monitoring levels in the validated `TradeProposal`
 - [ ] 3.3 Write unit test verifying `target_price <= 0.0` is rejected with `TradingError::SchemaViolation`
 - [ ] 3.4 Write unit test verifying `stop_loss <= 0.0` is rejected with `TradingError::SchemaViolation`
 - [ ] 3.5 Write unit test verifying non-finite `confidence` (NaN, Infinity) is rejected with
@@ -48,12 +53,14 @@
 - [ ] 3.6 Write unit test verifying empty `rationale` is rejected with `TradingError::SchemaViolation`
 - [ ] 3.7 Write unit test verifying oversized or control-character-containing `rationale` is rejected with
       `TradingError::SchemaViolation`
-- [ ] 3.8 Write unit test verifying malformed JSON (not a valid `TradeProposal`) is rejected with
-      `TradingError::SchemaViolation`
+- [ ] 3.8 Write unit test verifying malformed or schema-invalid structured output is rejected with
+      `TradingError::SchemaViolation` without typed-prompt retries on the same schema failure class
 - [ ] 3.9 Write unit test verifying `AgentTokenUsage` is recorded with agent name "Trader Agent" and
       correct model ID
 - [ ] 3.10 Write unit test verifying `AgentTokenUsage` preserves `token_counts_available = false` when
        the provider does not expose authoritative counts
+- [ ] 3.11 Write prompt-construction test verifying the moderator-alignment instruction and divergence-explanation
+       instruction are present in the Trader prompt sent to the provider layer
 
 ## 4. Context Injection Tests
 

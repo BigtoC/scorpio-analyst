@@ -21,9 +21,11 @@ The agent MUST receive the full `TradingState` context as prompt input, includin
 - The target asset symbol and current date.
 - `past_memory_str` — empty string for MVP (memory system deferred).
 
-The agent MUST use the `prompt_with_retry` invocation path (one-shot, not chat) from `llm-providers` to produce
-a structured `TradeProposal` JSON object. The agent MUST record `AgentTokenUsage` (agent name "Trader Agent",
-model ID, prompt/completion/total tokens, wall-clock latency, `token_counts_available` flag).
+The agent MUST use the `prompt_typed_with_retry` invocation path (one-shot typed prompt, not chat) from
+`llm-providers` to produce a structured `TradeProposal`. The Trader prompt MUST instruct the model to align with the
+moderator's stance unless the analyst evidence clearly justifies a different conclusion. If the final proposal
+diverges from the consensus stance, the `rationale` MUST explain why. The agent MUST record `AgentTokenUsage` (agent
+name "Trader Agent", model ID, prompt/completion/total tokens, wall-clock latency, `token_counts_available` flag).
 
 #### Scenario: Full Pipeline State Available
 
@@ -44,21 +46,32 @@ model ID, prompt/completion/total tokens, wall-clock latency, `token_counts_avai
 - **THEN** the agent produces a valid `TradeProposal` based on the available analyst data alone, and the prompt
   explicitly notes the absence of adversarial debate consensus
 
+#### Scenario: Proposal Diverges From Consensus With Justification
+
+- **WHEN** the moderator's `consensus_summary` recommends `Hold` but the analyst evidence strongly supports a
+  different action
+- **THEN** the Trader Agent MAY return `Buy` or `Sell`, but the `rationale` explicitly explains why the analyst
+  evidence outweighed the consensus stance
+
 ### Requirement: Trade Proposal Schema Validation
 
 The system MUST validate the LLM's JSON response against the `TradeProposal` schema before writing to
 `TradingState::trader_proposal`. Validation MUST enforce:
 
-1. The response parses as valid JSON matching the `TradeProposal` struct via `serde_json` deserialization.
+1. The provider-layer typed response successfully deserializes into the `TradeProposal` struct.
 2. `action` deserializes to a valid `TradeAction` variant (`Buy`, `Sell`, or `Hold`).
 3. `target_price` MUST be finite and greater than zero.
 4. `stop_loss` MUST be finite and greater than zero.
 5. `confidence` MUST be finite (no NaN or Infinity).
 6. `rationale` MUST be non-empty, MUST NOT contain disallowed control characters, and MUST NOT exceed the
    module's documented length bound.
+7. If `action` is `Hold`, `target_price` and `stop_loss` MUST still be present as numeric monitoring levels rather
+   than being omitted or nulled.
 
 If any validation check fails, the agent MUST return `TradingError::SchemaViolation` with a descriptive error
-message identifying the specific violation.
+message identifying the specific violation. Provider-layer structured-output decoding failures and trader-layer
+post-parse schema/domain validation failures MUST be treated as non-retriable schema violations rather than retried
+against the same prompt.
 
 #### Scenario: Valid Trade Proposal Accepted
 
@@ -90,14 +103,27 @@ message identifying the specific violation.
 #### Scenario: Malformed JSON Rejected
 
 - **WHEN** the LLM returns a response that does not parse as valid `TradeProposal` JSON
-- **THEN** the `prompt_with_retry` mechanism retries up to the configured retry limit, and if all retries
-  are exhausted the agent returns `TradingError::SchemaViolation`
+- **THEN** the typed provider path returns `TradingError::SchemaViolation` immediately, and
+  `TradingState::trader_proposal` remains `None`
+
+#### Scenario: Post-Parse Schema Violation Is Not Retried
+
+- **WHEN** the provider successfully returns a typed `TradeProposal` but trader-layer validation rejects it because a
+  required domain constraint fails (for example `target_price <= 0.0`)
+- **THEN** the trader returns `TradingError::SchemaViolation` without retrying the same prompt, and
+  `TradingState::trader_proposal` remains `None`
 
 #### Scenario: Oversized Rationale Rejected
 
 - **WHEN** the LLM returns a `rationale` that exceeds the module's documented length bound or contains
   disallowed control characters
 - **THEN** the agent returns `TradingError::SchemaViolation` and `TradingState::trader_proposal` remains `None`
+
+#### Scenario: Hold Proposal Uses Monitoring Levels
+
+- **WHEN** the Trader Agent returns `action = "Hold"`
+- **THEN** the resulting `TradeProposal` still contains numeric `target_price` and `stop_loss` values, interpreted as
+  confirmation and thesis-break monitoring levels rather than immediate execution levels
 
 ### Requirement: Trader Token Usage Recording
 
