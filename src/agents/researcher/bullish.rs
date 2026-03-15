@@ -69,12 +69,12 @@ impl BullishResearcher {
         handle: &CompletionModelHandle,
         state: &TradingState,
         llm_config: &LlmConfig,
-    ) -> Self {
-        let core = DebaterCore::new(handle, BULLISH_SYSTEM_PROMPT, state, llm_config);
+    ) -> Result<Self, TradingError> {
+        let core = DebaterCore::new(handle, BULLISH_SYSTEM_PROMPT, state, llm_config)?;
         let chat_history = vec![Message::User {
             content: OneOrMany::one(UserContent::text(build_analyst_context(state))),
         }];
-        Self { core, chat_history }
+        Ok(Self { core, chat_history })
     }
 
     /// Execute one round of the bullish argument.
@@ -120,7 +120,14 @@ impl BullishResearcher {
 
 fn build_bullish_prompt(debate_history: &[DebateMessage], bear_argument: Option<&str>) -> String {
     let bear_arg_text = bear_argument.unwrap_or("(none yet — opening argument)");
-    let history_text = format_debate_history(debate_history);
+    let history_text = if debate_history.is_empty() {
+        "(no prior debate history)".to_owned()
+    } else {
+        format!(
+            "Prior debate already exists in chat history. Latest stored turn: {}",
+            format_debate_history(&debate_history[debate_history.len().saturating_sub(1)..])
+        )
+    };
 
     format!(
         "{UNTRUSTED_CONTEXT_NOTICE}\n\nDebate history so far:\n{history_text}\n\nBear's latest argument:\n{bear_arg_text}\n\nProvide your bullish rebuttal."
@@ -133,8 +140,56 @@ fn build_bullish_prompt(debate_history: &[DebateMessage], bear_argument: Option<
 mod tests {
     use super::*;
     use super::super::common::validate_debate_content;
+    use crate::config::{ApiConfig, LlmConfig};
+    use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
     use crate::state::{AgentTokenUsage, DebateMessage};
+    use secrecy::SecretString;
+
+    fn sample_llm_config() -> LlmConfig {
+        LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 3,
+            max_risk_rounds: 2,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 3,
+            retry_base_delay_ms: 500,
+        }
+    }
+
+    fn api_config_with_openai() -> ApiConfig {
+        ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: Some(SecretString::from("test-key")),
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        }
+    }
+
+    fn sample_state() -> TradingState {
+        TradingState {
+            execution_id: uuid::Uuid::new_v4(),
+            asset_symbol: "AAPL".to_owned(),
+            target_date: "2026-03-15".to_owned(),
+            fundamental_metrics: None,
+            technical_indicators: None,
+            market_sentiment: None,
+            macro_news: None,
+            debate_history: Vec::new(),
+            consensus_summary: None,
+            trader_proposal: None,
+            risk_discussion_history: Vec::new(),
+            aggressive_risk_report: None,
+            neutral_risk_report: None,
+            conservative_risk_report: None,
+            final_execution_status: None,
+            token_usage: crate::state::TokenUsageTracker::default(),
+        }
+    }
 
     // ── Task 1.4: Correct DebateMessage construction ─────────────────────
 
@@ -301,5 +356,15 @@ mod tests {
 
         let (_, usage) = researcher.run(&[], None).await.unwrap();
         assert!(!usage.token_counts_available);
+    }
+
+    #[test]
+    fn constructor_rejects_quick_thinking_handle() {
+        let cfg = sample_llm_config();
+        let handle =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
+                .unwrap();
+        let result = BullishResearcher::new(&handle, &sample_state(), &cfg);
+        assert!(matches!(result, Err(TradingError::Config(_))));
     }
 }

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::{
     config::LlmConfig,
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
+    providers::factory::{build_agent, CompletionModelHandle, LlmAgent},
     state::{AgentTokenUsage, DebateMessage, TradingState},
 };
 
@@ -43,6 +43,7 @@ pub(super) fn researcher_runtime_config(
 /// Researchers produce longer, richer debate text than one-shot analyst summaries,
 /// so we allow a higher ceiling while still bounding adversarial payloads.
 pub(super) const MAX_DEBATE_CHARS: usize = 8_192;
+const MAX_PROMPT_CONTEXT_CHARS: usize = 2_048;
 
 /// Validate that a debate message or consensus summary is within bounds and free of
 /// disallowed control characters.
@@ -84,19 +85,34 @@ pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingErr
         });
     }
 
+    let has_bullish_evidence = content.contains("bull") || content.contains("Bull");
+    let has_bearish_evidence = content.contains("bear") || content.contains("Bear");
+    let has_uncertainty = content.contains("uncertainty") || content.contains("uncertain");
+
+    if !(has_bullish_evidence && has_bearish_evidence && has_uncertainty) {
+        return Err(TradingError::SchemaViolation {
+            message: "DebateModerator: consensus summary must include bullish evidence, bearish evidence, and unresolved uncertainty"
+                .to_owned(),
+        });
+    }
+
     Ok(())
 }
 
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
 pub(super) fn build_analyst_context(state: &TradingState) -> String {
-    let fundamental_report =
-        serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned());
-    let technical_report =
-        serde_json::to_string(&state.technical_indicators).unwrap_or_else(|_| "null".to_owned());
-    let sentiment_report =
-        serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned());
-    let news_report =
-        serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned());
+    let fundamental_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned()),
+    );
+    let technical_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.technical_indicators).unwrap_or_else(|_| "null".to_owned()),
+    );
+    let sentiment_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned()),
+    );
+    let news_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned()),
+    );
 
     format!(
         "{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}"
@@ -111,9 +127,28 @@ pub(super) fn format_debate_history(history: &[DebateMessage]) -> String {
     history
         .iter()
         .enumerate()
-        .map(|(i, msg)| format!("[{}] {}: {}", i + 1, msg.role, msg.content))
+        .map(|(i, msg)| {
+            format!(
+                "[{}] {}: {}",
+                i + 1,
+                sanitize_prompt_context(&msg.role),
+                sanitize_prompt_context(&msg.content)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+pub(super) fn sanitize_prompt_context(input: &str) -> String {
+    let filtered: String = input
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect();
+    let redacted = redact_secret_like_values(&filtered);
+    if redacted.chars().count() <= MAX_PROMPT_CONTEXT_CHARS {
+        return redacted;
+    }
+    redacted.chars().take(MAX_PROMPT_CONTEXT_CHARS).collect()
 }
 
 fn sanitize_symbol_for_prompt(symbol: &str) -> String {
@@ -140,6 +175,46 @@ fn sanitize_date_for_prompt(target_date: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+fn redact_secret_like_values(input: &str) -> String {
+    fn mask_prefixed_token(input: &str, prefix: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let prefix_bytes = prefix.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i..].starts_with(prefix_bytes) {
+                out.push_str("[REDACTED]");
+                i += prefix_bytes.len();
+                while i < bytes.len() {
+                    let ch = input[i..].chars().next().unwrap();
+                    if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                        i += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                let ch = input[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+
+        out
+    }
+
+    let mut out = input.to_owned();
+    for prefix in ["sk-ant-", "sk-", "AIza", "Bearer ", "bearer ", "BEARER "] {
+        out = mask_prefixed_token(&out, prefix);
+    }
+    out = out.replace("api_key=", "[REDACTED]");
+    out = out.replace("api-key=", "[REDACTED]");
+    out = out.replace("apikey=", "[REDACTED]");
+    out = out.replace("token=", "[REDACTED]");
+    out
 }
 
 /// Build an [`AgentTokenUsage`] from a `rig` usage response.
@@ -188,7 +263,15 @@ impl DebaterCore {
         system_prompt_template: &str,
         state: &TradingState,
         llm_config: &LlmConfig,
-    ) -> Self {
+    ) -> Result<Self, TradingError> {
+        if handle.model_id() != llm_config.deep_thinking_model {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "researcher agents require deep-thinking model '{}', got '{}'",
+                llm_config.deep_thinking_model,
+                handle.model_id()
+            )));
+        }
+
         let runtime =
             researcher_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
 
@@ -197,12 +280,12 @@ impl DebaterCore {
             .replace("{current_date}", &runtime.target_date)
             .replace("{past_memory_str}", "");
 
-        Self {
+        Ok(Self {
             agent: build_agent(handle, &system_prompt),
             model_id: handle.model_id().to_owned(),
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
-        }
+        })
     }
 
     /// Construct a minimal `DebaterCore` for unit tests (50 ms timeout, 1 retry).
@@ -375,7 +458,10 @@ mod tests {
     #[test]
     fn validate_consensus_summary_accepts_hold() {
         assert!(
-            validate_consensus_summary("Hold - upside is balanced by macro uncertainty.").is_ok()
+            validate_consensus_summary(
+                "Hold - bullish evidence is revenue growth, bearish evidence is rates, and uncertainty remains around demand durability."
+            )
+            .is_ok()
         );
     }
 

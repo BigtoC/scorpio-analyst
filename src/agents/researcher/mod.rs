@@ -153,9 +153,9 @@ pub async fn run_researcher_debate(
 ) -> Result<Vec<AgentTokenUsage>, TradingError> {
     let max_rounds = config.llm.max_debate_rounds;
     let mut executor = RealDebateExecutor {
-        bull: BullishResearcher::new(handle, state, &config.llm),
-        bear: BearishResearcher::new(handle, state, &config.llm),
-        moderator: DebateModerator::new(handle, state, &config.llm),
+        bull: BullishResearcher::new(handle, state, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, &config.llm)?,
     };
 
     run_researcher_debate_with_executor(state, max_rounds, &mut executor).await
@@ -284,6 +284,9 @@ mod tests {
         assert_eq!(state.debate_history[1].role, "bearish_researcher");
         assert!(state.consensus_summary.is_some());
         assert_eq!(usages.len(), 3);
+        assert_eq!(usages[0].agent_name, "Bullish Researcher");
+        assert_eq!(usages[1].agent_name, "Bearish Researcher");
+        assert_eq!(usages[2].agent_name, "Debate Moderator");
     }
 
     // ── Task 4.7: 3-round debate produces 6 DebateMessages ───────────────
@@ -307,6 +310,22 @@ mod tests {
         }
         assert!(state.consensus_summary.is_some());
         assert_eq!(usages.len(), 7);
+        assert_eq!(usages.last().unwrap().agent_name, "Debate Moderator");
+    }
+
+    #[test]
+    fn five_rounds_execute_exactly_five_rounds() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut state = make_state();
+        let mut exec = MockDebateExecutor::new();
+
+        let usages = rt
+            .block_on(run_researcher_debate_with_executor(&mut state, 5, &mut exec))
+            .unwrap();
+
+        assert_eq!(state.debate_history.len(), 10);
+        assert_eq!(usages.len(), 11);
+        assert_eq!(usages.last().unwrap().agent_name, "Debate Moderator");
     }
 
     // ── Task 4.8: 0 rounds — no debate messages, moderator still invoked ─
@@ -347,31 +366,15 @@ mod tests {
 
     #[test]
     fn token_usage_count_equals_two_rounds_plus_moderator() {
-        let rounds = 3u32;
-        let expected = (rounds as usize) * 2 + 1;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut state = make_state();
+        let mut exec = MockDebateExecutor::new();
 
-        // Simulate collecting usages
-        let mut usages: Vec<AgentTokenUsage> = Vec::new();
-        for i in 0..(rounds * 2 + 1) {
-            let agent_name = if i == rounds * 2 {
-                "Debate Moderator"
-            } else if i % 2 == 0 {
-                "Bullish Researcher"
-            } else {
-                "Bearish Researcher"
-            };
-            usages.push(AgentTokenUsage {
-                agent_name: agent_name.to_owned(),
-                model_id: "o3".to_owned(),
-                token_counts_available: false,
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-                latency_ms: 0,
-            });
-        }
+        let usages = rt
+            .block_on(run_researcher_debate_with_executor(&mut state, 3, &mut exec))
+            .unwrap();
 
-        assert_eq!(usages.len(), expected);
+        assert_eq!(usages.len(), 7);
         assert_eq!(usages.last().unwrap().agent_name, "Debate Moderator");
     }
 
@@ -379,56 +382,30 @@ mod tests {
 
     #[test]
     fn token_counts_unavailable_when_all_zero() {
-        let usage = AgentTokenUsage {
-            agent_name: "Bullish Researcher".to_owned(),
-            model_id: "o3".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 5,
-        };
-        assert!(!usage.token_counts_available);
-        assert_eq!(usage.total_tokens, 0);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut state = make_state();
+        let mut exec = MockDebateExecutor::new();
+
+        let usages = rt
+            .block_on(run_researcher_debate_with_executor(&mut state, 1, &mut exec))
+            .unwrap();
+
+        assert!(usages.iter().all(|usage| !usage.token_counts_available));
     }
 
     // ── Task 4.4: Return type is Vec<AgentTokenUsage> ─────────────────────
 
     #[test]
     fn usage_vector_includes_moderator_as_last_entry() {
-        let rounds = 2u32;
-        let mut usages: Vec<AgentTokenUsage> = Vec::new();
-        for _ in 0..rounds {
-            usages.push(AgentTokenUsage {
-                agent_name: "Bullish Researcher".to_owned(),
-                model_id: "o3".to_owned(),
-                token_counts_available: false,
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-                latency_ms: 0,
-            });
-            usages.push(AgentTokenUsage {
-                agent_name: "Bearish Researcher".to_owned(),
-                model_id: "o3".to_owned(),
-                token_counts_available: false,
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-                latency_ms: 0,
-            });
-        }
-        usages.push(AgentTokenUsage {
-            agent_name: "Debate Moderator".to_owned(),
-            model_id: "o3".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 0,
-        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut state = make_state();
+        let mut exec = MockDebateExecutor::new();
 
-        assert_eq!(usages.len(), (rounds as usize) * 2 + 1);
+        let usages = rt
+            .block_on(run_researcher_debate_with_executor(&mut state, 2, &mut exec))
+            .unwrap();
+
+        assert_eq!(usages.len(), 5);
         assert_eq!(usages.last().unwrap().agent_name, "Debate Moderator");
     }
 }

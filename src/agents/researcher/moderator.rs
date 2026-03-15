@@ -66,10 +66,10 @@ impl DebateModerator {
         handle: &CompletionModelHandle,
         state: &TradingState,
         llm_config: &LlmConfig,
-    ) -> Self {
-        Self {
-            core: DebaterCore::new(handle, MODERATOR_SYSTEM_PROMPT, state, llm_config),
-        }
+    ) -> Result<Self, TradingError> {
+        Ok(Self {
+            core: DebaterCore::new(handle, MODERATOR_SYSTEM_PROMPT, state, llm_config)?,
+        })
     }
 
     /// Run the moderator: produce a consensus summary from the completed debate.
@@ -122,7 +122,11 @@ fn build_moderator_prompt(state: &TradingState) -> String {
         .map(|m| m.content.as_str())
         .unwrap_or("(no bearish argument recorded)");
 
-    let history_text = format_debate_history(&state.debate_history);
+    let history_text = if state.debate_history.is_empty() {
+        "No adversarial debate occurred; base the consensus on analyst data alone.".to_owned()
+    } else {
+        format_debate_history(&state.debate_history)
+    };
     let analyst_context = build_analyst_context(state);
 
     format!(
@@ -154,8 +158,56 @@ fn build_moderator_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ApiConfig, LlmConfig};
+    use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::providers::factory::{mock_llm_agent, mock_prompt_response};
     use crate::state::AgentTokenUsage;
+    use secrecy::SecretString;
+
+    fn sample_llm_config() -> LlmConfig {
+        LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 3,
+            max_risk_rounds: 2,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 3,
+            retry_base_delay_ms: 500,
+        }
+    }
+
+    fn api_config_with_openai() -> ApiConfig {
+        ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: Some(SecretString::from("test-key")),
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        }
+    }
+
+    fn sample_state() -> TradingState {
+        TradingState {
+            execution_id: uuid::Uuid::new_v4(),
+            asset_symbol: "AAPL".to_owned(),
+            target_date: "2026-03-15".to_owned(),
+            fundamental_metrics: None,
+            technical_indicators: None,
+            market_sentiment: None,
+            macro_news: None,
+            debate_history: vec![],
+            consensus_summary: None,
+            trader_proposal: None,
+            risk_discussion_history: Vec::new(),
+            aggressive_risk_report: None,
+            neutral_risk_report: None,
+            conservative_risk_report: None,
+            final_execution_status: None,
+            token_usage: crate::state::TokenUsageTracker::default(),
+        }
+    }
 
     // ── Task 3.4 / 3.6: Structural checks (no LLM call needed) ──────────
 
@@ -202,22 +254,21 @@ mod tests {
 
     #[test]
     fn consensus_containing_buy_is_valid_content() {
-        let content = "Based on the evidence, the prevailing stance is Buy. \
-                       Revenue growth supports upside, though debt remains a risk.";
+        let content = "Based on the evidence, the prevailing stance is Buy. Strong bullish evidence is revenue growth, the strongest bearish evidence is debt load, and the main uncertainty is demand durability.";
         assert!(validate_consensus_summary(content).is_ok());
         assert!(content.contains("Buy") || content.contains("Sell") || content.contains("Hold"));
     }
 
     #[test]
     fn consensus_containing_hold_is_valid_content() {
-        let content = "Hold is the balanced stance given mixed signals.";
+        let content = "Hold is the balanced stance given mixed signals. Bullish evidence is margin resilience, bearish evidence is macro tightening, and uncertainty remains around demand.";
         assert!(validate_consensus_summary(content).is_ok());
         assert!(content.contains("Hold"));
     }
 
     #[test]
     fn consensus_containing_sell_is_valid_content() {
-        let content = "Sell is warranted given deteriorating fundamentals.";
+        let content = "Sell is warranted given deteriorating fundamentals. Bullish evidence is brand strength, bearish evidence is slowing growth, and uncertainty remains around the pace of deterioration.";
         assert!(validate_consensus_summary(content).is_ok());
         assert!(content.contains("Sell"));
     }
@@ -225,6 +276,17 @@ mod tests {
     #[test]
     fn consensus_without_explicit_stance_is_rejected() {
         let content = "Evidence is mixed, with upside and downside both plausible.";
+        let result = validate_consensus_summary(content);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn consensus_missing_uncertainty_is_rejected() {
+        let content = "Hold - bullish evidence is revenue growth and bearish evidence is rates.";
         let result = validate_consensus_summary(content);
         assert!(result.is_err());
         assert!(matches!(
@@ -372,5 +434,15 @@ mod tests {
         let (summary, usage) = moderator.run(&state).await.unwrap();
         assert!(summary.contains("Hold"));
         assert!(!usage.token_counts_available);
+    }
+
+    #[test]
+    fn constructor_rejects_quick_thinking_handle() {
+        let cfg = sample_llm_config();
+        let handle =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
+                .unwrap();
+        let result = DebateModerator::new(&handle, &sample_state(), &cfg);
+        assert!(matches!(result, Err(TradingError::Config(_))));
     }
 }
