@@ -13,7 +13,7 @@ For `<SpecName>`:
 - review `openspec/project.md`, the relevant capability spec(s), `proposal.md`, `design.md` if present, and `tasks.md`
 - check for active related changes that could conflict before editing
 
-Create a focused agent team for the implementation:
+Create an agent team with 4 roles to execute the change:
 - **Coordinator**: owns the plan, maps tasks to work slices, keeps changes minimal, and enforces the approval/spec gate
 - **Test Writer**: writes or updates failing tests first for the current task slice and does not edit production code
 - **Code Writer**: edits implementation code only after the new tests fail for the expected reason, then makes the smallest change to pass them
