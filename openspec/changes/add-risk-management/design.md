@@ -118,8 +118,8 @@ run_risk_discussion(state, config, providers)
 
 Risk agents receive serialized data in their system prompt or as prompt context:
 
-| Placeholder                | Source                                                    |
-|----------------------------|-----------------------------------------------------------|
+| Placeholder               | Source                                                   |
+|---------------------------|----------------------------------------------------------|
 | `{trader_proposal}`       | `serde_json::to_string(&state.trader_proposal)`          |
 | `{fundamental_report}`    | `serde_json::to_string(&state.fundamental_metrics)`      |
 | `{technical_report}`      | `serde_json::to_string(&state.technical_indicators)`     |
@@ -129,8 +129,8 @@ Risk agents receive serialized data in their system prompt or as prompt context:
 | `{aggressive_response}`   | `serde_json::to_string(&state.aggressive_risk_report)`   |
 | `{conservative_response}` | `serde_json::to_string(&state.conservative_risk_report)` |
 | `{neutral_response}`      | `serde_json::to_string(&state.neutral_risk_report)`      |
-| `{ticker}`                | `state.asset_symbol`                                      |
-| `{current_date}`          | `state.target_date`                                       |
+| `{ticker}`                | `state.asset_symbol`                                     |
+| `{current_date}`          | `state.target_date`                                      |
 | `{past_memory_str}`       | Empty string for MVP (memory system deferred)            |
 
 Missing analyst outputs (from graceful degradation) are serialized as `"null"` — the risk agent prompts explicitly
