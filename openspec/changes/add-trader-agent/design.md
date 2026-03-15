@@ -35,9 +35,9 @@ for final approval/rejection).
       clearly justifies a different conclusion, and to explain any divergence inside `rationale`.
     - Record `AgentTokenUsage` for the single invocation (agent name "Trader Agent", model ID,
       prompt/completion/total tokens, wall-clock latency, `token_counts_available` flag).
-    - Provide a `run_trader` function that accepts `&mut TradingState`, `&Config`, and provider references, writes
-      the validated proposal, and returns `Result<AgentTokenUsage, TradingError>`.
-    - Confine all implementation to `src/agents/trader.rs` (plus the approved `pub mod trader;` uncomment in
+    - Provide a `run_trader` function that accepts `&mut TradingState` and `&Config`, writes the validated proposal,
+      and returns `Result<AgentTokenUsage, TradingError>`.
+    - Confine all implementation to `src/agents/trader/mod.rs` and `src/agents/trader/tests.rs` (plus the approved `pub mod trader;` uncomment in
       `src/agents/mod.rs`).
 
 - **Non-Goals:**
@@ -65,7 +65,9 @@ the Trader needs.
 ```
 src/agents/
 ├── mod.rs           <- Uncomment `pub mod trader;` (cross-owner, foundation-owned)
-└── trader.rs        <- TraderAgent struct + run_trader function (this change)
+└── trader/
+    ├── mod.rs       <- TraderAgent struct + run_trader function (this change)
+    └── tests.rs     <- Trader-focused unit and run-path tests
 ```
 
 ### Agent Construction Pattern
@@ -74,6 +76,8 @@ src/agents/
 2. Build a `rig` agent via the agent builder helper with the Trader system prompt sourced from a module constant
    matching `docs/prompts.md`. No tool bindings are attached — the Trader is a pure reasoning agent.
 3. Serialize the full `TradingState` context into prompt placeholders (analyst outputs, consensus summary).
+   Sanitize symbol/date, redact secret-like substrings, frame injected data as untrusted context, and bound each
+   serialized context field before prompt insertion.
 4. Use `prompt_typed_with_retry` (one-shot typed prompt) to invoke the LLM and extract the structured
    `TradeProposal` plus usage metadata.
 5. Apply post-parse domain validation to the typed `TradeProposal`.
@@ -99,6 +103,12 @@ Missing analyst outputs (from Phase 1 graceful degradation) are serialized as `"
 `consensus_summary` (if the debate phase failed or was skipped) is handled as an explicit absence in the prompt.
 `TradingState::debate_history` remains available to the implementation for bounded supporting context, but the base
 prompt contract does not require injecting the full raw history.
+
+All prompt-bound context is sanitized before injection:
+- asset symbol and date are normalized to prompt-safe character sets
+- secret-like substrings are redacted before leaving the process
+- analyst and consensus text are treated as untrusted context
+- each injected field is bounded to a fixed character ceiling to limit token growth
 
 ### Output Validation
 

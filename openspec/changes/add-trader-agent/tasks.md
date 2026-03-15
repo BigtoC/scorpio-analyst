@@ -7,7 +7,7 @@
 - [x] `add-llm-providers` is complete (provider factory, agent builder helper, `DeepThinking` tier,
       `prompt_typed_with_retry` helper with structured output extraction and usage metadata)
 
-## 1. Trader Agent (`src/agents/trader.rs`)
+## 1. Trader Agent (`src/agents/trader/mod.rs`)
 
 - [x] 1.1 Define the Trader Agent system prompt as a `const &str`, adapted from `docs/prompts.md`
       (Trader section), with placeholders for `{ticker}`, `{current_date}`, `{consensus_summary}`,
@@ -31,7 +31,7 @@
 - [x] 1.6 Record `AgentTokenUsage` with agent name "Trader Agent", model ID from provider, token counts
       when available (respecting `token_counts_available` flag), and wall-clock latency
 
-## 2. Public API (`src/agents/trader.rs` exports)
+## 2. Public API (`src/agents/trader/mod.rs` exports)
 
 - [x] 2.1 Expose `run_trader` function as the primary entry point that constructs a `TraderAgent` and
       invokes it, returning `Result<AgentTokenUsage, TradingError>`

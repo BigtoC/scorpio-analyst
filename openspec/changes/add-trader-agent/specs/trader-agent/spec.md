@@ -21,6 +21,13 @@ The agent MUST receive the full `TradingState` context as prompt input, includin
 - The target asset symbol and current date.
 - `past_memory_str` — empty string for MVP (memory system deferred).
 
+Before injected state reaches the model, the trader prompt builder MUST:
+
+- Treat analyst and consensus content as untrusted context rather than instructions.
+- Sanitize prompt-bound symbol/date values to prompt-safe character sets.
+- Redact secret-like substrings from prompt-bound context.
+- Bound each injected context field to a fixed maximum size to limit prompt growth.
+
 The agent MUST use the `prompt_typed_with_retry` invocation path (one-shot typed prompt, not chat) from
 `llm-providers` to produce a structured `TradeProposal`. The Trader prompt MUST instruct the model to align with the
 moderator's stance unless the analyst evidence clearly justifies a different conclusion. If the final proposal
@@ -154,8 +161,8 @@ The `run_trader` function MUST return `Result<AgentTokenUsage, TradingError>` so
 
 ### Requirement: Trader Module Boundary
 
-This capability's implementation MUST remain limited to trader agent concerns within `src/agents/trader.rs`. It
-MUST re-export the `run_trader` function and `TraderAgent` type from `src/agents/trader.rs` for consumption by
+This capability's implementation MUST remain limited to trader agent concerns within `src/agents/trader/mod.rs`. It
+MUST re-export the `run_trader` function and `TraderAgent` type from `src/agents/trader/mod.rs` for consumption by
 the downstream `add-graph-orchestration` change via the agent module path
 (`use scorpio_analyst::agents::trader::{run_trader, TraderAgent}`).
 

@@ -10,7 +10,7 @@ object for downstream evaluation by the Risk Management Team.
 
 ## What Changes
 
-- Implement `TraderAgent` in `src/agents/trader.rs` — uses `DeepThinking` tier, receives the full `TradingState`
+- Implement `TraderAgent` in `src/agents/trader/mod.rs` — uses `DeepThinking` tier, receives the full `TradingState`
   context (analyst outputs + debate consensus, with optional bounded debate-history context if implementation benefit
   justifies it), and produces a structured `TradeProposal` via `prompt_typed_with_retry` (one-shot typed prompt, not
   chat-based).
@@ -28,13 +28,15 @@ object for downstream evaluation by the Risk Management Team.
   `confidence` must be a finite number, and `rationale` must be non-empty and bounded. `Hold` proposals still require
   numeric `target_price` and `stop_loss` values, interpreted as monitoring levels rather than immediate execution
   levels.
-- Expose `run_trader` function and `TraderAgent` type from `src/agents/trader.rs` for consumption by the
+- Expose `run_trader` function and `TraderAgent` type from `src/agents/trader/mod.rs` for consumption by the
   downstream `add-graph-orchestration` change.
+- Sanitize prompt-bound state before LLM injection: symbol/date normalization, secret-like redaction, untrusted-context
+  framing, and per-field prompt-context bounding to limit prompt-injection and token-budget risk.
 
 ## Impact
 
 - Affected specs: `trader-agent` (new)
-- Affected code: `src/agents/trader.rs` (new file), `src/agents/mod.rs` (approved single-line cross-owner change)
+- Affected code: `src/agents/trader/mod.rs` (new file), `src/agents/trader/tests.rs` (new tests), `src/agents/mod.rs` (approved single-line cross-owner change)
 - Dependencies: `add-project-foundation` (core types including `TradeProposal`, `TradeAction`, `TradingState`,
   error handling, config), `add-llm-providers` (provider factory, agent builder helper, `DeepThinking` tier,
   `prompt_typed_with_retry` helper)
