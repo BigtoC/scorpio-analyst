@@ -360,13 +360,13 @@ sentiment out does not introduce shared-file conflicts inside the data layer.
 
 #### I3 — Agent Layer (5 parallel)
 
-| Change                  | Capability          | Files Owned                                                                                 |
-|-------------------------|---------------------|---------------------------------------------------------------------------------------------|
-| `add-analyst-team`      | `analyst-team`      | `src/agents/analyst/mod.rs`, `src/agents/analyst/{fundamental,sentiment,news,technical}.rs` |
-| `add-researcher-debate` | `researcher-debate` | `src/agents/researcher/mod.rs`, `src/agents/researcher/{bullish,bearish,moderator}.rs`      |
-| `add-trader-agent`      | `trader-agent`      | `src/agents/trader.rs`                                                                      |
-| `add-risk-management`   | `risk-management`   | `src/agents/risk/mod.rs`, `src/agents/risk/{aggressive,conservative,neutral,moderator}.rs`  |
-| `add-fund-manager`      | `fund-manager`      | `src/agents/fund_manager.rs`                                                                |
+| Change                  | Capability          | Files Owned                                                                                          |
+|-------------------------|---------------------|------------------------------------------------------------------------------------------------------|
+| `add-analyst-team`      | `analyst-team`      | `src/agents/analyst/mod.rs`, `src/agents/analyst/{fundamental,sentiment,news,technical}.rs`          |
+| `add-researcher-debate` | `researcher-debate` | `src/agents/researcher/mod.rs`, `src/agents/researcher/{bullish,bearish,moderator}.rs`               |
+| `add-trader-agent`      | `trader-agent`      | `src/agents/trader.rs`                                                                               |
+| `add-risk-management`   | `risk-management`   | `src/agents/risk/mod.rs`, `src/agents/risk/{aggressive,conservative,neutral,moderator}.rs`           |
+| `add-fund-manager`      | `fund-manager`      | `src/agents/fund_manager/mod.rs`, `src/agents/fund_manager/{agent,prompt,validation,usage,tests}.rs` |
 
 **No code conflicts**: each agent spec owns its own subdirectory or file within `src/agents/`.
 The foundation pre-declares all `pub mod` entries in `src/agents/mod.rs`.
@@ -585,7 +585,13 @@ src/
 │   │   ├── conservative.rs     ← add-risk-management
 │   │   ├── neutral.rs          ← add-risk-management
 │   │   └── moderator.rs        ← add-risk-management
-│   └── fund_manager.rs         ← add-fund-manager
+│   └── fund_manager/
+│       ├── mod.rs              ← add-fund-manager
+│       ├── agent.rs            ← add-fund-manager
+│       ├── prompt.rs           ← add-fund-manager
+│       ├── validation.rs       ← add-fund-manager
+│       ├── usage.rs            ← add-fund-manager
+│       └── tests.rs            ← add-fund-manager
 ├── workflow/
 │   ├── mod.rs                  ← add-project-foundation (skeleton)
 │   ├── pipeline.rs             ← add-graph-orchestration
