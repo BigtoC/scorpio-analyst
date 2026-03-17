@@ -5,17 +5,18 @@
 
 ## 2. Core Implementation
 
-- [x] 2.1 Create `src/agents/fund_manager.rs`
-- [x] 2.2 Embed `FUND_MANAGER_SYSTEM_PROMPT` const from `docs/prompts.md` section 5
-- [x] 2.3 Implement `FundManagerInference` trait (mirrors the existing trait-based agent test seam pattern)
-- [x] 2.4 Implement `FundManagerAgent` struct with `new(handle, symbol, target_date, llm_config)` constructor
-- [x] 2.5 Implement deterministic safety-net check: reject if both Conservative + Neutral `flags_violation == true`
-- [x] 2.6 Implement `build_prompt_context` to inject serialized `TradeProposal`, 3 `RiskReport` objects, `risk_discussion_history`, analyst data, and `{current_date}`
-- [x] 2.7 Implement prompt sanitization (reuse or mirror `sanitize_prompt_context`, `sanitize_symbol_for_prompt`, `sanitize_date_for_prompt`, `redact_secret_like_values` from trader module as local logic, without cross-owner edits)
-- [x] 2.8 Implement `run` method: deterministic check -> LLM call -> validate -> write to `final_execution_status`
-- [x] 2.9 Implement `validate_execution_status`: valid decision enum, non-empty rationale, bounded length, no disallowed control chars
-- [x] 2.10 Normalize `decided_at` to the runtime-authoritative decision timestamp, falling back to the analysis date when a more precise timestamp is unavailable
-- [x] 2.11 Implement `usage_from_response` for `AgentTokenUsage` construction (LLM path and deterministic bypass)
+- [x] 2.1 Create package-style Fund Manager module rooted at `src/agents/fund_manager/mod.rs`
+- [x] 2.2 Split production logic across focused submodules in `src/agents/fund_manager/`
+- [x] 2.3 Embed `FUND_MANAGER_SYSTEM_PROMPT` const from `docs/prompts.md` section 5
+- [x] 2.4 Implement `FundManagerInference` trait (mirrors the existing trait-based agent test seam pattern)
+- [x] 2.5 Implement `FundManagerAgent` struct with `new(handle, symbol, target_date, llm_config)` constructor
+- [x] 2.6 Implement deterministic safety-net check: reject if both Conservative + Neutral `flags_violation == true`
+- [x] 2.7 Implement `build_prompt_context` to inject serialized `TradeProposal`, 3 `RiskReport` objects, `risk_discussion_history`, analyst data, and `{current_date}`
+- [x] 2.8 Implement prompt sanitization (reuse or mirror `sanitize_prompt_context`, `sanitize_symbol_for_prompt`, `sanitize_date_for_prompt`, `redact_secret_like_values` from trader module as local logic, without cross-owner edits)
+- [x] 2.9 Implement `run` method: deterministic check -> LLM call -> validate -> write to `final_execution_status`
+- [x] 2.10 Implement `validate_execution_status`: valid decision enum, non-empty rationale, bounded length, no disallowed control chars
+- [x] 2.11 Normalize `decided_at` to the runtime-authoritative decision timestamp, falling back to the analysis date when a more precise timestamp is unavailable
+- [x] 2.12 Implement `usage_from_response` for `AgentTokenUsage` construction (LLM path and deterministic bypass)
 
 ## 3. Public Entry Point
 
@@ -25,7 +26,7 @@
 
 ## 4. Testing
 
-- [x] 4.1 Add Fund Manager tests in a test-only module for `src/agents/fund_manager.rs`
+- [x] 4.1 Add Fund Manager integration-style tests in `src/agents/fund_manager/tests.rs`
 - [x] 4.2 Test: deterministic rejection when both Conservative + Neutral flag violation
 - [x] 4.3 Test: LLM path taken when only Conservative flags violation (Neutral does not)
 - [x] 4.4 Test: LLM path taken when neither flags violation

@@ -2,13 +2,15 @@
 
 ### Requirement: Fund Manager Final Decision Agent
 
-The system MUST implement a Fund Manager agent in `src/agents/fund_manager.rs` as a `rig` agent
-using the `DeepThinking` model tier. The agent MUST be configured with the system prompt defined in
-`docs/prompts.md` section 5 (Fund Manager). The agent reads `TradingState::trader_proposal`, the
-three `RiskReport` fields (`aggressive_risk_report`, `neutral_risk_report`,
-`conservative_risk_report`), `risk_discussion_history`, and the existing analyst context
-(`fundamental_metrics`, `technical_indicators`, `market_sentiment`, `macro_news`), then writes a
-validated `ExecutionStatus` to `TradingState::final_execution_status`.
+The system MUST implement a Fund Manager agent as a package-style module rooted at
+`src/agents/fund_manager/mod.rs`, with production logic contained within `src/agents/fund_manager/`,
+as a `rig` agent using the `DeepThinking` model tier. The agent MUST be configured with the system
+prompt defined in `docs/prompts.md` section 5 (Fund Manager), including the documented
+untrusted-context notice and missing-data acknowledgment instructions. The agent reads
+`TradingState::trader_proposal`, the three `RiskReport` fields (`aggressive_risk_report`,
+`neutral_risk_report`, `conservative_risk_report`), `risk_discussion_history`, and the existing
+analyst context (`fundamental_metrics`, `technical_indicators`, `market_sentiment`, `macro_news`),
+then writes a validated `ExecutionStatus` to `TradingState::final_execution_status`.
 
 #### Scenario: Approval with all inputs present
 
@@ -155,10 +157,11 @@ be returned to the caller for incorporation into the phase-level `PhaseTokenUsag
 ### Requirement: Fund Manager Module Boundary
 
 This capability's implementation MUST remain limited to Fund Manager agent concerns within
-`src/agents/fund_manager.rs`. Tests MAY be colocated in the same file or placed in an adjacent
-test-only module, but the production implementation for this capability MUST remain owned by
-`src/agents/fund_manager.rs`. It MUST NOT modify any foundation-owned state types, provider code,
-data layer files, or other agent modules.
+`src/agents/fund_manager/`. The public surface MUST remain owned by `src/agents/fund_manager/mod.rs`,
+and production logic MAY be split into adjacent private submodules beneath that directory. Tests MAY
+be colocated in helper modules or placed in `src/agents/fund_manager/tests.rs`, but the production
+implementation for this capability MUST remain owned by `src/agents/fund_manager/`. It MUST NOT
+modify any foundation-owned state types, provider code, data layer files, or other agent modules.
 
 #### Scenario: Downstream orchestration import
 
