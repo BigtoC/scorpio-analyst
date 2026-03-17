@@ -10,9 +10,11 @@ auditable approve/reject verdict. Without this agent the pipeline cannot produce
 
 ## What Changes
 
-- Implement the Fund Manager agent in `src/agents/fund_manager.rs` as a `rig` agent on the
-  `DeepThinking` model tier.
-- Embed the system prompt from `docs/prompts.md` section 5 (Fund Manager).
+- Implement the Fund Manager agent as a package-style module rooted at
+  `src/agents/fund_manager/mod.rs` with focused internal submodules under
+  `src/agents/fund_manager/`, using the `DeepThinking` model tier.
+- Embed the Fund Manager system prompt from `docs/prompts.md` section 5, including the
+  prompt-hardening guidance for untrusted upstream context and missing-data acknowledgment.
 - Provide a `run_fund_manager(state, config)` public entry point mirroring the pattern established
   by `add-trader-agent`'s `run_trader`.
 - Apply the deterministic safety-net rule: **automatically reject** if both the Conservative and
@@ -34,9 +36,10 @@ auditable approve/reject verdict. Without this agent the pipeline cannot produce
 ## Impact
 
 - Affected specs: `fund-manager` (new capability)
-- Affected code: `src/agents/fund_manager.rs` (new file, owned by this change); read-only
-  dependencies on `src/state/trading_state.rs`, `src/state/risk.rs`, `src/state/execution.rs`,
-  and `src/providers/factory.rs`
+- Affected code: `src/agents/fund_manager/` (owned by this change), `docs/prompts.md`,
+  `docs/architect-plan.md`, `.github/instructions/rust.instructions.md`; read-only dependencies
+  on `src/state/trading_state.rs`, `src/state/risk.rs`, `src/state/execution.rs`, and
+  `src/providers/factory.rs`
 
 ## Cross-Owner Changes
 

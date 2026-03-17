@@ -3,9 +3,9 @@
 The Fund Manager is the terminal node (Phase 5) of the TradingAgents pipeline. It receives the
 `TradeProposal` from Phase 3; the three `RiskReport` objects plus `risk_discussion_history` from
 Phase 4; and the upstream analyst context already present on `TradingState`, then renders an
-`ExecutionStatus` (Approved/Rejected). The design should align with the existing agent patterns
-already used in `src/agents/trader/mod.rs` and `src/agents/risk/mod.rs`, while keeping the module
-owned by this change limited to Fund Manager concerns.
+`ExecutionStatus` (Approved/Rejected). The design aligns with the existing agent patterns already
+used in `src/agents/trader/mod.rs` and `src/agents/risk/mod.rs`, while keeping the capability
+owned by this change limited to Fund Manager concerns behind a stable `fund_manager` module API.
 
 ## Goals / Non-Goals
 
@@ -33,10 +33,19 @@ owned by this change limited to Fund Manager concerns.
 - **Trait-based inference abstraction**: A `FundManagerInference` trait mirrors the `TraderInference`
   pattern, allowing unit tests to inject mock LLM responses without hitting real providers.
 
+- **Package-style module facade**: The production implementation is organized under
+  `src/agents/fund_manager/` with `mod.rs` as the intentional public surface and focused sibling
+  modules for orchestration, prompt construction, validation, token usage, and tests. This keeps
+  the external API stable while preventing another monolithic agent file.
+
 - **LLM response extraction is an implementation detail**: The behavior requires a validated
   `ExecutionStatus`, but the spec does not require either typed extraction or raw JSON parsing.
   Implementation may use `rig`'s typed path or plain-text JSON parsing, as long as it preserves the
   required validation and retry behavior and does not require provider API changes.
+
+- **Prompt hardening without API change**: The Fund Manager prompt remains the section 5 prompt from
+  `docs/prompts.md`, but the canonical text now includes an untrusted-context notice and explicit
+  instructions to acknowledge missing risk or analyst inputs in `rationale`.
 
 - **`decided_at` field**: Populated by the runtime with the authoritative decision timestamp when
   available and injected into the prompt as `{current_date}`. If the runtime does not provide a more

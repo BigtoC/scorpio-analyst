@@ -117,6 +117,12 @@ Eagerly implement common traits where appropriate:
 - Organize code into modules using `mod.rs` or named files.
 - Keep `main.rs` or `lib.rs` minimal - move logic to modules.
 - **Refactoring & Modularity**: When refactoring large files (e.g. >300 lines) into smaller submodules, utilize the **Facade Pattern**. Re-export the public items from the submodules in the parent `mod.rs` file. This strategy ensures the refactoring remains an internal implementation detail and strictly prevents downstream API breakage.
+- **Package-Style Modules for Large Components**: When a component grows beyond a single focused file, prefer converting `foo.rs` into `foo/` with a real `foo/mod.rs` public surface and private submodules beneath it.
+- **Intentional Public Surface**: Use `mod.rs` as the canonical API boundary. Export only the small set of items consumers should use, and keep internal helpers in private modules with `pub(super)` visibility where possible.
+- **Avoid Deep Public Module Trees**: Do not make helper modules public just to avoid re-exports. Consumers should depend on `crate::path::component::TypeOrFunction`, not `crate::path::component::internal_helper::...`.
+- **Facade, Not Barrel**: A parent `mod.rs` should not mechanically re-export everything. It should intentionally expose a stable public API and hide implementation details.
+- **Split by Responsibility**: For medium-sized Rust components, separate orchestration/runtime flow, prompt building, validation/parsing, token accounting, and tests into distinct files when that improves cohesion.
+- **Test Placement for Large Refactors**: Prefer a dedicated `tests.rs` sibling module for larger integration-style unit tests, while keeping tiny helper-specific tests next to the helper module only when the coupling is strong and local.
 
 ## Quality Checklist
 
