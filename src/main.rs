@@ -1,4 +1,4 @@
-use scorpio_analyst::config::Config;
+use scorpio_analyst::config::{Config, expand_path};
 use scorpio_analyst::observability::init_tracing;
 use scorpio_analyst::providers::factory::preflight_configured_providers;
 
@@ -22,6 +22,12 @@ fn main() {
                 eprintln!("failed to preflight configured providers: {e:#}");
                 std::process::exit(1);
             }
+
+            let snapshot_db_path = expand_path(&cfg.storage.snapshot_db_path);
+            tracing::info!(
+                snapshot_db_path = %snapshot_db_path.display(),
+                "storage configured"
+            );
 
             tracing::info!(
                 quick_provider = %cfg.llm.quick_thinking_provider,
