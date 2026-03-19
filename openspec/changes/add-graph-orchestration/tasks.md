@@ -37,18 +37,26 @@
 ## 3. Snapshot Store (`src/workflow/snapshot.rs`)
 
 - [ ] 3.1 Define `SnapshotStore` struct wrapping `sqlx::SqlitePool`
-- [ ] 3.2 Implement `SnapshotStore::new(db_url: &str) -> Result<Self>` that creates the pool and runs
-      the initial migration
-- [ ] 3.3 Add `migrations/0001_create_phase_snapshots.sql` defining the `phase_snapshots` table for SQLx
-- [ ] 3.4 Define the SQLite migration: `CREATE TABLE phase_snapshots` with columns `execution_id TEXT`,
+- [ ] 3.2 Implement configurable SQLite path resolution for `SnapshotStore`, defaulting to
+      `$HOME/.scorpio-analyst/phase_snapshots.db` when no explicit path is provided
+- [ ] 3.3 Ensure `SnapshotStore` creates the `$HOME/.scorpio-analyst` directory when it does not already
+      exist before opening the SQLite file
+- [ ] 3.4 Implement `SnapshotStore::new(db_path: Option<&Path>) -> Result<Self>` (or equivalent API)
+      that resolves the final SQLite path, creates the pool, and runs the initial migration
+- [ ] 3.5 Add `migrations/0001_create_phase_snapshots.sql` defining the `phase_snapshots` table for SQLx
+- [ ] 3.6 Define the SQLite migration: `CREATE TABLE phase_snapshots` with columns `execution_id TEXT`,
       `phase_number INTEGER`, `phase_name TEXT`, `trading_state_json TEXT`, `token_usage_json TEXT`,
       `created_at TEXT`, and a `UNIQUE(execution_id, phase_number)` constraint
-- [ ] 3.5 Implement `save_snapshot(&self, execution_id: &str, phase_number: u8, phase_name: &str,
+- [ ] 3.7 Implement `save_snapshot(&self, execution_id: &str, phase_number: u8, phase_name: &str,
       state: &TradingState, token_usage: Option<&[AgentTokenUsage]>) -> Result<()>`
-- [ ] 3.6 Implement `load_snapshot(&self, execution_id: &str, phase_number: u8) -> Result<Option<(TradingState, Option<Vec<AgentTokenUsage>>)>>`
-- [ ] 3.7 Write unit tests with in-memory SQLite (`sqlite::memory:`) for save/load round-trip
-- [ ] 3.8 Write unit tests verifying duplicate phase insertion uses upsert semantics
-- [ ] 3.9 Write unit tests verifying missing snapshot returns `None`
+- [ ] 3.8 Implement `load_snapshot(&self, execution_id: &str, phase_number: u8) -> Result<Option<(TradingState, Option<Vec<AgentTokenUsage>>)>>`
+- [ ] 3.9 Write unit tests with in-memory SQLite (`sqlite::memory:`) for save/load round-trip
+- [ ] 3.10 Write unit tests verifying duplicate phase insertion uses upsert semantics
+- [ ] 3.11 Write unit tests verifying missing snapshot returns `None`
+- [ ] 3.12 Write unit tests verifying the default path resolves to
+      `$HOME/.scorpio-analyst/phase_snapshots.db`
+- [ ] 3.13 Write unit tests verifying the parent directory is created automatically when absent
+- [ ] 3.14 Write unit tests verifying an explicit custom SQLite path overrides the default
 
 ## 4. Task Wrappers — Phase 1 Analyst Fan-Out (`src/workflow/tasks.rs`)
 

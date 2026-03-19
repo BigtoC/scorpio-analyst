@@ -50,7 +50,9 @@ connecting data ingestion, dialectical evaluation, synthesis, risk assessment, a
 
 ### Graph Topology
 11 task nodes connected via `GraphBuilder`:
-1. **Phase 1 — Analyst Fan-Out**: `FanOutTask` containing 4 analyst child tasks → `AnalystSyncTask`
+1. **Phase 1 — Analyst Fan-Out**: `FanOutTask` containing 4 analyst child tasks that run in
+   parallel because they are independent and write to separate analyst-owned state fields →
+   `AnalystSyncTask`
 2. **Phase 2 — Researcher Debate**: `BullishResearcherTask` → `BearishResearcherTask` →
    `DebateModeratorTask` with conditional edge looping back when `debate_round < max_debate_rounds`
 3. **Phase 3 — Trader Synthesis**: `TraderTask` (sequential)
@@ -66,7 +68,10 @@ connecting data ingestion, dialectical evaluation, synthesis, risk assessment, a
 - **Fan-out coordination**: Analyst child tasks write results to prefixed Context keys
   (`"analyst.fundamental"`, etc.). `AnalystSyncTask` merges them back into `TradingState`.
 - **Phase snapshots**: After each phase boundary, the current `TradingState` is persisted to SQLite
-  (`phase_snapshots` table) via `sqlx`.
+  (`phase_snapshots` table) via `sqlx`. The SQLite file path is configurable; when not explicitly
+  configured, it defaults to `$HOME/.scorpio-analyst/phase_snapshots.db`. If the
+  `$HOME/.scorpio-analyst` directory does not exist, the snapshot store creates it before opening
+  the database.
 
 ### Token Accounting
 Each task wrapper captures `AgentTokenUsage` from agent return values. At phase boundaries,

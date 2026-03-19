@@ -10,6 +10,8 @@ MUST follow a 5-phase structure:
 **Phase 1 — Analyst Fan-Out:**
 - `FanOutTask("analyst_fanout")` containing 4 child tasks: `FundamentalAnalystTask`, `SentimentAnalystTask`,
   `NewsAnalystTask`, `TechnicalAnalystTask`.
+- The 4 analyst child tasks MUST execute in parallel, not sequentially, because the upstream analyst-team capability
+  defines them as independent concurrent tasks that populate separate analyst-owned fields.
 - Edge: `analyst_fanout` → `AnalystSyncTask`.
 
 **Phase 2 — Researcher Debate:**
@@ -111,6 +113,9 @@ The system MUST implement 4 analyst task wrappers (`FundamentalAnalystTask`, `Se
 4. Record `AgentTokenUsage` from the agent's return value.
 5. Return `TaskResult` with `NextAction::Continue`.
 
+These 4 analyst task wrappers MUST be runnable in parallel because they do not depend on one another's outputs and
+each produces one distinct slice of the Phase 1 analyst snapshot.
+
 The system MUST implement `AnalystSyncTask` that reads all 4 prefixed analyst results from `Context`, merges them
 into `TradingState`, and enforces the graceful degradation policy: 1 analyst failure continues with partial data;
 2 or more analyst failures abort the cycle by returning `NextAction::End`.
@@ -120,6 +125,12 @@ into `TradingState`, and enforces the graceful degradation policy: 1 analyst fai
 - **WHEN** all 4 analyst fan-out child tasks complete successfully and `AnalystSyncTask` reads their prefixed keys
 - **THEN** `AnalystSyncTask` merges all 4 results into `TradingState`, re-serializes the updated state to
   `Context`, and returns `NextAction::Continue` to proceed to the researcher debate phase
+
+#### Scenario: Analyst Fan-Out Executes In Parallel
+
+- **WHEN** Phase 1 begins
+- **THEN** `FundamentalAnalystTask`, `SentimentAnalystTask`, `NewsAnalystTask`, and `TechnicalAnalystTask` are
+  dispatched concurrently rather than waiting for one another sequentially
 
 #### Scenario: One Analyst Fails
 
@@ -342,6 +353,10 @@ The `SnapshotStore` MUST provide `save_snapshot` and `load_snapshot` operations.
 return both the deserialized `TradingState` and any persisted token-usage payload for that phase. Schema creation MUST
 use `sqlx` migrations.
 
+The SQLite file path MUST be configurable. When no explicit path is configured, the snapshot store MUST default to
+`$HOME/.scorpio-analyst/phase_snapshots.db`. If the `$HOME/.scorpio-analyst` directory does not exist, the snapshot
+store MUST create it before opening or migrating the database.
+
 The SQLite migration MUST live in a root-level `migrations/` directory owned by this change (for example,
 `migrations/0001_create_phase_snapshots.sql`).
 
@@ -351,6 +366,23 @@ The SQLite migration MUST live in a root-level `migrations/` directory owned by 
   loaded via `load_snapshot` with the same identifiers
 - **THEN** the loaded `TradingState` is identical to the saved state, confirming lossless round-trip through
   SQLite storage
+
+#### Scenario: Default Snapshot Path Is Used
+
+- **WHEN** `SnapshotStore` is constructed without an explicit SQLite file path
+- **THEN** it resolves the database path to `$HOME/.scorpio-analyst/phase_snapshots.db`
+
+#### Scenario: Missing Parent Directory Is Created
+
+- **WHEN** `SnapshotStore` is constructed without an explicit SQLite file path and `$HOME/.scorpio-analyst` does not
+  yet exist
+- **THEN** the snapshot store creates `$HOME/.scorpio-analyst` before opening or migrating
+  `phase_snapshots.db`
+
+#### Scenario: Explicit Snapshot Path Overrides Default
+
+- **WHEN** `SnapshotStore` is constructed with an explicit SQLite file path
+- **THEN** it uses that explicit path instead of `$HOME/.scorpio-analyst/phase_snapshots.db`
 
 #### Scenario: Duplicate Phase Number Handled
 

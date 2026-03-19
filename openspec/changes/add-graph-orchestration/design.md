@@ -28,7 +28,8 @@ and `async-trait` for the graph-flow `Task` trait.
     - Provide SQLite-based phase snapshot storage via `sqlx` with a `phase_snapshots` table, using a
       migration-friendly schema that can later target Postgres.
     - Use `InMemorySessionStorage` for graph-flow session management in the MVP.
-    - Implement fan-out parallelism for the analyst phase (4 analysts via `FanOutTask`).
+    - Implement fan-out parallelism for the analyst phase (4 analysts via `FanOutTask`), since the
+      upstream analyst-team capability already defines them as independent concurrent tasks.
     - Implement sequential execution for risk agents within rounds (Aggressive → Conservative → Neutral), with
       cycling between rounds via conditional edges and round counters stored in Context. Sequential ordering is
       required because each risk agent's prompt references the other agents' latest same-round views.
@@ -178,6 +179,9 @@ because they run in series.
 
 The `AnalystSyncTask` reads the prefixed analyst keys, merges results back into `TradingState`, and writes the
 unified state to `"trading_state"`. It also enforces graceful degradation (1 analyst failure continues, 2+ abort).
+This fan-out is safe because the four analyst tasks are independent and each writes one distinct analyst-owned field
+(`fundamental_metrics`, `market_sentiment`, `macro_news`, `technical_indicators`) rather than mutating shared
+conversation history.
 
 ### Config-in-Context
 
@@ -208,6 +212,11 @@ Snapshots are taken at each phase boundary (between phases), yielding 5 snapshot
 (end of Phase 3), `RiskModeratorTask` final invocation only (end of Phase 4), and `FundManagerTask` (end of
 Phase 5). Intermediate debate/risk round iterations do not trigger snapshots. The `SnapshotStore` struct manages
 SQLite connection pooling and provides `save_snapshot` / `load_snapshot` methods.
+
+The SQLite file path is configurable. When no explicit path is provided, `SnapshotStore` resolves the default path to
+`$HOME/.scorpio-analyst/phase_snapshots.db`. If the `$HOME/.scorpio-analyst` directory is absent, `SnapshotStore`
+creates it before opening or migrating the database. This keeps the default audit trail location stable for local
+users while still allowing tests, CI, and advanced deployments to override the database path.
 The `sqlx` multi-database abstraction provides a migration-friendly path to Postgres when the project scales beyond
 single-node SQLite.
 
@@ -280,7 +289,9 @@ the foundation observability contract.
   cycling from graph-flow, defeating the purpose of using a graph execution engine.
 
 - **Fan-out via graph-flow FanOutTask (Phase 1 analysts only)**: Phase 1 analysts use `FanOutTask` for parallel
-  execution via `tokio::spawn`. Child tasks write to prefixed Context keys; `AnalystSyncTask` merges results.
+  execution via `tokio::spawn`. This matches the upstream `add-analyst-team` requirement that all four analysts run
+  concurrently, and it is correct because the tasks are independent and produce separate slices of the analyst
+  snapshot. Child tasks write to prefixed Context keys; `AnalystSyncTask` merges results.
   *Alternative*: manual `tokio::spawn` in a single task — rejected because `FanOutTask` provides built-in parallel
   orchestration with prefix namespacing and consistent error propagation.
 
