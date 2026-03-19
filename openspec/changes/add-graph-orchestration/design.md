@@ -69,7 +69,7 @@ migrations/
 ### Graph Topology (11 Nodes)
 
 ```
-                         ┌─────────────────────────────────┐
+                         ┌──────────────────────────────────┐
                          │  Phase 1: Analyst Fan-Out        │
                          │                                  │
                          │  FanOutTask("analyst_fanout")    │
@@ -80,29 +80,29 @@ migrations/
                          └──────────────┬───────────────────┘
                                         │
                                         ▼
-                              ┌─────────────────┐
+                              ┌──────────────────┐
                               │ AnalystSyncTask  │
                               │ (merge + degrade)│
-                              └────────┬────────┘
+                              └────────┬─────────┘
                                        │
                                conditional edge:
                                max_debate_rounds > 0?
                                    │           │
                              yes   │           │ no (skip to moderator)
                                    ▼           │
-              ┌────────────────────────────────│───────────────┐
+              ┌────────────────────────────────│────────────────┐
               │  Phase 2: Researcher Debate    │  (cyclic)      │
               │                                │                │
               │  ┌──────────────────────┐      │                │
          ┌───►│  BullishResearcherTask  │      │                │
          │    │  └──────────┬───────────┘      │                │
-         │    │             ▼                   │                │
+         │    │             ▼                  │                │
+         │    │  ┌───────────────────────┐     │                │
+         │    │  │ BearishResearcherTask │     │                │
+         │    │  └──────────┬────────────┘     │                │
+         │    │             ▼                  │                │
          │    │  ┌──────────────────────┐      │                │
-         │    │  │ BearishResearcherTask │      │                │
-         │    │  └──────────┬───────────┘      │                │
-         │    │             ▼                   │                │
-         │    │  ┌──────────────────────┐      │                │
-         │    │  │ DebateModeratorTask   │──── conditional edge │
+         │    │  │ DebateModeratorTask  │──── conditional edge  │
          │    │  └──────────────────────┘     debate_round <    │
          │    │                               max_debate_rounds?│
          │    └─────────────────────────────────────────────────┘
@@ -113,29 +113,29 @@ migrations/
          │    │  TraderTask      │
          │    └────────┬────────┘
          │             │
-          │    conditional edge:
-          │    max_risk_rounds > 0?
-          │        │           │
-          │  yes   │           │ no (skip to moderator)
-          │        ▼           │
-          │    ┌──────────────│─────────────────────────────────┐
-          │    │  Phase 4:    │  Risk Discussion (cyclic)        │
-          │    │              │                                   │
-          │    │  AggressiveRiskTask                              │
-          │    │       │                                          │
-          │    │       ▼                                          │
-          │    │  ConservativeRiskTask                            │
-          │    │       │                                          │
-          │    │       ▼                                          │
-          │    │  NeutralRiskTask                                 │
-          │    │       │                                          │
-          │    │       ▼                                          │
-          │    │  ┌──────────────────────┐                        │
-          │    │  │ RiskModeratorTask     │──── conditional edge  │
-          │    │  └──────────────────────┘     risk_round <       │
-          │    │       │ yes (loop back)       max_risk_rounds?   │
-          │    │       └──► AggressiveRiskTask                    │
-          │    └────────────────────────────────────────────────┘
+         │    conditional edge:
+         │    max_risk_rounds > 0?
+         │        │           │
+         │  yes   │           │ no (skip to moderator)
+         │        ▼           │
+         │    ┌──────────────│───────────────────────────────────┐
+         │    │  Phase 4:    │  Risk Discussion (cyclic)         │
+         │    │              │                                   │
+         │    │  AggressiveRiskTask                              │
+         │    │       │                                          │
+         │    │       ▼                                          │
+         │    │  ConservativeRiskTask                            │
+         │    │       │                                          │
+         │    │       ▼                                          │
+         │    │  NeutralRiskTask                                 │
+         │    │       │                                          │
+         │    │       ▼                                          │
+         │    │  ┌──────────────────────┐                        │
+         │    │  │ RiskModeratorTask     │──── conditional edge  │
+         │    │  └──────────────────────┘     risk_round <       │
+         │    │       │ yes (loop back)       max_risk_rounds?   │
+         │    │       └──► AggressiveRiskTask                    │
+         │    └──────────────────────────────────────────────────┘
          │              │ no (continue)
          │              ▼ ◄───────────────────┘
          │    ┌─────────────────────┐
