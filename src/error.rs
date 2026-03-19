@@ -30,6 +30,14 @@ pub enum TradingError {
     /// Configuration is invalid or missing required values.
     #[error("config error: {0}")]
     Config(#[from] anyhow::Error),
+
+    /// An error originating from the `graph-flow` orchestration layer.
+    #[error("graph-flow error in phase '{phase}' task '{task}': {cause}")]
+    GraphFlow {
+        phase: String,
+        task: String,
+        cause: String,
+    },
 }
 
 /// Retry parameters for exponential backoff.
