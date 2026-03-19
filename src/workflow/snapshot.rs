@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use chrono::Utc;
 use sqlx::SqlitePool;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::{
     error::TradingError,
@@ -49,7 +49,7 @@ impl SnapshotStore {
         }
 
         let db_url = format!("sqlite://{}?mode=rwc", resolved.display());
-        info!(path = %resolved.display(), "opening phase snapshot store");
+        debug!(path = %resolved.display(), "opening phase snapshot store");
 
         let pool = SqlitePool::connect(&db_url)
             .await
