@@ -192,6 +192,7 @@ fn pipeline_build_graph_produces_graph_without_panic() {
             gemini_api_key: None,
             finnhub_api_key: None,
         },
+        storage: Default::default(),
     };
 
     let finnhub = FinnhubClient::for_test();

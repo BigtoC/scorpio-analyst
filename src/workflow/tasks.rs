@@ -1667,6 +1667,7 @@ mod tests {
                 gemini_api_key: None,
                 finnhub_api_key: None,
             },
+            storage: Default::default(),
         });
 
         let handle = crate::providers::factory::CompletionModelHandle::for_test();
@@ -1730,6 +1731,7 @@ mod tests {
                 gemini_api_key: None,
                 finnhub_api_key: None,
             },
+            storage: Default::default(),
         });
 
         let handle = crate::providers::factory::CompletionModelHandle::for_test();

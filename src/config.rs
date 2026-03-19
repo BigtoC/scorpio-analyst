@@ -10,6 +10,8 @@ pub struct Config {
     pub llm: LlmConfig,
     pub trading: TradingConfig,
     pub api: ApiConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 /// LLM provider and model routing settings.
@@ -100,6 +102,27 @@ pub struct ApiConfig {
 
 fn default_finnhub_rate_limit() -> u32 {
     30
+}
+
+/// Storage backend settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageConfig {
+    /// Path to the SQLite snapshot database.
+    /// Supports `~/` and `$HOME/` expansion at call-site via [`expand_path`].
+    #[serde(default = "default_snapshot_db_path")]
+    pub snapshot_db_path: String,
+}
+
+fn default_snapshot_db_path() -> String {
+    "~/.scorpio-analyst/phase_snapshots.db".to_string()
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_db_path: default_snapshot_db_path(),
+        }
+    }
 }
 
 // Manual Debug implementation to redact secrets.
@@ -289,5 +312,32 @@ mod tests {
             serde::de::value::Error,
         >::new("  OpenAI  "));
         assert_eq!(result.unwrap(), "openai");
+    }
+
+    #[test]
+    fn storage_config_defaults_to_tilde_path() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cfg = Config::load_from("config.toml").expect("config should load");
+        assert_eq!(
+            cfg.storage.snapshot_db_path, "~/.scorpio-analyst/phase_snapshots.db",
+            "default snapshot_db_path should be the tilde-prefixed path"
+        );
+    }
+
+    #[test]
+    fn storage_config_can_be_overridden_via_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH", "/tmp/custom.db");
+        }
+        let result = Config::load_from("config.toml");
+        unsafe {
+            std::env::remove_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH");
+        }
+        let cfg = result.expect("config should load");
+        assert_eq!(
+            cfg.storage.snapshot_db_path, "/tmp/custom.db",
+            "env var should override snapshot_db_path"
+        );
     }
 }
