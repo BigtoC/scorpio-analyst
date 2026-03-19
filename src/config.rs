@@ -5,7 +5,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Deserializer};
 
 /// Top-level application configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub llm: LlmConfig,
     pub trading: TradingConfig,
@@ -13,7 +13,7 @@ pub struct Config {
 }
 
 /// LLM provider and model routing settings.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfig {
     #[serde(deserialize_with = "deserialize_provider_name")]
     pub quick_thinking_provider: String,
@@ -72,7 +72,7 @@ fn default_retry_base_delay_ms() -> u64 {
 }
 
 /// Trading-specific parameters.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TradingConfig {
     pub asset_symbol: String,
     #[serde(default)]
@@ -82,7 +82,7 @@ pub struct TradingConfig {
 }
 
 /// API keys and rate-limit quota settings.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ApiConfig {
     #[serde(default = "default_finnhub_rate_limit")]
     pub finnhub_rate_limit: u32,
