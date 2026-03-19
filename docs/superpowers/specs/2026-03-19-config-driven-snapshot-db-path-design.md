@@ -126,3 +126,10 @@ Tests for `~/` and `$HOME/` cases set `HOME` env var explicitly before asserting
 - No changes to existing test helpers.
 - No new crate dependencies (home dir resolved via `std::env::var("HOME")`).
 - No support for arbitrary env var substitution beyond `~` and `$HOME`.
+- No Windows support (`$HOME` is Unix-only; `%USERPROFILE%` not supported).
+
+## Implementation Notes
+
+- **`expand_path` supports both `~/` and `$HOME/`** as prefix forms — both are accepted, both expand to the same result. Only `$HOME` as the literal prefix token is handled; arbitrary env vars are not.
+- **`$HOME` unset fallback**: falls back to current working directory with a `tracing::warn!`. This is a soft fallback — the path is still valid but unexpected. This is acceptable because a missing `$HOME` is an unusual system misconfiguration and not a normal error path.
+- **Test env isolation**: Tests that set `HOME` must use `serial_test` (or equivalent) to avoid races with parallel test execution, since `std::env::set_var` is not thread-safe.
