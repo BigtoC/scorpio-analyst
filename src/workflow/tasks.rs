@@ -138,7 +138,7 @@ impl Task for FundamentalAnalystTask {
         );
 
         match analyst.run().await {
-            Ok((data, _usage)) => {
+            Ok((data, usage)) => {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_FUNDAMENTAL, &data)
                         .await
@@ -146,8 +146,15 @@ impl Task for FundamentalAnalystTask {
                     error!(analyst = "fundamental", error = %e, "failed to write result to context");
                     write_flag(&context, ANALYST_FUNDAMENTAL, false).await;
                     write_err(&context, ANALYST_FUNDAMENTAL, &e.to_string()).await;
+                    let _ = write_analyst_usage(
+                        &context,
+                        ANALYST_FUNDAMENTAL,
+                        &AgentTokenUsage::unavailable("Fundamental Analyst", "unknown", 0),
+                    )
+                    .await;
                 } else {
                     write_flag(&context, ANALYST_FUNDAMENTAL, true).await;
+                    let _ = write_analyst_usage(&context, ANALYST_FUNDAMENTAL, &usage).await;
                     info!(analyst = "fundamental", "analyst completed successfully");
                 }
             }
@@ -155,6 +162,12 @@ impl Task for FundamentalAnalystTask {
                 warn!(analyst = "fundamental", error = %e, "analyst failed");
                 write_flag(&context, ANALYST_FUNDAMENTAL, false).await;
                 write_err(&context, ANALYST_FUNDAMENTAL, &e.to_string()).await;
+                let _ = write_analyst_usage(
+                    &context,
+                    ANALYST_FUNDAMENTAL,
+                    &AgentTokenUsage::unavailable("Fundamental Analyst", "unknown", 0),
+                )
+                .await;
             }
         }
 
@@ -201,25 +214,38 @@ impl Task for SentimentAnalystTask {
             }
         };
 
+        let cached_news_opt: Option<std::sync::Arc<crate::state::NewsData>> = {
+            let json: Option<String> = context.get(KEY_CACHED_NEWS).await;
+            json.and_then(|j| serde_json::from_str::<crate::state::NewsData>(&j).ok())
+                .map(std::sync::Arc::new)
+        };
+
         let analyst = SentimentAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
             state.asset_symbol.clone(),
             state.target_date.clone(),
             &self.llm_config,
-            None, // no pre-fetched news cache available in task context
+            cached_news_opt,
         );
 
         match analyst.run().await {
-            Ok((data, _usage)) => {
+            Ok((data, usage)) => {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_SENTIMENT, &data).await
                 {
                     error!(analyst = "sentiment", error = %e, "failed to write result to context");
                     write_flag(&context, ANALYST_SENTIMENT, false).await;
                     write_err(&context, ANALYST_SENTIMENT, &e.to_string()).await;
+                    let _ = write_analyst_usage(
+                        &context,
+                        ANALYST_SENTIMENT,
+                        &AgentTokenUsage::unavailable("Sentiment Analyst", "unknown", 0),
+                    )
+                    .await;
                 } else {
                     write_flag(&context, ANALYST_SENTIMENT, true).await;
+                    let _ = write_analyst_usage(&context, ANALYST_SENTIMENT, &usage).await;
                     info!(analyst = "sentiment", "analyst completed successfully");
                 }
             }
@@ -227,6 +253,12 @@ impl Task for SentimentAnalystTask {
                 warn!(analyst = "sentiment", error = %e, "analyst failed");
                 write_flag(&context, ANALYST_SENTIMENT, false).await;
                 write_err(&context, ANALYST_SENTIMENT, &e.to_string()).await;
+                let _ = write_analyst_usage(
+                    &context,
+                    ANALYST_SENTIMENT,
+                    &AgentTokenUsage::unavailable("Sentiment Analyst", "unknown", 0),
+                )
+                .await;
             }
         }
 
@@ -273,25 +305,38 @@ impl Task for NewsAnalystTask {
             }
         };
 
+        let cached_news_opt: Option<std::sync::Arc<crate::state::NewsData>> = {
+            let json: Option<String> = context.get(KEY_CACHED_NEWS).await;
+            json.and_then(|j| serde_json::from_str::<crate::state::NewsData>(&j).ok())
+                .map(std::sync::Arc::new)
+        };
+
         let analyst = NewsAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
             state.asset_symbol.clone(),
             state.target_date.clone(),
             &self.llm_config,
-            None, // no pre-fetched news cache available in task context
+            cached_news_opt,
         );
 
         match analyst.run().await {
-            Ok((data, _usage)) => {
+            Ok((data, usage)) => {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_NEWS, &data).await
                 {
                     error!(analyst = "news", error = %e, "failed to write result to context");
                     write_flag(&context, ANALYST_NEWS, false).await;
                     write_err(&context, ANALYST_NEWS, &e.to_string()).await;
+                    let _ = write_analyst_usage(
+                        &context,
+                        ANALYST_NEWS,
+                        &AgentTokenUsage::unavailable("News Analyst", "unknown", 0),
+                    )
+                    .await;
                 } else {
                     write_flag(&context, ANALYST_NEWS, true).await;
+                    let _ = write_analyst_usage(&context, ANALYST_NEWS, &usage).await;
                     info!(analyst = "news", "analyst completed successfully");
                 }
             }
@@ -299,6 +344,12 @@ impl Task for NewsAnalystTask {
                 warn!(analyst = "news", error = %e, "analyst failed");
                 write_flag(&context, ANALYST_NEWS, false).await;
                 write_err(&context, ANALYST_NEWS, &e.to_string()).await;
+                let _ = write_analyst_usage(
+                    &context,
+                    ANALYST_NEWS,
+                    &AgentTokenUsage::unavailable("News Analyst", "unknown", 0),
+                )
+                .await;
             }
         }
 
@@ -354,15 +405,22 @@ impl Task for TechnicalAnalystTask {
         );
 
         match analyst.run().await {
-            Ok((data, _usage)) => {
+            Ok((data, usage)) => {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_TECHNICAL, &data).await
                 {
                     error!(analyst = "technical", error = %e, "failed to write result to context");
                     write_flag(&context, ANALYST_TECHNICAL, false).await;
                     write_err(&context, ANALYST_TECHNICAL, &e.to_string()).await;
+                    let _ = write_analyst_usage(
+                        &context,
+                        ANALYST_TECHNICAL,
+                        &AgentTokenUsage::unavailable("Technical Analyst", "unknown", 0),
+                    )
+                    .await;
                 } else {
                     write_flag(&context, ANALYST_TECHNICAL, true).await;
+                    let _ = write_analyst_usage(&context, ANALYST_TECHNICAL, &usage).await;
                     info!(analyst = "technical", "analyst completed successfully");
                 }
             }
@@ -370,6 +428,12 @@ impl Task for TechnicalAnalystTask {
                 warn!(analyst = "technical", error = %e, "analyst failed");
                 write_flag(&context, ANALYST_TECHNICAL, false).await;
                 write_err(&context, ANALYST_TECHNICAL, &e.to_string()).await;
+                let _ = write_analyst_usage(
+                    &context,
+                    ANALYST_TECHNICAL,
+                    &AgentTokenUsage::unavailable("Technical Analyst", "unknown", 0),
+                )
+                .await;
             }
         }
 
@@ -420,7 +484,6 @@ impl Task for AnalystSyncTask {
 
         // ── Collect results and failure counts ──────────────────────────────
         let mut failures: Vec<&str> = Vec::new();
-        let mut token_usages: Vec<AgentTokenUsage> = Vec::new();
 
         // Use context.get (async) for reading analyst flags properly
         let key_fund_ok = format!("{ANALYST_PREFIX}.{ANALYST_FUNDAMENTAL}.{OK_SUFFIX}");
@@ -443,29 +506,14 @@ impl Task for AnalystSyncTask {
             {
                 Ok(data) => {
                     state.fundamental_metrics = Some(data);
-                    token_usages.push(AgentTokenUsage::unavailable(
-                        "Fundamental Analyst",
-                        "unknown",
-                        0,
-                    ));
                 }
                 Err(e) => {
                     warn!(analyst = "fundamental", error = %e, "failed to read analyst result");
                     failures.push(ANALYST_FUNDAMENTAL);
-                    token_usages.push(AgentTokenUsage::unavailable(
-                        "Fundamental Analyst",
-                        "unknown",
-                        0,
-                    ));
                 }
             }
         } else {
             failures.push(ANALYST_FUNDAMENTAL);
-            token_usages.push(AgentTokenUsage::unavailable(
-                "Fundamental Analyst",
-                "unknown",
-                0,
-            ));
         }
 
         // Sentiment
@@ -479,29 +527,14 @@ impl Task for AnalystSyncTask {
             {
                 Ok(data) => {
                     state.market_sentiment = Some(data);
-                    token_usages.push(AgentTokenUsage::unavailable(
-                        "Sentiment Analyst",
-                        "unknown",
-                        0,
-                    ));
                 }
                 Err(e) => {
                     warn!(analyst = "sentiment", error = %e, "failed to read analyst result");
                     failures.push(ANALYST_SENTIMENT);
-                    token_usages.push(AgentTokenUsage::unavailable(
-                        "Sentiment Analyst",
-                        "unknown",
-                        0,
-                    ));
                 }
             }
         } else {
             failures.push(ANALYST_SENTIMENT);
-            token_usages.push(AgentTokenUsage::unavailable(
-                "Sentiment Analyst",
-                "unknown",
-                0,
-            ));
         }
 
         // News
@@ -515,17 +548,14 @@ impl Task for AnalystSyncTask {
             {
                 Ok(data) => {
                     state.macro_news = Some(data);
-                    token_usages.push(AgentTokenUsage::unavailable("News Analyst", "unknown", 0));
                 }
                 Err(e) => {
                     warn!(analyst = "news", error = %e, "failed to read analyst result");
                     failures.push(ANALYST_NEWS);
-                    token_usages.push(AgentTokenUsage::unavailable("News Analyst", "unknown", 0));
                 }
             }
         } else {
             failures.push(ANALYST_NEWS);
-            token_usages.push(AgentTokenUsage::unavailable("News Analyst", "unknown", 0));
         }
 
         // Technical
@@ -539,29 +569,14 @@ impl Task for AnalystSyncTask {
             {
                 Ok(data) => {
                     state.technical_indicators = Some(data);
-                    token_usages.push(AgentTokenUsage::unavailable(
-                        "Technical Analyst",
-                        "unknown",
-                        0,
-                    ));
                 }
                 Err(e) => {
                     warn!(analyst = "technical", error = %e, "failed to read analyst result");
                     failures.push(ANALYST_TECHNICAL);
-                    token_usages.push(AgentTokenUsage::unavailable(
-                        "Technical Analyst",
-                        "unknown",
-                        0,
-                    ));
                 }
             }
         } else {
             failures.push(ANALYST_TECHNICAL);
-            token_usages.push(AgentTokenUsage::unavailable(
-                "Technical Analyst",
-                "unknown",
-                0,
-            ));
         }
 
         // ── Degradation check ───────────────────────────────────────────────
@@ -580,22 +595,22 @@ impl Task for AnalystSyncTask {
             ));
         }
 
-        // ── Re-serialize updated state ──────────────────────────────────────
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|e| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "AnalystSyncTask: failed to serialize state: {e}"
-                ))
-            })?;
+        // ── Read real usages from context (written by analyst child tasks) ──
+        let fund_usage =
+            read_analyst_usage(&context, ANALYST_FUNDAMENTAL, "Fundamental Analyst").await;
+        let sent_usage = read_analyst_usage(&context, ANALYST_SENTIMENT, "Sentiment Analyst").await;
+        let news_usage = read_analyst_usage(&context, ANALYST_NEWS, "News Analyst").await;
+        let tech_usage = read_analyst_usage(&context, ANALYST_TECHNICAL, "Technical Analyst").await;
+        let token_usages: Vec<AgentTokenUsage> =
+            vec![fund_usage, sent_usage, news_usage, tech_usage];
 
-        // ── Record phase token usage ────────────────────────────────────────
+        // ── Build PhaseTokenUsage with real usages (BEFORE serialization) ───
         let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
         let phase_prompt: u64 = token_usages.iter().map(|u| u.prompt_tokens).sum();
         let phase_completion: u64 = token_usages.iter().map(|u| u.completion_tokens).sum();
         let phase_total: u64 = token_usages.iter().map(|u| u.total_tokens).sum();
         let phase_usage = PhaseTokenUsage {
-            phase_name: "analyst_team".to_owned(),
+            phase_name: "Analyst Fan-Out".to_owned(),
             agent_usage: token_usages.clone(),
             phase_prompt_tokens: phase_prompt,
             phase_completion_tokens: phase_completion,
@@ -603,12 +618,13 @@ impl Task for AnalystSyncTask {
             phase_duration_ms,
         };
         state.token_usage.push_phase_usage(phase_usage);
-        // Re-serialize again after updating token usage.
+
+        // ── Single serialize (all mutations done) ───────────────────────────
         serialize_state_to_context(&state, &context)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "AnalystSyncTask: failed to re-serialize state after token accounting: {e}"
+                    "AnalystSyncTask: failed to serialize state: {e}"
                 ))
             })?;
 
@@ -670,13 +686,21 @@ impl Task for BullishResearcherTask {
                 ))
             })?;
 
-        run_bullish_researcher_turn(&mut state, &self.config, &self.handle)
+        let usage = run_bullish_researcher_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
                     "BullishResearcherTask: failed to run bullish turn: {e}"
                 ))
             })?;
+
+        // Write per-round usage to context for DebateModeratorTask to collect.
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        let usage_key = format!("usage.debate.{this_round}.bull");
+        context
+            .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+            .await;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -719,13 +743,21 @@ impl Task for BearishResearcherTask {
                 ))
             })?;
 
-        run_bearish_researcher_turn(&mut state, &self.config, &self.handle)
+        let usage = run_bearish_researcher_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
                     "BearishResearcherTask: failed to run bearish turn: {e}"
                 ))
             })?;
+
+        // Write per-round usage to context for DebateModeratorTask to collect.
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        let usage_key = format!("usage.debate.{this_round}.bear");
+        context
+            .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+            .await;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -779,7 +811,7 @@ impl Task for DebateModeratorTask {
                 ))
             })?;
 
-        let usage = run_debate_moderation(&mut state, &self.config, &self.handle)
+        let mod_usage = run_debate_moderation(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -792,6 +824,48 @@ impl Task for DebateModeratorTask {
         let new_round = current_round + 1;
         context.set(KEY_DEBATE_ROUND, new_round).await;
 
+        let max_rounds: u32 = context.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
+
+        // Read bull and bear usages for this round from context.
+        let bull_key = format!("usage.debate.{new_round}.bull");
+        let bear_key = format!("usage.debate.{new_round}.bear");
+        let bull_usage: AgentTokenUsage = context
+            .get::<String>(&bull_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Bullish Researcher", "unknown", 0));
+        let bear_usage: AgentTokenUsage = context
+            .get::<String>(&bear_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Bearish Researcher", "unknown", 0));
+
+        // Create PhaseTokenUsage for the just-completed round (bull + bear).
+        let round_phase = PhaseTokenUsage {
+            phase_name: format!("Researcher Debate Round {new_round}"),
+            agent_usage: vec![bull_usage.clone(), bear_usage.clone()],
+            phase_prompt_tokens: bull_usage.prompt_tokens + bear_usage.prompt_tokens,
+            phase_completion_tokens: bull_usage.completion_tokens + bear_usage.completion_tokens,
+            phase_total_tokens: bull_usage.total_tokens + bear_usage.total_tokens,
+            phase_duration_ms: 0, // per-round wall time not tracked
+        };
+        state.token_usage.push_phase_usage(round_phase);
+
+        // On final round: also create the moderation entry and save snapshot.
+        if new_round >= max_rounds {
+            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
+            let mod_phase = PhaseTokenUsage {
+                phase_name: "Researcher Debate Moderation".to_owned(),
+                agent_usage: vec![mod_usage.clone()],
+                phase_prompt_tokens: mod_usage.prompt_tokens,
+                phase_completion_tokens: mod_usage.completion_tokens,
+                phase_total_tokens: mod_usage.total_tokens,
+                phase_duration_ms,
+            };
+            state.token_usage.push_phase_usage(mod_phase);
+        }
+
+        // Single serialization after all accounting.
         serialize_state_to_context(&state, &context)
             .await
             .map_err(|e| {
@@ -800,29 +874,7 @@ impl Task for DebateModeratorTask {
                 ))
             })?;
 
-        let max_rounds: u32 = context.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
-
-        // Save snapshot when the debate is complete (round counter has reached max).
         if new_round >= max_rounds {
-            // Record phase token usage on the final round.
-            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
-            let phase_usage = PhaseTokenUsage {
-                phase_name: "researcher_debate".to_owned(),
-                agent_usage: vec![usage.clone()],
-                phase_prompt_tokens: usage.prompt_tokens,
-                phase_completion_tokens: usage.completion_tokens,
-                phase_total_tokens: usage.total_tokens,
-                phase_duration_ms,
-            };
-            state.token_usage.push_phase_usage(phase_usage);
-            serialize_state_to_context(&state, &context)
-                .await
-                .map_err(|e| {
-                    graph_flow::GraphError::TaskExecutionFailed(format!(
-                        "DebateModeratorTask: failed to re-serialize state after token accounting: {e}"
-                    ))
-                })?;
-
             let execution_id = state.execution_id.to_string();
             self.snapshot_store
                 .save_snapshot(
@@ -830,7 +882,7 @@ impl Task for DebateModeratorTask {
                     2,
                     "researcher_debate",
                     &state,
-                    Some(&[usage]),
+                    Some(&[mod_usage]),
                 )
                 .await
                 .map_err(|e| {
@@ -893,7 +945,7 @@ impl Task for TraderTask {
         // Record phase token usage.
         let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
         let phase_usage = PhaseTokenUsage {
-            phase_name: "trader".to_owned(),
+            phase_name: "Trader Synthesis".to_owned(),
             agent_usage: vec![usage.clone()],
             phase_prompt_tokens: usage.prompt_tokens,
             phase_completion_tokens: usage.completion_tokens,
@@ -957,13 +1009,21 @@ impl Task for AggressiveRiskTask {
                 ))
             })?;
 
-        run_aggressive_risk_turn(&mut state, &self.config, &self.handle)
+        let usage = run_aggressive_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
                     "AggressiveRiskTask: failed to run aggressive turn: {e}"
                 ))
             })?;
+
+        // Write per-round usage to context for RiskModeratorTask to collect.
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        let usage_key = format!("usage.risk.{this_round}.agg");
+        context
+            .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+            .await;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -1006,13 +1066,21 @@ impl Task for ConservativeRiskTask {
                 ))
             })?;
 
-        run_conservative_risk_turn(&mut state, &self.config, &self.handle)
+        let usage = run_conservative_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
                     "ConservativeRiskTask: failed to run conservative turn: {e}"
                 ))
             })?;
+
+        // Write per-round usage to context for RiskModeratorTask to collect.
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        let usage_key = format!("usage.risk.{this_round}.con");
+        context
+            .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+            .await;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -1055,13 +1123,21 @@ impl Task for NeutralRiskTask {
                 ))
             })?;
 
-        run_neutral_risk_turn(&mut state, &self.config, &self.handle)
+        let usage = run_neutral_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
                     "NeutralRiskTask: failed to run neutral turn: {e}"
                 ))
             })?;
+
+        // Write per-round usage to context for RiskModeratorTask to collect.
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        let usage_key = format!("usage.risk.{this_round}.neu");
+        context
+            .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+            .await;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -1115,7 +1191,7 @@ impl Task for RiskModeratorTask {
                 ))
             })?;
 
-        let usage = run_risk_moderation(&mut state, &self.config, &self.handle)
+        let mod_usage = run_risk_moderation(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -1128,6 +1204,60 @@ impl Task for RiskModeratorTask {
         let new_round = current_round + 1;
         context.set(KEY_RISK_ROUND, new_round).await;
 
+        let max_rounds: u32 = context.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
+
+        // Read agg/con/neu usages for this round from context.
+        let agg_key = format!("usage.risk.{new_round}.agg");
+        let con_key = format!("usage.risk.{new_round}.con");
+        let neu_key = format!("usage.risk.{new_round}.neu");
+        let agg_usage: AgentTokenUsage = context
+            .get::<String>(&agg_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Aggressive Risk", "unknown", 0));
+        let con_usage: AgentTokenUsage = context
+            .get::<String>(&con_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Conservative Risk", "unknown", 0));
+        let neu_usage: AgentTokenUsage = context
+            .get::<String>(&neu_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Neutral Risk", "unknown", 0));
+
+        // Create PhaseTokenUsage for the just-completed round (agg + con + neu).
+        let round_phase = PhaseTokenUsage {
+            phase_name: format!("Risk Discussion Round {new_round}"),
+            agent_usage: vec![agg_usage.clone(), con_usage.clone(), neu_usage.clone()],
+            phase_prompt_tokens: agg_usage.prompt_tokens
+                + con_usage.prompt_tokens
+                + neu_usage.prompt_tokens,
+            phase_completion_tokens: agg_usage.completion_tokens
+                + con_usage.completion_tokens
+                + neu_usage.completion_tokens,
+            phase_total_tokens: agg_usage.total_tokens
+                + con_usage.total_tokens
+                + neu_usage.total_tokens,
+            phase_duration_ms: 0, // per-round wall time not tracked
+        };
+        state.token_usage.push_phase_usage(round_phase);
+
+        // On final round: also create the moderation entry and save snapshot.
+        if new_round >= max_rounds {
+            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
+            let mod_phase = PhaseTokenUsage {
+                phase_name: "Risk Discussion Moderation".to_owned(),
+                agent_usage: vec![mod_usage.clone()],
+                phase_prompt_tokens: mod_usage.prompt_tokens,
+                phase_completion_tokens: mod_usage.completion_tokens,
+                phase_total_tokens: mod_usage.total_tokens,
+                phase_duration_ms,
+            };
+            state.token_usage.push_phase_usage(mod_phase);
+        }
+
+        // Single serialization after all accounting.
         serialize_state_to_context(&state, &context)
             .await
             .map_err(|e| {
@@ -1136,31 +1266,16 @@ impl Task for RiskModeratorTask {
                 ))
             })?;
 
-        let max_rounds: u32 = context.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
-
         if new_round >= max_rounds {
-            // Record phase token usage on the final round.
-            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
-            let phase_usage = PhaseTokenUsage {
-                phase_name: "risk_discussion".to_owned(),
-                agent_usage: vec![usage.clone()],
-                phase_prompt_tokens: usage.prompt_tokens,
-                phase_completion_tokens: usage.completion_tokens,
-                phase_total_tokens: usage.total_tokens,
-                phase_duration_ms,
-            };
-            state.token_usage.push_phase_usage(phase_usage);
-            serialize_state_to_context(&state, &context)
-                .await
-                .map_err(|e| {
-                    graph_flow::GraphError::TaskExecutionFailed(format!(
-                        "RiskModeratorTask: failed to re-serialize state after token accounting: {e}"
-                    ))
-                })?;
-
             let execution_id = state.execution_id.to_string();
             self.snapshot_store
-                .save_snapshot(&execution_id, 4, "risk_discussion", &state, Some(&[usage]))
+                .save_snapshot(
+                    &execution_id,
+                    4,
+                    "risk_discussion",
+                    &state,
+                    Some(&[mod_usage]),
+                )
                 .await
                 .map_err(|e| {
                     graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -1224,7 +1339,7 @@ impl Task for FundManagerTask {
         // Record phase token usage.
         let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
         let phase_usage = PhaseTokenUsage {
-            phase_name: "fund_manager".to_owned(),
+            phase_name: "Fund Manager Decision".to_owned(),
             agent_usage: vec![usage.clone()],
             phase_prompt_tokens: usage.prompt_tokens,
             phase_completion_tokens: usage.completion_tokens,
@@ -1251,10 +1366,12 @@ impl Task for FundManagerTask {
                 ))
             })?;
 
-        info!(
-            decision = ?state.final_execution_status,
-            "FundManagerTask: pipeline complete"
-        );
+        let decision_label = state
+            .final_execution_status
+            .as_ref()
+            .map(|s| format!("{:?}", s.decision))
+            .unwrap_or_else(|| "none".to_owned());
+        info!(decision = %decision_label, "FundManagerTask: pipeline complete");
 
         Ok(TaskResult::new(None, NextAction::End))
     }
@@ -1279,6 +1396,27 @@ async fn write_err(context: &Context, analyst_key: &str, message: &str) {
             message.to_owned(),
         )
         .await;
+}
+
+/// Write an analyst's token usage to context for [`AnalystSyncTask`] to collect.
+async fn write_analyst_usage(
+    context: &Context,
+    analyst_key: &str,
+    usage: &AgentTokenUsage,
+) -> Result<(), crate::error::TradingError> {
+    write_prefixed_result(context, "usage.analyst", analyst_key, usage).await
+}
+
+/// Read an analyst's token usage from context; falls back to unavailable if missing/corrupt.
+async fn read_analyst_usage(
+    context: &Context,
+    analyst_key: &str,
+    agent_name: &str,
+) -> AgentTokenUsage {
+    match read_prefixed_result::<AgentTokenUsage>(context, "usage.analyst", analyst_key).await {
+        Ok(u) => u,
+        Err(_) => AgentTokenUsage::unavailable(agent_name, "unknown", 0),
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

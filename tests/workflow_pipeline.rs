@@ -399,7 +399,7 @@ async fn integration_phase_snapshot_written_and_readable() {
 // ────────────────────────────────────────────────────────────────────────────
 //
 // After AnalystSyncTask runs (Phase 1), `TradingState.token_usage` must contain
-// at least one `PhaseTokenUsage` entry for the "analyst_team" phase.
+// at least one `PhaseTokenUsage` entry for the "Analyst Fan-Out" phase.
 
 #[tokio::test]
 async fn integration_token_usage_accumulated_after_analyst_sync() {
@@ -425,10 +425,12 @@ async fn integration_token_usage_accumulated_after_analyst_sync() {
         "token_usage must contain at least one PhaseTokenUsage after Phase 1"
     );
 
-    let analyst_phase = phase_usages.iter().find(|p| p.phase_name == "analyst_team");
+    let analyst_phase = phase_usages
+        .iter()
+        .find(|p| p.phase_name == "Analyst Fan-Out");
     assert!(
         analyst_phase.is_some(),
-        "token_usage must contain a 'analyst_team' phase entry"
+        "token_usage must contain a 'Analyst Fan-Out' phase entry"
     );
 
     // There should be 4 agent entries (one per analyst).
