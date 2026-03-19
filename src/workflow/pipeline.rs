@@ -41,6 +41,7 @@ use graph_flow::{
     fanout::FanOutTask,
 };
 use tracing::{error, info, instrument};
+use uuid::Uuid;
 
 use crate::{
     config::Config,
@@ -171,8 +172,12 @@ impl TradingPipeline {
 
         // ── Phase 2: researcher debate ────────────────────────────────────
         let bullish = BullishResearcherTask::new(Arc::clone(&self.config), self.handle.clone());
-        let bearish = BearishResearcherTask::new();
-        let debate_mod = DebateModeratorTask::new(Arc::clone(&self.snapshot_store));
+        let bearish = BearishResearcherTask::new(Arc::clone(&self.config), self.handle.clone());
+        let debate_mod = DebateModeratorTask::new(
+            Arc::clone(&self.config),
+            self.handle.clone(),
+            Arc::clone(&self.snapshot_store),
+        );
 
         graph.add_task(bullish);
         graph.add_task(bearish);
@@ -212,9 +217,13 @@ impl TradingPipeline {
 
         // ── Phase 4: risk discussion (sequential within each round) ───────
         let aggressive = AggressiveRiskTask::new(Arc::clone(&self.config), self.handle.clone());
-        let conservative = ConservativeRiskTask::new();
-        let neutral = NeutralRiskTask::new();
-        let risk_mod = RiskModeratorTask::new(Arc::clone(&self.snapshot_store));
+        let conservative = ConservativeRiskTask::new(Arc::clone(&self.config), self.handle.clone());
+        let neutral = NeutralRiskTask::new(Arc::clone(&self.config), self.handle.clone());
+        let risk_mod = RiskModeratorTask::new(
+            Arc::clone(&self.config),
+            self.handle.clone(),
+            Arc::clone(&self.snapshot_store),
+        );
 
         graph.add_task(aggressive);
         graph.add_task(conservative);
@@ -263,8 +272,11 @@ impl TradingPipeline {
     #[instrument(skip(self, initial_state), fields(symbol = %initial_state.asset_symbol, date = %initial_state.target_date))]
     pub async fn run_analysis_cycle(
         &self,
-        initial_state: TradingState,
+        mut initial_state: TradingState,
     ) -> Result<TradingState, TradingError> {
+        // Assign a fresh execution ID for this cycle.
+        initial_state.execution_id = Uuid::new_v4();
+
         let symbol = initial_state.asset_symbol.clone();
         let date = initial_state.target_date.clone();
         info!(symbol = %symbol, date = %date, "starting analysis cycle");
@@ -274,7 +286,7 @@ impl TradingPipeline {
         let storage = Arc::new(InMemorySessionStorage::new());
 
         // ── Create session and seed context ───────────────────────────────
-        let session_id = uuid_session_id();
+        let session_id = Uuid::new_v4().to_string();
         let session = Session::new_from_task(session_id.clone(), TASK_ANALYST_FAN_OUT);
 
         // Serialize trading state into context.
@@ -321,7 +333,7 @@ impl TradingPipeline {
                 .await
                 .map_err(|e| TradingError::GraphFlow {
                     phase: "execution".into(),
-                    task: format!("step_{step}"),
+                    task: "runner".into(),
                     cause: e.to_string(),
                 })?;
 
@@ -340,7 +352,7 @@ impl TradingPipeline {
                     // Unexpected in this pipeline; treat as an error.
                     return Err(TradingError::GraphFlow {
                         phase: "execution".into(),
-                        task: format!("step_{step}"),
+                        task: "waiting_for_input".into(),
                         cause: "pipeline unexpectedly waiting for input".into(),
                     });
                 }
@@ -348,7 +360,7 @@ impl TradingPipeline {
                     error!(error = %msg, step, "pipeline step returned error status");
                     return Err(TradingError::GraphFlow {
                         phase: "execution".into(),
-                        task: format!("step_{step}"),
+                        task: "error_status".into(),
                         cause: msg.clone(),
                     });
                 }
@@ -383,30 +395,11 @@ impl TradingPipeline {
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Generate a short random session ID without pulling in a full UUID crate.
-fn uuid_session_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    format!("cycle-{}-{:08x}", std::process::id(), nanos)
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn uuid_session_id_is_non_empty() {
-        let id = uuid_session_id();
-        assert!(!id.is_empty());
-        assert!(id.starts_with("cycle-"));
-    }
 
     #[test]
     fn task_id_constants_match_task_impl_ids() {

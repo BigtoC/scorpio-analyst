@@ -56,22 +56,12 @@ impl SnapshotStore {
             .with_context(|| format!("failed to open SQLite pool at {}", resolved.display()))
             .map_err(TradingError::Config)?;
 
-        // Run inline migration.
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS phase_snapshots (
-                execution_id        TEXT    NOT NULL,
-                phase_number        INTEGER NOT NULL,
-                phase_name          TEXT    NOT NULL,
-                trading_state_json  TEXT    NOT NULL,
-                token_usage_json    TEXT,
-                created_at          TEXT    NOT NULL,
-                UNIQUE(execution_id, phase_number)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .with_context(|| "failed to run phase_snapshots migration")
-        .map_err(TradingError::Config)?;
+        // Run migrations from the `migrations/` directory (path relative to crate root).
+        sqlx::migrate!()
+            .run(&pool)
+            .await
+            .with_context(|| "failed to run phase_snapshots migration")
+            .map_err(TradingError::Config)?;
 
         Ok(Self { pool })
     }
@@ -130,6 +120,16 @@ impl SnapshotStore {
             phase_number, phase_name, "phase snapshot saved"
         );
         Ok(())
+    }
+
+    /// Close the underlying connection pool.
+    ///
+    /// For use in unit tests only — calling this makes all subsequent save/load
+    /// operations fail with a pool-closed error, which lets tests verify that
+    /// snapshot failures propagate as `Err` out of workflow tasks.
+    #[cfg(test)]
+    pub(crate) async fn close_for_test(&self) {
+        self.pool.close().await;
     }
 
     /// Load a phase snapshot by `execution_id` and `phase_number`.
