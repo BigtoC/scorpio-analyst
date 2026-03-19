@@ -154,39 +154,43 @@ into `TradingState`, and enforces the graceful degradation policy: 1 analyst fai
 - **WHEN** all 4 analyst child tasks fail
 - **THEN** `AnalystSyncTask` returns `NextAction::End` to abort the pipeline
 
+## MODIFIED Requirements
+
 ### Requirement: Researcher Debate Task Wrappers
 
 The system MUST implement `BullishResearcherTask`, `BearishResearcherTask`, and `DebateModeratorTask` each
-implementing graph-flow's `Task` trait. The debate cycle MUST be controlled by a conditional edge on
-`DebateModeratorTask`.
+implementing graph-flow's `Task` trait. Each node MUST perform exactly one real unit of work per invocation.
+The debate cycle MUST be controlled by a conditional edge on `DebateModeratorTask`.
 
 `BullishResearcherTask` MUST:
 1. Deserialize `TradingState` from `Context` and read the current debate history.
-2. Invoke the Bullish Researcher agent.
-3. Append the resulting `DebateMessage` to `TradingState::debate_history`.
-4. Increment the `debate_round` counter in `Context`.
+2. Call `run_bullish_researcher_turn` — invoke the Bullish Researcher agent for one turn only.
+3. The helper appends exactly one `DebateMessage` with role `"bullish_researcher"` to `TradingState::debate_history`.
+4. Record `AgentTokenUsage` from the helper's return value.
 5. Re-serialize `TradingState` to `Context`.
 6. Return `TaskResult` with `NextAction::Continue`.
 
-Note: `debate_round` represents "rounds started" — it is incremented by `BullishResearcherTask` at the start of
-each round, so the conditional edge `debate_round < max_debate_rounds` correctly terminates after the configured
-number of rounds.
-
 `BearishResearcherTask` MUST:
 1. Deserialize `TradingState` from `Context` and read the latest bullish argument.
-2. Invoke the Bearish Researcher agent.
-3. Append the resulting `DebateMessage` to `TradingState::debate_history`.
-4. Re-serialize `TradingState` to `Context`.
-5. Return `TaskResult` with `NextAction::Continue`.
+2. Call `run_bearish_researcher_turn` — invoke the Bearish Researcher agent for one turn only.
+3. The helper appends exactly one `DebateMessage` with role `"bearish_researcher"` to `TradingState::debate_history`.
+4. Record `AgentTokenUsage` from the helper's return value.
+5. Re-serialize `TradingState` to `Context`.
+6. Return `TaskResult` with `NextAction::Continue`.
 
 `DebateModeratorTask` MUST:
 1. Deserialize `TradingState` from `Context` and read the full debate history.
-2. Invoke the Debate Moderator agent.
-3. Write `consensus_summary` to `TradingState`.
-4. Re-serialize `TradingState` to `Context`.
-5. On its final invocation (when the debate is complete and flow proceeds to `TraderTask`), save a phase snapshot
-   via the `SnapshotStore`.
-6. Return `TaskResult` with `NextAction::Continue`.
+2. Call `run_debate_moderation` — invoke the Debate Moderator agent.
+3. The helper writes `consensus_summary` to `TradingState`.
+4. Increment the `debate_round` counter in `Context` (this is the round-completion checkpoint).
+5. Re-serialize `TradingState` to `Context`.
+6. On its final invocation (when the debate is complete and flow proceeds to `TraderTask`), save a phase snapshot
+   via the `SnapshotStore`. Snapshot failure MUST return a task error — log-and-continue is not permitted.
+7. Return `TaskResult` with `NextAction::Continue`.
+
+Note: `debate_round` represents "rounds completed" — it is incremented by `DebateModeratorTask` after each full
+bull+bear+moderator sequence. The conditional edge `debate_round < max_debate_rounds` correctly terminates after
+the configured number of complete rounds.
 
 A conditional edge from `DebateModeratorTask` MUST check if `debate_round < Config.llm.max_debate_rounds`: if true,
 loop back to `BullishResearcherTask`; if false, continue to `TraderTask`.
@@ -203,18 +207,102 @@ loop back to `BullishResearcherTask`; if false, continue to `TraderTask`.
 - **THEN** `TradingState::debate_history` contains 2 `DebateMessage` entries, `consensus_summary` is populated,
   and flow continues to `TraderTask`
 
-#### Scenario: Zero-Round Debate Skips Researchers
+#### Scenario: Zero-Round Debate Routes Directly To Moderator
 
 - **WHEN** `max_debate_rounds = 0`
 - **THEN** the entry conditional edge from `AnalystSyncTask` directs flow to `DebateModeratorTask` directly
-  (skipping `BullishResearcherTask` and `BearishResearcherTask`), `DebateModeratorTask` is invoked with empty
-  debate history and produces a `consensus_summary` from analyst data alone, and flow continues to `TraderTask`
+  (skipping `BullishResearcherTask` and `BearishResearcherTask`), `DebateModeratorTask` calls
+  `run_debate_moderation` with empty debate history and produces a `consensus_summary` from analyst data alone,
+  and flow continues to `TraderTask`
+
+#### Scenario: Each Node Does Exactly One Unit Of Work
+
+- **WHEN** a three-round debate executes
+- **THEN** `BullishResearcherTask` is invoked 3 times, each time appending exactly one bullish `DebateMessage`;
+  `BearishResearcherTask` is invoked 3 times, each time appending exactly one bearish `DebateMessage`;
+  `DebateModeratorTask` is invoked 3 times with `debate_round` incrementing at each moderator checkpoint
 
 #### Scenario: Conditional Edge Loops Correctly
 
 - **WHEN** `max_debate_rounds = 5` and the debate has completed 3 rounds
 - **THEN** the conditional edge on `DebateModeratorTask` evaluates `debate_round (3) < 5` as true and directs
   flow back to `BullishResearcherTask` for round 4
+
+### Requirement: Risk Discussion Task Wrappers
+
+The system MUST implement `AggressiveRiskTask`, `ConservativeRiskTask`, `NeutralRiskTask`, and `RiskModeratorTask`
+each implementing graph-flow's `Task` trait. Each node MUST perform exactly one real unit of work per invocation.
+The risk discussion cycle MUST be controlled by a conditional edge on `RiskModeratorTask`.
+
+`AggressiveRiskTask` MUST:
+1. Deserialize `TradingState` from `Context`.
+2. Call `run_aggressive_risk_turn` — invoke the Aggressive Risk Agent for one turn only.
+3. The helper writes `RiskReport` to `TradingState::aggressive_risk_report`.
+4. Record `AgentTokenUsage` from the helper's return value.
+5. Re-serialize `TradingState` to `Context`.
+6. Return `TaskResult` with `NextAction::Continue`.
+
+`ConservativeRiskTask` MUST:
+1. Deserialize `TradingState` from `Context`.
+2. Call `run_conservative_risk_turn` — invoke the Conservative Risk Agent for one turn only.
+3. The helper writes `RiskReport` to `TradingState::conservative_risk_report`.
+4. Record `AgentTokenUsage` from the helper's return value.
+5. Re-serialize `TradingState` to `Context`.
+6. Return `TaskResult` with `NextAction::Continue`.
+
+`NeutralRiskTask` MUST:
+1. Deserialize `TradingState` from `Context`.
+2. Call `run_neutral_risk_turn` — invoke the Neutral Risk Agent for one turn only.
+3. The helper writes `RiskReport` to `TradingState::neutral_risk_report`.
+4. Record `AgentTokenUsage` from the helper's return value.
+5. Re-serialize `TradingState` to `Context`.
+6. Return `TaskResult` with `NextAction::Continue`.
+
+`RiskModeratorTask` MUST:
+1. Deserialize `TradingState` from `Context`.
+2. Call `run_risk_moderation` — invoke the Risk Moderator agent.
+3. The helper appends the synthesis to `TradingState::risk_discussion_history`.
+4. Increment the `risk_round` counter in `Context` (this is the round-completion checkpoint).
+5. Re-serialize `TradingState` to `Context`.
+6. On its final invocation (when the discussion is complete and flow proceeds to `FundManagerTask`), save a phase
+   snapshot via the `SnapshotStore`. Snapshot failure MUST return a task error — log-and-continue is not permitted.
+7. Return `TaskResult` with `NextAction::Continue`.
+
+Note: `risk_round` represents "rounds completed" — it is incremented by `RiskModeratorTask` after each full
+Aggressive → Conservative → Neutral → Moderator sequence. The conditional edge `risk_round < max_risk_rounds`
+correctly terminates after the configured number of complete rounds.
+
+A conditional edge from `RiskModeratorTask` MUST check if `risk_round < Config.llm.max_risk_rounds`: if true, loop
+back to `AggressiveRiskTask`; if false, continue to `FundManagerTask`.
+
+#### Scenario: Two-Round Risk Discussion Completes
+
+- **WHEN** the risk discussion cycle executes with `max_risk_rounds = 2` (default) and all LLM calls succeed
+- **THEN** all 3 `RiskReport` fields are populated with the final round's reports,
+  `TradingState::risk_discussion_history` contains the moderator's synthesis entries, and the conditional edge
+  directs flow to `FundManagerTask`
+
+#### Scenario: Each Node Does Exactly One Unit Of Work
+
+- **WHEN** a two-round risk discussion executes
+- **THEN** `AggressiveRiskTask` is invoked 2 times each writing one `aggressive_risk_report`;
+  `ConservativeRiskTask` is invoked 2 times each writing one `conservative_risk_report`;
+  `NeutralRiskTask` is invoked 2 times each writing one `neutral_risk_report`;
+  `RiskModeratorTask` is invoked 2 times with `risk_round` incrementing at each moderator checkpoint
+
+#### Scenario: Risk Conditional Edge Loops Correctly
+
+- **WHEN** `max_risk_rounds = 3` and the discussion has completed 1 round
+- **THEN** the conditional edge on `RiskModeratorTask` evaluates `risk_round (1) < 3` as true and directs flow
+  back to `AggressiveRiskTask` for round 2
+
+#### Scenario: Zero-Round Risk Routes Directly To Moderator
+
+- **WHEN** `max_risk_rounds = 0`
+- **THEN** the entry conditional edge from `TraderTask` directs flow to `RiskModeratorTask` directly (skipping
+  `AggressiveRiskTask`, `ConservativeRiskTask`, and `NeutralRiskTask`), `RiskModeratorTask` calls
+  `run_risk_moderation` with the trade proposal alone and produces a synthesis, and flow continues to
+  `FundManagerTask`
 
 ### Requirement: Trader Task Wrapper
 
@@ -224,7 +312,7 @@ The system MUST implement `TraderTask` implementing graph-flow's `Task` trait. T
 2. Invoke the Trader agent (which reads analyst outputs and `consensus_summary` to produce a `TradeProposal`).
 3. Record `AgentTokenUsage` from the agent's return value.
 4. Re-serialize `TradingState` to `Context`.
-5. Save a phase snapshot via the `SnapshotStore`.
+5. Save a phase snapshot via the `SnapshotStore`. Snapshot failure MUST return a task error.
 6. Return `TaskResult` with `NextAction::Continue`.
 
 #### Scenario: TraderTask Produces Proposal And Continues
@@ -238,79 +326,6 @@ The system MUST implement `TraderTask` implementing graph-flow's `Task` trait. T
 - **WHEN** the Trader agent invocation fails with an LLM error or timeout
 - **THEN** the task returns a `TradingError` that propagates through the graph-flow pipeline, halting execution
 
-### Requirement: Risk Discussion Task Wrappers
-
-The system MUST implement `AggressiveRiskTask`, `ConservativeRiskTask`, `NeutralRiskTask`, and `RiskModeratorTask`
-each implementing graph-flow's `Task` trait. The risk discussion cycle MUST be controlled by a conditional edge on
-`RiskModeratorTask`.
-
-`AggressiveRiskTask` MUST:
-1. Deserialize `TradingState` from `Context`.
-2. Invoke the Aggressive Risk Agent.
-3. Write the resulting `RiskReport` to `TradingState::aggressive_risk_report`.
-4. Increment the `risk_round` counter in `Context`.
-5. Record `AgentTokenUsage`.
-6. Re-serialize `TradingState` to `Context`.
-7. Return `TaskResult` with `NextAction::Continue`.
-
-Note: `risk_round` represents "rounds started" — it is incremented by `AggressiveRiskTask` at the start of each
-round, so the conditional edge `risk_round < max_risk_rounds` correctly terminates after the configured number of
-rounds.
-
-`ConservativeRiskTask` MUST:
-1. Deserialize `TradingState` from `Context`.
-2. Invoke the Conservative Risk Agent.
-3. Write the resulting `RiskReport` to `TradingState::conservative_risk_report`.
-4. Record `AgentTokenUsage`.
-5. Re-serialize `TradingState` to `Context`.
-6. Return `TaskResult` with `NextAction::Continue`.
-
-`NeutralRiskTask` MUST:
-1. Deserialize `TradingState` from `Context`.
-2. Invoke the Neutral Risk Agent.
-3. Write the resulting `RiskReport` to `TradingState::neutral_risk_report`.
-4. Record `AgentTokenUsage`.
-5. Re-serialize `TradingState` to `Context`.
-6. Return `TaskResult` with `NextAction::Continue`.
-
-`RiskModeratorTask` MUST:
-1. Deserialize `TradingState` from `Context`.
-2. Invoke the Risk Moderator agent.
-3. Append the synthesis to `TradingState::risk_discussion_history`.
-4. Re-serialize `TradingState` to `Context`.
-5. On its final invocation (when the discussion is complete and flow proceeds to `FundManagerTask`), save a phase
-   snapshot via the `SnapshotStore`.
-6. Return `TaskResult` with `NextAction::Continue`.
-
-A conditional edge from `RiskModeratorTask` MUST check if `risk_round < Config.llm.max_risk_rounds`: if true, loop
-back to `AggressiveRiskTask`; if false, continue to `FundManagerTask`.
-
-#### Scenario: Two-Round Risk Discussion Completes
-
-- **WHEN** the risk discussion cycle executes with `max_risk_rounds = 2` (default) and all LLM calls succeed
-- **THEN** all 3 `RiskReport` fields are populated with the final round's reports,
-  `TradingState::risk_discussion_history` contains the moderator's synthesis, and the conditional edge directs
-  flow to `FundManagerTask`
-
-#### Scenario: Single-Round Risk Discussion
-
-- **WHEN** the risk discussion cycle executes with `max_risk_rounds = 1`
-- **THEN** all 3 `RiskReport` fields are populated, the moderator synthesis is appended, and flow continues to
-  `FundManagerTask`
-
-#### Scenario: Risk Conditional Edge Loops Correctly
-
-- **WHEN** `max_risk_rounds = 3` and the discussion has completed 1 round
-- **THEN** the conditional edge on `RiskModeratorTask` evaluates `risk_round (1) < 3` as true and directs flow
-  back to `AggressiveRiskTask` for round 2
-
-#### Scenario: Zero-Round Risk Discussion Skips Risk Personas
-
-- **WHEN** `max_risk_rounds = 0`
-- **THEN** the entry conditional edge from `TraderTask` directs flow to `RiskModeratorTask` directly (skipping
-  `AggressiveRiskTask`, `ConservativeRiskTask`, and `NeutralRiskTask`), `RiskModeratorTask` is invoked with empty
-  risk history and produces a synthesis from the trade proposal alone, and flow continues to `FundManagerTask`
-
 ### Requirement: Fund Manager Task Wrapper
 
 The system MUST implement `FundManagerTask` implementing graph-flow's `Task` trait. The wrapper MUST:
@@ -320,8 +335,10 @@ The system MUST implement `FundManagerTask` implementing graph-flow's `Task` tra
    `risk_discussion_history`, and supporting analyst context to produce `ExecutionStatus`).
 3. Record `AgentTokenUsage` from the agent's return value.
 4. Re-serialize `TradingState` to `Context`.
-5. Save the final phase snapshot via the `SnapshotStore`.
+5. Save the final phase snapshot via the `SnapshotStore`. Snapshot failure MUST return a task error.
 6. Return `TaskResult` with `NextAction::End` (terminal node).
+7. The fund-manager rationale MUST NOT be logged at info level; only structured decision metadata
+   (approve/reject, phase, task id) may appear in structured log events.
 
 #### Scenario: FundManagerTask Produces ExecutionStatus And Ends
 
@@ -351,7 +368,8 @@ boundaries. The schema MUST include the following columns:
 
 The `SnapshotStore` MUST provide `save_snapshot` and `load_snapshot` operations. `load_snapshot` MUST be able to
 return both the deserialized `TradingState` and any persisted token-usage payload for that phase. Schema creation MUST
-use `sqlx` migrations.
+use `sqlx` migrations from the `migrations/` directory (`sqlx::migrate!`). Inline schema duplication in Rust MUST NOT
+be used as the authoritative schema source.
 
 The SQLite file path MUST be configurable. When no explicit path is configured, the snapshot store MUST default to
 `$HOME/.scorpio-analyst/phase_snapshots.db`. If the `$HOME/.scorpio-analyst` directory does not exist, the snapshot
@@ -400,17 +418,26 @@ The SQLite migration MUST live in a root-level `migrations/` directory owned by 
 - **WHEN** `save_snapshot` is called with both a `TradingState` JSON blob and a `token_usage_json` value
 - **THEN** the token usage JSON is persisted in the same row and is retrievable via `load_snapshot`
 
+#### Scenario: Snapshot Failure Returns Task Error
+
+- **WHEN** `save_snapshot` returns an error during a workflow task execution
+- **THEN** the task returns an error and the pipeline halts — the task MUST NOT log and continue
+
 ### Requirement: Pipeline Token Accounting
 
 Each task wrapper MUST capture `AgentTokenUsage` from the wrapped agent's return value. At phase boundaries,
 accumulated `AgentTokenUsage` entries MUST be finalized into `PhaseTokenUsage` (including phase name, timing, and
-all agent entries) and appended to `TradingState.token_usage.phase_usage`.
+all agent entries) and appended to `TradingState.token_usage.phase_usage`. Token accounting MUST be written back
+into `TradingState` during the pipeline; it MUST NOT remain only in local variables.
 
 For cyclic researcher and risk phases, the pipeline MUST preserve multiple `PhaseTokenUsage` entries so individual
 rounds and the final moderator step are tracked separately (for example, `Researcher Debate Round 1`,
 `Researcher Debate Moderation`, `Risk Discussion Round 1`, `Risk Discussion Moderation`).
 
 The total cycle token usage MUST be computed at pipeline completion by summing all `PhaseTokenUsage` entries.
+
+If a provider does not return authoritative token counts, `AgentTokenUsage::unavailable` may be used, but the
+corresponding `PhaseTokenUsage` entry MUST still be materialized and appended.
 
 #### Scenario: Full Pipeline Produces Phase Token Usage
 
@@ -431,17 +458,24 @@ The total cycle token usage MUST be computed at pipeline completion by summing a
 - **THEN** that entry appears in the Phase 2 (Researcher Debate) `PhaseTokenUsage` and not in any other phase's
   entries
 
+#### Scenario: Unavailable Tokens Still Materialize Phase Entry
+
+- **WHEN** a provider returns unavailable token counts for an agent in Phase 3
+- **THEN** a `PhaseTokenUsage` entry for Phase 3 is still appended to `TradingState.token_usage.phase_usage`
+  with the `AgentTokenUsage::unavailable` entry included
+
 ### Requirement: Pipeline Public API
 
 The system MUST provide a `TradingPipeline` struct with:
 
-- `new(config, finnhub, yfinance, snapshot_store)` — constructor that builds the graph-flow graph topology using the
-  existing data clients and provider helper functions already present in the codebase.
+- `new(config, finnhub, yfinance, snapshot_store, handle)` — constructor that builds the graph-flow graph topology
+  using the existing data clients and provider helper functions already present in the codebase.
 - `run_analysis_cycle(&self, state: TradingState) -> Result<TradingState>` — executes the full 5-phase pipeline.
 
 The `run_analysis_cycle` function MUST:
 
-1. Generate a unique `execution_id` for the cycle.
+1. Generate a fresh `Uuid` for the cycle and write it to the working copy of `TradingState.execution_id`
+   (overwriting any caller-supplied value).
 2. Create an `InMemorySessionStorage` instance.
 3. Seed graph-flow `Context` with the serialized `TradingState` under the `"trading_state"` key.
 4. Seed `Context` with `"max_debate_rounds"` and `"max_risk_rounds"` from `Config.llm`.
@@ -459,11 +493,12 @@ The `run_analysis_cycle` function MUST:
 - **WHEN** any phase within the pipeline fails with a `TradingError`
 - **THEN** `run_analysis_cycle` returns the `TradingError` rather than a partial `TradingState`
 
-#### Scenario: Execution ID Is Unique Per Invocation
+#### Scenario: Fresh Execution ID Generated Per Invocation
 
 - **WHEN** `run_analysis_cycle` is called multiple times
-- **THEN** each invocation generates a distinct `execution_id`, ensuring phase snapshots from different runs do
-  not collide
+- **THEN** each invocation generates a distinct UUID `execution_id` written to `TradingState.execution_id`
+  before the graph starts, ensuring phase snapshots from different runs do not collide even if the caller
+  supplies the same initial state
 
 ### Requirement: FlowRunner Error Propagation
 
@@ -473,12 +508,18 @@ than silently swallowing it. Graph-flow error types MUST be mapped to `TradingEr
 underlying cause), using `TradingError::GraphFlow { phase, task, cause }` when a new graph-orchestration-specific
 variant is required.
 
-#### Scenario: Task Error Propagates Through Pipeline
+Graph-flow errors MUST NOT collapse to generic `step_N` labels. When the real task name and phase are known at the
+point of failure, they MUST be included in the `TradingError::GraphFlow` fields. Workflow-surfaced error messages
+MUST apply the same sanitization posture used for provider-layer errors, avoiding accidental leakage of verbose
+model output text.
+
+#### Scenario: Task Error Propagates With Real Task Identity
 
 - **WHEN** a task wrapper's `Task::run` implementation returns an error (e.g., LLM timeout in
   `BullishResearcherTask`)
-- **THEN** the `FlowRunner` halts execution, the error is mapped to a `TradingError` variant, and
-  `run_analysis_cycle` returns the `TradingError` with context indicating which task and phase failed
+- **THEN** the `FlowRunner` halts execution, the error is mapped to a `TradingError::GraphFlow` variant with
+  the real task id (`"bullish_researcher"`) and phase name (`"researcher_debate"`) in the structured fields,
+  and `run_analysis_cycle` returns the `TradingError`
 
 #### Scenario: Graph-Flow Error Mapped To TradingError
 
@@ -489,12 +530,11 @@ variant is required.
 
 ### Requirement: Workflow Module Boundary
 
-This capability's implementation MUST remain centered on orchestration concerns within `src/workflow/`. It MUST NOT
-modify agent implementations in `src/agents/`, state type definitions in `src/state/`, data layer files in
-`src/data/`, or indicator files in `src/indicators/` except for the explicitly approved cross-owner touch-points
-listed below.
+This capability's implementation MUST remain centered on orchestration concerns within `src/workflow/`. The only
+permitted modifications to agent files are the narrowly-scoped single-step helper additions explicitly approved as
+cross-owner touch-points for this remediation.
 
-The only cross-owner changes permitted are:
+The permitted cross-owner changes are:
 
 - Adding `graph-flow`, `sqlx`, and `async-trait` to `Cargo.toml` (owned by `add-project-foundation`).
 - Replacing the empty `src/workflow/mod.rs` skeleton (owned by `add-project-foundation`).
@@ -502,6 +542,13 @@ The only cross-owner changes permitted are:
   `add-project-foundation`).
 - Updating exhaustive `TradingError` handling in `src/providers/factory.rs` (owned by `add-llm-providers`) so the
   new graph-flow error variant is classified correctly.
+- Adding single-step public helpers to `src/agents/researcher/mod.rs` (owned by `add-researcher-debate`):
+  `run_bullish_researcher_turn`, `run_bearish_researcher_turn`, `run_debate_moderation`.
+- Adding single-step public helpers to `src/agents/risk/mod.rs` (owned by `add-risk-management`):
+  `run_aggressive_risk_turn`, `run_conservative_risk_turn`, `run_neutral_risk_turn`, `run_risk_moderation`.
+- Adding a shared cached-news prefetch helper to `src/agents/analyst/mod.rs` (owned by `add-analyst-team`).
+
+No other agent or state files may be modified.
 
 #### Scenario: Downstream CLI Imports Pipeline
 
@@ -509,14 +556,10 @@ The only cross-owner changes permitted are:
 - **THEN** it uses `use scorpio_analyst::workflow::{TradingPipeline, ...}` and receives the pipeline struct and
   public API through the workflow module path
 
-#### Scenario: No Agent Module Files Modified
+#### Scenario: Agent Module Core Logic Unchanged
 
-- **WHEN** the graph-orchestration capability is implemented
-- **THEN** all files under `src/agents/analyst/`, `src/agents/researcher/`, `src/agents/risk/`,
-  `src/agents/trader/`, and `src/agents/fund_manager/` remain unmodified
+- **WHEN** the graph-orchestration remediation is applied
+- **THEN** only the approved narrow helper additions are made to agent modules; core agent logic, existing public
+  APIs, and all state type definitions remain unmodified
 
-#### Scenario: No State Type Definitions Modified
 
-- **WHEN** the graph-orchestration capability is implemented
-- **THEN** all files under `src/state/` remain unmodified, as the orchestration layer consumes existing types
-  without altering their definitions

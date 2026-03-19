@@ -110,6 +110,11 @@ moderation entry, not a single flattened entry for the whole cyclic phase.
 
 ## Cross-Owner Changes
 
+The following files are owned by other changes and require explicit cross-owner approval before
+modification. Approved touch-points are recorded in each owner's `tasks.md`.
+
+### Originally declared cross-owner scope (initial implementation)
+
 - `Cargo.toml` — owner: `add-project-foundation`. Justification: adds `graph-flow`, `sqlx`, and
   `async-trait` as new dependencies. These were planned but not pre-declared since graph-flow was
   a deferred dependency.
@@ -122,3 +127,28 @@ moderation entry, not a single flattened entry for the whole cyclic phase.
 - `src/providers/factory.rs` — owner: `add-llm-providers`. Justification: exhaustive matches on
   `TradingError` (for retry classification and error propagation) will need the new
   `TradingError::GraphFlow { phase, task, cause }` variant handled explicitly.
+
+### Remediation scope (spec-compliance repair)
+
+The following additional cross-owner files must be edited during remediation so each graph node
+performs real per-role execution. The approved justification for each is described below:
+
+- `src/agents/researcher/mod.rs` — owner: `add-researcher-debate`. Justification: the orchestration
+  layer needs narrowly-scoped single-step public helpers (`run_bullish_researcher_turn`,
+  `run_bearish_researcher_turn`, `run_debate_moderation`) so `BullishResearcherTask`,
+  `BearishResearcherTask`, and `DebateModeratorTask` each perform exactly one real unit of work
+  instead of the current wrapper that calls the full debate loop inside a single task.
+
+- `src/agents/risk/mod.rs` — owner: `add-risk-management`. Justification: the orchestration layer
+  needs narrowly-scoped single-step public helpers (`run_aggressive_risk_turn`,
+  `run_conservative_risk_turn`, `run_neutral_risk_turn`, `run_risk_moderation`) so each of the four
+  risk workflow tasks performs exactly one real role step and the round-accounting semantics are
+  correct.
+
+- `src/agents/analyst/mod.rs` — owner: `add-analyst-team`. Justification: a shared cached-news
+  prefetch helper is needed so `SentimentAnalystTask` and `NewsAnalystTask` do not independently
+  issue duplicate Finnhub calls during the fan-out; the helper reuses the existing prefetch logic
+  from `run_analyst_team` without altering agent behaviour.
+
+These remediation cross-owner edits are additionally justified by the overall goal of bringing the
+`add-graph-orchestration` implementation into full compliance with the approved OpenSpec contract.

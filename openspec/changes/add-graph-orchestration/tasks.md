@@ -182,6 +182,41 @@ from the same round. This is NOT a fan-out.
 - [ ] 11.10 Write integration test: tracing emits phase/task/round transition events usable by downstream
       CLI/TUI streaming
 
+## 11-R. Remediation: Real Per-Node Execution
+
+_These tasks were not in the original implementation plan. They are required to bring the
+implementation into full spec-compliance. All tasks below are blocked on cross-owner approval
+for `src/agents/researcher/mod.rs`, `src/agents/risk/mod.rs`, and `src/agents/analyst/mod.rs`._
+
+- [ ] R-1 Add single-step researcher public helpers to `src/agents/researcher/mod.rs`:
+      `run_bullish_researcher_turn`, `run_bearish_researcher_turn`, `run_debate_moderation`
+- [ ] R-2 Add single-step risk public helpers to `src/agents/risk/mod.rs`:
+      `run_aggressive_risk_turn`, `run_conservative_risk_turn`, `run_neutral_risk_turn`,
+      `run_risk_moderation`
+- [ ] R-3 Add shared cached-news prefetch helper to `src/agents/analyst/mod.rs`:
+      `fetch_shared_news` (or equivalent)
+- [ ] R-4 Refactor `BullishResearcherTask` to call `run_bullish_researcher_turn` (not the full loop)
+- [ ] R-5 Refactor `BearishResearcherTask` from a no-op to call `run_bearish_researcher_turn`
+- [ ] R-6 Refactor `DebateModeratorTask` to call `run_debate_moderation` and increment `debate_round`
+      at the moderator checkpoint
+- [ ] R-7 Refactor `AggressiveRiskTask` to call `run_aggressive_risk_turn` (not the full loop);
+      do not increment `risk_round` here
+- [ ] R-8 Refactor `ConservativeRiskTask` from a no-op to call `run_conservative_risk_turn`
+- [ ] R-9 Refactor `NeutralRiskTask` from a no-op to call `run_neutral_risk_turn`
+- [ ] R-10 Refactor `RiskModeratorTask` to call `run_risk_moderation` and increment `risk_round`
+       at the moderator checkpoint
+- [ ] R-11 Make `run_analysis_cycle` generate a fresh `Uuid` and write it to
+       `TradingState.execution_id` before the graph starts (overwriting caller-supplied IDs)
+- [ ] R-12 Make snapshot persistence failures fatal in all workflow tasks (remove log-and-continue)
+- [ ] R-13 Switch `SnapshotStore` schema initialization to `sqlx::migrate!` (migration-driven)
+- [ ] R-14 Write per-phase `PhaseTokenUsage` entries into `TradingState.token_usage` at phase
+       boundaries (analyst, per-debate-round, debate-moderation, trader, per-risk-round,
+       risk-moderation, fund-manager)
+- [ ] R-15 Fix `TradingError::GraphFlow` mapping to carry real phase/task identity (not `step_N`)
+- [ ] R-16 Add tests for zero-round debate routing to `DebateModeratorTask` with real moderator call
+- [ ] R-17 Add tests for zero-round risk routing to `RiskModeratorTask` with real moderator call
+- [ ] R-18 Add tests verifying snapshot failure causes task error propagation
+
 ## 12. Cross-Owner Changes
 
 - [x] 12.1 Modify `Cargo.toml` (owned by `add-project-foundation`): add `graph-flow`, `sqlx`, and
@@ -209,3 +244,4 @@ from the same round. This is NOT a fan-out.
 - [x] 14.3 Run `cargo fmt -- --check` and confirm no formatting diffs
 - [ ] 14.4 Run `openspec validate add-graph-orchestration --strict` and confirm the change remains valid
 - [ ] 14.5 Verify all 14 sections above are complete with every task checked off
+- [ ] 14.6 After remediation: re-run full verification suite and confirm all new and original tests pass
