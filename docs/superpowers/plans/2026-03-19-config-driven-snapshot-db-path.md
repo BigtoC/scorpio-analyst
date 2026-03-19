@@ -4,7 +4,7 @@
 
 **Goal:** Make the SQLite snapshot database path configurable via `config.toml` and env vars, with a default of `~/.scorpio-analyst/phase_snapshots.db`, and fix a latent bug in the env var hierarchy separator.
 
-**Architecture:** Add a `StorageConfig` struct to `src/config.rs` with a `snapshot_db_path: String` field; add a `pub fn expand_path(s: &str) -> PathBuf` free function that resolves `~/` and `$HOME/` at runtime; fix `.separator("_")` → `.separator("__")` in `Config::load_from` so nested env var overrides work correctly. `SnapshotStore` is untouched.
+**Architecture:** Add a `StorageConfig` struct to `src/config.rs` with a `snapshot_db_path: String` field; add a `pub fn expand_path(s: &str) -> PathBuf` free function that resolves `~/` and `$HOME/` at runtime; fix `.separator("_")` → `.separator("__")` in `Config::load_from` so nested env var overrides work correctly; log the resolved path at startup in `main.rs`. `SnapshotStore` is untouched.
 
 **Tech Stack:** Rust 1.93+ (edition 2024), `config` 0.15 crate, `serde`/`serde_json`, `tokio`, `tracing`.
 
@@ -18,6 +18,7 @@
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------|
 | `src/config.rs` | Fix `.separator("__")`, add `StorageConfig` + `Default`, add `storage` field on `Config`, add `expand_path` fn, add unit tests |
 | `config.toml`   | Add `[storage]` section; update prefix comment                                                                                 |
+| `src/main.rs`   | Call `expand_path` at startup and log the resolved path                                                                        |
 
 No other files change. `src/workflow/snapshot.rs`, `src/workflow/tasks.rs`, `tests/workflow_pipeline.rs`, `tests/workflow_observability.rs` — all unchanged.
 
@@ -34,7 +35,18 @@ The `config` crate's `Environment::separator` determines how nested keys are enc
 
 - [ ] **Step 1: Write the failing test**
 
-Add this test to the `#[cfg(test)] mod tests` block at the bottom of `src/config.rs`:
+Add this test to the `#[cfg(test)] mod tests` block at the bottom of `src/config.rs`.
+
+First, add a shared mutex for env-var tests near the top of the `tests` module (above all test functions). This serializes all tests that mutate env vars, preventing races since `std::env::set_var` is not thread-safe:
+
+```rust
+/// Serializes tests that mutate environment variables.
+/// `std::env::set_var` is not thread-safe; all tests touching env vars must
+/// hold this lock for the duration of the test.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+```
+
+Then add the test:
 
 ```rust
 #[test]
@@ -56,22 +68,13 @@ fn env_override_uses_double_underscore_separator() {
 }
 ```
 
-Also add the shared lock near the top of the `tests` module (above all test functions):
-
-```rust
-/// Serializes tests that mutate environment variables.
-/// `std::env::set_var` is not thread-safe; all tests touching env vars must
-/// hold this lock for the duration of the test.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-```
-
 - [ ] **Step 2: Run the test to confirm it fails**
 
 ```bash
 cargo test env_override_uses_double_underscore_separator -- --nocapture
 ```
 
-Expected: FAIL — the override is not picked up because `.separator("_")` doesn't parse `SCORPIO__LLM__MAX_DEBATE_ROUNDS` correctly.
+Expected: FAIL — the override is not picked up because `.separator("_")` doesn't parse `SCORPIO__LLM__MAX_DEBATE_ROUNDS` correctly (the `config` crate sees empty segments around `__` when splitting on `_`).
 
 - [ ] **Step 3: Fix the separator**
 
@@ -105,7 +108,7 @@ Expected: PASS.
 cargo test
 ```
 
-Expected: all tests pass. (No existing tests rely on env var overrides going through the `config` crate — the secret API keys are loaded via direct `std::env::var` calls and are unaffected.)
+Expected: all tests pass. (No existing tests rely on env var overrides going through the `config` crate — the secret API keys are loaded via direct `std::env::var` calls and are unaffected by the separator change.)
 
 - [ ] **Step 6: Commit**
 
@@ -121,7 +124,7 @@ git commit -m "fix(config): change env separator from _ to __ to support nested 
 **Files:**
 - Modify: `src/config.rs` (add struct, default fn, `Default` impl, field on `Config`)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 Add to the `tests` module in `src/config.rs`:
 
@@ -192,7 +195,7 @@ impl Default for StorageConfig {
 }
 ```
 
-Then add the `storage` field to the `Config` struct:
+Then add `storage` as the last field on the `Config` struct (after `api`):
 
 ```rust
 pub struct Config {
@@ -229,7 +232,7 @@ git commit -m "feat(config): add StorageConfig with snapshot_db_path field"
 
 ---
 
-## Chunk 2: expand_path + config.toml
+## Chunk 2: expand_path + config.toml + main.rs wiring
 
 ### Task 3: Add `expand_path` function with unit tests
 
@@ -239,18 +242,19 @@ git commit -m "feat(config): add StorageConfig with snapshot_db_path field"
 `expand_path` is a pure function. It does not call any I/O other than `std::env::var("HOME")`. It does not write to the filesystem or create directories. Directory creation is the caller's responsibility.
 
 Rules:
-1. If `s` starts with `~/`, replace `~` with `$HOME` (env var). If `HOME` is unset, emit `tracing::warn!` and use `.` (current dir) as fallback.
-2. If `s` starts with `$HOME/`, substitute `$HOME`. Same fallback.
-3. Otherwise return `PathBuf::from(s)` unchanged.
+1. If `s` starts with `~/`, replace `~` with `$HOME` env var. If `HOME` is unset, emit `tracing::warn!` and use `"."` as fallback.
+2. If `s` starts with `$HOME/`, substitute `$HOME` env var. Same fallback.
+3. Otherwise, return `PathBuf::from(s)` unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the `tests` module in `src/config.rs`:
+Add to the `tests` module in `src/config.rs`. Note that `expand_path_absolute_unchanged` and `expand_path_relative_unchanged` do not acquire `ENV_LOCK` — inputs that don't start with `~/` or `$HOME/` never read `HOME`, so they are safe to run concurrently:
 
 ```rust
 #[test]
 fn expand_path_tilde_prefix() {
     let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: serialized by ENV_LOCK
     unsafe { std::env::set_var("HOME", "/home/testuser") };
     let result = expand_path("~/foo/bar.db");
     unsafe { std::env::remove_var("HOME") };
@@ -260,6 +264,7 @@ fn expand_path_tilde_prefix() {
 #[test]
 fn expand_path_dollar_home_prefix() {
     let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: serialized by ENV_LOCK
     unsafe { std::env::set_var("HOME", "/home/testuser") };
     let result = expand_path("$HOME/foo/bar.db");
     unsafe { std::env::remove_var("HOME") };
@@ -268,22 +273,35 @@ fn expand_path_dollar_home_prefix() {
 
 #[test]
 fn expand_path_absolute_unchanged() {
+    // Does not read HOME — no lock needed
     let result = expand_path("/absolute/path.db");
     assert_eq!(result, std::path::PathBuf::from("/absolute/path.db"));
 }
 
 #[test]
 fn expand_path_relative_unchanged() {
+    // Does not read HOME — no lock needed
     let result = expand_path("relative/path.db");
     assert_eq!(result, std::path::PathBuf::from("relative/path.db"));
 }
 
 #[test]
-fn expand_path_home_unset_falls_back_to_dot() {
+fn expand_path_tilde_home_unset_falls_back_to_dot() {
     let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: serialized by ENV_LOCK
     unsafe { std::env::remove_var("HOME") };
     let result = expand_path("~/foo/bar.db");
-    // When HOME is unset, falls back to "." + the suffix
+    // Fallback home is "." so format!("{home}/{rest}") == "./foo/bar.db"
+    assert_eq!(result, std::path::PathBuf::from("./foo/bar.db"));
+}
+
+#[test]
+fn expand_path_dollar_home_unset_falls_back_to_dot() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: serialized by ENV_LOCK
+    unsafe { std::env::remove_var("HOME") };
+    let result = expand_path("$HOME/foo/bar.db");
+    // Fallback home is "." so format!("{home}/{rest}") == "./foo/bar.db"
     assert_eq!(result, std::path::PathBuf::from("./foo/bar.db"));
 }
 ```
@@ -304,8 +322,8 @@ Add this function to `src/config.rs`, after the `StorageConfig` block (before `i
 /// Resolve `~/` and `$HOME/` prefix in a path string to the actual home directory.
 ///
 /// - `~/foo` and `$HOME/foo` both expand using the `HOME` environment variable.
-/// - If `HOME` is unset, falls back to `"."` with a warning.
-/// - All other paths are returned as-is.
+/// - If `HOME` is unset, falls back to `"."` with a warning logged via `tracing::warn!`.
+/// - All other paths are returned as-is (absolute and relative paths pass through unchanged).
 pub fn expand_path(s: &str) -> std::path::PathBuf {
     let suffix = if let Some(rest) = s.strip_prefix("~/") {
         Some(rest)
@@ -337,7 +355,7 @@ pub fn expand_path(s: &str) -> std::path::PathBuf {
 cargo test expand_path -- --nocapture
 ```
 
-Expected: all 5 tests PASS.
+Expected: all 6 tests PASS.
 
 - [ ] **Step 5: Run the full suite and clippy**
 
@@ -359,33 +377,11 @@ git commit -m "feat(config): add expand_path helper for ~ and \$HOME path expans
 ### Task 4: Update `config.toml`
 
 **Files:**
-- Modify: `config.toml` (add `[storage]` section, fix prefix comment)
+- Modify: `config.toml`
 
-- [ ] **Step 1: Add the `[storage]` section to `config.toml`**
+- [ ] **Step 1: Replace the contents of `config.toml` with the following**
 
-Open `config.toml`. The current content ends with:
-
-```toml
-[api]
-finnhub_rate_limit = 30
-```
-
-Append the following, and also update the comment on line 2 from `SCORPIO_` to `SCORPIO__`:
-
-```toml
-# Scorpio Analyst — default configuration
-# Override with .env or environment variables (prefix: SCORPIO__, e.g. SCORPIO__LLM__MAX_DEBATE_ROUNDS=5)
-
-[llm]
-...
-
-[storage]
-# Path to the SQLite snapshot database. Supports ~ and $HOME expansion.
-# Override: SCORPIO__STORAGE__SNAPSHOT_DB_PATH=/your/custom/path.db
-snapshot_db_path = "~/.scorpio-analyst/phase_snapshots.db"
-```
-
-The final `config.toml` should look like:
+The only changes are: (a) update the comment on line 2 to reflect the new `SCORPIO__` prefix convention; (b) append the `[storage]` section at the end.
 
 ```toml
 # Scorpio Analyst — default configuration
@@ -420,7 +416,7 @@ snapshot_db_path = "~/.scorpio-analyst/phase_snapshots.db"
 cargo test
 ```
 
-Expected: all tests pass. The existing `load_from_defaults_only` test checks `max_debate_rounds` and `finnhub_rate_limit` — both unaffected. The `storage_config_defaults_to_tilde_path` test added in Task 2 will also pass since `config.toml` now has an explicit `[storage]` value matching the default.
+Expected: all tests pass. The existing `load_from_defaults_only` test checks `max_debate_rounds` and `finnhub_rate_limit` — both unaffected. The `storage_config_defaults_to_tilde_path` test added in Task 2 also passes since `config.toml` now has an explicit `[storage]` value matching the default.
 
 - [ ] **Step 3: Run clippy and fmt**
 
@@ -439,12 +435,95 @@ git commit -m "feat(config): add [storage] section with snapshot_db_path"
 
 ---
 
-## Final verification
+### Task 5: Wire `expand_path` into `main.rs`
 
-- [ ] **Run the complete test suite one last time**
+**Files:**
+- Modify: `src/main.rs`
+
+`main.rs` does not yet construct a `SnapshotStore` (the full pipeline is not wired up yet), but `expand_path` must be called somewhere in production code to satisfy the spec goal. Add a startup log line that resolves and logs the configured db path. This makes the resolved path visible to operators and keeps `expand_path` and `StorageConfig` from being dead code.
+
+- [ ] **Step 1: Update `main.rs`**
+
+Replace the contents of `src/main.rs` with the following (adds `expand_path` import and a startup log for the resolved snapshot db path):
+
+```rust
+use scorpio_analyst::config::{Config, expand_path};
+use scorpio_analyst::observability::init_tracing;
+use scorpio_analyst::providers::factory::preflight_configured_providers;
+
+fn main() {
+    init_tracing();
+
+    match Config::load() {
+        Ok(cfg) => {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(e) => {
+                    eprintln!("failed to initialize async runtime: {e:#}");
+                    std::process::exit(1);
+                }
+            };
+
+            if let Err(e) = runtime.block_on(preflight_configured_providers(&cfg.llm, &cfg.api)) {
+                eprintln!("failed to preflight configured providers: {e:#}");
+                std::process::exit(1);
+            }
+
+            let snapshot_db_path = expand_path(&cfg.storage.snapshot_db_path);
+            tracing::info!(
+                snapshot_db_path = %snapshot_db_path.display(),
+                "storage configured"
+            );
+
+            tracing::info!(
+                quick_provider = %cfg.llm.quick_thinking_provider,
+                deep_provider = %cfg.llm.deep_thinking_provider,
+                symbol = %cfg.trading.asset_symbol,
+                "scorpio-analyst initialized"
+            );
+        }
+        Err(e) => {
+            eprintln!("failed to load configuration: {e:#}");
+            std::process::exit(1);
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Build to verify it compiles**
+
+```bash
+cargo build
+```
+
+Expected: compiles cleanly with no warnings.
+
+- [ ] **Step 3: Run the full suite, clippy, and fmt**
 
 ```bash
 cargo test && cargo clippy -- -D warnings && cargo fmt -- --check
 ```
 
-Expected: all tests pass, no clippy warnings, formatting clean.
+Expected: all pass.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/main.rs
+git commit -m "feat(main): log resolved snapshot_db_path at startup"
+```
+
+---
+
+## Final verification
+
+- [ ] **Run the complete test suite one last time**
+
+```bash
+cargo test && cargo clippy -- -D warnings && cargo fmt -- --check && cargo build
+```
+
+Expected: all tests pass, no clippy warnings, formatting clean, build succeeds.
