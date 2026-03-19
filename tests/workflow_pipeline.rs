@@ -348,7 +348,7 @@ async fn integration_zero_risk_rounds_bypasses_loop() {
     let round: u32 = ctx.get(KEY_RISK_ROUND).await.unwrap_or(0);
     let max: u32 = ctx.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
     assert!(
-        !(round < max),
+        round >= max,
         "with max_risk_rounds=0, loop predicate must be false (bypass directly to moderator)"
     );
 }
@@ -602,7 +602,7 @@ async fn integration_zero_debate_rounds_bypasses_loop() {
     let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
     let max: u32 = ctx.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
     assert!(
-        !(round < max),
+        round >= max,
         "with max_debate_rounds=0, loop predicate must be false (bypass directly to trader)"
     );
 }
@@ -640,21 +640,10 @@ async fn malformed_trading_state_json_returns_schema_violation() {
 // ────────────────────────────────────────────────────────────────────────────
 //
 // Documents the per-cycle uniqueness guarantee: each TradingState created with
-// `new()` gets a fresh UUID.  Also exercises that `uuid::Uuid::new_v4()` never
-// collides with another (probabilistically certain).
+// `new()` gets a fresh UUID, so two successive cycles never share an ID.
 
 #[test]
 fn execution_ids_are_distinct_across_cycles() {
-    use uuid::Uuid;
-
-    let id1 = Uuid::new_v4();
-    let id2 = Uuid::new_v4();
-    assert_ne!(
-        id1, id2,
-        "two independently generated UUIDs must be distinct"
-    );
-
-    // Verify TradingState also assigns distinct execution_ids per instance.
     let state1 = sample_state();
     let state2 = sample_state();
     assert_ne!(
