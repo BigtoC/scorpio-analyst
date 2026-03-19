@@ -199,7 +199,7 @@ fn pipeline_build_graph_produces_graph_without_panic() {
     let yfinance = YFinanceClient::new(SharedRateLimiter::new("test-yfinance", 10));
     let handle = CompletionModelHandle::for_test();
 
-    let pipeline = TradingPipeline::new(config, finnhub, yfinance, store, handle);
+    let pipeline = TradingPipeline::new(config, finnhub, yfinance, store, handle.clone(), handle);
 
     // build_graph must not panic and must return a non-trivially-empty graph.
     let _graph = pipeline.build_graph();

@@ -55,16 +55,16 @@ use crate::{
         tasks::{
             AggressiveRiskTask, AnalystSyncTask, BearishResearcherTask, BullishResearcherTask,
             ConservativeRiskTask, DebateModeratorTask, FundManagerTask, FundamentalAnalystTask,
-            KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
-            NeutralRiskTask, NewsAnalystTask, RiskModeratorTask, SentimentAnalystTask,
-            TechnicalAnalystTask,
+            KEY_CACHED_NEWS, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
+            KEY_RISK_ROUND, NeutralRiskTask, NewsAnalystTask, RiskModeratorTask,
+            SentimentAnalystTask, TechnicalAnalystTask,
         },
     },
 };
 
 // ── Graph task-ID constants ──────────────────────────────────────────────────
 
-const TASK_ANALYST_FAN_OUT: &str = "analyst_fan_out";
+const TASK_ANALYST_FAN_OUT: &str = "analyst_fanout";
 const TASK_ANALYST_SYNC: &str = "analyst_sync";
 const TASK_BULLISH_RESEARCHER: &str = "bullish_researcher";
 const TASK_BEARISH_RESEARCHER: &str = "bearish_researcher";
@@ -80,16 +80,25 @@ const TASK_FUND_MANAGER: &str = "fund_manager";
 
 /// Orchestrates the full five-phase trading analysis pipeline.
 ///
-/// Each call to [`run_analysis_cycle`][Self::run_analysis_cycle] builds a fresh
-/// graph-flow `Graph`, runs it to completion, and returns the enriched
-/// [`TradingState`].
+/// The graph is built once in [`new`][Self::new] and reused across analysis
+/// cycles. Use [`run_analysis_cycle`][Self::run_analysis_cycle] as the single
+/// entry point for callers.
 pub struct TradingPipeline {
     config: Arc<Config>,
     finnhub: FinnhubClient,
+    // Retained so the pipeline can be inspected or re-wired without reconstructing all clients.
+    #[allow(dead_code)]
     yfinance: YFinanceClient,
+    #[allow(dead_code)]
     snapshot_store: Arc<SnapshotStore>,
-    /// Handle used by the deep-thinking agents (researcher, risk).
-    handle: CompletionModelHandle,
+    /// Handle for quick-thinking agents (Analyst Team — Phase 1).
+    #[allow(dead_code)]
+    quick_handle: CompletionModelHandle,
+    /// Handle for deep-thinking agents (Researcher, Trader, Risk Team, Fund Manager).
+    #[allow(dead_code)]
+    deep_handle: CompletionModelHandle,
+    /// Pre-built graph — stateless, safe to share across analysis cycles.
+    graph: Arc<Graph>,
 }
 
 impl TradingPipeline {
@@ -101,62 +110,84 @@ impl TradingPipeline {
     /// - `finnhub` — Finnhub API client (used by analyst tasks)
     /// - `yfinance` — yfinance client (used by the technical analyst)
     /// - `snapshot_store` — SQLite-backed snapshot store for phase persistence
-    /// - `handle` — pre-built completion-model handle for deep-thinking agents
+    /// - `quick_handle` — pre-built completion-model handle for quick-thinking agents (Phase 1)
+    /// - `deep_handle` — pre-built completion-model handle for deep-thinking agents (Phases 2–5)
     pub fn new(
         config: Config,
         finnhub: FinnhubClient,
         yfinance: YFinanceClient,
         snapshot_store: SnapshotStore,
-        handle: CompletionModelHandle,
+        quick_handle: CompletionModelHandle,
+        deep_handle: CompletionModelHandle,
     ) -> Self {
+        let config = Arc::new(config);
+        let snapshot_store = Arc::new(snapshot_store);
+        let graph = Self::build_graph_impl(
+            Arc::clone(&config),
+            &finnhub,
+            &yfinance,
+            Arc::clone(&snapshot_store),
+            &quick_handle,
+            &deep_handle,
+        );
         Self {
-            config: Arc::new(config),
+            config,
             finnhub,
             yfinance,
-            snapshot_store: Arc::new(snapshot_store),
-            handle,
+            snapshot_store,
+            quick_handle,
+            deep_handle,
+            graph,
         }
     }
 
-    /// Build the directed [`Graph`] for one analysis cycle.
+    /// Return a clone of the pre-built [`Graph`].
     ///
-    /// The graph is stateless (all mutable state lives in the session
-    /// [`Context`][graph_flow::Context]), so it is safe to share across
-    /// concurrent cycles — but in practice we build a fresh one per cycle
-    /// to avoid any retained state.
+    /// Primarily useful for tests that need to inspect the graph topology.
     pub fn build_graph(&self) -> Arc<Graph> {
+        Arc::clone(&self.graph)
+    }
+
+    /// Build the directed [`Graph`] for the trading pipeline.
+    ///
+    /// This is a private associated function called once from [`new`][Self::new].
+    /// Phase 1 analyst tasks use `quick_handle`; all other phases use `deep_handle`.
+    fn build_graph_impl(
+        config: Arc<Config>,
+        finnhub: &FinnhubClient,
+        yfinance: &YFinanceClient,
+        snapshot_store: Arc<SnapshotStore>,
+        quick_handle: &CompletionModelHandle,
+        deep_handle: &CompletionModelHandle,
+    ) -> Arc<Graph> {
         let graph = Arc::new(Graph::new("trading_pipeline"));
 
-        // ── Phase 1: analyst fan-out ──────────────────────────────────────
+        // ── Phase 1: analyst fan-out (QUICK handle) ───────────────────────
         let fan_out = FanOutTask::new(
             TASK_ANALYST_FAN_OUT,
             vec![
                 FundamentalAnalystTask::new(
-                    self.handle.clone(),
-                    self.finnhub.clone(),
-                    self.config.llm.clone(),
+                    quick_handle.clone(),
+                    finnhub.clone(),
+                    config.llm.clone(),
                 ),
                 SentimentAnalystTask::new(
-                    self.handle.clone(),
-                    self.finnhub.clone(),
-                    self.config.llm.clone(),
+                    quick_handle.clone(),
+                    finnhub.clone(),
+                    config.llm.clone(),
                 ),
-                NewsAnalystTask::new(
-                    self.handle.clone(),
-                    self.finnhub.clone(),
-                    self.config.llm.clone(),
-                ),
+                NewsAnalystTask::new(quick_handle.clone(), finnhub.clone(), config.llm.clone()),
                 TechnicalAnalystTask::new(
-                    self.handle.clone(),
-                    self.yfinance.clone(),
-                    self.config.llm.clone(),
+                    quick_handle.clone(),
+                    yfinance.clone(),
+                    config.llm.clone(),
                 ),
             ],
         );
         graph.add_task(fan_out);
 
         // ── Phase 1 sync: aggregation + degradation ───────────────────────
-        let analyst_sync = AnalystSyncTask::new(Arc::clone(&self.snapshot_store));
+        let analyst_sync = AnalystSyncTask::new(Arc::clone(&snapshot_store));
         graph.add_task(analyst_sync);
         graph.add_edge(TASK_ANALYST_FAN_OUT, TASK_ANALYST_SYNC);
 
@@ -170,13 +201,13 @@ impl TradingPipeline {
             TASK_DEBATE_MODERATOR,   // no:  skip to moderator
         );
 
-        // ── Phase 2: researcher debate ────────────────────────────────────
-        let bullish = BullishResearcherTask::new(Arc::clone(&self.config), self.handle.clone());
-        let bearish = BearishResearcherTask::new(Arc::clone(&self.config), self.handle.clone());
+        // ── Phase 2: researcher debate (DEEP handle) ──────────────────────
+        let bullish = BullishResearcherTask::new(Arc::clone(&config), deep_handle.clone());
+        let bearish = BearishResearcherTask::new(Arc::clone(&config), deep_handle.clone());
         let debate_mod = DebateModeratorTask::new(
-            Arc::clone(&self.config),
-            self.handle.clone(),
-            Arc::clone(&self.snapshot_store),
+            Arc::clone(&config),
+            deep_handle.clone(),
+            Arc::clone(&snapshot_store),
         );
 
         graph.add_task(bullish);
@@ -199,10 +230,10 @@ impl TradingPipeline {
             TASK_TRADER,             // no:  move to trader
         );
 
-        // ── Phase 3: trader ───────────────────────────────────────────────
+        // ── Phase 3: trader (Config builds handle internally) ─────────────
         let trader = crate::workflow::tasks::TraderTask::new(
-            Arc::clone(&self.config),
-            Arc::clone(&self.snapshot_store),
+            Arc::clone(&config),
+            Arc::clone(&snapshot_store),
         );
         graph.add_task(trader);
 
@@ -215,14 +246,14 @@ impl TradingPipeline {
             TASK_RISK_MODERATOR,  // no:  skip to moderator
         );
 
-        // ── Phase 4: risk discussion (sequential within each round) ───────
-        let aggressive = AggressiveRiskTask::new(Arc::clone(&self.config), self.handle.clone());
-        let conservative = ConservativeRiskTask::new(Arc::clone(&self.config), self.handle.clone());
-        let neutral = NeutralRiskTask::new(Arc::clone(&self.config), self.handle.clone());
+        // ── Phase 4: risk discussion — sequential within each round (DEEP handle)
+        let aggressive = AggressiveRiskTask::new(Arc::clone(&config), deep_handle.clone());
+        let conservative = ConservativeRiskTask::new(Arc::clone(&config), deep_handle.clone());
+        let neutral = NeutralRiskTask::new(Arc::clone(&config), deep_handle.clone());
         let risk_mod = RiskModeratorTask::new(
-            Arc::clone(&self.config),
-            self.handle.clone(),
-            Arc::clone(&self.snapshot_store),
+            Arc::clone(&config),
+            deep_handle.clone(),
+            Arc::clone(&snapshot_store),
         );
 
         graph.add_task(aggressive);
@@ -247,9 +278,8 @@ impl TradingPipeline {
             TASK_FUND_MANAGER,    // no:  move to fund manager
         );
 
-        // ── Phase 5: fund manager (terminal) ─────────────────────────────
-        let fund_manager =
-            FundManagerTask::new(Arc::clone(&self.config), Arc::clone(&self.snapshot_store));
+        // ── Phase 5: fund manager (Config builds handle internally) ───────
+        let fund_manager = FundManagerTask::new(Arc::clone(&config), Arc::clone(&snapshot_store));
         graph.add_task(fund_manager);
 
         // Set explicit start task (fan-out is first, but belt-and-suspenders).
@@ -260,7 +290,7 @@ impl TradingPipeline {
 
     /// Run a full analysis cycle for the given initial state.
     ///
-    /// 1. Builds the graph.
+    /// 1. Pre-fetches shared news to avoid duplicate Finnhub calls.
     /// 2. Seeds a fresh in-memory session with the serialised `TradingState`.
     /// 3. Runs the `FlowRunner` loop until the pipeline completes.
     /// 4. Deserializes and returns the final `TradingState`.
@@ -281,8 +311,17 @@ impl TradingPipeline {
         let date = initial_state.target_date.clone();
         info!(symbol = %symbol, date = %date, "starting analysis cycle");
 
-        // ── Build graph + storage ─────────────────────────────────────────
-        let graph = self.build_graph();
+        // Pre-fetch shared news for Sentiment and News analysts (avoids duplicate Finnhub calls).
+        let cached_news_json: Option<String> = {
+            use crate::agents::analyst::prefetch_analyst_news;
+            match prefetch_analyst_news(&self.finnhub, &initial_state.asset_symbol).await {
+                Some(news_arc) => serde_json::to_string(news_arc.as_ref()).ok(),
+                None => None,
+            }
+        };
+
+        // ── Graph + storage ───────────────────────────────────────────────
+        let graph = Arc::clone(&self.graph);
         let storage = Arc::new(InMemorySessionStorage::new());
 
         // ── Create session and seed context ───────────────────────────────
@@ -310,6 +349,11 @@ impl TradingPipeline {
         session.context.set(KEY_DEBATE_ROUND, 0u32).await;
         session.context.set(KEY_RISK_ROUND, 0u32).await;
 
+        // Seed pre-fetched news into context so analysts can share it.
+        if let Some(news_json) = cached_news_json {
+            session.context.set(KEY_CACHED_NEWS, news_json).await;
+        }
+
         // Persist seed session so FlowRunner can load it.
         storage
             .save(session)
@@ -332,8 +376,8 @@ impl TradingPipeline {
                 .run(&session_id)
                 .await
                 .map_err(|e| TradingError::GraphFlow {
-                    phase: "execution".into(),
-                    task: "runner".into(),
+                    phase: "pipeline_execution".into(),
+                    task: "flow_runner".into(),
                     cause: e.to_string(),
                 })?;
 
@@ -351,17 +395,22 @@ impl TradingPipeline {
                 ExecutionStatus::WaitingForInput => {
                     // Unexpected in this pipeline; treat as an error.
                     return Err(TradingError::GraphFlow {
-                        phase: "execution".into(),
-                        task: "waiting_for_input".into(),
+                        phase: "pipeline_execution".into(),
+                        task: "unexpected_input_wait".into(),
                         cause: "pipeline unexpectedly waiting for input".into(),
                     });
                 }
                 ExecutionStatus::Error(ref msg) => {
                     error!(error = %msg, step, "pipeline step returned error status");
+                    let cause = if msg.len() > 200 {
+                        format!("{}...", &msg[..200])
+                    } else {
+                        msg.clone()
+                    };
                     return Err(TradingError::GraphFlow {
-                        phase: "execution".into(),
-                        task: "error_status".into(),
-                        cause: msg.clone(),
+                        phase: "pipeline_execution".into(),
+                        task: "task_failure".into(),
+                        cause,
                     });
                 }
             }
@@ -406,7 +455,7 @@ mod tests {
         // These are the string literals used in add_edge / add_conditional_edge.
         // If any task's id() implementation changes, the graph wiring will silently
         // break.  This test catches that mismatch at compile-time.
-        assert_eq!(TASK_ANALYST_FAN_OUT, "analyst_fan_out");
+        assert_eq!(TASK_ANALYST_FAN_OUT, "analyst_fanout");
         assert_eq!(TASK_ANALYST_SYNC, "analyst_sync");
         assert_eq!(TASK_BULLISH_RESEARCHER, "bullish_researcher");
         assert_eq!(TASK_BEARISH_RESEARCHER, "bearish_researcher");
