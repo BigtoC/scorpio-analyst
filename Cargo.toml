@@ -49,9 +49,17 @@ finnhub = "0.2.2"
 yfinance-rs = "0.7.2"
 kand = "0.2.2"
 
+# Graph orchestration
+graph-flow = { git = "https://github.com/BigtoC/rs-graph-llm", branch = "feature/update-rig-version", features = ["rig"] }
+async-trait = "0.1"
+
+# Phase snapshot persistence
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+
 [dev-dependencies]
 proptest = "1"
 mockall = "0.13"
 pretty_assertions = "1"
 paft-money = "0.7"
 rust_decimal = "1"
+tempfile = "3"
