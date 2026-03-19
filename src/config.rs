@@ -125,6 +125,29 @@ impl Default for StorageConfig {
     }
 }
 
+/// Resolve `~/` and `$HOME/` prefix in a path string to the actual home directory.
+///
+/// - `~/foo` and `$HOME/foo` both expand using the `HOME` environment variable.
+/// - If `HOME` is unset, falls back to `"."` with a warning logged via `tracing::warn!`.
+/// - All other paths are returned as-is (absolute and relative paths pass through unchanged).
+pub fn expand_path(s: &str) -> std::path::PathBuf {
+    let suffix = s.strip_prefix("~/").or_else(|| s.strip_prefix("$HOME/"));
+
+    match suffix {
+        Some(rest) => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| {
+                tracing::warn!(
+                    "HOME environment variable is not set; \
+                     falling back to current directory for path expansion"
+                );
+                ".".to_string()
+            });
+            std::path::PathBuf::from(format!("{home}/{rest}"))
+        }
+        None => std::path::PathBuf::from(s),
+    }
+}
+
 // Manual Debug implementation to redact secrets.
 impl std::fmt::Debug for ApiConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -339,5 +362,95 @@ mod tests {
             cfg.storage.snapshot_db_path, "/tmp/custom.db",
             "env var should override snapshot_db_path"
         );
+    }
+
+    #[test]
+    fn expand_path_tilde_prefix() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK
+        let saved_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", "/home/testuser") };
+        let result = expand_path("~/foo/bar.db");
+        // Restore HOME so subsequent tests in other modules are not affected
+        unsafe {
+            match saved_home {
+                Some(ref v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        assert_eq!(
+            result,
+            std::path::PathBuf::from("/home/testuser/foo/bar.db")
+        );
+    }
+
+    #[test]
+    fn expand_path_dollar_home_prefix() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK
+        let saved_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", "/home/testuser") };
+        let result = expand_path("$HOME/foo/bar.db");
+        // Restore HOME so subsequent tests in other modules are not affected
+        unsafe {
+            match saved_home {
+                Some(ref v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        assert_eq!(
+            result,
+            std::path::PathBuf::from("/home/testuser/foo/bar.db")
+        );
+    }
+
+    #[test]
+    fn expand_path_absolute_unchanged() {
+        // Does not read HOME — no lock needed
+        let result = expand_path("/absolute/path.db");
+        assert_eq!(result, std::path::PathBuf::from("/absolute/path.db"));
+    }
+
+    #[test]
+    fn expand_path_relative_unchanged() {
+        // Does not read HOME — no lock needed
+        let result = expand_path("relative/path.db");
+        assert_eq!(result, std::path::PathBuf::from("relative/path.db"));
+    }
+
+    #[test]
+    fn expand_path_tilde_home_unset_falls_back_to_dot() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK
+        let saved_home = std::env::var("HOME").ok();
+        unsafe { std::env::remove_var("HOME") };
+        let result = expand_path("~/foo/bar.db");
+        // Restore HOME so subsequent tests in other modules are not affected
+        unsafe {
+            match saved_home {
+                Some(ref v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        // Fallback home is "." so format!("{home}/{rest}") == "./foo/bar.db"
+        assert_eq!(result, std::path::PathBuf::from("./foo/bar.db"));
+    }
+
+    #[test]
+    fn expand_path_dollar_home_unset_falls_back_to_dot() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK
+        let saved_home = std::env::var("HOME").ok();
+        unsafe { std::env::remove_var("HOME") };
+        let result = expand_path("$HOME/foo/bar.db");
+        // Restore HOME so subsequent tests in other modules are not affected
+        unsafe {
+            match saved_home {
+                Some(ref v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        // Fallback home is "." so format!("{home}/{rest}") == "./foo/bar.db"
+        assert_eq!(result, std::path::PathBuf::from("./foo/bar.db"));
     }
 }
