@@ -5,12 +5,70 @@ schema: spec-driven
 
 context: |
   Project: scorpio-analyst
+  Purpose: Rust-native reimplementation of TradingAgents (arXiv:2412.20138). Simulates a trading firm
+  with specialized AI agent roles collaborating through a 5-phase pipeline to make autonomous,
+  explainable financial trading decisions.
 
-  # TODO: fill in your actual stack and conventions
-  # Tech stack: e.g. TypeScript, React, Node.js / Unity, C# / Python, Django
-  # Architecture: e.g. MVC, HMVC, ECS, Redux, MVVM, microservices
-  # Testing: e.g. Jest, NUnit, pytest
-  # Key constraints: e.g. legacy codebase, must support IE11, no breaking API changes
+  Tech Stack:
+  - Language: Rust 1.93+ (edition 2024), single binary crate (scorpio-analyst)
+  - LLM Orchestration: rig-core 0.31 (OpenAI, Anthropic, Gemini, custom Copilot via ACP/JSON-RPC 2.0)
+  - Workflow Engine: graph-flow 0.4 (feature "rig") — stateful directed graph (LangGraph equivalent)
+  - Async Runtime: tokio; Financial Data: finnhub 0.2, yfinance-rs 0.7; Indicators: kand 0.2
+  - Error Handling: thiserror (typed domain errors) + anyhow (context propagation)
+  - Rate Limiting: governor (Arc-shared across concurrent agents)
+  - Security: secrecy (API keys — zeroed on drop, excluded from Debug/logs)
+  - CLI: clap; Output: colored/comfy-table; TUI (Phase 2): ratatui + crossterm; Desktop (Phase 3): gpui
+  - Testing: mockall (mocks), proptest (property-based)
+
+  Architecture:
+  - 5-phase pipeline: Analyst Team (fan-out) → Researcher Team (cyclic debate) → Trader (sequential)
+    → Risk Team (fan-out + cyclic debate) → Fund Manager (sequential, deterministic fallback: reject
+    if Conservative + Neutral both flag violation)
+  - State: all inter-agent data via strongly-typed TradingState struct in graph_flow::Context — no
+    free-text handoffs (eliminates telephone effect)
+  - Dual-tier LLM routing: Analysts → quick-thinking models (gpt-4o-mini, claude-haiku, gemini-flash);
+    Researchers/Trader/Risk → deep-thinking models (o3, claude-opus). Per-agent overrides deferred post-MVP.
+  - Concurrency: tokio::spawn fan-out with per-field Arc<RwLock<Option<T>>> locking. Never hold
+    std::sync::Mutex across .await — use tokio::sync::RwLock.
+  - Token usage tracking: every LLM call records model ID, latency, and provider-reported token counts
+    into TokenUsageTracker on TradingState. Per-phase/per-agent breakdowns displayed after every run.
+  - Config layering: config.toml → .env (dotenvy) → environment variables (highest priority)
+  - Error resilience: exponential backoff (max 3 retries, base 500ms); 1 analyst failure = graceful
+    degradation; 2+ failures = abort; 30s per-analyst timeout
+
+  Code Conventions (see .github/instructions/rust.instructions.md for full details):
+  - Prefer &T over clone; &str over String for params when ownership not needed
+  - No unwrap()/expect() — use ? operator; no unnecessary unsafe
+  - Implement Debug, Clone, PartialEq on all public types
+  - Enums over flags/booleans; builders for complex objects
+  - Warnings are errors in CI (-D warnings); run cargo fmt --check, cargo clippy, cargo test
+
+  Testing Strategy:
+  - Unit: each agent task isolated with mocked APIs (mockall); verify TradingState fields populated correctly
+  - Integration: full graph-flow workflow with deterministic stubs (no real API calls)
+  - Backtesting: historical OHLCV replay with cached LLM responses (no look-ahead, deterministic)
+  - Property-based: proptest for TradingState serialization round-trips and TradingError edge cases
+
+  Git/Spec Workflow:
+  - Spec-driven via OpenSpec — proposals required for features, breaking changes, architecture shifts
+  - Bug fixes, typos, non-breaking dependency updates can skip proposals
+  - Future enhancements deferred explicitly go in docs/future-enhancements.md
+  - Cross-owner file modifications require a "## Cross-Owner Changes" section in proposal.md and
+    explicit approval before implementation begins
+
+  Key Constraints:
+  - API keys must use secrecy::SecretString — never in Debug output or logs
+  - Rate limiting mandatory — concurrent agents must not exceed provider limits (Finnhub: 30 req/s)
+  - LLMs must return rigid JSON schemas (enforced via serde) — no free-text state passing
+  - No std::sync::Mutex across .await boundaries — tokio::sync::RwLock only
+
+  Domain Concepts:
+  - Telephone effect: data degradation via unstructured language handoffs — mitigated by typed structs
+  - Dialectical debate: Bullish vs Bearish researchers argue in rounds (max_debate_rounds), moderated
+  - Risk personas: Aggressive (momentum, wider stops), Conservative (capital preservation, veto rights),
+    Neutral (Sharpe Ratio optimization)
+  - Key metrics: Cumulative Return, Annualized Return, Sharpe Ratio, Maximum Drawdown
+  - Technical indicators: RSI (>70 overbought, <30 oversold), MACD (signal crossovers), ATR (volatility)
 
 rules:
   proposal:
