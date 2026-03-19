@@ -85,6 +85,28 @@ impl CompletionModelHandle {
     pub fn model_id(&self) -> &str {
         &self.model_id
     }
+
+    /// Construct a non-functional handle for use in tests only.
+    ///
+    /// The resulting handle has a real `OpenAI` client built with a dummy key.
+    /// Any LLM call made through this handle will fail with an auth error,
+    /// which is intentional: tests use the error to prove the underlying agent
+    /// function was actually called (rather than being a silent no-op).
+    ///
+    /// # Note
+    ///
+    /// This method is public to allow integration tests in `tests/` to access
+    /// it.  It must not be called in production code.
+    #[doc(hidden)]
+    pub fn for_test() -> Self {
+        Self {
+            provider: ProviderId::OpenAI,
+            model_id: "test-model".to_owned(),
+            client: ProviderClient::OpenAI(
+                openai::Client::new("test-dummy-key").expect("openai client construction"),
+            ),
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
