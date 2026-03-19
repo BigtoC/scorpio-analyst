@@ -217,6 +217,107 @@ fn tracing_emits_phase_completion_event_for_analyst_sync() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// 11.15 — Structured field capture: `failures` field emitted by AnalystSyncTask
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Extends the tracing test to verify that the structured field `failures`
+// (emitted by `info!(failures = failure_count, "AnalystSyncTask: phase 1 complete")`)
+// is captured alongside the message.  Uses a `StructuredEventCollector` that
+// records all field name/value pairs, not just the `message` field.
+
+/// Captures all structured fields (name + string representation) from tracing events.
+#[derive(Clone, Default)]
+struct StructuredEventCollector {
+    fields: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl StructuredEventCollector {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn collected_fields(&self) -> Vec<(String, String)> {
+        self.fields.lock().unwrap().clone()
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StructuredEventCollector {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        struct AllFieldVisitor(Vec<(String, String)>);
+        impl tracing::field::Visit for AllFieldVisitor {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                self.0.push((field.name().to_owned(), value.to_owned()));
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0.push((field.name().to_owned(), format!("{value:?}")));
+            }
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                self.0.push((field.name().to_owned(), value.to_string()));
+            }
+            fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+                self.0.push((field.name().to_owned(), value.to_string()));
+            }
+            fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+                self.0.push((field.name().to_owned(), value.to_string()));
+            }
+        }
+
+        let mut visitor = AllFieldVisitor(Vec::new());
+        event.record(&mut visitor);
+        let mut guard = self.fields.lock().unwrap();
+        guard.extend(visitor.0);
+    }
+}
+
+#[test]
+fn tracing_emits_structured_failures_field_for_analyst_sync() {
+    let collector = StructuredEventCollector::new();
+    let subscriber = tracing_subscriber::registry().with(collector.clone());
+
+    with_default(subscriber, || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        rt.block_on(async {
+            let (store, _dir) = make_store().await;
+            let state = TradingState::new("AAPL", "2026-03-19");
+            let ctx = Context::new();
+
+            seed_all_analysts_ok(&ctx, &state).await;
+
+            let task = AnalystSyncTask::new(store);
+            task.run(ctx.clone())
+                .await
+                .expect("AnalystSyncTask should succeed");
+        });
+    });
+
+    let fields = collector.collected_fields();
+
+    // The `failures` structured field must be emitted with value "0"
+    // (all analysts succeeded).
+    let failures_field = fields.iter().find(|(name, _)| name == "failures");
+
+    assert!(
+        failures_field.is_some(),
+        "expected a structured field named 'failures' to be emitted, \
+         but got fields: {fields:?}"
+    );
+
+    let (_, failures_value) = failures_field.unwrap();
+    assert_eq!(
+        failures_value, "0",
+        "with all analysts succeeding, 'failures' field must be '0', got '{failures_value}'"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Supplemental: debate round counter emits context-visible transitions
 // ────────────────────────────────────────────────────────────────────────────
 //

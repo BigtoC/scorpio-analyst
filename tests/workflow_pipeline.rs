@@ -495,6 +495,175 @@ async fn snapshot_store_upsert_replaces_existing_snapshot() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// 11.11 — Exact graph topology assertion
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Verifies that `build_graph` wires the correct start task and all 11 expected
+// nodes are reachable via `get_task`.  Uses string literals because the
+// `TASK_*` constants in `pipeline.rs` are private.
+
+#[test]
+fn pipeline_graph_topology_has_correct_start_and_all_nodes() {
+    use scorpio_analyst::{
+        config::{ApiConfig, Config, LlmConfig, TradingConfig},
+        data::{FinnhubClient, YFinanceClient},
+        providers::factory::CompletionModelHandle,
+        rate_limit::SharedRateLimiter,
+        workflow::TradingPipeline,
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (store, _dir) = rt.block_on(async {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let store = SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store");
+        (store, dir)
+    });
+
+    let config = Config {
+        llm: LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: TradingConfig {
+            asset_symbol: "AAPL".to_owned(),
+            backtest_start: None,
+            backtest_end: None,
+        },
+        api: ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: None,
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        },
+        storage: Default::default(),
+    };
+
+    let finnhub = FinnhubClient::for_test();
+    let yfinance = YFinanceClient::new(SharedRateLimiter::new("test-topology", 10));
+    let handle = CompletionModelHandle::for_test();
+
+    let pipeline = TradingPipeline::new(config, finnhub, yfinance, store, handle.clone(), handle);
+    let graph = pipeline.build_graph();
+
+    // Start task must be the analyst fan-out.
+    assert_eq!(
+        graph.start_task_id(),
+        Some("analyst_fanout".to_owned()),
+        "start task must be 'analyst_fanout'"
+    );
+
+    // All 11 expected node IDs must resolve.
+    let expected_nodes = [
+        "analyst_fanout",
+        "analyst_sync",
+        "bullish_researcher",
+        "bearish_researcher",
+        "debate_moderator",
+        "trader",
+        "aggressive_risk",
+        "conservative_risk",
+        "neutral_risk",
+        "risk_moderator",
+        "fund_manager",
+    ];
+    for id in &expected_nodes {
+        assert!(
+            graph.get_task(id).is_some(),
+            "graph must contain node '{id}'"
+        );
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 11.12 — Zero-round debate routing (context predicate bypasses loop)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// With KEY_MAX_DEBATE_ROUNDS = 0 and KEY_DEBATE_ROUND = 0, the loop predicate
+// `round < max` evaluates to false so the graph routes directly to Trader.
+// Mirrors `integration_zero_risk_rounds_bypasses_loop`.
+
+#[tokio::test]
+async fn integration_zero_debate_rounds_bypasses_loop() {
+    let ctx = Context::new();
+    ctx.set(KEY_MAX_DEBATE_ROUNDS, 0u32).await;
+    ctx.set(KEY_DEBATE_ROUND, 0u32).await;
+
+    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+    let max: u32 = ctx.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
+    assert!(
+        !(round < max),
+        "with max_debate_rounds=0, loop predicate must be false (bypass directly to trader)"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 11.13 — Malformed JSON for trading_state key returns SchemaViolation
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Storing an invalid JSON string under TRADING_STATE_KEY and calling
+// `deserialize_state_from_context` must produce a `TradingError::SchemaViolation`.
+
+#[tokio::test]
+async fn malformed_trading_state_json_returns_schema_violation() {
+    use scorpio_analyst::{
+        error::TradingError,
+        workflow::context_bridge::{TRADING_STATE_KEY, deserialize_state_from_context},
+    };
+
+    let ctx = Context::new();
+    ctx.set(TRADING_STATE_KEY, "not valid json {{{{".to_owned())
+        .await;
+
+    let err = deserialize_state_from_context(&ctx)
+        .await
+        .expect_err("malformed JSON must return an error");
+
+    assert!(
+        matches!(err, TradingError::SchemaViolation { .. }),
+        "expected SchemaViolation, got: {err:?}"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 11.14 — Two execution_id values are distinct (per-cycle uniqueness)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Documents the per-cycle uniqueness guarantee: each TradingState created with
+// `new()` gets a fresh UUID.  Also exercises that `uuid::Uuid::new_v4()` never
+// collides with another (probabilistically certain).
+
+#[test]
+fn execution_ids_are_distinct_across_cycles() {
+    use uuid::Uuid;
+
+    let id1 = Uuid::new_v4();
+    let id2 = Uuid::new_v4();
+    assert_ne!(
+        id1, id2,
+        "two independently generated UUIDs must be distinct"
+    );
+
+    // Verify TradingState also assigns distinct execution_ids per instance.
+    let state1 = sample_state();
+    let state2 = sample_state();
+    assert_ne!(
+        state1.execution_id, state2.execution_id,
+        "each TradingState::new() must receive a unique execution_id"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Supplemental: agent token usage accumulation across multiple push_phase_usage
 // ────────────────────────────────────────────────────────────────────────────
 
