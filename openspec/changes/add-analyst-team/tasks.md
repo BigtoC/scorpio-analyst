@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- [ ] `add-project-foundation` is complete (core types, error handling, config, rate-limiting, module stubs)
-- [ ] `add-llm-providers` is complete (provider factory, agent builder helper, retry-wrapped completions, ModelTier)
-- [ ] `add-financial-data` is complete (Finnhub and Yahoo Finance clients and rig tool wrappers)
-- [ ] `add-technical-analysis` is complete (kand indicator calculator and rig tool wrappers)
+- [x] `add-project-foundation` is complete (core types, error handling, config, rate-limiting, module stubs)
+- [x] `add-llm-providers` is complete (provider factory, agent builder helper, retry-wrapped completions, ModelTier)
+- [x] `add-financial-data` is complete (Finnhub and Yahoo Finance clients and rig tool wrappers)
+- [x] `add-technical-analysis` is complete (kand indicator calculator and rig tool wrappers)
 
 ## 1. Fundamental Analyst Agent (`src/agents/analyst/fundamental.rs`)
 
