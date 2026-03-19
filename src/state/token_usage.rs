@@ -35,6 +35,16 @@ pub struct AgentTokenUsage {
     pub latency_ms: u64,
 }
 
+impl TokenUsageTracker {
+    /// Append a completed phase's token usage and update the running totals.
+    pub fn push_phase_usage(&mut self, phase: PhaseTokenUsage) {
+        self.total_prompt_tokens += phase.phase_prompt_tokens;
+        self.total_completion_tokens += phase.phase_completion_tokens;
+        self.total_tokens += phase.phase_total_tokens;
+        self.phase_usage.push(phase);
+    }
+}
+
 impl AgentTokenUsage {
     /// Construct a best-effort usage record for an analyst that completed (possibly
     /// with an error) but did not produce authoritative token counts.
