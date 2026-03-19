@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use secrecy::SecretString;
 use serde::{Deserialize, Deserializer};
 
@@ -144,7 +144,7 @@ impl Config {
             .add_source(config::File::from(config_path.as_ref()).required(false))
             .add_source(
                 config::Environment::with_prefix("SCORPIO")
-                    .separator("_")
+                    .separator("__")
                     .try_parsing(true),
             )
             .build()
@@ -193,6 +193,29 @@ fn secret_from_env(key: &str) -> Option<SecretString> {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate environment variables.
+    /// `std::env::set_var` is not thread-safe; all tests touching env vars must
+    /// hold this lock for the duration of the test.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn env_override_uses_double_underscore_separator() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK; no other thread mutates env vars concurrently
+        unsafe {
+            std::env::set_var("SCORPIO__LLM__MAX_DEBATE_ROUNDS", "7");
+        }
+        let result = Config::load_from("config.toml");
+        unsafe {
+            std::env::remove_var("SCORPIO__LLM__MAX_DEBATE_ROUNDS");
+        }
+        let cfg = result.expect("config should load");
+        assert_eq!(
+            cfg.llm.max_debate_rounds, 7,
+            "double-underscore env var should override llm.max_debate_rounds"
+        );
+    }
+
     #[test]
     fn api_config_debug_redacts_secrets() {
         let api = ApiConfig {
@@ -219,6 +242,7 @@ mod tests {
 
     #[test]
     fn load_from_defaults_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Load only from the checked-in config.toml without any env overrides
         let cfg = Config::load_from("config.toml");
         assert!(
