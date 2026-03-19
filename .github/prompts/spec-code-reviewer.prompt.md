@@ -4,11 +4,9 @@ description: Run a multi-angle code review for an OpenSpec change.
 
 Review the implementation for the requested spec.
 
-<SpecName>
-  $ARGUMENTS
-</SpecName>
+`<SpecName>`: `$ARGUMENTS`
 
-Follow `@AGENTS.md`, `@PRD.md`, `@docs/architect-plan.md`, `@/openspec/AGENTS.md`, and `.github/instructions/rust.instructions.md`.
+Follow `@PRD.md`, `@docs/architect-plan.md`, and `.github/instructions/rust.instructions.md`.
 
 Review the corresponding OpenSpec proposal and implementation together from 5 perspectives:
 - requirements fulfillment

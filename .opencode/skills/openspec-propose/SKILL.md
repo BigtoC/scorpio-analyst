@@ -1,50 +1,45 @@
 ---
-agent: build
-description: Create a new OpenSpec proposal for a planned spec.
+name: openspec-propose
+description: Propose a new change with all artifacts generated in one step. Use when the user wants to quickly describe what they want to build and get a complete proposal with design, specs, and tasks ready for implementation.
+license: MIT
+compatibility: Requires openspec CLI.
+metadata:
+  author: openspec
+  version: "1.0"
+  generatedBy: "1.2.0"
 ---
 
-Write a new spec that is planned in `docs/architect-plan.md`.
-
-`<SpecName>`: `$ARGUMENTS`
+Propose a new change - create the change and generate all artifacts in one step.
 
 I'll create a change with artifacts:
 - proposal.md (what & why)
 - design.md (how)
 - tasks.md (implementation steps)
-- spec delta files under `openspec/changes/<change-id>/specs/`
 
-When ready to implement, run `/opsx-apply`.
+When ready to implement, run /opsx-apply
 
 ---
 
-**Input**: The argument is the spec name (kebab-case from `docs/architect-plan.md`), OR a description of what to build.
+**Input**: The user's request should include a change name (kebab-case) OR a description of what they want to build.
 
 **Steps**
 
-1. **If no input provided, ask which spec to build**
+1. **If no clear input provided, ask what they want to build**
 
    Use the **AskUserQuestion tool** (open-ended, no preset options) to ask:
-   > "Which planned spec from `docs/architect-plan.md` do you want to work on? Describe what you want to build or fix."
+   > "What change do you want to work on? Describe what you want to build or fix."
 
-   From their description, derive a kebab-case name (e.g., "add researcher debate" → `add-researcher-debate`).
+   From their description, derive a kebab-case name (e.g., "add user authentication" → `add-user-auth`).
 
    **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
 
-2. **Review existing context**
-
-   Before creating anything:
-   - Read `docs/architect-plan.md` to understand the planned spec and its scope
-   - Read `@AGENTS.md`, `@PRD.md`, for project constraints
-   - Review existing changes in `openspec/changes/` to avoid duplication
-   - Choose a unique verb-led change ID
-
-3. **Create the change directory**
+2. **Create the change directory**
    ```bash
    openspec new change "<name>"
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
 
-4. **Get the artifact build order**
+3. **Get the artifact build order**
    ```bash
    openspec status --change "<name>" --json
    ```
@@ -52,7 +47,7 @@ When ready to implement, run `/opsx-apply`.
    - `applyRequires`: array of artifact IDs needed before implementation (e.g., `["tasks"]`)
    - `artifacts`: list of all artifacts with their status and dependencies
 
-5. **Create artifacts in sequence until apply-ready**
+4. **Create artifacts in sequence until apply-ready**
 
    Use the **TodoWrite tool** to track progress through the artifacts.
 
@@ -84,16 +79,7 @@ When ready to implement, run `/opsx-apply`.
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-6. **Create spec delta files**
-
-   Create the required spec delta files under `openspec/changes/<change-id>/specs/` based on the design artifact.
-
-7. **Validate the change**
-   ```bash
-   openspec validate <change-id> --strict
-   ```
-
-8. **Show final status**
+5. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
@@ -104,7 +90,7 @@ After completing all artifacts, summarize:
 - Change name and location
 - List of artifacts created with brief descriptions
 - What's ready: "All artifacts created! Ready for implementation."
-- Prompt: "Run `/opsx-apply` to start implementing."
+- Prompt: "Run `/opsx-apply` or ask me to implement to start working on the tasks."
 
 **Artifact Creation Guidelines**
 
@@ -122,5 +108,3 @@ After completing all artifacts, summarize:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
-- Follow `@AGENTS.md`, `@PRD.md`, and `@docs/architect-plan.md` for project-specific constraints
-- If the request is ambiguous, ask only the minimum clarifying question needed
