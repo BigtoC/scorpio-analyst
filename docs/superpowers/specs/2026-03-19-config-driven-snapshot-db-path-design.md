@@ -64,8 +64,10 @@ Add a `[storage]` section:
 snapshot_db_path = "~/.scorpio-analyst/phase_snapshots.db"
 ```
 
-Env override follows the existing `config` crate convention:
-`SCORPIO_STORAGE__SNAPSHOT_DB_PATH=/custom/path.db`
+Env override uses double-underscore as the hierarchy separator:
+`SCORPIO__STORAGE__SNAPSHOT_DB_PATH=/custom/path.db`
+
+The config loader's `.separator("_")` must be changed to `.separator("__")` as part of this change — see Implementation Notes.
 
 ### Call site (`main.rs` / CLI)
 
@@ -76,14 +78,14 @@ let snapshot_store = SnapshotStore::new(Some(&db_path)).await?;
 
 ## Components and Responsibilities
 
-| Component | Responsibility |
-|---|---|
-| `StorageConfig` | Hold raw (unexpanded) string path from config/env |
+| Component                    | Responsibility                                                              |
+|------------------------------|-----------------------------------------------------------------------------|
+| `StorageConfig`              | Hold raw (unexpanded) string path from config/env                           |
 | `default_snapshot_db_path()` | Provide the serde default literal `"~/.scorpio-analyst/phase_snapshots.db"` |
-| `expand_path(s)` | Resolve `~` and `$HOME` at runtime; return `PathBuf` |
-| `config.toml [storage]` | Document the default; allow user override |
-| `main.rs` | Read config, call `expand_path`, pass `PathBuf` to `SnapshotStore::new` |
-| `SnapshotStore` | Unchanged — still accepts `Option<&Path>` |
+| `expand_path(s)`             | Resolve `~` and `$HOME` at runtime; return `PathBuf`                        |
+| `config.toml [storage]`      | Document the default; allow user override                                   |
+| `main.rs`                    | Read config, call `expand_path`, pass `PathBuf` to `SnapshotStore::new`     |
+| `SnapshotStore`              | Unchanged — still accepts `Option<&Path>`                                   |
 
 ## Data Flow
 
@@ -109,12 +111,12 @@ SnapshotStore::new(Some(&path)) → SnapshotStore
 
 **Unit tests in `src/config.rs`** covering `expand_path`:
 
-| Input | Expected output |
-|---|---|
-| `~/foo/bar` | `$HOME/foo/bar` |
-| `$HOME/foo/bar` | `$HOME/foo/bar` |
+| Input               | Expected output                 |
+|---------------------|---------------------------------|
+| `~/foo/bar`         | `$HOME/foo/bar`                 |
+| `$HOME/foo/bar`     | `$HOME/foo/bar`                 |
 | `/absolute/path.db` | `/absolute/path.db` (unchanged) |
-| `relative/path.db` | `relative/path.db` (unchanged) |
+| `relative/path.db`  | `relative/path.db` (unchanged)  |
 
 Tests for `~/` and `$HOME/` cases set `HOME` env var explicitly before asserting.
 
@@ -130,6 +132,7 @@ Tests for `~/` and `$HOME/` cases set `HOME` env var explicitly before asserting
 
 ## Implementation Notes
 
+- **Separator change (`"_"` → `"__"`)**: The `config::Environment` source in `Config::load_from` currently uses `.separator("_")`. With a single-underscore separator, every `_` in the env var name is treated as a hierarchy level delimiter, so `SCORPIO_STORAGE_SNAPSHOT_DB_PATH` would be parsed as path `storage → snapshot → db → path` — not `storage.snapshot_db_path`. Changing to `.separator("__")` fixes this: double underscore marks hierarchy boundaries, single underscores within a segment are preserved as part of the key name. This is a latent bug fix — existing nested env vars like `SCORPIO_LLM_MAX_DEBATE_ROUNDS` are also broken with the current separator and will start working correctly after this change (`SCORPIO__LLM__MAX_DEBATE_ROUNDS`).
 - **`expand_path` supports both `~/` and `$HOME/`** as prefix forms — both are accepted, both expand to the same result. Only `$HOME` as the literal prefix token is handled; arbitrary env vars are not.
 - **`$HOME` unset fallback**: falls back to current working directory with a `tracing::warn!`. This is a soft fallback — the path is still valid but unexpected. This is acceptable because a missing `$HOME` is an unusual system misconfiguration and not a normal error path.
 - **Test env isolation**: Tests that set `HOME` must use `serial_test` (or equivalent) to avoid races with parallel test execution, since `std::env::set_var` is not thread-safe.
