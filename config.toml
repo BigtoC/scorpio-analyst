@@ -1,5 +1,5 @@
 # Scorpio Analyst — default configuration
-# Override with .env or environment variables (prefix: SCORPIO_)
+# Override with .env or environment variables (prefix: SCORPIO__, e.g. SCORPIO__LLM__MAX_DEBATE_ROUNDS=5)
 
 [llm]
 quick_thinking_provider = "gemini"
@@ -17,3 +17,8 @@ backtest_end = "2024-11-30"
 
 [api]
 finnhub_rate_limit = 30
+
+[storage]
+# Path to the SQLite snapshot database. Supports ~ and $HOME expansion.
+# Override: SCORPIO__STORAGE__SNAPSHOT_DB_PATH=/your/custom/path.db
+snapshot_db_path = "~/.scorpio-analyst/phase_snapshots.db"
