@@ -13,3 +13,4 @@
 .claude-mem/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+.worktrees/
