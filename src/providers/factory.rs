@@ -1174,7 +1174,9 @@ fn should_retry_typed_error(err: &TradingError) -> bool {
                 || msg.contains("503")
                 || msg.contains("504")
         }
-        TradingError::AnalystError { .. } | TradingError::Config(_) => false,
+        TradingError::AnalystError { .. } | TradingError::Config(_) | TradingError::Storage(_) => {
+            false
+        }
         // GraphFlow errors originate from the orchestration layer, not from LLM providers,
         // so retrying the typed prompt won't help.
         TradingError::GraphFlow { .. } => false,
