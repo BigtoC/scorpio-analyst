@@ -334,7 +334,8 @@ impl TradingPipeline {
 
         let symbol = initial_state.asset_symbol.clone();
         let date = initial_state.target_date.clone();
-        info!(symbol = %symbol, date = %date, "starting analysis cycle");
+        let execution_id = initial_state.execution_id.to_string();
+        info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle started");
 
         // Pre-fetch shared news for Sentiment and News analysts (avoids duplicate Finnhub calls).
         let cached_news_json: Option<String> = {
@@ -469,7 +470,7 @@ impl TradingPipeline {
                 cause: e.to_string(),
             })?;
 
-        info!(symbol = %symbol, date = %date, "analysis cycle complete");
+        info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle complete");
         Ok(final_state)
     }
 }

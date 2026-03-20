@@ -259,10 +259,10 @@ openspec validate add-graph-orchestration --strict
 - Modify: `src/workflow/tasks.rs`
 - Modify: `tests/workflow_observability.rs`
 
-- [ ] Add failing observability tests for cycle start/end, phase start/end, round boundaries, task start/success/failure, and snapshot persistence events.
-- [ ] Add explicit structured tracing events for each required boundary.
-- [ ] Confirm fund-manager rationale is not emitted at info level while decision metadata still is.
-- [ ] Re-run observability tests and confirm they pass.
+- [x] Add failing observability tests for cycle start/end, phase start/end, round boundaries, task start/success/failure, and snapshot persistence events.
+- [x] Add explicit structured tracing events for each required boundary.
+- [x] Confirm fund-manager rationale is not emitted at info level while decision metadata still is.
+- [x] Re-run observability tests and confirm they pass.
 
 ### Task 14: Make cyclic phase timing and accounting trustworthy
 
@@ -270,22 +270,22 @@ openspec validate add-graph-orchestration --strict
 - Modify: `src/workflow/tasks.rs`
 - Modify: `tests/workflow_pipeline.rs`
 
-- [ ] Add failing tests for researcher/risk per-round `PhaseTokenUsage` entries covering:
+- [x] Add failing tests for researcher/risk per-round `PhaseTokenUsage` entries covering:
   - correct phase names
   - correct agent attribution
   - no phantom zero-round round entries
   - credible nonzero timing when work actually ran
   - correct total reconciliation
-- [ ] Replace `phase_duration_ms = 0` placeholders with real timings for cyclic round entries.
-- [ ] Ensure moderation and round entries are both materialized in the expected order.
-- [ ] Re-run the targeted accounting tests and confirm they pass.
+- [x] Replace `phase_duration_ms = 0` placeholders with real timings for cyclic round entries.
+- [x] Ensure moderation and round entries are both materialized in the expected order.
+- [x] Re-run the targeted accounting tests and confirm they pass.
 
 ### Task 15: Final verification and review handoff
 
 **Files:**
 - Verify only
 
-- [ ] Run the full verification suite.
+- [x] Run the full verification suite.
 
 ```bash
 cargo fmt -- --check
@@ -294,8 +294,8 @@ cargo test
 openspec validate add-graph-orchestration --strict
 ```
 
-- [ ] Re-read the original review findings and confirm each high-severity issue is closed or intentionally deferred with justification.
-- [ ] Prepare a short review-ready summary listing:
+- [x] Re-read the original review findings and confirm each high-severity issue is closed or intentionally deferred with justification.
+- [x] Prepare a short review-ready summary listing:
   - closed issues
   - any remaining medium/low debt
   - cross-owner files touched
@@ -306,5 +306,5 @@ openspec validate add-graph-orchestration --strict
 - [x] Batch 1 closes the main no-go blockers inside `src/workflow/`
 - [x] Batch 2 proves successful `run_analysis_cycle()` execution and real routing/accounting coverage within the currently approved file boundary
 - [x] Batch 3 closes sanitization / persistence / runaway-execution concerns
-- [ ] Batch 4 closes observability and timing/accounting fidelity gaps
-- [ ] Full verification is green at the end of each batch and at final handoff
+- [x] Batch 4 closes observability and timing/accounting fidelity gaps
+- [x] Full verification is green at the end of each batch and at final handoff

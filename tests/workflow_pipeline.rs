@@ -2102,3 +2102,296 @@ async fn step_ceiling_prevents_runaway_loop() {
         other => panic!("expected TradingError::GraphFlow with step_ceiling, got: {other:?}"),
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 14: Accounting fidelity — per-round phase names, agent attribution,
+//          nonzero timing, total reconciliation, entry ordering
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Debate round `PhaseTokenUsage` entries carry the correct phase name pattern,
+/// correct agent names (Bullish/Bearish Researcher), and credible nonzero timing
+/// derived from agent latencies.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn accounting_debate_rounds_have_correct_phase_names_and_agents() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(2, 1).await;
+
+    for round in 1..=2u32 {
+        let expected_name = format!("Researcher Debate Round {round}");
+        let phase = final_state
+            .token_usage
+            .phase_usage
+            .iter()
+            .find(|p| p.phase_name == expected_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected phase '{expected_name}' not found in: {:?}",
+                    final_state
+                        .token_usage
+                        .phase_usage
+                        .iter()
+                        .map(|p| &p.phase_name)
+                        .collect::<Vec<_>>()
+                )
+            });
+
+        // Correct agent attribution: exactly bull + bear.
+        let agent_names: Vec<&str> = phase
+            .agent_usage
+            .iter()
+            .map(|a| a.agent_name.as_str())
+            .collect();
+        assert_eq!(
+            agent_names,
+            vec!["Bullish Researcher", "Bearish Researcher"],
+            "debate round {round} agents"
+        );
+
+        // Credible nonzero timing: stubs produce latency_ms = 1 each, so
+        // round_duration_ms = bull(1) + bear(1) = 2.
+        assert!(
+            phase.phase_duration_ms > 0,
+            "debate round {round} phase_duration_ms must be nonzero, got: {}",
+            phase.phase_duration_ms
+        );
+        assert_eq!(
+            phase.phase_duration_ms, 2,
+            "debate round {round} phase_duration_ms = bull(1) + bear(1) = 2"
+        );
+    }
+}
+
+/// Risk round `PhaseTokenUsage` entries carry the correct phase name pattern,
+/// correct agent names (Aggressive/Conservative/Neutral Risk), and credible
+/// nonzero timing derived from agent latencies.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn accounting_risk_rounds_have_correct_phase_names_and_agents() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(1, 2).await;
+
+    for round in 1..=2u32 {
+        let expected_name = format!("Risk Discussion Round {round}");
+        let phase = final_state
+            .token_usage
+            .phase_usage
+            .iter()
+            .find(|p| p.phase_name == expected_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected phase '{expected_name}' not found in: {:?}",
+                    final_state
+                        .token_usage
+                        .phase_usage
+                        .iter()
+                        .map(|p| &p.phase_name)
+                        .collect::<Vec<_>>()
+                )
+            });
+
+        // Correct agent attribution: exactly agg + con + neu.
+        let agent_names: Vec<&str> = phase
+            .agent_usage
+            .iter()
+            .map(|a| a.agent_name.as_str())
+            .collect();
+        assert_eq!(
+            agent_names,
+            vec!["Aggressive Risk", "Conservative Risk", "Neutral Risk"],
+            "risk round {round} agents"
+        );
+
+        // Credible nonzero timing: stubs produce latency_ms = 1 each, so
+        // round_duration_ms = agg(1) + con(1) + neu(1) = 3.
+        assert!(
+            phase.phase_duration_ms > 0,
+            "risk round {round} phase_duration_ms must be nonzero, got: {}",
+            phase.phase_duration_ms
+        );
+        assert_eq!(
+            phase.phase_duration_ms, 3,
+            "risk round {round} phase_duration_ms = agg(1) + con(1) + neu(1) = 3"
+        );
+    }
+}
+
+/// Per-round token counts reconcile with their contained agents: the round's
+/// aggregate prompt/completion/total must equal the sum of its agents' values.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn accounting_round_token_totals_reconcile_with_agents() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(2, 2).await;
+
+    for phase in &final_state.token_usage.phase_usage {
+        if phase.phase_name.contains("Round") {
+            let sum_prompt: u64 = phase.agent_usage.iter().map(|a| a.prompt_tokens).sum();
+            let sum_completion: u64 = phase.agent_usage.iter().map(|a| a.completion_tokens).sum();
+            let sum_total: u64 = phase.agent_usage.iter().map(|a| a.total_tokens).sum();
+
+            assert_eq!(
+                phase.phase_prompt_tokens, sum_prompt,
+                "'{}' prompt token mismatch",
+                phase.phase_name
+            );
+            assert_eq!(
+                phase.phase_completion_tokens, sum_completion,
+                "'{}' completion token mismatch",
+                phase.phase_name
+            );
+            assert_eq!(
+                phase.phase_total_tokens, sum_total,
+                "'{}' total token mismatch",
+                phase.phase_name
+            );
+        }
+    }
+}
+
+/// The tracker's running totals equal the sum of all phase entries.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn accounting_tracker_totals_reconcile_with_all_phases() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(3, 2).await;
+
+    let expected_prompt: u64 = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_prompt_tokens)
+        .sum();
+    let expected_completion: u64 = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_completion_tokens)
+        .sum();
+    let expected_total: u64 = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_total_tokens)
+        .sum();
+
+    assert_eq!(
+        final_state.token_usage.total_prompt_tokens, expected_prompt,
+        "tracker total_prompt_tokens mismatch"
+    );
+    assert_eq!(
+        final_state.token_usage.total_completion_tokens, expected_completion,
+        "tracker total_completion_tokens mismatch"
+    );
+    assert_eq!(
+        final_state.token_usage.total_tokens, expected_total,
+        "tracker total_tokens mismatch"
+    );
+}
+
+/// Round entries appear strictly before their phase's moderation entry.
+/// Debate rounds 1..N appear before "Researcher Debate Moderation".
+/// Risk rounds 1..N appear before "Risk Discussion Moderation".
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn accounting_round_entries_precede_moderation_entries() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(3, 2).await;
+
+    let phase_names: Vec<&str> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_name.as_str())
+        .collect();
+
+    let debate_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Moderation")
+        .expect("debate moderation entry must exist");
+
+    for round in 1..=3u32 {
+        let name = format!("Researcher Debate Round {round}");
+        let round_idx = phase_names
+            .iter()
+            .position(|n| *n == name.as_str())
+            .unwrap_or_else(|| panic!("'{name}' must exist"));
+        assert!(
+            round_idx < debate_mod_idx,
+            "'{name}' (idx={round_idx}) must precede debate moderation (idx={debate_mod_idx})"
+        );
+    }
+
+    let risk_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Moderation")
+        .expect("risk moderation entry must exist");
+
+    for round in 1..=2u32 {
+        let name = format!("Risk Discussion Round {round}");
+        let round_idx = phase_names
+            .iter()
+            .position(|n| *n == name.as_str())
+            .unwrap_or_else(|| panic!("'{name}' must exist"));
+        assert!(
+            round_idx < risk_mod_idx,
+            "'{name}' (idx={round_idx}) must precede risk moderation (idx={risk_mod_idx})"
+        );
+    }
+}
+
+/// Moderation entries exist with correct agent attribution and reconciled
+/// token counts.  Their timing is wall-clock (`phase_start.elapsed()`), which
+/// may be 0ms in fast stub runs — the important property is that round entries
+/// use the agent-latency proxy while moderation uses wall-clock, and both are
+/// structurally populated.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn accounting_moderation_entries_are_structurally_correct() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(1, 1).await;
+
+    let debate_mod = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .find(|p| p.phase_name == "Researcher Debate Moderation")
+        .expect("debate moderation entry must exist");
+    // Moderation entry should contain exactly the moderator agent.
+    assert_eq!(
+        debate_mod.agent_usage.len(),
+        1,
+        "debate moderation should have 1 agent"
+    );
+    assert_eq!(
+        debate_mod.agent_usage[0].agent_name, "Debate Moderator",
+        "debate moderation agent name"
+    );
+    // Token reconciliation.
+    assert_eq!(
+        debate_mod.phase_prompt_tokens, debate_mod.agent_usage[0].prompt_tokens,
+        "debate mod prompt token reconciliation"
+    );
+    assert_eq!(
+        debate_mod.phase_total_tokens, debate_mod.agent_usage[0].total_tokens,
+        "debate mod total token reconciliation"
+    );
+
+    let risk_mod = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .find(|p| p.phase_name == "Risk Discussion Moderation")
+        .expect("risk moderation entry must exist");
+    assert_eq!(
+        risk_mod.agent_usage.len(),
+        1,
+        "risk moderation should have 1 agent"
+    );
+    assert_eq!(
+        risk_mod.agent_usage[0].agent_name, "Risk Moderator",
+        "risk moderation agent name"
+    );
+    assert_eq!(
+        risk_mod.phase_prompt_tokens, risk_mod.agent_usage[0].prompt_tokens,
+        "risk mod prompt token reconciliation"
+    );
+    assert_eq!(
+        risk_mod.phase_total_tokens, risk_mod.agent_usage[0].total_tokens,
+        "risk mod total token reconciliation"
+    );
+}

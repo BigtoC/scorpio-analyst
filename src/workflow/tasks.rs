@@ -466,6 +466,7 @@ impl Task for AnalystSyncTask {
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        info!(task = "analyst_sync", phase = 1, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = deserialize_state_from_context(&context)
             .await
@@ -638,10 +639,12 @@ impl Task for AnalystSyncTask {
                 ))
             })?;
 
+        info!(task = "analyst_sync", phase = 1, "snapshot saved");
         info!(
             failures = failure_count,
             "AnalystSyncTask: phase 1 complete"
         );
+        info!(phase = 1, phase_name = "analyst_team", "phase complete");
 
         Ok(TaskResult::new(None, NextAction::Continue))
     }
@@ -679,6 +682,14 @@ impl Task for BullishResearcherTask {
                 ))
             })?;
 
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        info!(
+            task = "bullish_researcher",
+            round = this_round,
+            "task started"
+        );
+
         let usage = run_bullish_researcher_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
@@ -688,8 +699,6 @@ impl Task for BullishResearcherTask {
             })?;
 
         // Write per-round usage to context for DebateModeratorTask to collect.
-        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-        let this_round = current_round + 1;
         let usage_key = format!("usage.debate.{this_round}.bull");
         context
             .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
@@ -703,7 +712,11 @@ impl Task for BullishResearcherTask {
                 ))
             })?;
 
-        info!("BullishResearcherTask: bullish turn complete");
+        info!(
+            task = "bullish_researcher",
+            round = this_round,
+            "task completed"
+        );
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -736,6 +749,14 @@ impl Task for BearishResearcherTask {
                 ))
             })?;
 
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        info!(
+            task = "bearish_researcher",
+            round = this_round,
+            "task started"
+        );
+
         let usage = run_bearish_researcher_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
@@ -745,8 +766,6 @@ impl Task for BearishResearcherTask {
             })?;
 
         // Write per-round usage to context for DebateModeratorTask to collect.
-        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-        let this_round = current_round + 1;
         let usage_key = format!("usage.debate.{this_round}.bear");
         context
             .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
@@ -760,7 +779,11 @@ impl Task for BearishResearcherTask {
                 ))
             })?;
 
-        info!("BearishResearcherTask: bearish turn complete");
+        info!(
+            task = "bearish_researcher",
+            round = this_round,
+            "task completed"
+        );
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -795,6 +818,7 @@ impl Task for DebateModeratorTask {
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        info!(task = "debate_moderator", phase = 2, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = deserialize_state_from_context(&context)
             .await
@@ -849,9 +873,15 @@ impl Task for DebateModeratorTask {
                         "DebateModeratorTask: failed to save phase 2 snapshot: {e}"
                     ))
                 })?;
-            info!("DebateModeratorTask: debate complete, snapshot saved");
+            info!(task = "debate_moderator", phase = 2, "snapshot saved");
+            info!(
+                phase = 2,
+                phase_name = "researcher_debate",
+                "phase complete"
+            );
         }
 
+        info!(task = "debate_moderator", phase = 2, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -883,6 +913,7 @@ impl Task for TraderTask {
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        info!(task = "trader", phase = 3, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = deserialize_state_from_context(&context)
             .await
@@ -928,7 +959,9 @@ impl Task for TraderTask {
                 ))
             })?;
 
-        info!("TraderTask: trade proposal generated");
+        info!(task = "trader", phase = 3, "snapshot saved");
+        info!(phase = 3, phase_name = "trader", "phase complete");
+        info!(task = "trader", phase = 3, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -965,6 +998,11 @@ impl Task for AggressiveRiskTask {
                 ))
             })?;
 
+        // Read current round to compute this_round before the LLM call.
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        info!(task = "aggressive_risk", round = this_round, "task started");
+
         let usage = run_aggressive_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
@@ -974,8 +1012,6 @@ impl Task for AggressiveRiskTask {
             })?;
 
         // Write per-round usage to context for RiskModeratorTask to collect.
-        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
-        let this_round = current_round + 1;
         let usage_key = format!("usage.risk.{this_round}.agg");
         context
             .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
@@ -989,7 +1025,11 @@ impl Task for AggressiveRiskTask {
                 ))
             })?;
 
-        info!("AggressiveRiskTask: aggressive turn complete");
+        info!(
+            task = "aggressive_risk",
+            round = this_round,
+            "task completed"
+        );
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -1022,6 +1062,15 @@ impl Task for ConservativeRiskTask {
                 ))
             })?;
 
+        // Read current round to compute this_round before the LLM call.
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        info!(
+            task = "conservative_risk",
+            round = this_round,
+            "task started"
+        );
+
         let usage = run_conservative_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
@@ -1031,8 +1080,6 @@ impl Task for ConservativeRiskTask {
             })?;
 
         // Write per-round usage to context for RiskModeratorTask to collect.
-        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
-        let this_round = current_round + 1;
         let usage_key = format!("usage.risk.{this_round}.con");
         context
             .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
@@ -1046,7 +1093,11 @@ impl Task for ConservativeRiskTask {
                 ))
             })?;
 
-        info!("ConservativeRiskTask: conservative turn complete");
+        info!(
+            task = "conservative_risk",
+            round = this_round,
+            "task completed"
+        );
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -1079,6 +1130,11 @@ impl Task for NeutralRiskTask {
                 ))
             })?;
 
+        // Read current round to compute this_round before the LLM call.
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let this_round = current_round + 1;
+        info!(task = "neutral_risk", round = this_round, "task started");
+
         let usage = run_neutral_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|e| {
@@ -1088,8 +1144,6 @@ impl Task for NeutralRiskTask {
             })?;
 
         // Write per-round usage to context for RiskModeratorTask to collect.
-        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
-        let this_round = current_round + 1;
         let usage_key = format!("usage.risk.{this_round}.neu");
         context
             .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
@@ -1103,7 +1157,7 @@ impl Task for NeutralRiskTask {
                 ))
             })?;
 
-        info!("NeutralRiskTask: neutral turn complete");
+        info!(task = "neutral_risk", round = this_round, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -1138,6 +1192,7 @@ impl Task for RiskModeratorTask {
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        info!(task = "risk_moderator", phase = 4, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = deserialize_state_from_context(&context)
             .await
@@ -1192,9 +1247,11 @@ impl Task for RiskModeratorTask {
                         "RiskModeratorTask: failed to save phase 4 snapshot: {e}"
                     ))
                 })?;
-            info!("RiskModeratorTask: risk discussion complete, snapshot saved");
+            info!(task = "risk_moderator", phase = 4, "snapshot saved");
+            info!(phase = 4, phase_name = "risk_discussion", "phase complete");
         }
 
+        info!(task = "risk_moderator", phase = 4, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -1226,6 +1283,7 @@ impl Task for FundManagerTask {
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        info!(task = "fund_manager", phase = 5, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = deserialize_state_from_context(&context)
             .await
@@ -1273,12 +1331,18 @@ impl Task for FundManagerTask {
                 ))
             })?;
 
+        info!(task = "fund_manager", phase = 5, "snapshot saved");
+
         let decision_label = state
             .final_execution_status
             .as_ref()
             .map(|s| format!("{:?}", s.decision))
             .unwrap_or_else(|| "none".to_owned());
-        info!(decision = %decision_label, "FundManagerTask: pipeline complete");
+        // NOTE: Only emit the decision label at info level, NOT the full rationale.
+        // The rationale may contain sensitive reasoning and should only appear at
+        // debug level or below.
+        info!(task = "fund_manager", decision = %decision_label, phase = 5, "task completed");
+        info!(phase = 5, phase_name = "fund_manager", "phase complete");
 
         Ok(TaskResult::new(None, NextAction::End))
     }
@@ -1361,6 +1425,12 @@ async fn debate_moderator_accounting(
         let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
         let new_round = current_round + 1;
         context.set(KEY_DEBATE_ROUND, new_round).await;
+        info!(
+            round = new_round,
+            max_rounds,
+            phase = 2,
+            "debate round complete"
+        );
 
         // Read bull and bear usages for this round from context.
         let bull_key = format!("usage.debate.{new_round}.bull");
@@ -1377,13 +1447,17 @@ async fn debate_moderator_accounting(
             .unwrap_or_else(|| AgentTokenUsage::unavailable("Bearish Researcher", "unknown", 0));
 
         // Create PhaseTokenUsage for the just-completed round (bull + bear).
+        // Per-round wall time is derived from agent latencies (the best
+        // available proxy since the researchers ran as separate graph tasks
+        // before the moderator was invoked).
+        let round_duration_ms = bull_usage.latency_ms + bear_usage.latency_ms;
         let round_phase = PhaseTokenUsage {
             phase_name: format!("Researcher Debate Round {new_round}"),
             agent_usage: vec![bull_usage.clone(), bear_usage.clone()],
             phase_prompt_tokens: bull_usage.prompt_tokens + bear_usage.prompt_tokens,
             phase_completion_tokens: bull_usage.completion_tokens + bear_usage.completion_tokens,
             phase_total_tokens: bull_usage.total_tokens + bear_usage.total_tokens,
-            phase_duration_ms: 0, // per-round wall time not tracked
+            phase_duration_ms: round_duration_ms,
         };
         state.token_usage.push_phase_usage(round_phase);
 
@@ -1438,6 +1512,12 @@ async fn risk_moderator_accounting(
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let new_round = current_round + 1;
         context.set(KEY_RISK_ROUND, new_round).await;
+        info!(
+            round = new_round,
+            max_rounds,
+            phase = 4,
+            "risk round complete"
+        );
 
         // Read agg/con/neu usages for this round from context.
         let agg_key = format!("usage.risk.{new_round}.agg");
@@ -1460,6 +1540,10 @@ async fn risk_moderator_accounting(
             .unwrap_or_else(|| AgentTokenUsage::unavailable("Neutral Risk", "unknown", 0));
 
         // Create PhaseTokenUsage for the just-completed round (agg + con + neu).
+        // Per-round wall time is derived from agent latencies (the best
+        // available proxy since the risk agents ran as separate graph tasks
+        // before the moderator was invoked).
+        let round_duration_ms = agg_usage.latency_ms + con_usage.latency_ms + neu_usage.latency_ms;
         let round_phase = PhaseTokenUsage {
             phase_name: format!("Risk Discussion Round {new_round}"),
             agent_usage: vec![agg_usage.clone(), con_usage.clone(), neu_usage.clone()],
@@ -1472,7 +1556,7 @@ async fn risk_moderator_accounting(
             phase_total_tokens: agg_usage.total_tokens
                 + con_usage.total_tokens
                 + neu_usage.total_tokens,
-            phase_duration_ms: 0, // per-round wall time not tracked
+            phase_duration_ms: round_duration_ms,
         };
         state.token_usage.push_phase_usage(round_phase);
 
