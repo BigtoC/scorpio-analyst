@@ -186,7 +186,7 @@ async fn merge_analyst_result<T>(
     failures: &mut Vec<&'static str>,
 ) -> Option<T>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned {}
 ```
 
 - [x] Use that helper from `AnalystSyncTask::run()` so each analyst branch becomes one line assigning `state.fundamental_metrics`, `state.market_sentiment`, etc.
