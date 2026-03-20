@@ -14,13 +14,11 @@ use scorpio_analyst::{
         AgentTokenUsage, FundamentalData, NewsData, SentimentData, TechnicalData, TradingState,
     },
     workflow::{
-        SnapshotStore,
-        context_bridge::{
-            deserialize_state_from_context, serialize_state_to_context, write_prefixed_result,
-        },
-        tasks::{
+        SnapshotPhase, SnapshotStore,
+        test_support::{
             AnalystSyncTask, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
-            KEY_RISK_ROUND,
+            KEY_RISK_ROUND, deserialize_state_from_context, serialize_state_to_context,
+            write_prefixed_result, write_round_debate_usage, write_round_risk_usage,
         },
     },
 };
@@ -382,7 +380,7 @@ async fn integration_phase_snapshot_written_and_readable() {
 
     // Phase 1 snapshot must now exist.
     let snapshot = store
-        .load_snapshot(&exec_id, 1)
+        .load_snapshot(&exec_id, SnapshotPhase::AnalystTeam)
         .await
         .expect("load_snapshot should not error");
 
@@ -390,8 +388,8 @@ async fn integration_phase_snapshot_written_and_readable() {
         snapshot.is_some(),
         "phase 1 snapshot must be written by AnalystSyncTask"
     );
-    let (loaded_state, _token_usage) = snapshot.unwrap();
-    assert_eq!(loaded_state.asset_symbol, "AAPL");
+    let loaded = snapshot.unwrap();
+    assert_eq!(loaded.state.asset_symbol, "AAPL");
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -450,7 +448,7 @@ async fn integration_token_usage_accumulated_after_analyst_sync() {
 async fn snapshot_store_returns_none_for_unknown_execution_id() {
     let (store, _dir) = make_store().await;
     let result = store
-        .load_snapshot("non-existent-exec-id", 1)
+        .load_snapshot("non-existent-exec-id", SnapshotPhase::AnalystTeam)
         .await
         .expect("load_snapshot must not error for missing row");
     assert!(result.is_none(), "missing snapshot must return None");
@@ -469,7 +467,7 @@ async fn snapshot_store_upsert_replaces_existing_snapshot() {
 
     // Save a first snapshot.
     store
-        .save_snapshot(exec_id, 1, "analyst_team", &state, None)
+        .save_snapshot(exec_id, SnapshotPhase::AnalystTeam, &state, None)
         .await
         .expect("first save");
 
@@ -477,21 +475,33 @@ async fn snapshot_store_upsert_replaces_existing_snapshot() {
     let mut state2 = sample_state();
     state2.asset_symbol = "TSLA".to_owned();
     store
-        .save_snapshot(exec_id, 1, "analyst_team", &state2, None)
+        .save_snapshot(exec_id, SnapshotPhase::AnalystTeam, &state2, None)
         .await
         .expect("upsert save");
 
     // Only one row should exist; it should be the updated one.
     let result = store
-        .load_snapshot(exec_id, 1)
+        .load_snapshot(exec_id, SnapshotPhase::AnalystTeam)
         .await
         .expect("load after upsert");
     assert!(result.is_some());
-    let (loaded, _) = result.unwrap();
+    let loaded = result.unwrap();
     assert_eq!(
-        loaded.asset_symbol, "TSLA",
+        loaded.state.asset_symbol, "TSLA",
         "upsert must replace the original snapshot"
     );
+}
+
+#[cfg(feature = "test-helpers")]
+fn phase_from_number(phase: u8) -> SnapshotPhase {
+    match phase {
+        1 => SnapshotPhase::AnalystTeam,
+        2 => SnapshotPhase::ResearcherDebate,
+        3 => SnapshotPhase::Trader,
+        4 => SnapshotPhase::RiskDiscussion,
+        5 => SnapshotPhase::FundManager,
+        _ => panic!("unsupported snapshot phase: {phase}"),
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -618,7 +628,7 @@ async fn integration_zero_debate_rounds_bypasses_loop() {
 async fn malformed_trading_state_json_returns_schema_violation() {
     use scorpio_analyst::{
         error::TradingError,
-        workflow::context_bridge::{TRADING_STATE_KEY, deserialize_state_from_context},
+        workflow::test_support::{TRADING_STATE_KEY, deserialize_state_from_context},
     };
 
     let ctx = Context::new();
@@ -667,7 +677,7 @@ fn execution_ids_are_distinct_across_cycles() {
 
 #[test]
 fn graphflow_errors_preserve_real_task_identity() {
-    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+    use scorpio_analyst::{error::TradingError, workflow::test_support::map_graph_error};
 
     // Simulate what graph-flow's `execute_single_task` produces:
     // "Task 'bullish_researcher' failed: BullishResearcherTask: failed to run bullish turn: ..."
@@ -712,7 +722,7 @@ fn graphflow_errors_preserve_real_task_identity() {
 /// mapped with meaningful identity rather than generic labels.
 #[test]
 fn graphflow_non_task_errors_preserve_identity() {
-    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+    use scorpio_analyst::{error::TradingError, workflow::test_support::map_graph_error};
 
     let graph_err = graph_flow::GraphError::SessionNotFound("abc-123".to_owned());
     let trading_err = map_graph_error(graph_err);
@@ -749,9 +759,10 @@ fn graphflow_non_task_errors_preserve_identity() {
 // real LLM), so we test via the DebateModeratorTask unit-test helper that
 // exercises the accounting path with a mock moderation result.
 
+#[cfg(feature = "test-helpers")]
 #[tokio::test]
 async fn zero_round_debate_does_not_create_phantom_round_entry() {
-    use scorpio_analyst::workflow::tasks::test_helpers::run_debate_moderator_accounting;
+    use scorpio_analyst::workflow::test_support::run_debate_moderator_accounting;
 
     let ctx = Context::new();
     let state = sample_state();
@@ -770,6 +781,7 @@ async fn zero_round_debate_does_not_create_phantom_round_entry() {
     };
 
     let (store, _dir) = make_store().await;
+    write_round_debate_usage(&ctx, 1, &mod_usage, &mod_usage).await;
     run_debate_moderator_accounting(&ctx, &mod_usage, Arc::clone(&store)).await;
 
     // Counter must stay at 0.
@@ -816,9 +828,10 @@ async fn zero_round_debate_does_not_create_phantom_round_entry() {
 // Task 2: Zero-round risk does not create phantom round entries
 // ────────────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "test-helpers")]
 #[tokio::test]
 async fn zero_round_risk_does_not_create_phantom_round_entry() {
-    use scorpio_analyst::workflow::tasks::test_helpers::run_risk_moderator_accounting;
+    use scorpio_analyst::workflow::test_support::run_risk_moderator_accounting;
 
     let ctx = Context::new();
     let state = sample_state();
@@ -837,6 +850,7 @@ async fn zero_round_risk_does_not_create_phantom_round_entry() {
     };
 
     let (store, _dir) = make_store().await;
+    write_round_risk_usage(&ctx, 1, &mod_usage, &mod_usage, &mod_usage).await;
     run_risk_moderator_accounting(&ctx, &mod_usage, Arc::clone(&store)).await;
 
     // Counter must stay at 0.
@@ -951,7 +965,7 @@ async fn analyst_child_deserialization_failure_returns_err() {
         config::LlmConfig,
         data::FinnhubClient,
         providers::factory::CompletionModelHandle,
-        workflow::{context_bridge::TRADING_STATE_KEY, tasks::FundamentalAnalystTask},
+        workflow::test_support::{FundamentalAnalystTask, TRADING_STATE_KEY},
     };
 
     let ctx = Context::new();
@@ -1017,7 +1031,7 @@ async fn run_analysis_cycle_success_path_populates_all_phases() {
         providers::factory::CompletionModelHandle,
         rate_limit::SharedRateLimiter,
         state::{Decision, TradingState},
-        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+        workflow::{TradingPipeline, test_support::replace_with_stubs},
     };
 
     let dir = tempdir().expect("tempdir");
@@ -1158,7 +1172,7 @@ async fn run_analysis_cycle_success_path_populates_all_phases() {
     let exec_id_str = final_state.execution_id.to_string();
     for phase_num in 1..=5 {
         let snapshot = verify_store
-            .load_snapshot(&exec_id_str, phase_num)
+            .load_snapshot(&exec_id_str, phase_from_number(phase_num))
             .await
             .unwrap_or_else(|e| panic!("load_snapshot phase {phase_num} failed: {e}"));
         assert!(
@@ -1286,7 +1300,7 @@ async fn run_stubbed_pipeline(
         providers::factory::CompletionModelHandle,
         rate_limit::SharedRateLimiter,
         state::TradingState,
-        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+        workflow::{TradingPipeline, test_support::replace_with_stubs},
     };
 
     let dir = tempdir().expect("tempdir");
@@ -1621,7 +1635,7 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
         providers::factory::CompletionModelHandle,
         rate_limit::SharedRateLimiter,
         state::TradingState,
-        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+        workflow::{TradingPipeline, test_support::replace_with_stubs},
     };
 
     let dir = tempdir().expect("tempdir");
@@ -1702,8 +1716,9 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
     let exec_id_1 = final_1.execution_id.to_string();
     let exec_id_2 = final_2.execution_id.to_string();
     for phase in 1..=5u8 {
+        let snapshot_phase = phase_from_number(phase);
         let snap_1 = verify_store
-            .load_snapshot(&exec_id_1, phase)
+            .load_snapshot(&exec_id_1, snapshot_phase)
             .await
             .unwrap_or_else(|e| panic!("load run#1 phase {phase}: {e}"));
         assert!(
@@ -1712,7 +1727,7 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
         );
 
         let snap_2 = verify_store
-            .load_snapshot(&exec_id_2, phase)
+            .load_snapshot(&exec_id_2, snapshot_phase)
             .await
             .unwrap_or_else(|e| panic!("load run#2 phase {phase}: {e}"));
         assert!(
@@ -1733,12 +1748,12 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
     // Load all 5 snapshots.
     let mut snaps = Vec::new();
     for phase in 1..=5u8 {
-        let (state, _usage) = verify_store
-            .load_snapshot(&exec_id, phase)
+        let snapshot = verify_store
+            .load_snapshot(&exec_id, phase_from_number(phase))
             .await
             .unwrap_or_else(|e| panic!("load phase {phase}: {e}"))
             .unwrap_or_else(|| panic!("phase {phase} snapshot must exist"));
-        snaps.push(state);
+        snaps.push(snapshot.state);
     }
 
     // ── Phase 1 (Analyst Fan-Out) boundary ──────────────────────────────
@@ -1906,7 +1921,7 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
 /// credential-like substrings before surfacing them in `TradingError::GraphFlow`.
 #[test]
 fn workflow_graph_error_redacts_credentials_in_cause() {
-    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+    use scorpio_analyst::{error::TradingError, workflow::test_support::map_graph_error};
 
     // Simulate a task failure whose cause embeds a raw provider error
     // containing an API key, bearer token, and auth header.
@@ -1950,7 +1965,7 @@ fn workflow_graph_error_redacts_credentials_in_cause() {
 /// Non-task GraphError variants (catch-all path) also sanitize their cause.
 #[test]
 fn workflow_non_task_graph_error_redacts_credentials() {
-    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+    use scorpio_analyst::{error::TradingError, workflow::test_support::map_graph_error};
 
     let graph_err = graph_flow::GraphError::ContextError(
         "context fetch failed: token=secretvalue123 for session".to_owned(),
@@ -1992,7 +2007,7 @@ async fn step_ceiling_prevents_runaway_loop() {
         providers::factory::CompletionModelHandle,
         rate_limit::SharedRateLimiter,
         state::TradingState,
-        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+        workflow::{TradingPipeline, test_support::replace_with_stubs},
     };
     use std::sync::Arc;
 

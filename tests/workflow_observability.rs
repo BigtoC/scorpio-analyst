@@ -13,10 +13,10 @@ use scorpio_analyst::{
     state::TradingState,
     workflow::{
         SnapshotStore,
-        context_bridge::{serialize_state_to_context, write_prefixed_result},
-        tasks::{
+        test_support::{
             AnalystSyncTask, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
-            KEY_RISK_ROUND,
+            KEY_RISK_ROUND, serialize_state_to_context, write_prefixed_result,
+            write_round_debate_usage, write_round_risk_usage,
         },
     },
 };
@@ -533,7 +533,7 @@ fn tracing_emits_phase_number_field_for_analyst_sync() {
 #[cfg(feature = "test-helpers")]
 #[test]
 fn tracing_emits_debate_round_complete_event() {
-    use scorpio_analyst::workflow::tasks::test_helpers::run_debate_moderator_accounting;
+    use scorpio_analyst::workflow::test_support::run_debate_moderator_accounting;
 
     let collector = EventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -548,7 +548,7 @@ fn tracing_emits_debate_round_complete_event() {
             let (store, _dir) = make_store().await;
             let state = TradingState::new("AAPL", "2026-03-19");
             let ctx = Context::new();
-            scorpio_analyst::workflow::context_bridge::serialize_state_to_context(&state, &ctx)
+            serialize_state_to_context(&state, &ctx)
                 .await
                 .expect("serialize");
 
@@ -566,16 +566,7 @@ fn tracing_emits_debate_round_complete_event() {
                 "stub",
                 1,
             );
-            ctx.set(
-                "usage.debate.1.bull".to_owned(),
-                serde_json::to_string(&bull_usage).unwrap(),
-            )
-            .await;
-            ctx.set(
-                "usage.debate.1.bear".to_owned(),
-                serde_json::to_string(&bear_usage).unwrap(),
-            )
-            .await;
+            write_round_debate_usage(&ctx, 1, &bull_usage, &bear_usage).await;
 
             let mod_usage =
                 scorpio_analyst::state::AgentTokenUsage::unavailable("Debate Moderator", "stub", 1);
@@ -596,7 +587,7 @@ fn tracing_emits_debate_round_complete_event() {
 #[cfg(feature = "test-helpers")]
 #[test]
 fn tracing_emits_risk_round_complete_event() {
-    use scorpio_analyst::workflow::tasks::test_helpers::run_risk_moderator_accounting;
+    use scorpio_analyst::workflow::test_support::run_risk_moderator_accounting;
 
     let collector = EventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -611,7 +602,7 @@ fn tracing_emits_risk_round_complete_event() {
             let (store, _dir) = make_store().await;
             let state = TradingState::new("AAPL", "2026-03-19");
             let ctx = Context::new();
-            scorpio_analyst::workflow::context_bridge::serialize_state_to_context(&state, &ctx)
+            serialize_state_to_context(&state, &ctx)
                 .await
                 .expect("serialize");
 
@@ -628,21 +619,7 @@ fn tracing_emits_risk_round_complete_event() {
             );
             let neu_usage =
                 scorpio_analyst::state::AgentTokenUsage::unavailable("Neutral Risk", "stub", 1);
-            ctx.set(
-                "usage.risk.1.agg".to_owned(),
-                serde_json::to_string(&agg_usage).unwrap(),
-            )
-            .await;
-            ctx.set(
-                "usage.risk.1.con".to_owned(),
-                serde_json::to_string(&con_usage).unwrap(),
-            )
-            .await;
-            ctx.set(
-                "usage.risk.1.neu".to_owned(),
-                serde_json::to_string(&neu_usage).unwrap(),
-            )
-            .await;
+            write_round_risk_usage(&ctx, 1, &agg_usage, &con_usage, &neu_usage).await;
 
             let mod_usage =
                 scorpio_analyst::state::AgentTokenUsage::unavailable("Risk Moderator", "stub", 1);
@@ -662,7 +639,7 @@ fn tracing_emits_risk_round_complete_event() {
 #[cfg(feature = "test-helpers")]
 #[test]
 fn tracing_emits_structured_round_field_for_debate() {
-    use scorpio_analyst::workflow::tasks::test_helpers::run_debate_moderator_accounting;
+    use scorpio_analyst::workflow::test_support::run_debate_moderator_accounting;
 
     let collector = StructuredEventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -677,7 +654,7 @@ fn tracing_emits_structured_round_field_for_debate() {
             let (store, _dir) = make_store().await;
             let state = TradingState::new("AAPL", "2026-03-19");
             let ctx = Context::new();
-            scorpio_analyst::workflow::context_bridge::serialize_state_to_context(&state, &ctx)
+            serialize_state_to_context(&state, &ctx)
                 .await
                 .expect("serialize");
 
@@ -695,16 +672,7 @@ fn tracing_emits_structured_round_field_for_debate() {
                 "stub",
                 1,
             );
-            ctx.set(
-                "usage.debate.1.bull".to_owned(),
-                serde_json::to_string(&bull).unwrap(),
-            )
-            .await;
-            ctx.set(
-                "usage.debate.1.bear".to_owned(),
-                serde_json::to_string(&bear).unwrap(),
-            )
-            .await;
+            write_round_debate_usage(&ctx, 1, &bull, &bear).await;
 
             let mod_usage =
                 scorpio_analyst::state::AgentTokenUsage::unavailable("Debate Moderator", "stub", 1);
@@ -733,7 +701,7 @@ fn tracing_emits_structured_round_field_for_debate() {
 #[cfg(feature = "test-helpers")]
 #[test]
 fn tracing_zero_round_debate_no_round_event() {
-    use scorpio_analyst::workflow::tasks::test_helpers::run_debate_moderator_accounting;
+    use scorpio_analyst::workflow::test_support::run_debate_moderator_accounting;
 
     let collector = EventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -748,7 +716,7 @@ fn tracing_zero_round_debate_no_round_event() {
             let (store, _dir) = make_store().await;
             let state = TradingState::new("AAPL", "2026-03-19");
             let ctx = Context::new();
-            scorpio_analyst::workflow::context_bridge::serialize_state_to_context(&state, &ctx)
+            serialize_state_to_context(&state, &ctx)
                 .await
                 .expect("serialize");
 
@@ -779,7 +747,7 @@ fn tracing_zero_round_debate_no_round_event() {
 #[test]
 fn fund_manager_decision_event_excludes_rationale() {
     use scorpio_analyst::workflow::TradingPipeline;
-    use scorpio_analyst::workflow::tasks::test_helpers::replace_with_stubs;
+    use scorpio_analyst::workflow::test_support::replace_with_stubs;
 
     let collector = StructuredEventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -845,7 +813,7 @@ fn fund_manager_decision_event_excludes_rationale() {
 #[test]
 fn tracing_emits_cycle_start_and_complete_events() {
     use scorpio_analyst::workflow::TradingPipeline;
-    use scorpio_analyst::workflow::tasks::test_helpers::replace_with_stubs;
+    use scorpio_analyst::workflow::test_support::replace_with_stubs;
 
     let collector = EventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -905,7 +873,7 @@ fn tracing_emits_cycle_start_and_complete_events() {
 #[test]
 fn tracing_emits_phase_name_field_for_analyst_phase() {
     use scorpio_analyst::workflow::TradingPipeline;
-    use scorpio_analyst::workflow::tasks::test_helpers::replace_with_stubs;
+    use scorpio_analyst::workflow::test_support::replace_with_stubs;
 
     let collector = StructuredEventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
@@ -968,7 +936,7 @@ fn tracing_emits_phase_name_field_for_analyst_phase() {
 #[test]
 fn tracing_emits_snapshot_saved_events_from_pipeline() {
     use scorpio_analyst::workflow::TradingPipeline;
-    use scorpio_analyst::workflow::tasks::test_helpers::replace_with_stubs;
+    use scorpio_analyst::workflow::test_support::replace_with_stubs;
 
     let collector = EventCollector::new();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
