@@ -63,3 +63,8 @@ pretty_assertions = "1"
 paft-money = "0.7"
 rust_decimal = "1"
 tempfile = "3"
+
+[features]
+default = []
+## Expose internal test helpers for integration tests.  Not for production use.
+test-helpers = []
