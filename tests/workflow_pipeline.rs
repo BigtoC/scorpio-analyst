@@ -994,3 +994,901 @@ async fn analyst_child_deserialization_failure_returns_err() {
         "error must identify the task; got: {err_msg}"
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// BATCH 2 — End-to-End Execution Coverage (Tasks 5–7)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 5: True success-path run_analysis_cycle() test
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Replaces all LLM-calling tasks with deterministic stubs, then runs the
+// full `TradingPipeline::run_analysis_cycle()` loop via `FlowRunner`.
+// Asserts all 5 phases execute and the returned `TradingState` is fully
+// populated.
+
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn run_analysis_cycle_success_path_populates_all_phases() {
+    use scorpio_analyst::{
+        config::{ApiConfig, Config, LlmConfig, TradingConfig},
+        data::{FinnhubClient, YFinanceClient},
+        providers::factory::CompletionModelHandle,
+        rate_limit::SharedRateLimiter,
+        state::{Decision, TradingState},
+        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+    };
+
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("e2e-test.db");
+
+    // Create the store that the pipeline will own.
+    let pipeline_store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("pipeline snapshot store");
+
+    // Create a second handle to the same DB for stubs and verification.
+    let verify_store = Arc::new(
+        SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("verify snapshot store"),
+    );
+
+    let config = Config {
+        llm: LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: TradingConfig {
+            asset_symbol: "AAPL".to_owned(),
+            backtest_start: None,
+            backtest_end: None,
+        },
+        api: ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: None,
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        },
+        storage: Default::default(),
+    };
+
+    let finnhub = FinnhubClient::for_test();
+    let yfinance = YFinanceClient::new(SharedRateLimiter::new("e2e-test", 10));
+    let handle = CompletionModelHandle::for_test();
+
+    let pipeline = TradingPipeline::new(
+        config,
+        finnhub,
+        yfinance,
+        pipeline_store,
+        handle.clone(),
+        handle,
+    );
+
+    // Replace all LLM-calling tasks with deterministic stubs.
+    replace_with_stubs(pipeline.graph(), Arc::clone(&verify_store));
+
+    let initial_state = TradingState::new("AAPL", "2026-03-20");
+    let caller_exec_id = initial_state.execution_id;
+
+    let result = pipeline.run_analysis_cycle(initial_state).await;
+    let final_state = result.expect("pipeline must complete successfully with stubs");
+
+    // ── Assertion 1: execution_id is overwritten ────────────────────────
+    assert_ne!(
+        final_state.execution_id, caller_exec_id,
+        "run_analysis_cycle must assign a fresh execution_id"
+    );
+
+    // ── Assertion 2: all 5 phases populated ─────────────────────────────
+    // Phase 1: analyst data merged
+    assert!(
+        final_state.fundamental_metrics.is_some(),
+        "Phase 1: fundamental_metrics must be populated"
+    );
+    assert!(
+        final_state.technical_indicators.is_some(),
+        "Phase 1: technical_indicators must be populated"
+    );
+    assert!(
+        final_state.market_sentiment.is_some(),
+        "Phase 1: market_sentiment must be populated"
+    );
+    assert!(
+        final_state.macro_news.is_some(),
+        "Phase 1: macro_news must be populated"
+    );
+
+    // Phase 2: debate history + consensus
+    assert!(
+        !final_state.debate_history.is_empty(),
+        "Phase 2: debate_history must have entries"
+    );
+    assert!(
+        final_state.consensus_summary.is_some(),
+        "Phase 2: consensus_summary must be set"
+    );
+
+    // Phase 3: trade proposal
+    assert!(
+        final_state.trader_proposal.is_some(),
+        "Phase 3: trader_proposal must be set"
+    );
+
+    // Phase 4: risk reports + discussion
+    assert!(
+        final_state.aggressive_risk_report.is_some(),
+        "Phase 4: aggressive_risk_report must be set"
+    );
+    assert!(
+        final_state.conservative_risk_report.is_some(),
+        "Phase 4: conservative_risk_report must be set"
+    );
+    assert!(
+        final_state.neutral_risk_report.is_some(),
+        "Phase 4: neutral_risk_report must be set"
+    );
+    assert!(
+        !final_state.risk_discussion_history.is_empty(),
+        "Phase 4: risk_discussion_history must have entries"
+    );
+
+    // Phase 5: final execution status
+    let exec_status = final_state
+        .final_execution_status
+        .as_ref()
+        .expect("Phase 5: final_execution_status must be set");
+    assert_eq!(
+        exec_status.decision,
+        Decision::Approved,
+        "Phase 5: stub fund manager approves"
+    );
+
+    // ── Assertion 3: 5 snapshots exist ──────────────────────────────────
+    let exec_id_str = final_state.execution_id.to_string();
+    for phase_num in 1..=5 {
+        let snapshot = verify_store
+            .load_snapshot(&exec_id_str, phase_num)
+            .await
+            .unwrap_or_else(|e| panic!("load_snapshot phase {phase_num} failed: {e}"));
+        assert!(
+            snapshot.is_some(),
+            "snapshot for phase {phase_num} must exist"
+        );
+    }
+
+    // ── Assertion 4: phase-usage entries exist in expected order ─────────
+    let phase_names: Vec<&str> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_name.as_str())
+        .collect();
+
+    assert!(
+        phase_names.contains(&"Analyst Fan-Out"),
+        "phase_usage must contain 'Analyst Fan-Out'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Researcher Debate Round 1"),
+        "phase_usage must contain 'Researcher Debate Round 1'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Researcher Debate Moderation"),
+        "phase_usage must contain 'Researcher Debate Moderation'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Trader Synthesis"),
+        "phase_usage must contain 'Trader Synthesis'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Risk Discussion Round 1"),
+        "phase_usage must contain 'Risk Discussion Round 1'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Risk Discussion Moderation"),
+        "phase_usage must contain 'Risk Discussion Moderation'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Fund Manager Decision"),
+        "phase_usage must contain 'Fund Manager Decision'; got: {phase_names:?}"
+    );
+
+    // Verify ordering: Analyst Fan-Out must come before Researcher Debate,
+    // which must come before Trader, etc.
+    let analyst_idx = phase_names
+        .iter()
+        .position(|n| *n == "Analyst Fan-Out")
+        .unwrap();
+    let debate_round_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Round 1")
+        .unwrap();
+    let debate_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Moderation")
+        .unwrap();
+    let trader_idx = phase_names
+        .iter()
+        .position(|n| *n == "Trader Synthesis")
+        .unwrap();
+    let risk_round_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Round 1")
+        .unwrap();
+    let risk_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Moderation")
+        .unwrap();
+    let fund_idx = phase_names
+        .iter()
+        .position(|n| *n == "Fund Manager Decision")
+        .unwrap();
+
+    assert!(
+        analyst_idx < debate_round_idx,
+        "Analyst must come before Debate Round"
+    );
+    assert!(
+        debate_round_idx < debate_mod_idx,
+        "Debate Round must come before Debate Moderation"
+    );
+    assert!(
+        debate_mod_idx < trader_idx,
+        "Debate Moderation must come before Trader"
+    );
+    assert!(
+        trader_idx < risk_round_idx,
+        "Trader must come before Risk Round"
+    );
+    assert!(
+        risk_round_idx < risk_mod_idx,
+        "Risk Round must come before Risk Moderation"
+    );
+    assert!(
+        risk_mod_idx < fund_idx,
+        "Risk Moderation must come before Fund Manager"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 6: Expand e2e assertions for routing and accounting
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Test variants with different max_debate_rounds and max_risk_rounds settings
+// to verify that the graph routing and phase-usage accounting are correct for
+// zero-round bypass, single-round, and multi-round loops.
+
+/// Helper: build a pipeline with stubs and the given debate/risk round limits,
+/// run it, and return the final state along with the verification store.
+#[cfg(feature = "test-helpers")]
+async fn run_stubbed_pipeline(
+    max_debate_rounds: u32,
+    max_risk_rounds: u32,
+) -> (
+    scorpio_analyst::state::TradingState,
+    Arc<SnapshotStore>,
+    tempfile::TempDir,
+) {
+    use scorpio_analyst::{
+        config::{ApiConfig, Config, LlmConfig, TradingConfig},
+        data::{FinnhubClient, YFinanceClient},
+        providers::factory::CompletionModelHandle,
+        rate_limit::SharedRateLimiter,
+        state::TradingState,
+        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+    };
+
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("e2e-test.db");
+
+    let pipeline_store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("pipeline snapshot store");
+    let verify_store = Arc::new(
+        SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("verify snapshot store"),
+    );
+
+    let config = Config {
+        llm: LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds,
+            max_risk_rounds,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: TradingConfig {
+            asset_symbol: "AAPL".to_owned(),
+            backtest_start: None,
+            backtest_end: None,
+        },
+        api: ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: None,
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        },
+        storage: Default::default(),
+    };
+
+    let finnhub = FinnhubClient::for_test();
+    let yfinance = YFinanceClient::new(SharedRateLimiter::new("e2e-test", 10));
+    let handle = CompletionModelHandle::for_test();
+
+    let pipeline = TradingPipeline::new(
+        config,
+        finnhub,
+        yfinance,
+        pipeline_store,
+        handle.clone(),
+        handle,
+    );
+
+    replace_with_stubs(pipeline.graph(), Arc::clone(&verify_store));
+
+    let initial_state = TradingState::new("AAPL", "2026-03-20");
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must complete successfully with stubs");
+
+    (final_state, verify_store, dir)
+}
+
+/// Zero-round debate + zero-round risk: graph bypasses both loops entirely.
+/// No "Round N" entries should appear; only moderation entries.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn e2e_zero_debate_zero_risk_routing_and_accounting() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(0, 0).await;
+
+    let phase_names: Vec<&str> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_name.as_str())
+        .collect();
+
+    // Must NOT contain any round entries (debate or risk).
+    let debate_rounds: Vec<&&str> = phase_names
+        .iter()
+        .filter(|n| n.starts_with("Researcher Debate Round"))
+        .collect();
+    assert!(
+        debate_rounds.is_empty(),
+        "zero debate rounds must produce no 'Researcher Debate Round' entries; got: {debate_rounds:?}"
+    );
+
+    let risk_rounds: Vec<&&str> = phase_names
+        .iter()
+        .filter(|n| n.starts_with("Risk Discussion Round"))
+        .collect();
+    assert!(
+        risk_rounds.is_empty(),
+        "zero risk rounds must produce no 'Risk Discussion Round' entries; got: {risk_rounds:?}"
+    );
+
+    // Debate and risk moderation entries SHOULD still exist.
+    assert!(
+        phase_names.contains(&"Researcher Debate Moderation"),
+        "zero debate rounds must still produce 'Researcher Debate Moderation'; got: {phase_names:?}"
+    );
+    assert!(
+        phase_names.contains(&"Risk Discussion Moderation"),
+        "zero risk rounds must still produce 'Risk Discussion Moderation'; got: {phase_names:?}"
+    );
+
+    // Debate history should be empty (researchers were skipped).
+    assert!(
+        final_state.debate_history.is_empty(),
+        "zero debate rounds should produce no debate history entries"
+    );
+
+    // Risk discussion history should be empty (risk agents were skipped).
+    assert!(
+        final_state.risk_discussion_history.is_empty(),
+        "zero risk rounds should produce no risk discussion history entries"
+    );
+
+    // The pipeline must still complete all the way through.
+    assert!(
+        final_state.final_execution_status.is_some(),
+        "pipeline must still reach fund manager decision with zero rounds"
+    );
+
+    // Verify ordering of what IS present.
+    let analyst_idx = phase_names
+        .iter()
+        .position(|n| *n == "Analyst Fan-Out")
+        .expect("must have Analyst Fan-Out");
+    let debate_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Moderation")
+        .expect("must have Researcher Debate Moderation");
+    let trader_idx = phase_names
+        .iter()
+        .position(|n| *n == "Trader Synthesis")
+        .expect("must have Trader Synthesis");
+    let risk_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Moderation")
+        .expect("must have Risk Discussion Moderation");
+    let fund_idx = phase_names
+        .iter()
+        .position(|n| *n == "Fund Manager Decision")
+        .expect("must have Fund Manager Decision");
+
+    assert!(analyst_idx < debate_mod_idx);
+    assert!(debate_mod_idx < trader_idx);
+    assert!(trader_idx < risk_mod_idx);
+    assert!(risk_mod_idx < fund_idx);
+}
+
+/// Multi-round debate (N=3) + multi-round risk (N=2): graph loops correctly.
+/// Phase-usage entries should contain Round 1, 2, 3 for debate and Round 1, 2
+/// for risk.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn e2e_multi_round_debate_and_risk_routing_and_accounting() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(3, 2).await;
+
+    let phase_names: Vec<&str> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_name.as_str())
+        .collect();
+
+    // Debate: should have rounds 1, 2, 3.
+    for r in 1..=3 {
+        let name = format!("Researcher Debate Round {r}");
+        assert!(
+            phase_names.contains(&name.as_str()),
+            "multi-round debate must contain '{name}'; got: {phase_names:?}"
+        );
+    }
+    // Should NOT have round 4.
+    assert!(
+        !phase_names.contains(&"Researcher Debate Round 4"),
+        "max_debate_rounds=3 must not produce Round 4; got: {phase_names:?}"
+    );
+
+    // Risk: should have rounds 1, 2.
+    for r in 1..=2 {
+        let name = format!("Risk Discussion Round {r}");
+        assert!(
+            phase_names.contains(&name.as_str()),
+            "multi-round risk must contain '{name}'; got: {phase_names:?}"
+        );
+    }
+    assert!(
+        !phase_names.contains(&"Risk Discussion Round 3"),
+        "max_risk_rounds=2 must not produce Round 3; got: {phase_names:?}"
+    );
+
+    // Debate history should have entries from each round (2 per round: bull + bear).
+    assert_eq!(
+        final_state.debate_history.len(),
+        6, // 3 rounds * 2 messages (bull + bear)
+        "3 debate rounds should produce 6 debate history entries; got: {}",
+        final_state.debate_history.len()
+    );
+
+    // Risk discussion history should have entries from each round (3 per round).
+    assert_eq!(
+        final_state.risk_discussion_history.len(),
+        6, // 2 rounds * 3 messages (agg + con + neu)
+        "2 risk rounds should produce 6 risk discussion history entries; got: {}",
+        final_state.risk_discussion_history.len()
+    );
+
+    // Verify full ordering.
+    let analyst_idx = phase_names
+        .iter()
+        .position(|n| *n == "Analyst Fan-Out")
+        .unwrap();
+    let debate_r1_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Round 1")
+        .unwrap();
+    let debate_r3_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Round 3")
+        .unwrap();
+    let debate_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Researcher Debate Moderation")
+        .unwrap();
+    let trader_idx = phase_names
+        .iter()
+        .position(|n| *n == "Trader Synthesis")
+        .unwrap();
+    let risk_r1_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Round 1")
+        .unwrap();
+    let risk_r2_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Round 2")
+        .unwrap();
+    let risk_mod_idx = phase_names
+        .iter()
+        .position(|n| *n == "Risk Discussion Moderation")
+        .unwrap();
+    let fund_idx = phase_names
+        .iter()
+        .position(|n| *n == "Fund Manager Decision")
+        .unwrap();
+
+    assert!(analyst_idx < debate_r1_idx, "Analyst before Debate Round 1");
+    assert!(
+        debate_r1_idx < debate_r3_idx,
+        "Debate Round 1 before Round 3"
+    );
+    assert!(
+        debate_r3_idx < debate_mod_idx,
+        "Debate Round 3 before Moderation"
+    );
+    assert!(
+        debate_mod_idx < trader_idx,
+        "Debate Moderation before Trader"
+    );
+    assert!(trader_idx < risk_r1_idx, "Trader before Risk Round 1");
+    assert!(risk_r1_idx < risk_r2_idx, "Risk Round 1 before Round 2");
+    assert!(
+        risk_r2_idx < risk_mod_idx,
+        "Risk Round 2 before Risk Moderation"
+    );
+    assert!(
+        risk_mod_idx < fund_idx,
+        "Risk Moderation before Fund Manager"
+    );
+
+    // The pipeline must still complete.
+    assert!(final_state.final_execution_status.is_some());
+}
+
+/// Mixed: zero debate rounds + multiple risk rounds.
+/// Verifies that only one loop can be zero while the other runs normally.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn e2e_zero_debate_multi_risk_routing_and_accounting() {
+    let (final_state, _store, _dir) = run_stubbed_pipeline(0, 2).await;
+
+    let phase_names: Vec<&str> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .map(|p| p.phase_name.as_str())
+        .collect();
+
+    // No debate round entries.
+    let debate_rounds: Vec<&&str> = phase_names
+        .iter()
+        .filter(|n| n.starts_with("Researcher Debate Round"))
+        .collect();
+    assert!(
+        debate_rounds.is_empty(),
+        "zero debate rounds → no round entries"
+    );
+
+    // Risk should have rounds 1, 2.
+    assert!(phase_names.contains(&"Risk Discussion Round 1"));
+    assert!(phase_names.contains(&"Risk Discussion Round 2"));
+
+    // Debate history empty, risk discussion populated.
+    assert!(final_state.debate_history.is_empty());
+    assert_eq!(final_state.risk_discussion_history.len(), 6); // 2 rounds * 3
+
+    assert!(final_state.final_execution_status.is_some());
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 7: Verify snapshot and execution-id behavior end to end
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Two tests:
+//  1. Two invocations with the same caller input state produce distinct saved
+//     execution IDs, each with its own complete set of 5 snapshots.
+//  2. Each phase snapshot contains boundary-appropriate state — later-phase
+//     data must be absent at earlier snapshot boundaries.
+
+/// Two separate `run_analysis_cycle()` calls with identical initial state
+/// must produce distinct execution IDs, and each must have 5 snapshots.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn e2e_two_invocations_produce_distinct_execution_ids() {
+    use scorpio_analyst::{
+        config::{ApiConfig, Config, LlmConfig, TradingConfig},
+        data::{FinnhubClient, YFinanceClient},
+        providers::factory::CompletionModelHandle,
+        rate_limit::SharedRateLimiter,
+        state::TradingState,
+        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+    };
+
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("exec-id-test.db");
+
+    let pipeline_store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("pipeline snapshot store");
+    let verify_store = Arc::new(
+        SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("verify snapshot store"),
+    );
+
+    let config = Config {
+        llm: LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: TradingConfig {
+            asset_symbol: "AAPL".to_owned(),
+            backtest_start: None,
+            backtest_end: None,
+        },
+        api: ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: None,
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        },
+        storage: Default::default(),
+    };
+
+    let finnhub = FinnhubClient::for_test();
+    let yfinance = YFinanceClient::new(SharedRateLimiter::new("exec-id-test", 10));
+    let handle = CompletionModelHandle::for_test();
+
+    let pipeline = TradingPipeline::new(
+        config,
+        finnhub,
+        yfinance,
+        pipeline_store,
+        handle.clone(),
+        handle,
+    );
+
+    replace_with_stubs(pipeline.graph(), Arc::clone(&verify_store));
+
+    // Run #1: identical initial state (same symbol + date).
+    let state_1 = TradingState::new("AAPL", "2026-03-20");
+    let final_1 = pipeline
+        .run_analysis_cycle(state_1)
+        .await
+        .expect("run #1 must succeed");
+
+    // Run #2: identical initial state.
+    let state_2 = TradingState::new("AAPL", "2026-03-20");
+    let final_2 = pipeline
+        .run_analysis_cycle(state_2)
+        .await
+        .expect("run #2 must succeed");
+
+    // Execution IDs must be distinct.
+    assert_ne!(
+        final_1.execution_id, final_2.execution_id,
+        "two invocations must produce distinct execution IDs"
+    );
+
+    // Both runs must have all 5 snapshots.
+    let exec_id_1 = final_1.execution_id.to_string();
+    let exec_id_2 = final_2.execution_id.to_string();
+    for phase in 1..=5u8 {
+        let snap_1 = verify_store
+            .load_snapshot(&exec_id_1, phase)
+            .await
+            .unwrap_or_else(|e| panic!("load run#1 phase {phase}: {e}"));
+        assert!(
+            snap_1.is_some(),
+            "run #1 must have snapshot for phase {phase}"
+        );
+
+        let snap_2 = verify_store
+            .load_snapshot(&exec_id_2, phase)
+            .await
+            .unwrap_or_else(|e| panic!("load run#2 phase {phase}: {e}"));
+        assert!(
+            snap_2.is_some(),
+            "run #2 must have snapshot for phase {phase}"
+        );
+    }
+}
+
+/// Snapshots for phases 1-5 contain boundary-appropriate state: data set
+/// in a later phase must be absent in earlier phase snapshots.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn e2e_snapshots_contain_boundary_appropriate_state() {
+    let (final_state, verify_store, _dir) = run_stubbed_pipeline(1, 1).await;
+    let exec_id = final_state.execution_id.to_string();
+
+    // Load all 5 snapshots.
+    let mut snaps = Vec::new();
+    for phase in 1..=5u8 {
+        let (state, _usage) = verify_store
+            .load_snapshot(&exec_id, phase)
+            .await
+            .unwrap_or_else(|e| panic!("load phase {phase}: {e}"))
+            .unwrap_or_else(|| panic!("phase {phase} snapshot must exist"));
+        snaps.push(state);
+    }
+
+    // ── Phase 1 (Analyst Fan-Out) boundary ──────────────────────────────
+    // Analyst data present.
+    assert!(
+        snaps[0].fundamental_metrics.is_some(),
+        "phase 1: fundamental_metrics must be present"
+    );
+    assert!(
+        snaps[0].technical_indicators.is_some(),
+        "phase 1: technical_indicators must be present"
+    );
+    assert!(
+        snaps[0].market_sentiment.is_some(),
+        "phase 1: market_sentiment must be present"
+    );
+    assert!(
+        snaps[0].macro_news.is_some(),
+        "phase 1: macro_news must be present"
+    );
+    // Later-phase data must NOT be present.
+    assert!(
+        snaps[0].debate_history.is_empty(),
+        "phase 1: debate_history must be empty"
+    );
+    assert!(
+        snaps[0].consensus_summary.is_none(),
+        "phase 1: consensus_summary must be absent"
+    );
+    assert!(
+        snaps[0].trader_proposal.is_none(),
+        "phase 1: trader_proposal must be absent"
+    );
+    assert!(
+        snaps[0].aggressive_risk_report.is_none(),
+        "phase 1: risk reports must be absent"
+    );
+    assert!(
+        snaps[0].final_execution_status.is_none(),
+        "phase 1: final_execution_status must be absent"
+    );
+
+    // ── Phase 2 (Researcher Debate) boundary ────────────────────────────
+    // Analyst data + debate data present.
+    assert!(
+        snaps[1].fundamental_metrics.is_some(),
+        "phase 2: fundamental_metrics must be present"
+    );
+    assert!(
+        !snaps[1].debate_history.is_empty(),
+        "phase 2: debate_history must be populated"
+    );
+    assert!(
+        snaps[1].consensus_summary.is_some(),
+        "phase 2: consensus_summary must be set"
+    );
+    // Later-phase data absent.
+    assert!(
+        snaps[1].trader_proposal.is_none(),
+        "phase 2: trader_proposal must be absent"
+    );
+    assert!(
+        snaps[1].aggressive_risk_report.is_none(),
+        "phase 2: risk reports must be absent"
+    );
+    assert!(
+        snaps[1].final_execution_status.is_none(),
+        "phase 2: final_execution_status must be absent"
+    );
+
+    // ── Phase 3 (Trader Synthesis) boundary ─────────────────────────────
+    // Analyst + debate + trader present.
+    assert!(
+        snaps[2].fundamental_metrics.is_some(),
+        "phase 3: fundamental_metrics must be present"
+    );
+    assert!(
+        snaps[2].consensus_summary.is_some(),
+        "phase 3: consensus_summary must be present"
+    );
+    assert!(
+        snaps[2].trader_proposal.is_some(),
+        "phase 3: trader_proposal must be set"
+    );
+    // Later-phase data absent.
+    assert!(
+        snaps[2].aggressive_risk_report.is_none(),
+        "phase 3: risk reports must be absent"
+    );
+    assert!(
+        snaps[2].conservative_risk_report.is_none(),
+        "phase 3: conservative risk must be absent"
+    );
+    assert!(
+        snaps[2].neutral_risk_report.is_none(),
+        "phase 3: neutral risk must be absent"
+    );
+    assert!(
+        snaps[2].final_execution_status.is_none(),
+        "phase 3: final_execution_status must be absent"
+    );
+
+    // ── Phase 4 (Risk Management) boundary ──────────────────────────────
+    // Analyst + debate + trader + risk present.
+    assert!(
+        snaps[3].trader_proposal.is_some(),
+        "phase 4: trader_proposal must be present"
+    );
+    assert!(
+        snaps[3].aggressive_risk_report.is_some(),
+        "phase 4: aggressive_risk_report must be set"
+    );
+    assert!(
+        snaps[3].conservative_risk_report.is_some(),
+        "phase 4: conservative_risk_report must be set"
+    );
+    assert!(
+        snaps[3].neutral_risk_report.is_some(),
+        "phase 4: neutral_risk_report must be set"
+    );
+    assert!(
+        !snaps[3].risk_discussion_history.is_empty(),
+        "phase 4: risk_discussion_history must be populated"
+    );
+    // Fund manager not yet.
+    assert!(
+        snaps[3].final_execution_status.is_none(),
+        "phase 4: final_execution_status must be absent"
+    );
+
+    // ── Phase 5 (Fund Manager Decision) boundary ────────────────────────
+    // Everything present.
+    assert!(
+        snaps[4].fundamental_metrics.is_some(),
+        "phase 5: fundamental_metrics must be present"
+    );
+    assert!(
+        snaps[4].consensus_summary.is_some(),
+        "phase 5: consensus_summary must be present"
+    );
+    assert!(
+        snaps[4].trader_proposal.is_some(),
+        "phase 5: trader_proposal must be present"
+    );
+    assert!(
+        snaps[4].aggressive_risk_report.is_some(),
+        "phase 5: aggressive_risk_report must be present"
+    );
+    assert!(
+        snaps[4].final_execution_status.is_some(),
+        "phase 5: final_execution_status must be set"
+    );
+}

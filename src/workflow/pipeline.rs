@@ -148,6 +148,21 @@ impl TradingPipeline {
         Arc::clone(&self.graph)
     }
 
+    /// Return a reference to the pre-built [`Graph`].
+    ///
+    /// The returned `Arc<Graph>` shares the same underlying `DashMap`-backed
+    /// task registry as the pipeline.  Callers can call
+    /// [`Graph::add_task`] on this handle to **replace** tasks by ID — the
+    /// replacement takes effect immediately for subsequent
+    /// [`run_analysis_cycle`][Self::run_analysis_cycle] calls.
+    ///
+    /// This is the primary test seam: integration tests replace LLM-calling
+    /// tasks with deterministic stubs, then run the full pipeline loop.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn graph(&self) -> &Arc<Graph> {
+        &self.graph
+    }
+
     /// Build the directed [`Graph`] for the trading pipeline.
     ///
     /// This is a private associated function called once from [`new`][Self::new].

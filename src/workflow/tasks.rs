@@ -1576,6 +1576,792 @@ pub mod test_helpers {
             .await
             .expect("test: state serialization");
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Deterministic stub tasks for end-to-end pipeline tests
+    // ────────────────────────────────────────────────────────────────────
+    //
+    // Each stub implements `graph_flow::Task` with the same `id()` as the
+    // real task it replaces.  Instead of calling LLM agents, stubs write
+    // deterministic synthetic data to context — exactly the keys and shapes
+    // that downstream tasks and `run_analysis_cycle()` expect.
+    //
+    // The `AnalystSyncTask` is NOT stubbed because it has no LLM dependency.
+
+    use crate::state::{
+        DebateMessage, Decision, ExecutionStatus, FundamentalData, NewsData, PhaseTokenUsage,
+        RiskLevel, RiskReport, SentimentData, TechnicalData, TradeAction, TradeProposal,
+    };
+
+    /// Synthetic [`AgentTokenUsage`] with deterministic values.
+    pub fn stub_usage(agent_name: &str) -> AgentTokenUsage {
+        AgentTokenUsage {
+            agent_name: agent_name.to_owned(),
+            model_id: "stub-model".to_owned(),
+            token_counts_available: true,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            latency_ms: 1,
+        }
+    }
+
+    // ── Phase 1 child stubs ──────────────────────────────────────────────
+
+    /// Stub analyst child that writes synthetic data for one analyst type.
+    ///
+    /// Replicates the context contract of the real analyst child wrappers:
+    /// - Deserialises `TradingState` (verifies context is seeded)
+    /// - Writes serialised analyst data under `"analyst.<type>"`
+    /// - Writes `true` under `"analyst.<type>.ok"`
+    /// - Writes serialised `AgentTokenUsage` under `"usage.analyst.<type>"`
+    pub struct StubAnalystChild {
+        analyst_key: &'static str,
+        task_id: String,
+    }
+
+    impl StubAnalystChild {
+        pub fn fundamental() -> Arc<Self> {
+            Arc::new(Self {
+                analyst_key: super::ANALYST_FUNDAMENTAL,
+                task_id: "fundamental_analyst".to_owned(),
+            })
+        }
+        pub fn sentiment() -> Arc<Self> {
+            Arc::new(Self {
+                analyst_key: super::ANALYST_SENTIMENT,
+                task_id: "sentiment_analyst".to_owned(),
+            })
+        }
+        pub fn news() -> Arc<Self> {
+            Arc::new(Self {
+                analyst_key: super::ANALYST_NEWS,
+                task_id: "news_analyst".to_owned(),
+            })
+        }
+        pub fn technical() -> Arc<Self> {
+            Arc::new(Self {
+                analyst_key: super::ANALYST_TECHNICAL,
+                task_id: "technical_analyst".to_owned(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubAnalystChild {
+        fn id(&self) -> &str {
+            &self.task_id
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            use crate::workflow::context_bridge::write_prefixed_result;
+
+            // Verify context is seeded (same as real task).
+            let _state: crate::state::TradingState = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubAnalystChild({}): orchestration corruption: \
+                             state deserialization failed: {e}",
+                        self.analyst_key
+                    ))
+                })?;
+
+            // Write synthetic analyst data.
+            match self.analyst_key {
+                super::ANALYST_FUNDAMENTAL => {
+                    let data = FundamentalData {
+                        revenue_growth_pct: Some(12.5),
+                        pe_ratio: Some(24.5),
+                        eps: Some(6.05),
+                        current_ratio: None,
+                        debt_to_equity: None,
+                        gross_margin: None,
+                        net_income: None,
+                        insider_transactions: vec![],
+                        summary: "stub: strong fundamentals".to_owned(),
+                    };
+                    write_prefixed_result(
+                        &context,
+                        super::ANALYST_PREFIX,
+                        super::ANALYST_FUNDAMENTAL,
+                        &data,
+                    )
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "StubAnalystChild(fundamental): orchestration corruption: \
+                             context write failed: {e}"
+                        ))
+                    })?;
+                }
+                super::ANALYST_SENTIMENT => {
+                    let data = SentimentData {
+                        overall_score: 0.72,
+                        source_breakdown: vec![],
+                        engagement_peaks: vec![],
+                        summary: "stub: positive sentiment".to_owned(),
+                    };
+                    write_prefixed_result(
+                        &context,
+                        super::ANALYST_PREFIX,
+                        super::ANALYST_SENTIMENT,
+                        &data,
+                    )
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "StubAnalystChild(sentiment): orchestration corruption: \
+                             context write failed: {e}"
+                        ))
+                    })?;
+                }
+                super::ANALYST_NEWS => {
+                    let data = NewsData {
+                        articles: vec![],
+                        macro_events: vec![],
+                        summary: "stub: no major news".to_owned(),
+                    };
+                    write_prefixed_result(
+                        &context,
+                        super::ANALYST_PREFIX,
+                        super::ANALYST_NEWS,
+                        &data,
+                    )
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "StubAnalystChild(news): orchestration corruption: \
+                             context write failed: {e}"
+                        ))
+                    })?;
+                }
+                super::ANALYST_TECHNICAL => {
+                    let data = TechnicalData {
+                        rsi: Some(55.0),
+                        macd: None,
+                        atr: None,
+                        sma_20: None,
+                        sma_50: None,
+                        ema_12: None,
+                        ema_26: None,
+                        bollinger_upper: None,
+                        bollinger_lower: None,
+                        support_level: None,
+                        resistance_level: None,
+                        volume_avg: None,
+                        summary: "stub: neutral technical".to_owned(),
+                    };
+                    write_prefixed_result(
+                        &context,
+                        super::ANALYST_PREFIX,
+                        super::ANALYST_TECHNICAL,
+                        &data,
+                    )
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "StubAnalystChild(technical): orchestration corruption: \
+                             context write failed: {e}"
+                        ))
+                    })?;
+                }
+                other => {
+                    return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubAnalystChild: unknown analyst key '{other}'"
+                    )));
+                }
+            }
+
+            // Write success flag.
+            super::write_flag(&context, self.analyst_key, true).await;
+
+            // Write usage.
+            let usage = stub_usage(&format!("Stub {} Analyst", self.analyst_key));
+            super::write_analyst_usage(&context, self.analyst_key, &usage)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubAnalystChild({}): usage write failed: {e}",
+                        self.analyst_key
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    // ── Phase 2 stubs ────────────────────────────────────────────────────
+
+    /// Stub Bullish Researcher — appends a debate message and writes usage key.
+    pub struct StubBullishResearcherTask;
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubBullishResearcherTask {
+        fn id(&self) -> &str {
+            "bullish_researcher"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubBullishResearcherTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.debate_history.push(DebateMessage {
+                role: "bullish".to_owned(),
+                content: "stub: bullish argument — strong growth outlook".to_owned(),
+            });
+
+            // Write per-round usage (mirrors real task).
+            let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).await.unwrap_or(0);
+            let this_round = current_round + 1;
+            let usage = stub_usage("Bullish Researcher");
+            let usage_key = format!("usage.debate.{this_round}.bull");
+            context
+                .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+                .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubBullishResearcherTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    /// Stub Bearish Researcher — appends a debate message and writes usage key.
+    pub struct StubBearishResearcherTask;
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubBearishResearcherTask {
+        fn id(&self) -> &str {
+            "bearish_researcher"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubBearishResearcherTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.debate_history.push(DebateMessage {
+                role: "bearish".to_owned(),
+                content: "stub: bearish argument — overvaluation risk".to_owned(),
+            });
+
+            // Write per-round usage (mirrors real task).
+            let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).await.unwrap_or(0);
+            let this_round = current_round + 1;
+            let usage = stub_usage("Bearish Researcher");
+            let usage_key = format!("usage.debate.{this_round}.bear");
+            context
+                .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+                .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubBearishResearcherTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    /// Stub Debate Moderator — sets consensus, delegates to shared accounting.
+    pub struct StubDebateModeratorTask {
+        pub snapshot_store: Arc<SnapshotStore>,
+    }
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubDebateModeratorTask {
+        fn id(&self) -> &str {
+            "debate_moderator"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let phase_start = std::time::Instant::now();
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubDebateModeratorTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.consensus_summary =
+                Some("stub: moderator consensus — cautiously bullish".to_owned());
+
+            let mod_usage = stub_usage("Debate Moderator");
+
+            let is_final = debate_moderator_accounting(
+                &context,
+                &mut state,
+                &mod_usage,
+                &phase_start,
+                &self.snapshot_store,
+            )
+            .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubDebateModeratorTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            if is_final {
+                let execution_id = state.execution_id.to_string();
+                self.snapshot_store
+                    .save_snapshot(
+                        &execution_id,
+                        2,
+                        "researcher_debate",
+                        &state,
+                        Some(&[mod_usage]),
+                    )
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "StubDebateModeratorTask: snapshot save failed: {e}"
+                        ))
+                    })?;
+            }
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    // ── Phase 3 stub ─────────────────────────────────────────────────────
+
+    /// Stub Trader — sets a deterministic trade proposal, records usage, saves snapshot.
+    pub struct StubTraderTask {
+        pub snapshot_store: Arc<SnapshotStore>,
+    }
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubTraderTask {
+        fn id(&self) -> &str {
+            "trader"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let phase_start = std::time::Instant::now();
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubTraderTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.trader_proposal = Some(TradeProposal {
+                action: TradeAction::Buy,
+                target_price: 195.0,
+                stop_loss: 180.0,
+                confidence: 0.75,
+                rationale: "stub: buy on strong fundamentals and positive sentiment".to_owned(),
+            });
+
+            let usage = stub_usage("Trader");
+            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
+            let phase_usage = PhaseTokenUsage {
+                phase_name: "Trader Synthesis".to_owned(),
+                agent_usage: vec![usage.clone()],
+                phase_prompt_tokens: usage.prompt_tokens,
+                phase_completion_tokens: usage.completion_tokens,
+                phase_total_tokens: usage.total_tokens,
+                phase_duration_ms,
+            };
+            state.token_usage.push_phase_usage(phase_usage);
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubTraderTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            let execution_id = state.execution_id.to_string();
+            self.snapshot_store
+                .save_snapshot(&execution_id, 3, "trader", &state, Some(&[usage]))
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubTraderTask: snapshot save failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    // ── Phase 4 stubs ────────────────────────────────────────────────────
+
+    /// Stub Aggressive Risk — sets risk report, appends to discussion history,
+    /// writes per-round usage key.
+    pub struct StubAggressiveRiskTask;
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubAggressiveRiskTask {
+        fn id(&self) -> &str {
+            "aggressive_risk"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubAggressiveRiskTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.aggressive_risk_report = Some(RiskReport {
+                risk_level: RiskLevel::Aggressive,
+                assessment: "stub: acceptable risk/reward ratio".to_owned(),
+                recommended_adjustments: vec![],
+                flags_violation: false,
+            });
+            state.risk_discussion_history.push(DebateMessage {
+                role: "aggressive_risk".to_owned(),
+                content: "stub: risk is manageable, proceed".to_owned(),
+            });
+
+            let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
+            let this_round = current_round + 1;
+            let usage = stub_usage("Aggressive Risk");
+            let usage_key = format!("usage.risk.{this_round}.agg");
+            context
+                .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+                .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubAggressiveRiskTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    /// Stub Conservative Risk — sets risk report, appends to discussion history,
+    /// writes per-round usage key.
+    pub struct StubConservativeRiskTask;
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubConservativeRiskTask {
+        fn id(&self) -> &str {
+            "conservative_risk"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubConservativeRiskTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.conservative_risk_report = Some(RiskReport {
+                risk_level: RiskLevel::Conservative,
+                assessment: "stub: within risk tolerances".to_owned(),
+                recommended_adjustments: vec!["tighten stop-loss by 2%".to_owned()],
+                flags_violation: false,
+            });
+            state.risk_discussion_history.push(DebateMessage {
+                role: "conservative_risk".to_owned(),
+                content: "stub: acceptable with tighter stop-loss".to_owned(),
+            });
+
+            let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
+            let this_round = current_round + 1;
+            let usage = stub_usage("Conservative Risk");
+            let usage_key = format!("usage.risk.{this_round}.con");
+            context
+                .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+                .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubConservativeRiskTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    /// Stub Neutral Risk — sets risk report, appends to discussion history,
+    /// writes per-round usage key.
+    pub struct StubNeutralRiskTask;
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubNeutralRiskTask {
+        fn id(&self) -> &str {
+            "neutral_risk"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubNeutralRiskTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.neutral_risk_report = Some(RiskReport {
+                risk_level: RiskLevel::Neutral,
+                assessment: "stub: balanced risk assessment".to_owned(),
+                recommended_adjustments: vec![],
+                flags_violation: false,
+            });
+            state.risk_discussion_history.push(DebateMessage {
+                role: "neutral_risk".to_owned(),
+                content: "stub: balanced view, proceed with caution".to_owned(),
+            });
+
+            let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
+            let this_round = current_round + 1;
+            let usage = stub_usage("Neutral Risk");
+            let usage_key = format!("usage.risk.{this_round}.neu");
+            context
+                .set(usage_key, serde_json::to_string(&usage).unwrap_or_default())
+                .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubNeutralRiskTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    /// Stub Risk Moderator — delegates to shared accounting, saves snapshot on final round.
+    pub struct StubRiskModeratorTask {
+        pub snapshot_store: Arc<SnapshotStore>,
+    }
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubRiskModeratorTask {
+        fn id(&self) -> &str {
+            "risk_moderator"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let phase_start = std::time::Instant::now();
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubRiskModeratorTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            let mod_usage = stub_usage("Risk Moderator");
+
+            let is_final = risk_moderator_accounting(
+                &context,
+                &mut state,
+                &mod_usage,
+                &phase_start,
+                &self.snapshot_store,
+            )
+            .await;
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubRiskModeratorTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            if is_final {
+                let execution_id = state.execution_id.to_string();
+                self.snapshot_store
+                    .save_snapshot(
+                        &execution_id,
+                        4,
+                        "risk_discussion",
+                        &state,
+                        Some(&[mod_usage]),
+                    )
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "StubRiskModeratorTask: snapshot save failed: {e}"
+                        ))
+                    })?;
+            }
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::Continue,
+            ))
+        }
+    }
+
+    // ── Phase 5 stub ─────────────────────────────────────────────────────
+
+    /// Stub Fund Manager — sets execution status, records usage, saves snapshot,
+    /// returns `NextAction::End`.
+    pub struct StubFundManagerTask {
+        pub snapshot_store: Arc<SnapshotStore>,
+    }
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for StubFundManagerTask {
+        fn id(&self) -> &str {
+            "fund_manager"
+        }
+
+        async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+            let phase_start = std::time::Instant::now();
+            let mut state = deserialize_state_from_context(&context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubFundManagerTask: state deser failed: {e}"
+                    ))
+                })?;
+
+            state.final_execution_status = Some(ExecutionStatus {
+                decision: Decision::Approved,
+                rationale: "stub: approved — risk within tolerances".to_owned(),
+                decided_at: "2026-03-20T00:00:00Z".to_owned(),
+            });
+
+            let usage = stub_usage("Fund Manager");
+            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
+            let phase_usage = PhaseTokenUsage {
+                phase_name: "Fund Manager Decision".to_owned(),
+                agent_usage: vec![usage.clone()],
+                phase_prompt_tokens: usage.prompt_tokens,
+                phase_completion_tokens: usage.completion_tokens,
+                phase_total_tokens: usage.total_tokens,
+                phase_duration_ms,
+            };
+            state.token_usage.push_phase_usage(phase_usage);
+
+            serialize_state_to_context(&state, &context)
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubFundManagerTask: state ser failed: {e}"
+                    ))
+                })?;
+
+            let execution_id = state.execution_id.to_string();
+            self.snapshot_store
+                .save_snapshot(&execution_id, 5, "fund_manager", &state, Some(&[usage]))
+                .await
+                .map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "StubFundManagerTask: snapshot save failed: {e}"
+                    ))
+                })?;
+
+            Ok(graph_flow::TaskResult::new(
+                None,
+                graph_flow::NextAction::End,
+            ))
+        }
+    }
+
+    /// Replace all LLM-calling tasks in the pipeline's graph with
+    /// deterministic stubs, leaving `AnalystSyncTask` (which has no LLM
+    /// dependency) in place.
+    ///
+    /// This is the primary test seam for end-to-end pipeline tests.
+    pub fn replace_with_stubs(graph: &graph_flow::Graph, snapshot_store: Arc<SnapshotStore>) {
+        use graph_flow::fanout::FanOutTask;
+
+        // Phase 1: replace the analyst fan-out with stub children.
+        let stub_fanout = FanOutTask::new(
+            "analyst_fanout",
+            vec![
+                StubAnalystChild::fundamental(),
+                StubAnalystChild::sentiment(),
+                StubAnalystChild::news(),
+                StubAnalystChild::technical(),
+            ],
+        );
+        graph.add_task(stub_fanout);
+
+        // Phase 2: researcher debate stubs.
+        graph.add_task(Arc::new(StubBullishResearcherTask));
+        graph.add_task(Arc::new(StubBearishResearcherTask));
+        graph.add_task(Arc::new(StubDebateModeratorTask {
+            snapshot_store: Arc::clone(&snapshot_store),
+        }));
+
+        // Phase 3: trader stub.
+        graph.add_task(Arc::new(StubTraderTask {
+            snapshot_store: Arc::clone(&snapshot_store),
+        }));
+
+        // Phase 4: risk discussion stubs.
+        graph.add_task(Arc::new(StubAggressiveRiskTask));
+        graph.add_task(Arc::new(StubConservativeRiskTask));
+        graph.add_task(Arc::new(StubNeutralRiskTask));
+        graph.add_task(Arc::new(StubRiskModeratorTask {
+            snapshot_store: Arc::clone(&snapshot_store),
+        }));
+
+        // Phase 5: fund manager stub.
+        graph.add_task(Arc::new(StubFundManagerTask { snapshot_store }));
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
