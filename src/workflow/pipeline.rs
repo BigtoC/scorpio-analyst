@@ -372,14 +372,7 @@ impl TradingPipeline {
             step += 1;
             info!(step, "pipeline step");
 
-            let result = runner
-                .run(&session_id)
-                .await
-                .map_err(|e| TradingError::GraphFlow {
-                    phase: "pipeline_execution".into(),
-                    task: "flow_runner".into(),
-                    cause: e.to_string(),
-                })?;
+            let result = runner.run(&session_id).await.map_err(map_graph_error)?;
 
             match result.status {
                 ExecutionStatus::Completed => {
@@ -402,14 +395,17 @@ impl TradingPipeline {
                 }
                 ExecutionStatus::Error(ref msg) => {
                     error!(error = %msg, step, "pipeline step returned error status");
-                    let cause = if msg.len() > 200 {
-                        format!("{}...", &msg[..200])
+                    // Parse the error message for task identity, same as GraphError path.
+                    let (task_id, cause) = extract_task_identity(msg);
+                    let phase = phase_for_task(&task_id);
+                    let cause = if cause.len() > 200 {
+                        format!("{}...", &cause[..200])
                     } else {
-                        msg.clone()
+                        cause
                     };
                     return Err(TradingError::GraphFlow {
-                        phase: "pipeline_execution".into(),
-                        task: "task_failure".into(),
+                        phase,
+                        task: task_id,
                         cause,
                     });
                 }
@@ -441,6 +437,112 @@ impl TradingPipeline {
 
         info!(symbol = %symbol, date = %date, "analysis cycle complete");
         Ok(final_state)
+    }
+}
+
+// ── Error mapping ────────────────────────────────────────────────────────────
+
+/// Map a [`graph_flow::GraphError`] into a [`TradingError::GraphFlow`],
+/// preserving the real task identity and phase when available.
+///
+/// Graph-flow embeds task names in unstructured error strings like
+/// `"Task 'bullish_researcher' failed: ..."`.  This function extracts the
+/// task id from that pattern.  Our own task wrappers also prefix their error
+/// messages with `"<TaskType>: ..."`.  The phase is inferred from the task id
+/// using the known pipeline topology.
+///
+/// This is intentionally a free function (not a method) so it is independently
+/// testable.
+pub fn map_graph_error(err: graph_flow::GraphError) -> TradingError {
+    match err {
+        graph_flow::GraphError::TaskExecutionFailed(ref msg) => {
+            let (task_id, cause) = extract_task_identity(msg);
+            let phase = phase_for_task(&task_id);
+            TradingError::GraphFlow {
+                phase,
+                task: task_id,
+                cause,
+            }
+        }
+        graph_flow::GraphError::TaskNotFound(ref id) => TradingError::GraphFlow {
+            phase: phase_for_task(id),
+            task: id.clone(),
+            cause: format!("task not found: {id}"),
+        },
+        other => {
+            // For session/storage/edge/context errors, use the variant name as
+            // the task field so callers can distinguish error classes.
+            let variant = match &other {
+                graph_flow::GraphError::GraphNotFound(_) => "graph_not_found",
+                graph_flow::GraphError::InvalidEdge(_) => "invalid_edge",
+                graph_flow::GraphError::ContextError(_) => "context_error",
+                graph_flow::GraphError::StorageError(_) => "storage_error",
+                graph_flow::GraphError::SessionNotFound(_) => "session_not_found",
+                _ => "graph_flow",
+            };
+            TradingError::GraphFlow {
+                phase: "orchestration".into(),
+                task: variant.into(),
+                cause: other.to_string(),
+            }
+        }
+    }
+}
+
+/// Extract the task id from a graph-flow error message.
+///
+/// Graph-flow produces messages in the form `"Task '<id>' failed: <rest>"` and
+/// `"FanOut child '<id>' failed: <rest>"`.  If neither pattern matches, the
+/// full message is returned as the cause with `"unknown"` as the task id.
+fn extract_task_identity(msg: &str) -> (String, String) {
+    // Pattern 1: "Task '<task_id>' failed: <rest>"
+    if let Some(rest) = msg.strip_prefix("Task '")
+        && let Some(quote_end) = rest.find('\'')
+    {
+        let task_id = &rest[..quote_end];
+        let cause = rest[quote_end..]
+            .strip_prefix("' failed: ")
+            .unwrap_or(&rest[quote_end..])
+            .to_owned();
+        return (task_id.to_owned(), cause);
+    }
+
+    // Pattern 2: "FanOut child '<task_id>' failed: <rest>"
+    if let Some(rest) = msg.strip_prefix("FanOut child '")
+        && let Some(quote_end) = rest.find('\'')
+    {
+        let task_id = &rest[..quote_end];
+        let cause = rest[quote_end..]
+            .strip_prefix("' failed: ")
+            .unwrap_or(&rest[quote_end..])
+            .to_owned();
+        return (task_id.to_owned(), cause);
+    }
+
+    // Pattern 3: Our task wrappers prefix with "<TaskType>: <context>"
+    // e.g. "BullishResearcherTask: failed to run bullish turn: ..."
+    // In this case the full message IS the cause and the task id is unknown.
+    ("unknown".to_owned(), msg.to_owned())
+}
+
+/// Map a graph task id to its pipeline phase name.
+fn phase_for_task(task_id: &str) -> String {
+    match task_id {
+        "analyst_fanout"
+        | "fundamental_analyst"
+        | "sentiment_analyst"
+        | "news_analyst"
+        | "technical_analyst"
+        | "analyst_sync" => "analyst_team".into(),
+        "bullish_researcher" | "bearish_researcher" | "debate_moderator" => {
+            "researcher_debate".into()
+        }
+        "trader" => "trader".into(),
+        "aggressive_risk" | "conservative_risk" | "neutral_risk" | "risk_moderator" => {
+            "risk_discussion".into()
+        }
+        "fund_manager" => "fund_manager".into(),
+        _ => "unknown_phase".into(),
     }
 }
 

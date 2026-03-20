@@ -9,16 +9,30 @@
 //! [`FundamentalAnalystTask`], [`SentimentAnalystTask`], [`NewsAnalystTask`],
 //! and [`TechnicalAnalystTask`] run as children inside a [`FanOutTask`].
 //! Because [`FanOutTask`] aborts the entire fan-out when **any** child returns
-//! `Err`, these tasks **must never return `Err`**.  Instead they write:
+//! `Err`, these tasks distinguish two failure categories:
 //!
-//! - On success: serialized analyst data under `"analyst.<type>"`, and
-//!   `true` under `"analyst.<type>.ok"`.
-//! - On failure: `false` under `"analyst.<type>.ok"` and the error message
-//!   under `"analyst.<type>.err"`.
+//! ## Orchestration corruption → `Err` (fail hard)
+//!
+//! If the shared [`TradingState`] cannot be deserialized from the context, or
+//! if `write_prefixed_result` fails (serialization bug), the fan-out child
+//! returns `Err(GraphError::TaskExecutionFailed(...))`.  This aborts the
+//! entire fan-out because the orchestration layer itself is broken — partial
+//! results from other analysts would be unreliable.
+//!
+//! ## Analyst runtime failure → graceful degradation
+//!
+//! If the underlying analyst agent (`analyst.run()`) fails (network timeout,
+//! API error, LLM refusal, etc.), the child writes:
+//!
+//! - `false` under `"analyst.<type>.ok"` and the error message under
+//!   `"analyst.<type>.err"`.
 //!
 //! [`AnalystSyncTask`] reads these flags, applies the degradation policy
 //! (≥ 2 failures → `NextAction::End`), and merges successful results into
 //! the main `TradingState`.
+//!
+//! On success, the child writes serialized analyst data under
+//! `"analyst.<type>"` and `true` under `"analyst.<type>.ok"`.
 
 use std::sync::Arc;
 
@@ -42,8 +56,7 @@ use crate::{
     config::{Config, LlmConfig},
     data::{FinnhubClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
-    state::AgentTokenUsage,
-    state::PhaseTokenUsage,
+    state::{AgentTokenUsage, PhaseTokenUsage, TradingState},
     workflow::{
         context_bridge::{
             deserialize_state_from_context, read_prefixed_result, serialize_state_to_context,
@@ -122,10 +135,10 @@ impl Task for FundamentalAnalystTask {
         let state = match deserialize_state_from_context(&context).await {
             Ok(s) => s,
             Err(e) => {
-                error!(analyst = "fundamental", error = %e, "failed to deserialize state");
-                write_flag(&context, ANALYST_FUNDAMENTAL, false).await;
-                write_err(&context, ANALYST_FUNDAMENTAL, &e.to_string()).await;
-                return Ok(TaskResult::new(None, NextAction::Continue));
+                error!(analyst = "fundamental", error = %e, "orchestration corruption: failed to deserialize state");
+                return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "FundamentalAnalystTask: orchestration corruption: state deserialization failed: {e}"
+                )));
             }
         };
 
@@ -143,15 +156,10 @@ impl Task for FundamentalAnalystTask {
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_FUNDAMENTAL, &data)
                         .await
                 {
-                    error!(analyst = "fundamental", error = %e, "failed to write result to context");
-                    write_flag(&context, ANALYST_FUNDAMENTAL, false).await;
-                    write_err(&context, ANALYST_FUNDAMENTAL, &e.to_string()).await;
-                    let _ = write_analyst_usage(
-                        &context,
-                        ANALYST_FUNDAMENTAL,
-                        &AgentTokenUsage::unavailable("Fundamental Analyst", "unknown", 0),
-                    )
-                    .await;
+                    error!(analyst = "fundamental", error = %e, "orchestration corruption: failed to write result to context");
+                    return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "FundamentalAnalystTask: orchestration corruption: context write failed: {e}"
+                    )));
                 } else {
                     write_flag(&context, ANALYST_FUNDAMENTAL, true).await;
                     let _ = write_analyst_usage(&context, ANALYST_FUNDAMENTAL, &usage).await;
@@ -207,10 +215,10 @@ impl Task for SentimentAnalystTask {
         let state = match deserialize_state_from_context(&context).await {
             Ok(s) => s,
             Err(e) => {
-                error!(analyst = "sentiment", error = %e, "failed to deserialize state");
-                write_flag(&context, ANALYST_SENTIMENT, false).await;
-                write_err(&context, ANALYST_SENTIMENT, &e.to_string()).await;
-                return Ok(TaskResult::new(None, NextAction::Continue));
+                error!(analyst = "sentiment", error = %e, "orchestration corruption: failed to deserialize state");
+                return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "SentimentAnalystTask: orchestration corruption: state deserialization failed: {e}"
+                )));
             }
         };
 
@@ -234,15 +242,10 @@ impl Task for SentimentAnalystTask {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_SENTIMENT, &data).await
                 {
-                    error!(analyst = "sentiment", error = %e, "failed to write result to context");
-                    write_flag(&context, ANALYST_SENTIMENT, false).await;
-                    write_err(&context, ANALYST_SENTIMENT, &e.to_string()).await;
-                    let _ = write_analyst_usage(
-                        &context,
-                        ANALYST_SENTIMENT,
-                        &AgentTokenUsage::unavailable("Sentiment Analyst", "unknown", 0),
-                    )
-                    .await;
+                    error!(analyst = "sentiment", error = %e, "orchestration corruption: failed to write result to context");
+                    return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "SentimentAnalystTask: orchestration corruption: context write failed: {e}"
+                    )));
                 } else {
                     write_flag(&context, ANALYST_SENTIMENT, true).await;
                     let _ = write_analyst_usage(&context, ANALYST_SENTIMENT, &usage).await;
@@ -298,10 +301,10 @@ impl Task for NewsAnalystTask {
         let state = match deserialize_state_from_context(&context).await {
             Ok(s) => s,
             Err(e) => {
-                error!(analyst = "news", error = %e, "failed to deserialize state");
-                write_flag(&context, ANALYST_NEWS, false).await;
-                write_err(&context, ANALYST_NEWS, &e.to_string()).await;
-                return Ok(TaskResult::new(None, NextAction::Continue));
+                error!(analyst = "news", error = %e, "orchestration corruption: failed to deserialize state");
+                return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "NewsAnalystTask: orchestration corruption: state deserialization failed: {e}"
+                )));
             }
         };
 
@@ -325,15 +328,10 @@ impl Task for NewsAnalystTask {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_NEWS, &data).await
                 {
-                    error!(analyst = "news", error = %e, "failed to write result to context");
-                    write_flag(&context, ANALYST_NEWS, false).await;
-                    write_err(&context, ANALYST_NEWS, &e.to_string()).await;
-                    let _ = write_analyst_usage(
-                        &context,
-                        ANALYST_NEWS,
-                        &AgentTokenUsage::unavailable("News Analyst", "unknown", 0),
-                    )
-                    .await;
+                    error!(analyst = "news", error = %e, "orchestration corruption: failed to write result to context");
+                    return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "NewsAnalystTask: orchestration corruption: context write failed: {e}"
+                    )));
                 } else {
                     write_flag(&context, ANALYST_NEWS, true).await;
                     let _ = write_analyst_usage(&context, ANALYST_NEWS, &usage).await;
@@ -389,10 +387,10 @@ impl Task for TechnicalAnalystTask {
         let state = match deserialize_state_from_context(&context).await {
             Ok(s) => s,
             Err(e) => {
-                error!(analyst = "technical", error = %e, "failed to deserialize state");
-                write_flag(&context, ANALYST_TECHNICAL, false).await;
-                write_err(&context, ANALYST_TECHNICAL, &e.to_string()).await;
-                return Ok(TaskResult::new(None, NextAction::Continue));
+                error!(analyst = "technical", error = %e, "orchestration corruption: failed to deserialize state");
+                return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "TechnicalAnalystTask: orchestration corruption: state deserialization failed: {e}"
+                )));
             }
         };
 
@@ -409,15 +407,10 @@ impl Task for TechnicalAnalystTask {
                 if let Err(e) =
                     write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_TECHNICAL, &data).await
                 {
-                    error!(analyst = "technical", error = %e, "failed to write result to context");
-                    write_flag(&context, ANALYST_TECHNICAL, false).await;
-                    write_err(&context, ANALYST_TECHNICAL, &e.to_string()).await;
-                    let _ = write_analyst_usage(
-                        &context,
-                        ANALYST_TECHNICAL,
-                        &AgentTokenUsage::unavailable("Technical Analyst", "unknown", 0),
-                    )
-                    .await;
+                    error!(analyst = "technical", error = %e, "orchestration corruption: failed to write result to context");
+                    return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "TechnicalAnalystTask: orchestration corruption: context write failed: {e}"
+                    )));
                 } else {
                     write_flag(&context, ANALYST_TECHNICAL, true).await;
                     let _ = write_analyst_usage(&context, ANALYST_TECHNICAL, &usage).await;
@@ -819,51 +812,17 @@ impl Task for DebateModeratorTask {
                 ))
             })?;
 
-        // Increment the debate round counter.
-        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-        let new_round = current_round + 1;
-        context.set(KEY_DEBATE_ROUND, new_round).await;
-
-        let max_rounds: u32 = context.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
-
-        // Read bull and bear usages for this round from context.
-        let bull_key = format!("usage.debate.{new_round}.bull");
-        let bear_key = format!("usage.debate.{new_round}.bear");
-        let bull_usage: AgentTokenUsage = context
-            .get::<String>(&bull_key)
-            .await
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_else(|| AgentTokenUsage::unavailable("Bullish Researcher", "unknown", 0));
-        let bear_usage: AgentTokenUsage = context
-            .get::<String>(&bear_key)
-            .await
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_else(|| AgentTokenUsage::unavailable("Bearish Researcher", "unknown", 0));
-
-        // Create PhaseTokenUsage for the just-completed round (bull + bear).
-        let round_phase = PhaseTokenUsage {
-            phase_name: format!("Researcher Debate Round {new_round}"),
-            agent_usage: vec![bull_usage.clone(), bear_usage.clone()],
-            phase_prompt_tokens: bull_usage.prompt_tokens + bear_usage.prompt_tokens,
-            phase_completion_tokens: bull_usage.completion_tokens + bear_usage.completion_tokens,
-            phase_total_tokens: bull_usage.total_tokens + bear_usage.total_tokens,
-            phase_duration_ms: 0, // per-round wall time not tracked
-        };
-        state.token_usage.push_phase_usage(round_phase);
-
-        // On final round: also create the moderation entry and save snapshot.
-        if new_round >= max_rounds {
-            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
-            let mod_phase = PhaseTokenUsage {
-                phase_name: "Researcher Debate Moderation".to_owned(),
-                agent_usage: vec![mod_usage.clone()],
-                phase_prompt_tokens: mod_usage.prompt_tokens,
-                phase_completion_tokens: mod_usage.completion_tokens,
-                phase_total_tokens: mod_usage.total_tokens,
-                phase_duration_ms,
-            };
-            state.token_usage.push_phase_usage(mod_phase);
-        }
+        // Delegate to the shared accounting function (handles counter
+        // increment, round-entry creation with zero-round guard, and
+        // moderation entry).  Returns true on the final round.
+        let is_final = debate_moderator_accounting(
+            &context,
+            &mut state,
+            &mod_usage,
+            &phase_start,
+            &self.snapshot_store,
+        )
+        .await;
 
         // Single serialization after all accounting.
         serialize_state_to_context(&state, &context)
@@ -874,7 +833,7 @@ impl Task for DebateModeratorTask {
                 ))
             })?;
 
-        if new_round >= max_rounds {
+        if is_final {
             let execution_id = state.execution_id.to_string();
             self.snapshot_store
                 .save_snapshot(
@@ -890,10 +849,7 @@ impl Task for DebateModeratorTask {
                         "DebateModeratorTask: failed to save phase 2 snapshot: {e}"
                     ))
                 })?;
-            info!(
-                rounds = new_round,
-                "DebateModeratorTask: debate complete, snapshot saved"
-            );
+            info!("DebateModeratorTask: debate complete, snapshot saved");
         }
 
         Ok(TaskResult::new(None, NextAction::Continue))
@@ -1199,63 +1155,17 @@ impl Task for RiskModeratorTask {
                 ))
             })?;
 
-        // Increment the risk round counter.
-        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
-        let new_round = current_round + 1;
-        context.set(KEY_RISK_ROUND, new_round).await;
-
-        let max_rounds: u32 = context.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
-
-        // Read agg/con/neu usages for this round from context.
-        let agg_key = format!("usage.risk.{new_round}.agg");
-        let con_key = format!("usage.risk.{new_round}.con");
-        let neu_key = format!("usage.risk.{new_round}.neu");
-        let agg_usage: AgentTokenUsage = context
-            .get::<String>(&agg_key)
-            .await
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_else(|| AgentTokenUsage::unavailable("Aggressive Risk", "unknown", 0));
-        let con_usage: AgentTokenUsage = context
-            .get::<String>(&con_key)
-            .await
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_else(|| AgentTokenUsage::unavailable("Conservative Risk", "unknown", 0));
-        let neu_usage: AgentTokenUsage = context
-            .get::<String>(&neu_key)
-            .await
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_else(|| AgentTokenUsage::unavailable("Neutral Risk", "unknown", 0));
-
-        // Create PhaseTokenUsage for the just-completed round (agg + con + neu).
-        let round_phase = PhaseTokenUsage {
-            phase_name: format!("Risk Discussion Round {new_round}"),
-            agent_usage: vec![agg_usage.clone(), con_usage.clone(), neu_usage.clone()],
-            phase_prompt_tokens: agg_usage.prompt_tokens
-                + con_usage.prompt_tokens
-                + neu_usage.prompt_tokens,
-            phase_completion_tokens: agg_usage.completion_tokens
-                + con_usage.completion_tokens
-                + neu_usage.completion_tokens,
-            phase_total_tokens: agg_usage.total_tokens
-                + con_usage.total_tokens
-                + neu_usage.total_tokens,
-            phase_duration_ms: 0, // per-round wall time not tracked
-        };
-        state.token_usage.push_phase_usage(round_phase);
-
-        // On final round: also create the moderation entry and save snapshot.
-        if new_round >= max_rounds {
-            let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
-            let mod_phase = PhaseTokenUsage {
-                phase_name: "Risk Discussion Moderation".to_owned(),
-                agent_usage: vec![mod_usage.clone()],
-                phase_prompt_tokens: mod_usage.prompt_tokens,
-                phase_completion_tokens: mod_usage.completion_tokens,
-                phase_total_tokens: mod_usage.total_tokens,
-                phase_duration_ms,
-            };
-            state.token_usage.push_phase_usage(mod_phase);
-        }
+        // Delegate to the shared accounting function (handles counter
+        // increment, round-entry creation with zero-round guard, and
+        // moderation entry).  Returns true on the final round.
+        let is_final = risk_moderator_accounting(
+            &context,
+            &mut state,
+            &mod_usage,
+            &phase_start,
+            &self.snapshot_store,
+        )
+        .await;
 
         // Single serialization after all accounting.
         serialize_state_to_context(&state, &context)
@@ -1266,7 +1176,7 @@ impl Task for RiskModeratorTask {
                 ))
             })?;
 
-        if new_round >= max_rounds {
+        if is_final {
             let execution_id = state.execution_id.to_string();
             self.snapshot_store
                 .save_snapshot(
@@ -1282,10 +1192,7 @@ impl Task for RiskModeratorTask {
                         "RiskModeratorTask: failed to save phase 4 snapshot: {e}"
                     ))
                 })?;
-            info!(
-                rounds = new_round,
-                "RiskModeratorTask: risk discussion complete, snapshot saved"
-            );
+            info!("RiskModeratorTask: risk discussion complete, snapshot saved");
         }
 
         Ok(TaskResult::new(None, NextAction::Continue))
@@ -1416,6 +1323,258 @@ async fn read_analyst_usage(
     match read_prefixed_result::<AgentTokenUsage>(context, "usage.analyst", analyst_key).await {
         Ok(u) => u,
         Err(_) => AgentTokenUsage::unavailable(agent_name, "unknown", 0),
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Shared moderator accounting logic
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Extracted from `DebateModeratorTask::run()` and `RiskModeratorTask::run()`
+// so integration tests can exercise the accounting path without a live LLM.
+// The zero-round guard (`max_rounds > 0`) prevents phantom round entries.
+
+/// Accounting logic shared between [`DebateModeratorTask::run()`] and the
+/// test helper [`test_helpers::run_debate_moderator_accounting`].
+///
+/// When `max_debate_rounds > 0`, this increments the round counter and
+/// creates a per-round `PhaseTokenUsage` entry from the bull/bear usage
+/// stored in context by the researcher tasks.  When `max_debate_rounds == 0`
+/// the graph routes directly to the moderator; this function skips counter
+/// increment and round-entry creation to avoid phantom entries.
+///
+/// The moderation `PhaseTokenUsage` entry is written on the final round (or
+/// immediately when `max_rounds == 0`).
+///
+/// Returns `true` if this is the final round (caller should save snapshot).
+async fn debate_moderator_accounting(
+    context: &Context,
+    state: &mut TradingState,
+    mod_usage: &AgentTokenUsage,
+    phase_start: &std::time::Instant,
+    _snapshot_store: &SnapshotStore,
+) -> bool {
+    let max_rounds: u32 = context.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
+
+    // Only increment counter and create round entries when there are actual rounds.
+    let new_round = if max_rounds > 0 {
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let new_round = current_round + 1;
+        context.set(KEY_DEBATE_ROUND, new_round).await;
+
+        // Read bull and bear usages for this round from context.
+        let bull_key = format!("usage.debate.{new_round}.bull");
+        let bear_key = format!("usage.debate.{new_round}.bear");
+        let bull_usage: AgentTokenUsage = context
+            .get::<String>(&bull_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Bullish Researcher", "unknown", 0));
+        let bear_usage: AgentTokenUsage = context
+            .get::<String>(&bear_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Bearish Researcher", "unknown", 0));
+
+        // Create PhaseTokenUsage for the just-completed round (bull + bear).
+        let round_phase = PhaseTokenUsage {
+            phase_name: format!("Researcher Debate Round {new_round}"),
+            agent_usage: vec![bull_usage.clone(), bear_usage.clone()],
+            phase_prompt_tokens: bull_usage.prompt_tokens + bear_usage.prompt_tokens,
+            phase_completion_tokens: bull_usage.completion_tokens + bear_usage.completion_tokens,
+            phase_total_tokens: bull_usage.total_tokens + bear_usage.total_tokens,
+            phase_duration_ms: 0, // per-round wall time not tracked
+        };
+        state.token_usage.push_phase_usage(round_phase);
+
+        new_round
+    } else {
+        0
+    };
+
+    let is_final = new_round >= max_rounds;
+
+    // On final round (or immediately for zero-round): create the moderation entry.
+    if is_final {
+        let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
+        let mod_phase = PhaseTokenUsage {
+            phase_name: "Researcher Debate Moderation".to_owned(),
+            agent_usage: vec![mod_usage.clone()],
+            phase_prompt_tokens: mod_usage.prompt_tokens,
+            phase_completion_tokens: mod_usage.completion_tokens,
+            phase_total_tokens: mod_usage.total_tokens,
+            phase_duration_ms,
+        };
+        state.token_usage.push_phase_usage(mod_phase);
+    }
+
+    is_final
+}
+
+/// Accounting logic shared between [`RiskModeratorTask::run()`] and the
+/// test helper [`test_helpers::run_risk_moderator_accounting`].
+///
+/// When `max_risk_rounds > 0`, this increments the round counter and
+/// creates a per-round `PhaseTokenUsage` entry from the agg/con/neu usage
+/// stored in context by the risk agent tasks.  When `max_risk_rounds == 0`
+/// the graph routes directly to the moderator; this function skips counter
+/// increment and round-entry creation to avoid phantom entries.
+///
+/// The moderation `PhaseTokenUsage` entry is written on the final round (or
+/// immediately when `max_rounds == 0`).
+///
+/// Returns `true` if this is the final round (caller should save snapshot).
+async fn risk_moderator_accounting(
+    context: &Context,
+    state: &mut TradingState,
+    mod_usage: &AgentTokenUsage,
+    phase_start: &std::time::Instant,
+    _snapshot_store: &SnapshotStore,
+) -> bool {
+    let max_rounds: u32 = context.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
+
+    // Only increment counter and create round entries when there are actual rounds.
+    let new_round = if max_rounds > 0 {
+        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let new_round = current_round + 1;
+        context.set(KEY_RISK_ROUND, new_round).await;
+
+        // Read agg/con/neu usages for this round from context.
+        let agg_key = format!("usage.risk.{new_round}.agg");
+        let con_key = format!("usage.risk.{new_round}.con");
+        let neu_key = format!("usage.risk.{new_round}.neu");
+        let agg_usage: AgentTokenUsage = context
+            .get::<String>(&agg_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Aggressive Risk", "unknown", 0));
+        let con_usage: AgentTokenUsage = context
+            .get::<String>(&con_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Conservative Risk", "unknown", 0));
+        let neu_usage: AgentTokenUsage = context
+            .get::<String>(&neu_key)
+            .await
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_else(|| AgentTokenUsage::unavailable("Neutral Risk", "unknown", 0));
+
+        // Create PhaseTokenUsage for the just-completed round (agg + con + neu).
+        let round_phase = PhaseTokenUsage {
+            phase_name: format!("Risk Discussion Round {new_round}"),
+            agent_usage: vec![agg_usage.clone(), con_usage.clone(), neu_usage.clone()],
+            phase_prompt_tokens: agg_usage.prompt_tokens
+                + con_usage.prompt_tokens
+                + neu_usage.prompt_tokens,
+            phase_completion_tokens: agg_usage.completion_tokens
+                + con_usage.completion_tokens
+                + neu_usage.completion_tokens,
+            phase_total_tokens: agg_usage.total_tokens
+                + con_usage.total_tokens
+                + neu_usage.total_tokens,
+            phase_duration_ms: 0, // per-round wall time not tracked
+        };
+        state.token_usage.push_phase_usage(round_phase);
+
+        new_round
+    } else {
+        0
+    };
+
+    let is_final = new_round >= max_rounds;
+
+    // On final round (or immediately for zero-round): create the moderation entry.
+    if is_final {
+        let phase_duration_ms = phase_start.elapsed().as_millis() as u64;
+        let mod_phase = PhaseTokenUsage {
+            phase_name: "Risk Discussion Moderation".to_owned(),
+            agent_usage: vec![mod_usage.clone()],
+            phase_prompt_tokens: mod_usage.prompt_tokens,
+            phase_completion_tokens: mod_usage.completion_tokens,
+            phase_total_tokens: mod_usage.total_tokens,
+            phase_duration_ms,
+        };
+        state.token_usage.push_phase_usage(mod_phase);
+    }
+
+    is_final
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Test helpers (exposed for integration tests)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Test-only helpers that expose the accounting/state logic of moderator
+/// tasks so integration tests can exercise them without a live LLM call.
+///
+/// Each helper calls the same [`debate_moderator_accounting`] /
+/// [`risk_moderator_accounting`] function that the real task uses.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_helpers {
+    use std::sync::Arc;
+
+    use graph_flow::Context;
+
+    use crate::{
+        state::AgentTokenUsage,
+        workflow::{
+            context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+            snapshot::SnapshotStore,
+        },
+    };
+
+    use super::{debate_moderator_accounting, risk_moderator_accounting};
+
+    /// Run the accounting portion of [`super::DebateModeratorTask`] using a
+    /// pre-computed moderation usage, writing results back to context.
+    pub async fn run_debate_moderator_accounting(
+        context: &Context,
+        mod_usage: &AgentTokenUsage,
+        snapshot_store: Arc<SnapshotStore>,
+    ) {
+        let phase_start = std::time::Instant::now();
+        let mut state = deserialize_state_from_context(context)
+            .await
+            .expect("test: state deserialization");
+
+        debate_moderator_accounting(
+            context,
+            &mut state,
+            mod_usage,
+            &phase_start,
+            &snapshot_store,
+        )
+        .await;
+
+        serialize_state_to_context(&state, context)
+            .await
+            .expect("test: state serialization");
+    }
+
+    /// Run the accounting portion of [`super::RiskModeratorTask`] using a
+    /// pre-computed moderation usage, writing results back to context.
+    pub async fn run_risk_moderator_accounting(
+        context: &Context,
+        mod_usage: &AgentTokenUsage,
+        snapshot_store: Arc<SnapshotStore>,
+    ) {
+        let phase_start = std::time::Instant::now();
+        let mut state = deserialize_state_from_context(context)
+            .await
+            .expect("test: state deserialization");
+
+        risk_moderator_accounting(
+            context,
+            &mut state,
+            mod_usage,
+            &phase_start,
+            &snapshot_store,
+        )
+        .await;
+
+        serialize_state_to_context(&state, context)
+            .await
+            .expect("test: state serialization");
     }
 }
 

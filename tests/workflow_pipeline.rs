@@ -653,6 +653,233 @@ fn execution_ids_are_distinct_across_cycles() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Task 1: GraphFlow errors preserve real task identity
+// ────────────────────────────────────────────────────────────────────────────
+//
+// When `graph_flow::GraphError::TaskExecutionFailed` is returned by the
+// runner, the pipeline must surface a `TradingError::GraphFlow` whose `task`
+// field contains the originating task name and whose `phase` maps to the
+// correct pipeline phase — NOT generic placeholders like "pipeline_execution"
+// / "flow_runner" / "task_failure".
+//
+// This test exercises the public helper `map_graph_error` that the pipeline
+// uses to convert `GraphError` into `TradingError::GraphFlow`.
+
+#[test]
+fn graphflow_errors_preserve_real_task_identity() {
+    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+
+    // Simulate what graph-flow's `execute_single_task` produces:
+    // "Task 'bullish_researcher' failed: BullishResearcherTask: failed to run bullish turn: ..."
+    let graph_err = graph_flow::GraphError::TaskExecutionFailed(
+        "Task 'bullish_researcher' failed: BullishResearcherTask: failed to run bullish turn: connection refused".to_owned()
+    );
+
+    let trading_err = map_graph_error(graph_err);
+
+    match &trading_err {
+        TradingError::GraphFlow { phase, task, cause } => {
+            // Must NOT be the generic labels.
+            assert_ne!(
+                task, "flow_runner",
+                "task must not be generic 'flow_runner'; got phase={phase:?}, task={task:?}"
+            );
+            assert_ne!(
+                task, "task_failure",
+                "task must not be generic 'task_failure'; got phase={phase:?}, task={task:?}"
+            );
+            // Must contain the real task id somewhere.
+            assert!(
+                task.contains("bullish_researcher"),
+                "task field must contain the real task id 'bullish_researcher'; got task={task:?}"
+            );
+            // Phase must not be the generic "pipeline_execution".
+            assert_ne!(
+                phase, "pipeline_execution",
+                "phase must not be generic 'pipeline_execution'; got phase={phase:?}"
+            );
+            // Cause should contain the actual error message.
+            assert!(
+                cause.contains("connection refused"),
+                "cause must contain the original error; got cause={cause:?}"
+            );
+        }
+        other => panic!("expected TradingError::GraphFlow, got: {other:?}"),
+    }
+}
+
+/// Verify that non-task GraphError variants (e.g. SessionNotFound) are also
+/// mapped with meaningful identity rather than generic labels.
+#[test]
+fn graphflow_non_task_errors_preserve_identity() {
+    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+
+    let graph_err = graph_flow::GraphError::SessionNotFound("abc-123".to_owned());
+    let trading_err = map_graph_error(graph_err);
+
+    match &trading_err {
+        TradingError::GraphFlow {
+            phase: _,
+            task,
+            cause,
+        } => {
+            assert_ne!(
+                task, "flow_runner",
+                "task must not be generic 'flow_runner'"
+            );
+            assert!(
+                cause.contains("abc-123"),
+                "cause must contain the session id; got cause={cause:?}"
+            );
+        }
+        other => panic!("expected TradingError::GraphFlow, got: {other:?}"),
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 2: Zero-round debate does not create phantom round entries
+// ────────────────────────────────────────────────────────────────────────────
+//
+// When max_debate_rounds = 0 the graph routes directly to DebateModeratorTask,
+// skipping bullish/bearish researchers.  The moderator must NOT increment
+// KEY_DEBATE_ROUND or create a "Researcher Debate Round N" PhaseTokenUsage
+// entry — only the moderation entry should appear.
+//
+// We cannot run the full task (it calls run_debate_moderation which needs a
+// real LLM), so we test via the DebateModeratorTask unit-test helper that
+// exercises the accounting path with a mock moderation result.
+
+#[tokio::test]
+async fn zero_round_debate_does_not_create_phantom_round_entry() {
+    use scorpio_analyst::workflow::tasks::test_helpers::run_debate_moderator_accounting;
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+    ctx.set(KEY_MAX_DEBATE_ROUNDS, 0u32).await;
+    ctx.set(KEY_DEBATE_ROUND, 0u32).await;
+
+    let mod_usage = AgentTokenUsage {
+        agent_name: "Debate Moderator".to_owned(),
+        model_id: "test-model".to_owned(),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+        latency_ms: 200,
+        token_counts_available: true,
+    };
+
+    let (store, _dir) = make_store().await;
+    run_debate_moderator_accounting(&ctx, &mod_usage, Arc::clone(&store)).await;
+
+    // Counter must stay at 0.
+    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(99);
+    assert_eq!(
+        round, 0,
+        "debate round counter must stay at 0 when max_debate_rounds = 0"
+    );
+
+    // State must NOT contain any "Researcher Debate Round" entry.
+    let final_state = deserialize_state_from_context(&ctx)
+        .await
+        .expect("state deserialization");
+    let round_entries: Vec<_> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .filter(|p| p.phase_name.starts_with("Researcher Debate Round"))
+        .collect();
+    assert!(
+        round_entries.is_empty(),
+        "zero-round debate must not create phantom 'Researcher Debate Round' entries; found: {:?}",
+        round_entries
+            .iter()
+            .map(|p| &p.phase_name)
+            .collect::<Vec<_>>()
+    );
+
+    // Moderation entry SHOULD still exist.
+    let mod_entries: Vec<_> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .filter(|p| p.phase_name == "Researcher Debate Moderation")
+        .collect();
+    assert_eq!(
+        mod_entries.len(),
+        1,
+        "zero-round debate must still create one 'Researcher Debate Moderation' entry"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 2: Zero-round risk does not create phantom round entries
+// ────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn zero_round_risk_does_not_create_phantom_round_entry() {
+    use scorpio_analyst::workflow::tasks::test_helpers::run_risk_moderator_accounting;
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+    ctx.set(KEY_MAX_RISK_ROUNDS, 0u32).await;
+    ctx.set(KEY_RISK_ROUND, 0u32).await;
+
+    let mod_usage = AgentTokenUsage {
+        agent_name: "Risk Moderator".to_owned(),
+        model_id: "test-model".to_owned(),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+        latency_ms: 200,
+        token_counts_available: true,
+    };
+
+    let (store, _dir) = make_store().await;
+    run_risk_moderator_accounting(&ctx, &mod_usage, Arc::clone(&store)).await;
+
+    // Counter must stay at 0.
+    let round: u32 = ctx.get(KEY_RISK_ROUND).await.unwrap_or(99);
+    assert_eq!(
+        round, 0,
+        "risk round counter must stay at 0 when max_risk_rounds = 0"
+    );
+
+    // State must NOT contain any "Risk Discussion Round" entry.
+    let final_state = deserialize_state_from_context(&ctx)
+        .await
+        .expect("state deserialization");
+    let round_entries: Vec<_> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .filter(|p| p.phase_name.starts_with("Risk Discussion Round"))
+        .collect();
+    assert!(
+        round_entries.is_empty(),
+        "zero-round risk must not create phantom 'Risk Discussion Round' entries; found: {:?}",
+        round_entries
+            .iter()
+            .map(|p| &p.phase_name)
+            .collect::<Vec<_>>()
+    );
+
+    // Moderation entry SHOULD still exist.
+    let mod_entries: Vec<_> = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .filter(|p| p.phase_name == "Risk Discussion Moderation")
+        .collect();
+    assert_eq!(
+        mod_entries.len(),
+        1,
+        "zero-round risk must still create one 'Risk Discussion Moderation' entry"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Supplemental: agent token usage accumulation across multiple push_phase_usage
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -708,4 +935,62 @@ fn token_tracker_accumulates_multiple_phases() {
     assert_eq!(tracker.phase_usage[1].phase_name, "trader");
     assert_eq!(tracker.phase_usage[0].phase_total_tokens, 150);
     assert_eq!(tracker.phase_usage[1].phase_total_tokens, 300);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 3: Analyst child deserialization failure returns Err (orchestration corruption)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Storing garbage under TRADING_STATE_KEY makes `deserialize_state_from_context`
+// fail.  The analyst child task must return `Err(GraphError::TaskExecutionFailed(...))`
+// rather than silently degrading into an analyst miss.
+
+#[tokio::test]
+async fn analyst_child_deserialization_failure_returns_err() {
+    use scorpio_analyst::{
+        config::LlmConfig,
+        data::FinnhubClient,
+        providers::factory::CompletionModelHandle,
+        workflow::{context_bridge::TRADING_STATE_KEY, tasks::FundamentalAnalystTask},
+    };
+
+    let ctx = Context::new();
+    // Store garbage that cannot deserialize into TradingState.
+    ctx.set(TRADING_STATE_KEY, "this is not valid JSON {{{".to_owned())
+        .await;
+
+    let llm_config = LlmConfig {
+        quick_thinking_provider: "openai".to_owned(),
+        deep_thinking_provider: "openai".to_owned(),
+        quick_thinking_model: "gpt-4o-mini".to_owned(),
+        deep_thinking_model: "o3".to_owned(),
+        max_debate_rounds: 1,
+        max_risk_rounds: 1,
+        analyst_timeout_secs: 30,
+        retry_max_retries: 1,
+        retry_base_delay_ms: 1,
+    };
+
+    let task = FundamentalAnalystTask::new(
+        CompletionModelHandle::for_test(),
+        FinnhubClient::for_test(),
+        llm_config,
+    );
+
+    let result = task.run(ctx).await;
+
+    assert!(
+        result.is_err(),
+        "deserialization failure must return Err, not Ok with graceful degradation"
+    );
+
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("orchestration corruption"),
+        "error must mention 'orchestration corruption'; got: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("FundamentalAnalystTask"),
+        "error must identify the task; got: {err_msg}"
+    );
 }
