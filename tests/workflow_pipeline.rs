@@ -1892,3 +1892,213 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
         "phase 5: final_execution_status must be set"
     );
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 9: Sanitize workflow-surfaced graph errors
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Raw provider error text (API keys, bearer tokens, auth headers) must not
+// leak through `TradingError::GraphFlow` messages returned from the workflow
+// layer.  The workflow must sanitize error causes using the same credential-
+// redaction logic as the provider layer.
+
+/// Workflow-surfaced `GraphError::TaskExecutionFailed` messages must redact
+/// credential-like substrings before surfacing them in `TradingError::GraphFlow`.
+#[test]
+fn workflow_graph_error_redacts_credentials_in_cause() {
+    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+
+    // Simulate a task failure whose cause embeds a raw provider error
+    // containing an API key, bearer token, and auth header.
+    let raw_cause = concat!(
+        "TraderTask: run_trader failed: provider=openai model=o3 ",
+        "summary=HTTP 401 Unauthorized api_key=sk-live-abc123XYZ ",
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"
+    );
+    let graph_err =
+        graph_flow::GraphError::TaskExecutionFailed(format!("Task 'trader' failed: {raw_cause}"));
+
+    let trading_err = map_graph_error(graph_err);
+
+    match &trading_err {
+        TradingError::GraphFlow { cause, .. } => {
+            // API key must be redacted.
+            assert!(
+                !cause.contains("sk-live-abc123XYZ"),
+                "cause must not contain raw API key; got: {cause}"
+            );
+            // Bearer token must be redacted.
+            assert!(
+                !cause.contains("eyJhbGciOiJIUzI1NiJ9"),
+                "cause must not contain raw bearer token; got: {cause}"
+            );
+            // Authorization header must be redacted.
+            assert!(
+                !cause.contains("Authorization:"),
+                "cause must not contain raw Authorization header; got: {cause}"
+            );
+            // The [REDACTED] placeholder must appear.
+            assert!(
+                cause.contains("[REDACTED]"),
+                "cause must contain [REDACTED] placeholder; got: {cause}"
+            );
+        }
+        other => panic!("expected TradingError::GraphFlow, got: {other:?}"),
+    }
+}
+
+/// Non-task GraphError variants (catch-all path) also sanitize their cause.
+#[test]
+fn workflow_non_task_graph_error_redacts_credentials() {
+    use scorpio_analyst::{error::TradingError, workflow::pipeline::map_graph_error};
+
+    let graph_err = graph_flow::GraphError::ContextError(
+        "context fetch failed: token=secretvalue123 for session".to_owned(),
+    );
+
+    let trading_err = map_graph_error(graph_err);
+
+    match &trading_err {
+        TradingError::GraphFlow { cause, .. } => {
+            assert!(
+                !cause.contains("secretvalue123"),
+                "cause must not contain raw token value; got: {cause}"
+            );
+            assert!(
+                cause.contains("[REDACTED]"),
+                "cause must contain [REDACTED]; got: {cause}"
+            );
+        }
+        other => panic!("expected TradingError::GraphFlow, got: {other:?}"),
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Task 11: Step ceiling and snapshot path hardening
+// ────────────────────────────────────────────────────────────────────────────
+
+/// The pipeline must fail with an informative error when the step ceiling is
+/// exceeded, rather than looping indefinitely.  This test constructs a pipeline
+/// whose debate loop never terminates (the debate-round counter is never
+/// incremented past max) and verifies the ceiling kicks in.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn step_ceiling_prevents_runaway_loop() {
+    use graph_flow::{Context, NextAction, TaskResult};
+    use scorpio_analyst::{
+        config::{ApiConfig, Config, LlmConfig, TradingConfig},
+        data::{FinnhubClient, YFinanceClient},
+        error::TradingError,
+        providers::factory::CompletionModelHandle,
+        rate_limit::SharedRateLimiter,
+        state::TradingState,
+        workflow::{TradingPipeline, tasks::test_helpers::replace_with_stubs},
+    };
+    use std::sync::Arc;
+
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("ceiling-test.db");
+
+    let pipeline_store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("pipeline snapshot store");
+
+    // Use large debate rounds to ensure the loop would run far beyond the
+    // ceiling if unchecked.  The stub debate moderator increments normally,
+    // but we'll replace it with one that never increments — causing an infinite loop.
+    let config = Config {
+        llm: LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 3,
+            max_risk_rounds: 0,
+            analyst_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: TradingConfig {
+            asset_symbol: "AAPL".to_owned(),
+            backtest_start: None,
+            backtest_end: None,
+        },
+        api: ApiConfig {
+            finnhub_rate_limit: 30,
+            openai_api_key: None,
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            finnhub_api_key: None,
+        },
+        storage: Default::default(),
+    };
+
+    let finnhub = FinnhubClient::for_test();
+    let yfinance = YFinanceClient::new(SharedRateLimiter::new("ceiling-test", 10));
+    let handle = CompletionModelHandle::for_test();
+
+    let pipeline = TradingPipeline::new(
+        config,
+        finnhub,
+        yfinance,
+        pipeline_store,
+        handle.clone(),
+        handle,
+    );
+
+    // First replace with normal stubs, then override the debate moderator
+    // with one that NEVER increments the debate round — causing an infinite loop.
+    let verify_store = Arc::new(
+        SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("verify snapshot store"),
+    );
+    replace_with_stubs(pipeline.graph(), verify_store);
+
+    // Replace the debate_moderator stub with one that never increments the
+    // round counter, simulating corrupted state.
+    struct RunawayDebateModerator;
+
+    #[async_trait::async_trait]
+    impl graph_flow::Task for RunawayDebateModerator {
+        fn id(&self) -> &str {
+            "debate_moderator"
+        }
+        async fn run(&self, _context: Context) -> graph_flow::Result<TaskResult> {
+            // Intentionally do NOT increment KEY_DEBATE_ROUND.
+            // The conditional edge will keep looping back to bullish_researcher.
+            Ok(TaskResult::new(None, NextAction::Continue))
+        }
+    }
+
+    pipeline.graph().add_task(Arc::new(RunawayDebateModerator));
+
+    let initial_state = TradingState::new("AAPL", "2026-03-20");
+    let result = pipeline.run_analysis_cycle(initial_state).await;
+
+    assert!(
+        result.is_err(),
+        "pipeline should fail with step ceiling error"
+    );
+    let err = result.unwrap_err();
+    match &err {
+        TradingError::GraphFlow {
+            phase, task, cause, ..
+        } => {
+            assert_eq!(task, "step_ceiling", "task should be 'step_ceiling'");
+            assert_eq!(
+                phase, "pipeline_execution",
+                "phase should be 'pipeline_execution'"
+            );
+            assert!(
+                cause.contains("exceeded maximum"),
+                "cause should mention ceiling: {cause}"
+            );
+            assert!(
+                cause.contains("runaway loop"),
+                "cause should mention runaway: {cause}"
+            );
+        }
+        other => panic!("expected TradingError::GraphFlow with step_ceiling, got: {other:?}"),
+    }
+}

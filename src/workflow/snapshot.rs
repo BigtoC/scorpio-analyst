@@ -182,10 +182,46 @@ impl SnapshotStore {
 
 /// Resolve the SQLite database path.
 ///
-/// If `db_path` is `Some`, it is used as-is.  Otherwise the default
-/// `$HOME/.scorpio-analyst/phase_snapshots.db` is returned.
+/// If `db_path` is `Some`, basic validation is applied to reject clearly unsafe
+/// or malformed inputs (empty paths, embedded null bytes, bare path-traversal
+/// sequences).  Otherwise the default `$HOME/.scorpio-analyst/phase_snapshots.db`
+/// is returned.
 fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf, TradingError> {
     if let Some(p) = db_path {
+        let s = p.to_string_lossy();
+
+        // Reject empty paths.
+        if s.is_empty() {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "snapshot db_path must not be empty"
+            )));
+        }
+
+        // Reject embedded null bytes (would truncate the path in C-based libs
+        // like SQLite).
+        if s.contains('\0') {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "snapshot db_path must not contain null bytes"
+            )));
+        }
+
+        // Reject paths that are *purely* traversal sequences (e.g. "../../../"
+        // or "..").  We do NOT reject paths like "/legit/dir/../file.db" because
+        // those are normal relative references; we only block paths whose
+        // *every* component is `.` or `..`, which have no meaningful file
+        // destination.
+        let all_traversal = p.components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        });
+        if all_traversal {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "snapshot db_path must not be a bare traversal path: {s}"
+            )));
+        }
+
         return Ok(p.to_path_buf());
     }
 
@@ -340,6 +376,55 @@ mod tests {
         let custom = Path::new("/tmp/custom_test.db");
         let resolved = resolve_db_path(Some(custom)).expect("should resolve");
         assert_eq!(resolved, custom);
+    }
+
+    // ── Path-validation edge cases ───────────────────────────────────────
+
+    #[test]
+    fn empty_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new("")));
+        assert!(result.is_err(), "empty path should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("must not be empty"),
+            "error should mention empty: {msg}"
+        );
+    }
+
+    #[test]
+    fn null_byte_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new("/tmp/bad\0.db")));
+        assert!(result.is_err(), "null-byte path should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("null bytes"),
+            "error should mention null bytes: {msg}"
+        );
+    }
+
+    #[test]
+    fn bare_traversal_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new("../../..")));
+        assert!(result.is_err(), "bare traversal path should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("bare traversal"),
+            "error should mention traversal: {msg}"
+        );
+    }
+
+    #[test]
+    fn dot_only_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new(".")));
+        assert!(result.is_err(), "bare '.' path should be rejected");
+    }
+
+    #[test]
+    fn legitimate_path_with_parent_ref_is_accepted() {
+        // Paths like "/tmp/foo/../bar.db" are legitimate relative refs.
+        let p = Path::new("/tmp/foo/../bar.db");
+        let resolved = resolve_db_path(Some(p)).expect("should resolve");
+        assert_eq!(resolved, p);
     }
 
     #[tokio::test]

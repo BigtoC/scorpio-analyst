@@ -1237,7 +1237,7 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
 }
 
 /// Replace ASCII/Unicode control characters (except `\n` and `\t`) with a space.
-fn replace_control_chars(s: &str) -> String {
+pub(crate) fn replace_control_chars(s: &str) -> String {
     s.chars()
         .map(|ch| {
             if ch.is_control() && ch != '\n' && ch != '\t' {
@@ -1250,7 +1250,7 @@ fn replace_control_chars(s: &str) -> String {
 }
 
 /// Redact known credential patterns (API key prefixes, auth headers, bearer tokens).
-fn redact_credentials(s: &str) -> String {
+pub(crate) fn redact_credentials(s: &str) -> String {
     fn mask_prefixed_token(input: &str, prefix: &str) -> String {
         let mut out = String::with_capacity(input.len());
         let bytes = input.as_bytes();
@@ -1350,7 +1350,7 @@ fn redact_credentials(s: &str) -> String {
 }
 
 /// Truncate `s` to at most `max_chars` Unicode scalar values, appending `"..."` if trimmed.
-fn truncate_to(s: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_to(s: &str, max_chars: usize) -> String {
     let truncated: String = s.chars().take(max_chars).collect();
     if s.chars().count() > max_chars {
         format!("{truncated}...")
@@ -1359,7 +1359,7 @@ fn truncate_to(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn sanitize_error_summary(input: &str) -> String {
+pub(crate) fn sanitize_error_summary(input: &str) -> String {
     let sanitized = replace_control_chars(input);
     let sanitized = redact_credentials(&sanitized);
     truncate_to(&sanitized, MAX_ERROR_SUMMARY_CHARS)

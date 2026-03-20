@@ -47,7 +47,7 @@ use crate::{
     config::Config,
     data::{FinnhubClient, YFinanceClient},
     error::TradingError,
-    providers::factory::CompletionModelHandle,
+    providers::factory::{CompletionModelHandle, sanitize_error_summary},
     state::TradingState,
     workflow::{
         SnapshotStore,
@@ -75,6 +75,16 @@ const TASK_CONSERVATIVE_RISK: &str = "conservative_risk";
 const TASK_NEUTRAL_RISK: &str = "neutral_risk";
 const TASK_RISK_MODERATOR: &str = "risk_moderator";
 const TASK_FUND_MANAGER: &str = "fund_manager";
+
+/// Hard ceiling on `FlowRunner::run()` iterations inside
+/// [`TradingPipeline::run_analysis_cycle`].
+///
+/// The pipeline has ~11 distinct tasks.  With `max_debate_rounds` and
+/// `max_risk_rounds` each allowing up to ~10 rounds, the theoretical maximum
+/// for a legitimate run is around 50 steps.  200 provides comfortable headroom
+/// while still catching runaway loops caused by corrupted round counters or
+/// misconfigured conditional edges.
+pub(crate) const MAX_PIPELINE_STEPS: usize = 200;
 
 // ── TradingPipeline ──────────────────────────────────────────────────────────
 
@@ -385,6 +395,19 @@ impl TradingPipeline {
         let mut step = 0usize;
         loop {
             step += 1;
+
+            if step > MAX_PIPELINE_STEPS {
+                return Err(TradingError::GraphFlow {
+                    phase: "pipeline_execution".into(),
+                    task: "step_ceiling".into(),
+                    cause: format!(
+                        "pipeline exceeded maximum of {MAX_PIPELINE_STEPS} steps — \
+                         possible runaway loop from corrupted round counters or \
+                         misconfigured conditional edges"
+                    ),
+                });
+            }
+
             info!(step, "pipeline step");
 
             let result = runner.run(&session_id).await.map_err(map_graph_error)?;
@@ -413,11 +436,7 @@ impl TradingPipeline {
                     // Parse the error message for task identity, same as GraphError path.
                     let (task_id, cause) = extract_task_identity(msg);
                     let phase = phase_for_task(&task_id);
-                    let cause = if cause.len() > 200 {
-                        format!("{}...", &cause[..200])
-                    } else {
-                        cause
-                    };
+                    let cause = sanitize_error_summary(&cause);
                     return Err(TradingError::GraphFlow {
                         phase,
                         task: task_id,
@@ -476,7 +495,7 @@ pub fn map_graph_error(err: graph_flow::GraphError) -> TradingError {
             TradingError::GraphFlow {
                 phase,
                 task: task_id,
-                cause,
+                cause: sanitize_error_summary(&cause),
             }
         }
         graph_flow::GraphError::TaskNotFound(ref id) => TradingError::GraphFlow {
@@ -498,7 +517,7 @@ pub fn map_graph_error(err: graph_flow::GraphError) -> TradingError {
             TradingError::GraphFlow {
                 phase: "orchestration".into(),
                 task: variant.into(),
-                cause: other.to_string(),
+                cause: sanitize_error_summary(&other.to_string()),
             }
         }
     }
@@ -583,5 +602,20 @@ mod tests {
         assert_eq!(TASK_NEUTRAL_RISK, "neutral_risk");
         assert_eq!(TASK_RISK_MODERATOR, "risk_moderator");
         assert_eq!(TASK_FUND_MANAGER, "fund_manager");
+    }
+
+    #[test]
+    fn max_pipeline_steps_is_reasonable() {
+        // The pipeline has ~11 distinct tasks.  With generous round counts the
+        // theoretical maximum is around 50 steps.  The ceiling must be well
+        // above that (to avoid false positives) but finite (to catch runaways).
+        assert!(
+            MAX_PIPELINE_STEPS >= 100,
+            "ceiling too low — may cause false positives"
+        );
+        assert!(
+            MAX_PIPELINE_STEPS <= 1000,
+            "ceiling too high — may not catch runaways quickly enough"
+        );
     }
 }
