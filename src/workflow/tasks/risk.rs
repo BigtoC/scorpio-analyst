@@ -12,11 +12,11 @@ use crate::{
     config::Config,
     providers::factory::CompletionModelHandle,
     workflow::{
-        context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
             accounting::risk_moderator_accounting,
             common::{KEY_RISK_ROUND, RISK_USAGE_PREFIX, write_round_usage},
+            runtime::{load_state, save_state, task_error},
         },
     },
 };
@@ -33,6 +33,9 @@ pub struct AggressiveRiskTask {
 }
 
 impl AggressiveRiskTask {
+    const TASK_ID: &str = "aggressive_risk";
+    const TASK_NAME: &str = "AggressiveRiskTask";
+
     /// Create a new `AggressiveRiskTask`.
     pub fn new(config: Arc<Config>, handle: CompletionModelHandle) -> Arc<Self> {
         Arc::new(Self { config, handle })
@@ -42,51 +45,27 @@ impl AggressiveRiskTask {
 #[async_trait]
 impl Task for AggressiveRiskTask {
     fn id(&self) -> &str {
-        "aggressive_risk"
+        Self::TASK_ID
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
-        let mut state = deserialize_state_from_context(&context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "AggressiveRiskTask: failed to deserialize state: {error}"
-                ))
-            })?;
+        let mut state = load_state(Self::TASK_NAME, &context).await?;
 
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
-        info!(task = "aggressive_risk", round = this_round, "task started");
+        info!(task = Self::TASK_ID, round = this_round, "task started");
 
         let usage = run_aggressive_risk_turn(&mut state, &self.config, &self.handle)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "AggressiveRiskTask: failed to run aggressive turn: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "failed to run aggressive turn", error))?;
 
         write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "agg", &usage)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "AggressiveRiskTask: failed to persist round usage: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "AggressiveRiskTask: failed to serialize state: {error}"
-                ))
-            })?;
+        save_state(Self::TASK_NAME, &state, &context).await?;
 
-        info!(
-            task = "aggressive_risk",
-            round = this_round,
-            "task completed"
-        );
+        info!(task = Self::TASK_ID, round = this_round, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -103,6 +82,9 @@ pub struct ConservativeRiskTask {
 }
 
 impl ConservativeRiskTask {
+    const TASK_ID: &str = "conservative_risk";
+    const TASK_NAME: &str = "ConservativeRiskTask";
+
     /// Create a new `ConservativeRiskTask`.
     pub fn new(config: Arc<Config>, handle: CompletionModelHandle) -> Arc<Self> {
         Arc::new(Self { config, handle })
@@ -112,55 +94,29 @@ impl ConservativeRiskTask {
 #[async_trait]
 impl Task for ConservativeRiskTask {
     fn id(&self) -> &str {
-        "conservative_risk"
+        Self::TASK_ID
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
-        let mut state = deserialize_state_from_context(&context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "ConservativeRiskTask: failed to deserialize state: {error}"
-                ))
-            })?;
+        let mut state = load_state(Self::TASK_NAME, &context).await?;
 
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
-        info!(
-            task = "conservative_risk",
-            round = this_round,
-            "task started"
-        );
+        info!(task = Self::TASK_ID, round = this_round, "task started");
 
         let usage = run_conservative_risk_turn(&mut state, &self.config, &self.handle)
             .await
             .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "ConservativeRiskTask: failed to run conservative turn: {error}"
-                ))
+                task_error(Self::TASK_NAME, "failed to run conservative turn", error)
             })?;
 
         write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "con", &usage)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "ConservativeRiskTask: failed to persist round usage: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "ConservativeRiskTask: failed to serialize state: {error}"
-                ))
-            })?;
+        save_state(Self::TASK_NAME, &state, &context).await?;
 
-        info!(
-            task = "conservative_risk",
-            round = this_round,
-            "task completed"
-        );
+        info!(task = Self::TASK_ID, round = this_round, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -177,6 +133,9 @@ pub struct NeutralRiskTask {
 }
 
 impl NeutralRiskTask {
+    const TASK_ID: &str = "neutral_risk";
+    const TASK_NAME: &str = "NeutralRiskTask";
+
     /// Create a new `NeutralRiskTask`.
     pub fn new(config: Arc<Config>, handle: CompletionModelHandle) -> Arc<Self> {
         Arc::new(Self { config, handle })
@@ -186,47 +145,27 @@ impl NeutralRiskTask {
 #[async_trait]
 impl Task for NeutralRiskTask {
     fn id(&self) -> &str {
-        "neutral_risk"
+        Self::TASK_ID
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
-        let mut state = deserialize_state_from_context(&context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "NeutralRiskTask: failed to deserialize state: {error}"
-                ))
-            })?;
+        let mut state = load_state(Self::TASK_NAME, &context).await?;
 
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
-        info!(task = "neutral_risk", round = this_round, "task started");
+        info!(task = Self::TASK_ID, round = this_round, "task started");
 
         let usage = run_neutral_risk_turn(&mut state, &self.config, &self.handle)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "NeutralRiskTask: failed to run neutral turn: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "failed to run neutral turn", error))?;
 
         write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "neu", &usage)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "NeutralRiskTask: failed to persist round usage: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "NeutralRiskTask: failed to serialize state: {error}"
-                ))
-            })?;
+        save_state(Self::TASK_NAME, &state, &context).await?;
 
-        info!(task = "neutral_risk", round = this_round, "task completed");
+        info!(task = Self::TASK_ID, round = this_round, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -244,6 +183,9 @@ pub struct RiskModeratorTask {
 }
 
 impl RiskModeratorTask {
+    const TASK_ID: &str = "risk_moderator";
+    const TASK_NAME: &str = "RiskModeratorTask";
+
     /// Create a new `RiskModeratorTask`.
     pub fn new(
         config: Arc<Config>,
@@ -261,38 +203,22 @@ impl RiskModeratorTask {
 #[async_trait]
 impl Task for RiskModeratorTask {
     fn id(&self) -> &str {
-        "risk_moderator"
+        Self::TASK_ID
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
-        info!(task = "risk_moderator", phase = 4, "task started");
+        info!(task = Self::TASK_ID, phase = 4, "task started");
         let phase_start = std::time::Instant::now();
-        let mut state = deserialize_state_from_context(&context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "RiskModeratorTask: failed to deserialize state: {error}"
-                ))
-            })?;
+        let mut state = load_state(Self::TASK_NAME, &context).await?;
 
         let mod_usage = run_risk_moderation(&mut state, &self.config, &self.handle)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "RiskModeratorTask: failed to run moderation: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "failed to run moderation", error))?;
 
         let is_final =
             risk_moderator_accounting(&context, &mut state, &mod_usage, &phase_start).await;
 
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "RiskModeratorTask: failed to serialize state: {error}"
-                ))
-            })?;
+        save_state(Self::TASK_NAME, &state, &context).await?;
 
         if is_final {
             let execution_id = state.execution_id.to_string();
@@ -305,15 +231,40 @@ impl Task for RiskModeratorTask {
                 )
                 .await
                 .map_err(|error| {
-                    graph_flow::GraphError::TaskExecutionFailed(format!(
-                        "RiskModeratorTask: failed to save phase 4 snapshot: {error}"
-                    ))
+                    task_error(Self::TASK_NAME, "failed to save phase 4 snapshot", error)
                 })?;
-            info!(task = "risk_moderator", phase = 4, "snapshot saved");
+            info!(task = Self::TASK_ID, phase = 4, "snapshot saved");
             info!(phase = 4, phase_name = "risk_discussion", "phase complete");
         }
 
-        info!(task = "risk_moderator", phase = 4, "task completed");
+        info!(task = Self::TASK_ID, phase = 4, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::workflow::tasks::runtime::task_error;
+
+    use super::AggressiveRiskTask;
+
+    #[test]
+    fn aggressive_task_identity_constants_drive_error_identity() {
+        assert_eq!(AggressiveRiskTask::TASK_ID, "aggressive_risk");
+        assert_eq!(AggressiveRiskTask::TASK_NAME, "AggressiveRiskTask");
+
+        match task_error(
+            AggressiveRiskTask::TASK_NAME,
+            "failed to run aggressive turn",
+            "boom",
+        ) {
+            graph_flow::GraphError::TaskExecutionFailed(message) => {
+                assert_eq!(
+                    message,
+                    "AggressiveRiskTask: failed to run aggressive turn: boom"
+                );
+            }
+            other => panic!("expected TaskExecutionFailed, got: {other:?}"),
+        }
     }
 }

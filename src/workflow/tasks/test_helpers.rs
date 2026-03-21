@@ -276,7 +276,7 @@ impl graph_flow::Task for StubBullishResearcherTask {
             })?;
 
         state.debate_history.push(DebateMessage {
-            role: "bullish".to_owned(),
+            role: "bullish_researcher".to_owned(),
             content: "stub: bullish argument — strong growth outlook".to_owned(),
         });
 
@@ -324,7 +324,7 @@ impl graph_flow::Task for StubBearishResearcherTask {
             })?;
 
         state.debate_history.push(DebateMessage {
-            role: "bearish".to_owned(),
+            role: "bearish_researcher".to_owned(),
             content: "stub: bearish argument — overvaluation risk".to_owned(),
         });
 
@@ -657,6 +657,11 @@ impl graph_flow::Task for StubRiskModeratorTask {
                 ))
             })?;
 
+        state.risk_discussion_history.push(DebateMessage {
+            role: "risk_moderator".to_owned(),
+            content: "stub: moderator synthesis - risk views consolidated".to_owned(),
+        });
+
         let mod_usage = stub_usage("Risk Moderator");
         let is_final =
             risk_moderator_accounting(&context, &mut state, &mod_usage, &phase_start).await;
@@ -759,8 +764,11 @@ impl graph_flow::Task for StubFundManagerTask {
     }
 }
 
-/// Replace all LLM-calling tasks in the pipeline graph with deterministic stubs.
-pub fn replace_with_stubs(graph: &graph_flow::Graph, snapshot_store: Arc<SnapshotStore>) {
+/// Replace all LLM-calling tasks in the pipeline with deterministic stubs.
+pub fn replace_with_stubs(
+    pipeline: &crate::workflow::TradingPipeline,
+    snapshot_store: Arc<SnapshotStore>,
+) -> Result<(), crate::workflow::pipeline::WorkflowTestSeamError> {
     use graph_flow::fanout::FanOutTask;
 
     let stub_fanout = FanOutTask::new(
@@ -772,24 +780,26 @@ pub fn replace_with_stubs(graph: &graph_flow::Graph, snapshot_store: Arc<Snapsho
             StubAnalystChild::technical(),
         ],
     );
-    graph.add_task(stub_fanout);
+    pipeline.replace_task_for_test(stub_fanout)?;
 
-    graph.add_task(Arc::new(StubBullishResearcherTask));
-    graph.add_task(Arc::new(StubBearishResearcherTask));
-    graph.add_task(Arc::new(StubDebateModeratorTask {
+    pipeline.replace_task_for_test(Arc::new(StubBullishResearcherTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubBearishResearcherTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubDebateModeratorTask {
         snapshot_store: Arc::clone(&snapshot_store),
-    }));
+    }))?;
 
-    graph.add_task(Arc::new(StubTraderTask {
+    pipeline.replace_task_for_test(Arc::new(StubTraderTask {
         snapshot_store: Arc::clone(&snapshot_store),
-    }));
+    }))?;
 
-    graph.add_task(Arc::new(StubAggressiveRiskTask));
-    graph.add_task(Arc::new(StubConservativeRiskTask));
-    graph.add_task(Arc::new(StubNeutralRiskTask));
-    graph.add_task(Arc::new(StubRiskModeratorTask {
+    pipeline.replace_task_for_test(Arc::new(StubAggressiveRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubConservativeRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubNeutralRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubRiskModeratorTask {
         snapshot_store: Arc::clone(&snapshot_store),
-    }));
+    }))?;
 
-    graph.add_task(Arc::new(StubFundManagerTask { snapshot_store }));
+    pipeline.replace_task_for_test(Arc::new(StubFundManagerTask { snapshot_store }))?;
+
+    Ok(())
 }

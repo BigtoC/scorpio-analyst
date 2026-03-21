@@ -9,8 +9,8 @@ use crate::{
     config::Config,
     state::PhaseTokenUsage,
     workflow::{
-        context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         snapshot::{SnapshotPhase, SnapshotStore},
+        tasks::runtime::{load_state, save_state, task_error},
     },
 };
 
@@ -25,6 +25,9 @@ pub struct TraderTask {
 }
 
 impl TraderTask {
+    const TASK_ID: &str = "trader";
+    const TASK_NAME: &str = "TraderTask";
+
     /// Create a new `TraderTask`.
     pub fn new(config: Arc<Config>, snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
         Arc::new(Self {
@@ -37,27 +40,17 @@ impl TraderTask {
 #[async_trait]
 impl Task for TraderTask {
     fn id(&self) -> &str {
-        "trader"
+        Self::TASK_ID
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
-        info!(task = "trader", phase = 3, "task started");
+        info!(task = Self::TASK_ID, phase = 3, "task started");
         let phase_start = std::time::Instant::now();
-        let mut state = deserialize_state_from_context(&context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "TraderTask: failed to deserialize state: {error}"
-                ))
-            })?;
+        let mut state = load_state(Self::TASK_NAME, &context).await?;
 
         let usage = run_trader(&mut state, &self.config)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "TraderTask: run_trader failed: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "run_trader failed", error))?;
 
         state.token_usage.push_phase_usage(PhaseTokenUsage {
             phase_name: "Trader Synthesis".to_owned(),
@@ -68,27 +61,19 @@ impl Task for TraderTask {
             phase_duration_ms: phase_start.elapsed().as_millis() as u64,
         });
 
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "TraderTask: failed to serialize state: {error}"
-                ))
-            })?;
+        save_state(Self::TASK_NAME, &state, &context).await?;
 
         let execution_id = state.execution_id.to_string();
         self.snapshot_store
             .save_snapshot(&execution_id, SnapshotPhase::Trader, &state, Some(&[usage]))
             .await
             .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "TraderTask: failed to save phase 3 snapshot: {error}"
-                ))
+                task_error(Self::TASK_NAME, "failed to save phase 3 snapshot", error)
             })?;
 
-        info!(task = "trader", phase = 3, "snapshot saved");
+        info!(task = Self::TASK_ID, phase = 3, "snapshot saved");
         info!(phase = 3, phase_name = "trader", "phase complete");
-        info!(task = "trader", phase = 3, "task completed");
+        info!(task = Self::TASK_ID, phase = 3, "task completed");
         Ok(TaskResult::new(None, NextAction::Continue))
     }
 }
@@ -104,6 +89,9 @@ pub struct FundManagerTask {
 }
 
 impl FundManagerTask {
+    const TASK_ID: &str = "fund_manager";
+    const TASK_NAME: &str = "FundManagerTask";
+
     /// Create a new `FundManagerTask`.
     pub fn new(config: Arc<Config>, snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
         Arc::new(Self {
@@ -116,27 +104,17 @@ impl FundManagerTask {
 #[async_trait]
 impl Task for FundManagerTask {
     fn id(&self) -> &str {
-        "fund_manager"
+        Self::TASK_ID
     }
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
-        info!(task = "fund_manager", phase = 5, "task started");
+        info!(task = Self::TASK_ID, phase = 5, "task started");
         let phase_start = std::time::Instant::now();
-        let mut state = deserialize_state_from_context(&context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "FundManagerTask: failed to deserialize state: {error}"
-                ))
-            })?;
+        let mut state = load_state(Self::TASK_NAME, &context).await?;
 
         let usage = run_fund_manager(&mut state, &self.config)
             .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "FundManagerTask: run_fund_manager failed: {error}"
-                ))
-            })?;
+            .map_err(|error| task_error(Self::TASK_NAME, "run_fund_manager failed", error))?;
 
         state.token_usage.push_phase_usage(PhaseTokenUsage {
             phase_name: "Fund Manager Decision".to_owned(),
@@ -147,13 +125,7 @@ impl Task for FundManagerTask {
             phase_duration_ms: phase_start.elapsed().as_millis() as u64,
         });
 
-        serialize_state_to_context(&state, &context)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "FundManagerTask: failed to serialize state: {error}"
-                ))
-            })?;
+        save_state(Self::TASK_NAME, &state, &context).await?;
 
         let execution_id = state.execution_id.to_string();
         self.snapshot_store
@@ -165,21 +137,39 @@ impl Task for FundManagerTask {
             )
             .await
             .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "FundManagerTask: failed to save phase 5 snapshot: {error}"
-                ))
+                task_error(Self::TASK_NAME, "failed to save phase 5 snapshot", error)
             })?;
 
-        info!(task = "fund_manager", phase = 5, "snapshot saved");
+        info!(task = Self::TASK_ID, phase = 5, "snapshot saved");
 
         let decision_label = state
             .final_execution_status
             .as_ref()
             .map(|status| format!("{:?}", status.decision))
             .unwrap_or_else(|| "none".to_owned());
-        info!(task = "fund_manager", decision = %decision_label, phase = 5, "task completed");
+        info!(task = Self::TASK_ID, decision = %decision_label, phase = 5, "task completed");
         info!(phase = 5, phase_name = "fund_manager", "phase complete");
 
         Ok(TaskResult::new(None, NextAction::End))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::workflow::tasks::runtime::task_error;
+
+    use super::TraderTask;
+
+    #[test]
+    fn trader_task_identity_constants_drive_error_identity() {
+        assert_eq!(TraderTask::TASK_ID, "trader");
+        assert_eq!(TraderTask::TASK_NAME, "TraderTask");
+
+        match task_error(TraderTask::TASK_NAME, "run_trader failed", "boom") {
+            graph_flow::GraphError::TaskExecutionFailed(message) => {
+                assert_eq!(message, "TraderTask: run_trader failed: boom");
+            }
+            other => panic!("expected TaskExecutionFailed, got: {other:?}"),
+        }
     }
 }

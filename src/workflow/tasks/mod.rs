@@ -8,6 +8,7 @@ mod analyst;
 mod common;
 mod research;
 mod risk;
+mod runtime;
 mod trading;
 
 #[cfg(any(test, feature = "test-helpers"))]

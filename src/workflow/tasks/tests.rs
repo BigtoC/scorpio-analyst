@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use graph_flow::{Context, NextAction, Task};
+use tempfile::tempdir;
 
 use super::*;
 use crate::{
@@ -316,4 +317,69 @@ fn task_ids_are_correct() {
     assert_eq!("bearish_researcher", "bearish_researcher");
     assert_eq!("conservative_risk", "conservative_risk");
     assert_eq!("neutral_risk", "neutral_risk");
+}
+
+#[tokio::test]
+async fn stub_researchers_use_production_role_names() {
+    let ctx = Context::new();
+    seed_state(&ctx, &sample_state()).await;
+
+    test_helpers::StubBullishResearcherTask
+        .run(ctx.clone())
+        .await
+        .expect("bullish stub should succeed");
+    test_helpers::StubBearishResearcherTask
+        .run(ctx.clone())
+        .await
+        .expect("bearish stub should succeed");
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    let roles: Vec<&str> = recovered
+        .debate_history
+        .iter()
+        .map(|message| message.role.as_str())
+        .collect();
+
+    assert_eq!(roles, vec!["bullish_researcher", "bearish_researcher"]);
+}
+
+#[tokio::test]
+async fn stub_risk_moderator_appends_workflow_history_entry() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let mut state = sample_state();
+    state
+        .risk_discussion_history
+        .push(crate::state::DebateMessage {
+            role: "aggressive_risk".to_owned(),
+            content: "stub: prior risk discussion".to_owned(),
+        });
+    seed_state(&ctx, &state).await;
+
+    test_helpers::StubRiskModeratorTask {
+        snapshot_store: store,
+    }
+    .run(ctx.clone())
+    .await
+    .expect("risk moderator stub should succeed");
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    let last_message = recovered
+        .risk_discussion_history
+        .last()
+        .expect("stub should append a moderator history entry");
+
+    assert_eq!(recovered.risk_discussion_history.len(), 2);
+    assert_eq!(last_message.role, "risk_moderator");
+    assert!(
+        !last_message.content.is_empty(),
+        "moderator history entry should include synthesis content"
+    );
 }
