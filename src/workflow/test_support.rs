@@ -12,8 +12,8 @@ pub use crate::workflow::context_bridge::{
 
 #[cfg(any(test, feature = "test-helpers"))]
 pub use crate::workflow::tasks::test_helpers::{
-    replace_with_stubs, run_debate_moderator_accounting, run_risk_moderator_accounting,
-    write_round_debate_usage, write_round_risk_usage,
+    run_debate_moderator_accounting, run_risk_moderator_accounting, write_round_debate_usage,
+    write_round_risk_usage,
 };
 
 #[cfg(any(test, feature = "test-helpers"))]
