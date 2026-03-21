@@ -14,8 +14,8 @@ use scorpio_analyst::{
         SnapshotStore,
         test_support::{
             AnalystSyncTask, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
-            KEY_RISK_ROUND, serialize_state_to_context, write_prefixed_result,
-            write_round_debate_usage, write_round_risk_usage,
+            KEY_RISK_ROUND, deserialize_state_from_context, serialize_state_to_context,
+            write_prefixed_result, write_round_debate_usage, write_round_risk_usage,
         },
     },
 };
@@ -161,7 +161,7 @@ pub fn run_debate_accounting_under_collector(
     collector: EventCollector,
     max_rounds: u32,
     current_round: u32,
-) {
+) -> TradingState {
     use scorpio_analyst::{
         state::AgentTokenUsage, workflow::test_support::run_debate_moderator_accounting,
     };
@@ -194,8 +194,12 @@ pub fn run_debate_accounting_under_collector(
 
             let mod_usage = AgentTokenUsage::unavailable("Debate Moderator", "stub", 1);
             run_debate_moderator_accounting(&ctx, &mod_usage, store).await;
-        });
-    });
+
+            deserialize_state_from_context(&ctx)
+                .await
+                .expect("debate accounting should preserve state")
+        })
+    })
 }
 
 pub fn run_debate_accounting_under_structured_collector(

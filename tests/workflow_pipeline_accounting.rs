@@ -1,8 +1,9 @@
 #![cfg(feature = "test-helpers")]
 
-mod workflow_test_support;
+#[path = "support/workflow_pipeline_stubbed_support.rs"]
+mod workflow_pipeline_stubbed_support;
 
-use workflow_test_support::run_stubbed_pipeline;
+use workflow_pipeline_stubbed_support::run_stubbed_pipeline;
 
 #[tokio::test]
 async fn accounting_debate_rounds_have_correct_phase_names_and_agents() {

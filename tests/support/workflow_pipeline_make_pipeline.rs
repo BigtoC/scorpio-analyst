@@ -1,5 +1,4 @@
 #![cfg(feature = "test-helpers")]
-#![allow(dead_code)]
 
 use std::sync::Arc;
 
@@ -8,21 +7,9 @@ use scorpio_analyst::{
     data::{FinnhubClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     rate_limit::SharedRateLimiter,
-    state::TradingState,
-    workflow::{SnapshotPhase, SnapshotStore, TradingPipeline},
+    workflow::{SnapshotStore, TradingPipeline},
 };
 use tempfile::tempdir;
-
-pub fn phase_from_number(phase: u8) -> SnapshotPhase {
-    match phase {
-        1 => SnapshotPhase::AnalystTeam,
-        2 => SnapshotPhase::ResearcherDebate,
-        3 => SnapshotPhase::Trader,
-        4 => SnapshotPhase::RiskDiscussion,
-        5 => SnapshotPhase::FundManager,
-        _ => panic!("unsupported snapshot phase: {phase}"),
-    }
-}
 
 pub async fn make_pipeline(
     db_name: &str,
@@ -83,29 +70,4 @@ pub async fn make_pipeline(
     );
 
     (pipeline, verify_store, dir)
-}
-
-pub async fn run_stubbed_pipeline(
-    max_debate_rounds: u32,
-    max_risk_rounds: u32,
-) -> (TradingState, Arc<SnapshotStore>, tempfile::TempDir) {
-    let (pipeline, verify_store, dir) = make_pipeline(
-        "e2e-test.db",
-        "e2e-test",
-        max_debate_rounds,
-        max_risk_rounds,
-    )
-    .await;
-
-    pipeline
-        .install_stub_tasks_for_test()
-        .expect("stub install must succeed");
-
-    let initial_state = TradingState::new("AAPL", "2026-03-20");
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
-        .await
-        .expect("pipeline must complete successfully with stubs");
-
-    (final_state, verify_store, dir)
 }

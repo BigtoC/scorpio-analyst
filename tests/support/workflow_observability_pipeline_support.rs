@@ -84,7 +84,7 @@ pub fn run_stubbed_pipeline_under_collector(collector: EventCollector, db_name: 
 pub fn run_stubbed_pipeline_under_structured_collector(
     collector: StructuredEventCollector,
     db_name: &str,
-) {
+) -> TradingState {
     let subscriber = tracing_subscriber::registry().with(collector);
 
     with_default(subscriber, || {
@@ -115,7 +115,10 @@ pub fn run_stubbed_pipeline_under_structured_collector(
                 .expect("stub install must succeed");
 
             let state = TradingState::new("AAPL", "2026-03-20");
-            let _ = pipeline.run_analysis_cycle(state).await;
-        });
-    });
+            pipeline
+                .run_analysis_cycle(state)
+                .await
+                .expect("stubbed pipeline should succeed")
+        })
+    })
 }

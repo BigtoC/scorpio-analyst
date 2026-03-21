@@ -1,5 +1,6 @@
 #![cfg(feature = "test-helpers")]
 
+#[path = "support/workflow_observability_task_support.rs"]
 mod workflow_observability_task_support;
 
 use graph_flow::Context;
@@ -179,10 +180,20 @@ fn tracing_emits_structured_round_field_for_debate() {
 #[test]
 fn tracing_zero_round_debate_no_round_event() {
     let collector = EventCollector::new();
-    run_debate_accounting_under_collector(collector.clone(), 0, 0);
+    let final_state = run_debate_accounting_under_collector(collector.clone(), 0, 0);
 
     let events = collector.collected();
     let has_round = events.iter().any(|e| e.contains("debate round complete"));
+    let has_moderation_entry = final_state
+        .token_usage
+        .phase_usage
+        .iter()
+        .any(|phase| phase.phase_name == "Researcher Debate Moderation");
+
+    assert!(
+        has_moderation_entry,
+        "zero-round debate should still record a moderation entry"
+    );
     assert!(
         !has_round,
         "zero-round debate must NOT emit 'debate round complete', but got events: {events:?}"

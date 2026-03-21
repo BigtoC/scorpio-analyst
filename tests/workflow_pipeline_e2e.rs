@@ -1,6 +1,7 @@
 #![cfg(feature = "test-helpers")]
 
-mod workflow_test_support;
+#[path = "support/workflow_pipeline_e2e_support.rs"]
+mod workflow_pipeline_e2e_support;
 
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use scorpio_analyst::{
     error::TradingError,
     state::{Decision, TradingState},
 };
-use workflow_test_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
+use workflow_pipeline_e2e_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
 
 #[tokio::test]
 async fn run_analysis_cycle_success_path_populates_all_phases() {

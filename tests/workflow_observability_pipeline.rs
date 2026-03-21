@@ -1,5 +1,6 @@
 #![cfg(feature = "test-helpers")]
 
+#[path = "support/workflow_observability_pipeline_support.rs"]
 mod workflow_observability_pipeline_support;
 
 use workflow_observability_pipeline_support::{
@@ -10,11 +11,17 @@ use workflow_observability_pipeline_support::{
 #[test]
 fn fund_manager_decision_event_excludes_rationale() {
     let collector = StructuredEventCollector::new();
-    run_stubbed_pipeline_under_structured_collector(collector.clone(), "obs-fund.db");
+    let final_state =
+        run_stubbed_pipeline_under_structured_collector(collector.clone(), "obs-fund.db");
 
     let fields = collector.collected_fields();
     let rationale_text = "stub: approved - risk within tolerances";
     let has_rationale = fields.iter().any(|(_, val)| val.contains(rationale_text));
+
+    assert!(
+        final_state.final_execution_status.is_some(),
+        "fund manager path should complete successfully before checking rationale leakage"
+    );
     assert!(
         !has_rationale,
         "rationale text must NOT appear in any tracing event field value, but found it in fields: {fields:?}"

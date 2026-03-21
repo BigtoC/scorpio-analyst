@@ -1,7 +1,9 @@
 #![cfg(feature = "test-helpers")]
 
-mod workflow_test_support;
+#[path = "support/workflow_pipeline_make_pipeline.rs"]
+mod workflow_pipeline_make_pipeline;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use graph_flow::{Context, NextAction, Task};
@@ -19,7 +21,7 @@ use scorpio_analyst::{
     },
 };
 use tempfile::tempdir;
-use workflow_test_support::make_pipeline;
+use workflow_pipeline_make_pipeline::make_pipeline;
 
 fn sample_state() -> TradingState {
     TradingState::new("AAPL", "2026-03-19")
@@ -133,6 +135,29 @@ fn pipeline_build_graph_produces_graph_without_panic() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (pipeline, _store, _dir) = rt.block_on(make_pipeline("test.db", "test-yfinance", 1, 1));
     let _graph = pipeline.build_graph();
+}
+
+#[test]
+fn workflow_support_modules_live_under_support_subdir() {
+    let tests_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+
+    for helper in [
+        "workflow_pipeline_make_pipeline.rs",
+        "workflow_pipeline_e2e_support.rs",
+        "workflow_pipeline_stubbed_support.rs",
+        "workflow_observability_collectors.rs",
+        "workflow_observability_task_support.rs",
+        "workflow_observability_pipeline_support.rs",
+    ] {
+        assert!(
+            tests_dir.join("support").join(helper).exists(),
+            "expected `tests/support/{helper}` to exist"
+        );
+        assert!(
+            !tests_dir.join(helper).exists(),
+            "did not expect `tests/{helper}` to remain at the tests root"
+        );
+    }
 }
 
 #[tokio::test]
