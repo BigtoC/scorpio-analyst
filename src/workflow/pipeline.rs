@@ -40,6 +40,8 @@ use graph_flow::{
     ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage, Session, SessionStorage,
     fanout::FanOutTask,
 };
+#[cfg(any(test, feature = "test-helpers"))]
+use thiserror::Error;
 use tracing::{error, info, instrument};
 use uuid::Uuid;
 
@@ -76,6 +78,21 @@ const TASK_NEUTRAL_RISK: &str = "neutral_risk";
 const TASK_RISK_MODERATOR: &str = "risk_moderator";
 const TASK_FUND_MANAGER: &str = "fund_manager";
 
+#[cfg(any(test, feature = "test-helpers"))]
+const REPLACEABLE_TASK_IDS: [&str; 11] = [
+    TASK_ANALYST_FAN_OUT,
+    TASK_ANALYST_SYNC,
+    TASK_BULLISH_RESEARCHER,
+    TASK_BEARISH_RESEARCHER,
+    TASK_DEBATE_MODERATOR,
+    TASK_TRADER,
+    TASK_AGGRESSIVE_RISK,
+    TASK_CONSERVATIVE_RISK,
+    TASK_NEUTRAL_RISK,
+    TASK_RISK_MODERATOR,
+    TASK_FUND_MANAGER,
+];
+
 /// Hard ceiling on `FlowRunner::run()` iterations inside
 /// [`TradingPipeline::run_analysis_cycle`].
 ///
@@ -85,6 +102,13 @@ const TASK_FUND_MANAGER: &str = "fund_manager";
 /// while still catching runaway loops caused by corrupted round counters or
 /// misconfigured conditional edges.
 pub(crate) const MAX_PIPELINE_STEPS: usize = 200;
+
+#[cfg(any(test, feature = "test-helpers"))]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum WorkflowTestSeamError {
+    #[error("unknown workflow task id '{task_id}' cannot be replaced via test seam")]
+    UnknownTaskId { task_id: String },
+}
 
 // ── TradingPipeline ──────────────────────────────────────────────────────────
 
@@ -96,16 +120,11 @@ pub(crate) const MAX_PIPELINE_STEPS: usize = 200;
 pub struct TradingPipeline {
     config: Arc<Config>,
     finnhub: FinnhubClient,
-    // Retained so the pipeline can be inspected or re-wired without reconstructing all clients.
-    #[allow(dead_code)]
     yfinance: YFinanceClient,
-    #[allow(dead_code)]
     snapshot_store: Arc<SnapshotStore>,
     /// Handle for quick-thinking agents (Analyst Team — Phase 1).
-    #[allow(dead_code)]
     quick_handle: CompletionModelHandle,
     /// Handle for deep-thinking agents (Researcher, Trader, Risk Team, Fund Manager).
-    #[allow(dead_code)]
     deep_handle: CompletionModelHandle,
     /// Pre-built graph — stateless, safe to share across analysis cycles.
     graph: Arc<Graph>,
@@ -151,26 +170,43 @@ impl TradingPipeline {
         }
     }
 
-    /// Return a clone of the pre-built [`Graph`].
+    /// Build and return a fresh [`Graph`] with the pipeline topology.
     ///
-    /// Primarily useful for tests that need to inspect the graph topology.
+    /// Primarily useful for tests that need to inspect the graph topology
+    /// without gaining a mutable handle to the live graph used by
+    /// [`run_analysis_cycle`][Self::run_analysis_cycle].
     pub fn build_graph(&self) -> Arc<Graph> {
-        Arc::clone(&self.graph)
+        Self::build_graph_impl(
+            Arc::clone(&self.config),
+            &self.finnhub,
+            &self.yfinance,
+            Arc::clone(&self.snapshot_store),
+            &self.quick_handle,
+            &self.deep_handle,
+        )
     }
 
-    /// Return a reference to the pre-built [`Graph`].
-    ///
-    /// The returned `Arc<Graph>` shares the same underlying `DashMap`-backed
-    /// task registry as the pipeline.  Callers can call
-    /// [`Graph::add_task`] on this handle to **replace** tasks by ID — the
-    /// replacement takes effect immediately for subsequent
-    /// [`run_analysis_cycle`][Self::run_analysis_cycle] calls.
-    ///
-    /// This is the primary test seam: integration tests replace LLM-calling
-    /// tasks with deterministic stubs, then run the full pipeline loop.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub fn graph(&self) -> &Arc<Graph> {
-        &self.graph
+    pub fn replace_task_for_test(
+        &self,
+        task: Arc<dyn graph_flow::Task>,
+    ) -> Result<(), WorkflowTestSeamError> {
+        let task_id = task.id();
+        if !is_replaceable_task_id(task_id) {
+            return Err(WorkflowTestSeamError::UnknownTaskId {
+                task_id: task_id.to_owned(),
+            });
+        }
+        self.graph.add_task(task);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn install_stub_tasks_for_test(&self) -> Result<(), WorkflowTestSeamError> {
+        crate::workflow::tasks::test_helpers::replace_with_stubs(
+            self,
+            Arc::clone(&self.snapshot_store),
+        )
     }
 
     /// Build the directed [`Graph`] for the trading pipeline.
@@ -579,6 +615,11 @@ fn phase_for_task(task_id: &str) -> String {
         "fund_manager" => "fund_manager".into(),
         _ => "unknown_phase".into(),
     }
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+fn is_replaceable_task_id(task_id: &str) -> bool {
+    REPLACEABLE_TASK_IDS.contains(&task_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
