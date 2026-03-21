@@ -103,6 +103,17 @@ const REPLACEABLE_TASK_IDS: [&str; 11] = [
 /// misconfigured conditional edges.
 pub(crate) const MAX_PIPELINE_STEPS: usize = 200;
 
+const _: () = {
+    assert!(
+        MAX_PIPELINE_STEPS >= 100,
+        "ceiling too low - may cause false positives"
+    );
+    assert!(
+        MAX_PIPELINE_STEPS <= 1000,
+        "ceiling too high - may not catch runaways quickly enough"
+    );
+};
+
 #[cfg(any(test, feature = "test-helpers"))]
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WorkflowTestSeamError {
@@ -646,18 +657,4 @@ mod tests {
         assert_eq!(TASK_FUND_MANAGER, "fund_manager");
     }
 
-    #[test]
-    fn max_pipeline_steps_is_reasonable() {
-        // The pipeline has ~11 distinct tasks.  With generous round counts the
-        // theoretical maximum is around 50 steps.  The ceiling must be well
-        // above that (to avoid false positives) but finite (to catch runaways).
-        assert!(
-            MAX_PIPELINE_STEPS >= 100,
-            "ceiling too low — may cause false positives"
-        );
-        assert!(
-            MAX_PIPELINE_STEPS <= 1000,
-            "ceiling too high — may not catch runaways quickly enough"
-        );
-    }
 }
