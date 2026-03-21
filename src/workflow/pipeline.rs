@@ -656,5 +656,4 @@ mod tests {
         assert_eq!(TASK_RISK_MODERATOR, "risk_moderator");
         assert_eq!(TASK_FUND_MANAGER, "fund_manager");
     }
-
 }
