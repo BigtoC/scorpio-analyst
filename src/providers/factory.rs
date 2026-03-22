@@ -97,6 +97,7 @@ impl CompletionModelHandle {
     ///
     /// This method is public to allow integration tests in `tests/` to access
     /// it.  It must not be called in production code.
+    #[cfg(any(test, feature = "test-helpers"))]
     #[doc(hidden)]
     pub fn for_test() -> Self {
         Self {

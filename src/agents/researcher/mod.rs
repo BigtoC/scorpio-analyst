@@ -189,7 +189,7 @@ pub async fn run_bullish_researcher_turn(
         .map(|m| m.content.as_str());
 
     let (msg, usage) = executor
-        .bullish_turn(&state.debate_history.clone(), bear_latest)
+        .bullish_turn(&state.debate_history, bear_latest)
         .await?;
     state.debate_history.push(msg);
     Ok(usage)
@@ -223,7 +223,7 @@ pub async fn run_bearish_researcher_turn(
         .map(|m| m.content.as_str());
 
     let (msg, usage) = executor
-        .bearish_turn(&state.debate_history.clone(), bull_latest)
+        .bearish_turn(&state.debate_history, bull_latest)
         .await?;
     state.debate_history.push(msg);
     Ok(usage)

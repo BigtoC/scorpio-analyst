@@ -1,6 +1,7 @@
-use scorpio_analyst::config::{Config, expand_path};
+use scorpio_analyst::config::Config;
 use scorpio_analyst::observability::init_tracing;
 use scorpio_analyst::providers::factory::preflight_configured_providers;
+use scorpio_analyst::workflow::SnapshotStore;
 
 fn main() {
     init_tracing();
@@ -23,9 +24,16 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let snapshot_db_path = expand_path(&cfg.storage.snapshot_db_path);
+            let snapshot_store = match runtime.block_on(SnapshotStore::from_config(&cfg)) {
+                Ok(store) => store,
+                Err(e) => {
+                    eprintln!("failed to initialize snapshot storage: {e:#}");
+                    std::process::exit(1);
+                }
+            };
+
             tracing::info!(
-                snapshot_db_path = %snapshot_db_path.display(),
+                snapshot_store = ?snapshot_store,
                 "storage configured"
             );
 

@@ -19,6 +19,7 @@ use sqlx::SqlitePool;
 use tracing::debug;
 
 use crate::{
+    config::Config,
     error::TradingError,
     state::{AgentTokenUsage, TradingState},
 };
@@ -71,6 +72,20 @@ pub struct SnapshotStore {
 }
 
 impl SnapshotStore {
+    /// Open (or create) the snapshot store configured for this application.
+    ///
+    /// Uses [`crate::config::StorageConfig::snapshot_db_path`] after applying
+    /// the project's `~/` / `$HOME/` expansion rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`SnapshotStore::new`] if path resolution,
+    /// directory creation, or SQLite initialization fails.
+    pub async fn from_config(config: &Config) -> Result<Self, TradingError> {
+        let db_path = crate::config::expand_path(&config.storage.snapshot_db_path);
+        Self::new(Some(&db_path)).await
+    }
+
     /// Open (or create) the snapshot store at the given path.
     ///
     /// If `db_path` is `None`, the default path
@@ -572,6 +587,24 @@ mod tests {
         let custom = Path::new("/tmp/custom_test.db");
         let resolved = resolve_db_path(Some(custom)).expect("should resolve");
         assert_eq!(resolved, custom);
+    }
+
+    #[tokio::test]
+    async fn from_config_uses_expanded_snapshot_db_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("configured.db");
+        let mut config = crate::config::Config::load_from("config.toml").expect("config load");
+        config.storage.snapshot_db_path = db_path.to_string_lossy().into_owned();
+
+        let store = SnapshotStore::from_config(&config)
+            .await
+            .expect("store should open from config path");
+
+        assert!(
+            db_path.exists(),
+            "configured snapshot db path should be created"
+        );
+        drop(store);
     }
 
     // ── Path-validation edge cases ───────────────────────────────────────

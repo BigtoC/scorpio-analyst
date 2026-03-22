@@ -28,6 +28,21 @@ use crate::{
     },
 };
 
+async fn read_cached_news(
+    task_name: &str,
+    context: &Context,
+) -> graph_flow::Result<Option<Arc<NewsData>>> {
+    let json: Option<String> = context.get(super::KEY_CACHED_NEWS).await;
+    json.map(|value| {
+        serde_json::from_str::<NewsData>(&value).map(Arc::new).map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "{task_name}: orchestration corruption: cached news deserialization failed: {error}"
+            ))
+        })
+    })
+    .transpose()
+}
+
 /// Runs the phase-1 fundamental analyst child task.
 ///
 /// On success the task writes typed analyst output and token usage into context,
@@ -157,11 +172,7 @@ impl Task for SentimentAnalystTask {
             }
         };
 
-        let cached_news_opt = {
-            let json: Option<String> = context.get(super::KEY_CACHED_NEWS).await;
-            json.and_then(|value| serde_json::from_str::<crate::state::NewsData>(&value).ok())
-                .map(Arc::new)
-        };
+        let cached_news_opt = read_cached_news("SentimentAnalystTask", &context).await?;
 
         let analyst = SentimentAnalyst::new(
             self.handle.clone(),
@@ -248,11 +259,7 @@ impl Task for NewsAnalystTask {
             }
         };
 
-        let cached_news_opt = {
-            let json: Option<String> = context.get(super::KEY_CACHED_NEWS).await;
-            json.and_then(|value| serde_json::from_str::<crate::state::NewsData>(&value).ok())
-                .map(Arc::new)
-        };
+        let cached_news_opt = read_cached_news("NewsAnalystTask", &context).await?;
 
         let analyst = NewsAnalyst::new(
             self.handle.clone(),

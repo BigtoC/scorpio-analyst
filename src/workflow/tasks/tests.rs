@@ -5,6 +5,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
+    config::LlmConfig,
     state::{FundamentalData, NewsData, SentimentData, TechnicalData, TradingState},
     workflow::context_bridge::{
         deserialize_state_from_context, serialize_state_to_context, write_prefixed_result,
@@ -15,10 +16,35 @@ fn sample_state() -> TradingState {
     TradingState::new("AAPL", "2026-03-19")
 }
 
+fn sample_llm_config() -> LlmConfig {
+    LlmConfig {
+        quick_thinking_provider: "openai".to_owned(),
+        deep_thinking_provider: "openai".to_owned(),
+        quick_thinking_model: "gpt-4o-mini".to_owned(),
+        deep_thinking_model: "o3".to_owned(),
+        max_debate_rounds: 3,
+        max_risk_rounds: 2,
+        analyst_timeout_secs: 30,
+        retry_max_retries: 3,
+        retry_base_delay_ms: 500,
+    }
+}
+
 async fn seed_state(ctx: &Context, state: &TradingState) {
     serialize_state_to_context(state, ctx)
         .await
         .expect("seed state serialization should succeed");
+}
+
+async fn context_with_invalid_cached_news() -> Context {
+    let ctx = Context::new();
+    seed_state(&ctx, &sample_state()).await;
+    ctx.set(
+        common::KEY_CACHED_NEWS.to_owned(),
+        "not valid json".to_owned(),
+    )
+    .await;
+    ctx
 }
 
 #[tokio::test]
@@ -382,4 +408,50 @@ async fn stub_risk_moderator_appends_workflow_history_entry() {
         !last_message.content.is_empty(),
         "moderator history entry should include synthesis content"
     );
+}
+
+#[tokio::test]
+async fn sentiment_analyst_invalid_cached_news_fails_closed() {
+    let task = SentimentAnalystTask::new(
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::data::FinnhubClient::for_test(),
+        sample_llm_config(),
+    );
+    let ctx = context_with_invalid_cached_news().await;
+
+    let error = task
+        .run(ctx)
+        .await
+        .expect_err("invalid cached news should fail closed");
+
+    match error {
+        graph_flow::GraphError::TaskExecutionFailed(message) => {
+            assert!(message.contains("SentimentAnalystTask"));
+            assert!(message.contains("cached news"));
+        }
+        other => panic!("expected TaskExecutionFailed, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn news_analyst_invalid_cached_news_fails_closed() {
+    let task = NewsAnalystTask::new(
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::data::FinnhubClient::for_test(),
+        sample_llm_config(),
+    );
+    let ctx = context_with_invalid_cached_news().await;
+
+    let error = task
+        .run(ctx)
+        .await
+        .expect_err("invalid cached news should fail closed");
+
+    match error {
+        graph_flow::GraphError::TaskExecutionFailed(message) => {
+            assert!(message.contains("NewsAnalystTask"));
+            assert!(message.contains("cached news"));
+        }
+        other => panic!("expected TaskExecutionFailed, got: {other:?}"),
+    }
 }
