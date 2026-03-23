@@ -241,6 +241,180 @@ pub async fn run_risk_discussion(
     run_risk_discussion_with_executor(state, max_rounds, &mut executor).await
 }
 
+/// Execute a single Aggressive Risk agent turn for one round step.
+///
+/// Reads the latest conservative and neutral reports from `state`, calls the
+/// Aggressive agent, and writes the result back to `state.aggressive_risk_report`
+/// and appends to `state.risk_discussion_history`.
+///
+/// Used by [`AggressiveRiskTask`][crate::workflow::tasks::AggressiveRiskTask]
+/// so each graph node performs exactly one agent step.
+///
+/// # Errors
+///
+/// - [`TradingError::SchemaViolation`] if `state.trader_proposal` is `None`.
+/// - Returns [`TradingError`] on LLM failure.
+pub async fn run_aggressive_risk_turn(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    if state.trader_proposal.is_none() {
+        return Err(TradingError::SchemaViolation {
+            message: "run_aggressive_risk_turn: trader_proposal is required but not set".to_owned(),
+        });
+    }
+    let mut executor = RealRiskExecutor {
+        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, &config.llm)?,
+    };
+
+    let prior_conservative = serialize_risk_report_context(state.conservative_risk_report.as_ref());
+    let prior_neutral = serialize_risk_report_context(state.neutral_risk_report.as_ref());
+
+    let (report, usage) = executor
+        .aggressive_turn(
+            state,
+            prior_conservative.as_deref(),
+            prior_neutral.as_deref(),
+        )
+        .await?;
+
+    let summary = redact_text_for_storage(&report.assessment);
+    state.aggressive_risk_report = Some(report);
+    state.risk_discussion_history.push(DebateMessage {
+        role: "aggressive_risk".to_owned(),
+        content: summary,
+    });
+    Ok(usage)
+}
+
+/// Execute a single Conservative Risk agent turn for one round step.
+///
+/// Reads the latest aggressive and neutral reports from `state`, calls the
+/// Conservative agent, and writes the result back.
+///
+/// Used by [`ConservativeRiskTask`][crate::workflow::tasks::ConservativeRiskTask].
+///
+/// # Errors
+///
+/// - [`TradingError::SchemaViolation`] if `state.trader_proposal` is `None`.
+/// - Returns [`TradingError`] on LLM failure.
+pub async fn run_conservative_risk_turn(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    if state.trader_proposal.is_none() {
+        return Err(TradingError::SchemaViolation {
+            message: "run_conservative_risk_turn: trader_proposal is required but not set"
+                .to_owned(),
+        });
+    }
+    let mut executor = RealRiskExecutor {
+        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, &config.llm)?,
+    };
+
+    let agg_context = serialize_risk_report_context(state.aggressive_risk_report.as_ref());
+    let neu_context = serialize_risk_report_context(state.neutral_risk_report.as_ref());
+
+    let (report, usage) = executor
+        .conservative_turn(state, agg_context.as_deref(), neu_context.as_deref())
+        .await?;
+
+    let summary = redact_text_for_storage(&report.assessment);
+    state.conservative_risk_report = Some(report);
+    state.risk_discussion_history.push(DebateMessage {
+        role: "conservative_risk".to_owned(),
+        content: summary,
+    });
+    Ok(usage)
+}
+
+/// Execute a single Neutral Risk agent turn for one round step.
+///
+/// Reads the latest aggressive and conservative reports from `state`, calls the
+/// Neutral agent, and writes the result back.
+///
+/// Used by [`NeutralRiskTask`][crate::workflow::tasks::NeutralRiskTask].
+///
+/// # Errors
+///
+/// - [`TradingError::SchemaViolation`] if `state.trader_proposal` is `None`.
+/// - Returns [`TradingError`] on LLM failure.
+pub async fn run_neutral_risk_turn(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    if state.trader_proposal.is_none() {
+        return Err(TradingError::SchemaViolation {
+            message: "run_neutral_risk_turn: trader_proposal is required but not set".to_owned(),
+        });
+    }
+    let mut executor = RealRiskExecutor {
+        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, &config.llm)?,
+    };
+
+    let agg_context = serialize_risk_report_context(state.aggressive_risk_report.as_ref());
+    let con_context = serialize_risk_report_context(state.conservative_risk_report.as_ref());
+
+    let (report, usage) = executor
+        .neutral_turn(state, agg_context.as_deref(), con_context.as_deref())
+        .await?;
+
+    let summary = redact_text_for_storage(&report.assessment);
+    state.neutral_risk_report = Some(report);
+    state.risk_discussion_history.push(DebateMessage {
+        role: "neutral_risk".to_owned(),
+        content: summary,
+    });
+    Ok(usage)
+}
+
+/// Run the Risk Moderator once, appending the synthesis to
+/// `state.risk_discussion_history`.
+///
+/// Used by [`RiskModeratorTask`][crate::workflow::tasks::RiskModeratorTask]
+/// so the moderator runs as its own dedicated graph node.
+///
+/// # Errors
+///
+/// - [`TradingError::SchemaViolation`] if `state.trader_proposal` is `None`.
+/// - Returns [`TradingError`] on LLM failure.
+pub async fn run_risk_moderation(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    if state.trader_proposal.is_none() {
+        return Err(TradingError::SchemaViolation {
+            message: "run_risk_moderation: trader_proposal is required but not set".to_owned(),
+        });
+    }
+    let mut executor = RealRiskExecutor {
+        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, &config.llm)?,
+    };
+
+    let (synthesis, usage) = executor.moderate(state).await?;
+    state.risk_discussion_history.push(DebateMessage {
+        role: "risk_moderator".to_owned(),
+        content: redact_text_for_storage(&synthesis),
+    });
+    Ok(usage)
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

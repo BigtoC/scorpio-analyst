@@ -85,6 +85,29 @@ impl CompletionModelHandle {
     pub fn model_id(&self) -> &str {
         &self.model_id
     }
+
+    /// Construct a non-functional handle for use in tests only.
+    ///
+    /// The resulting handle has a real `OpenAI` client built with a dummy key.
+    /// Any LLM call made through this handle will fail with an auth error,
+    /// which is intentional: tests use the error to prove the underlying agent
+    /// function was actually called (rather than being a silent no-op).
+    ///
+    /// # Note
+    ///
+    /// This method is public to allow integration tests in `tests/` to access
+    /// it.  It must not be called in production code.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[doc(hidden)]
+    pub fn for_test() -> Self {
+        Self {
+            provider: ProviderId::OpenAI,
+            model_id: "test-model".to_owned(),
+            client: ProviderClient::OpenAI(
+                openai::Client::new("test-dummy-key").expect("openai client construction"),
+            ),
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1152,7 +1175,9 @@ fn should_retry_typed_error(err: &TradingError) -> bool {
                 || msg.contains("503")
                 || msg.contains("504")
         }
-        TradingError::AnalystError { .. } | TradingError::Config(_) => false,
+        TradingError::AnalystError { .. } | TradingError::Config(_) | TradingError::Storage(_) => {
+            false
+        }
         // GraphFlow errors originate from the orchestration layer, not from LLM providers,
         // so retrying the typed prompt won't help.
         TradingError::GraphFlow { .. } => false,
@@ -1215,7 +1240,7 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
 }
 
 /// Replace ASCII/Unicode control characters (except `\n` and `\t`) with a space.
-fn replace_control_chars(s: &str) -> String {
+pub(crate) fn replace_control_chars(s: &str) -> String {
     s.chars()
         .map(|ch| {
             if ch.is_control() && ch != '\n' && ch != '\t' {
@@ -1228,7 +1253,7 @@ fn replace_control_chars(s: &str) -> String {
 }
 
 /// Redact known credential patterns (API key prefixes, auth headers, bearer tokens).
-fn redact_credentials(s: &str) -> String {
+pub(crate) fn redact_credentials(s: &str) -> String {
     fn mask_prefixed_token(input: &str, prefix: &str) -> String {
         let mut out = String::with_capacity(input.len());
         let bytes = input.as_bytes();
@@ -1328,7 +1353,7 @@ fn redact_credentials(s: &str) -> String {
 }
 
 /// Truncate `s` to at most `max_chars` Unicode scalar values, appending `"..."` if trimmed.
-fn truncate_to(s: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_to(s: &str, max_chars: usize) -> String {
     let truncated: String = s.chars().take(max_chars).collect();
     if s.chars().count() > max_chars {
         format!("{truncated}...")
@@ -1337,7 +1362,7 @@ fn truncate_to(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn sanitize_error_summary(input: &str) -> String {
+pub(crate) fn sanitize_error_summary(input: &str) -> String {
     let sanitized = replace_control_chars(input);
     let sanitized = redact_credentials(&sanitized);
     truncate_to(&sanitized, MAX_ERROR_SUMMARY_CHARS)

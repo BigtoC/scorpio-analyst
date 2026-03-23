@@ -31,6 +31,10 @@ pub enum TradingError {
     #[error("config error: {0}")]
     Config(#[from] anyhow::Error),
 
+    /// Runtime persistence or storage failed.
+    #[error("storage error: {0}")]
+    Storage(#[source] anyhow::Error),
+
     /// An error originating from the `graph-flow` orchestration layer.
     #[error("graph-flow error in phase '{phase}' task '{task}': {cause}")]
     GraphFlow {

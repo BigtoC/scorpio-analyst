@@ -11,3 +11,6 @@
 
 # claude-mem local session data
 .claude-mem/
+# CocoIndex Code (ccc)
+/.cocoindex_code/
+.worktrees/

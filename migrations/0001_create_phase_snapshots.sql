@@ -4,6 +4,6 @@ CREATE TABLE IF NOT EXISTS phase_snapshots (
     phase_name      TEXT    NOT NULL,
     trading_state_json TEXT NOT NULL,
     token_usage_json   TEXT,
-    created_at      TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE(execution_id, phase_number)
 );

@@ -57,40 +57,91 @@ pub async fn deserialize_state_from_context(
 // Prefixed fan-out helpers
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Validate a prefixed fan-out leaf key before building a composite context key.
+///
+/// Prefixes may themselves be namespace-style strings containing `.` separators,
+/// such as `"usage.analyst"`. The leaf `key` must be a single path segment so
+/// the composite `"<prefix>.<key>"` contract remains unambiguous.
+///
+/// # Errors
+///
+/// Returns [`TradingError::SchemaViolation`] when `key` is empty or contains `.`.
+fn validate_prefixed_leaf_key(prefix: &str, key: &str) -> Result<(), TradingError> {
+    if key.is_empty() {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "invalid prefixed result leaf key for prefix '{prefix}': leaf key must not be empty"
+            ),
+        });
+    }
+
+    if key.contains('.') {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "invalid prefixed result leaf key '{key}' for prefix '{prefix}': leaf key must not contain '.'"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 /// Compute the composite context key for a prefixed fan-out entry.
-fn prefixed_key(prefix: &str, key: &str) -> String {
-    format!("{prefix}.{key}")
+///
+/// Prefixes may contain `.` namespace separators, but `key` must be a single
+/// leaf segment that is non-empty and does not contain `.`.
+///
+/// # Errors
+///
+/// Returns [`TradingError::SchemaViolation`] when the leaf key is invalid.
+fn prefixed_key(prefix: &str, key: &str) -> Result<String, TradingError> {
+    validate_prefixed_leaf_key(prefix, key)?;
+    Ok(format!("{prefix}.{key}"))
 }
 
 /// Serialize `value` as JSON and store it under `"<prefix>.<key>"` in `context`.
 ///
 /// Used by individual analyst child tasks to write their results without
 /// interfering with each other or with the main `TradingState` blob.
+///
+/// `prefix` may be a namespace-style path that already contains `.` separators,
+/// such as `"usage.analyst"`. By contrast, `key` is always the terminal leaf
+/// segment and must be non-empty and must not contain `.`.
+///
+/// # Errors
+///
+/// Returns [`TradingError::SchemaViolation`] if the leaf key is invalid or if
+/// serialization fails.
 pub async fn write_prefixed_result<T: Serialize>(
     context: &Context,
     prefix: &str,
     key: &str,
     value: &T,
 ) -> Result<(), TradingError> {
+    let full_key = prefixed_key(prefix, key)?;
     let json = serde_json::to_string(value).map_err(|e| TradingError::SchemaViolation {
-        message: format!("failed to serialize prefixed result '{prefix}.{key}': {e}"),
+        message: format!("failed to serialize prefixed result '{full_key}': {e}"),
     })?;
-    context.set(prefixed_key(prefix, key), json).await;
+    context.set(full_key, json).await;
     Ok(())
 }
 
 /// Read and deserialize the JSON value stored under `"<prefix>.<key>"` in `context`.
 ///
+/// `prefix` may be a namespace-style path that already contains `.` separators,
+/// but `key` must be a single leaf segment so the composite key remains
+/// unambiguous.
+///
 /// # Errors
 ///
-/// Returns `TradingError::SchemaViolation` if the key is missing or the JSON
-/// cannot be deserialized into `T`.
+/// Returns [`TradingError::SchemaViolation`] if the leaf key is invalid, if the
+/// composite key is missing, or if the JSON cannot be deserialized into `T`.
 pub async fn read_prefixed_result<T: DeserializeOwned>(
     context: &Context,
     prefix: &str,
     key: &str,
 ) -> Result<T, TradingError> {
-    let full_key = prefixed_key(prefix, key);
+    let full_key = prefixed_key(prefix, key)?;
     let json: Option<String> = context.get(&full_key).await;
     let json = json.ok_or_else(|| TradingError::SchemaViolation {
         message: format!("context missing prefixed key '{full_key}'"),
@@ -190,6 +241,85 @@ mod tests {
         assert_eq!(sent, "sent data");
         assert_eq!(news, "news data");
         assert_eq!(tech, "tech data");
+    }
+
+    #[tokio::test]
+    async fn prefixed_namespace_style_prefix_is_allowed() {
+        let ctx = Context::new();
+
+        write_prefixed_result(&ctx, "usage.analyst", "fundamental", &42_u64)
+            .await
+            .expect("write should succeed for namespace-style prefixes");
+
+        let recovered: u64 = read_prefixed_result(&ctx, "usage.analyst", "fundamental")
+            .await
+            .expect("read should succeed for namespace-style prefixes");
+
+        assert_eq!(recovered, 42);
+    }
+
+    #[tokio::test]
+    async fn prefixed_write_rejects_empty_leaf_key() {
+        let ctx = Context::new();
+
+        let err = write_prefixed_result(&ctx, "analyst", "", &"fund data".to_string())
+            .await
+            .expect_err("write should fail for an empty leaf key");
+
+        assert!(matches!(
+            err,
+            TradingError::SchemaViolation { ref message }
+                if message.contains("leaf key") && message.contains("must not be empty")
+        ));
+    }
+
+    #[tokio::test]
+    async fn prefixed_read_rejects_empty_leaf_key() {
+        let ctx = Context::new();
+
+        let err = read_prefixed_result::<String>(&ctx, "analyst", "")
+            .await
+            .expect_err("read should fail for an empty leaf key");
+
+        assert!(matches!(
+            err,
+            TradingError::SchemaViolation { ref message }
+                if message.contains("leaf key") && message.contains("must not be empty")
+        ));
+    }
+
+    #[tokio::test]
+    async fn prefixed_write_rejects_leaf_key_with_separator() {
+        let ctx = Context::new();
+
+        let err = write_prefixed_result(&ctx, "analyst", "risk.score", &"fund data".to_string())
+            .await
+            .expect_err("write should fail for a leaf key containing the separator");
+
+        assert!(matches!(
+            err,
+            TradingError::SchemaViolation { ref message }
+                if message.contains("leaf key")
+                    && message.contains("risk.score")
+                    && message.contains("must not contain '.'")
+        ));
+    }
+
+    #[tokio::test]
+    async fn prefixed_read_rejects_leaf_key_with_separator() {
+        let ctx = Context::new();
+
+        let err = read_prefixed_result::<String>(&ctx, "analyst", "risk.score")
+            .await
+            .expect_err("read should fail for a leaf key containing the separator");
+
+        assert!(matches!(
+            err,
+            TradingError::SchemaViolation { ref message }
+                if message.contains("leaf key")
+                    && message.contains("risk.score")
+                    && message.contains("must not contain '.'")
+        ));
     }
 
     #[tokio::test]

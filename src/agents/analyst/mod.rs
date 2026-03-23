@@ -42,6 +42,22 @@ use crate::{
     },
 };
 
+/// Pre-fetch news data from Finnhub for the given `symbol`.
+///
+/// Returns `Some(Arc<NewsData>)` on success so both `SentimentAnalyst` and
+/// `NewsAnalyst` can share the same data without a duplicate API call.
+/// On failure a warning is emitted and `None` is returned — callers fall back
+/// to live tool calls.
+pub async fn prefetch_analyst_news(finnhub: &FinnhubClient, symbol: &str) -> Option<Arc<NewsData>> {
+    match finnhub.get_news(symbol).await {
+        Ok(data) => Some(Arc::new(data)),
+        Err(err) => {
+            warn!(error = %err, "news pre-fetch failed; analysts will use live tool calls");
+            None
+        }
+    }
+}
+
 /// Run all four analyst agents concurrently and write results into `state`.
 ///
 /// Each agent is constructed fresh, cloning the shared handles, then spawned
@@ -80,13 +96,7 @@ pub async fn run_analyst_team(
     //
     // This eliminates the duplicate Finnhub `get_news` call (P1).  If the
     // pre-fetch fails the analysts fall back to their live `GetNews` tool.
-    let cached_news: Option<Arc<crate::state::NewsData>> = match finnhub.get_news(&symbol).await {
-        Ok(data) => Some(Arc::new(data)),
-        Err(err) => {
-            warn!(error = %err, "news pre-fetch failed; analysts will use live tool calls");
-            None
-        }
-    };
+    let cached_news = prefetch_analyst_news(finnhub, &symbol).await;
 
     // ── Spawn all four analysts concurrently ─────────────────────────────
 

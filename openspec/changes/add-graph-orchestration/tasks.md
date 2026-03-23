@@ -162,16 +162,16 @@ from the same round. This is NOT a fan-out.
 
 ## 11. Integration Tests
 
-- [ ] 11.1 Write integration test: full pipeline with mocked agents — verify all 5 phases execute in order
-- [ ] 11.2 Write integration test: analyst degradation — 1 mock analyst fails, pipeline continues
-- [ ] 11.3 Write integration test: analyst degradation — 2 mock analysts fail, pipeline aborts after Phase 1
-- [ ] 11.4 Write integration test: debate cycling — verify conditional edge loops for the configured
+- [x] 11.1 Write integration test: full pipeline with mocked agents — verify all 5 phases execute in order
+- [x] 11.2 Write integration test: analyst degradation — 1 mock analyst fails, pipeline continues
+- [x] 11.3 Write integration test: analyst degradation — 2 mock analysts fail, pipeline aborts after Phase 1
+- [x] 11.4 Write integration test: debate cycling — verify conditional edge loops for the configured
       number of `max_debate_rounds`
-- [ ] 11.5 Write integration test: risk cycling — verify sequential execution order
+- [x] 11.5 Write integration test: risk cycling — verify sequential execution order
       (Aggressive → Conservative → Neutral → Moderator) for the configured number of
       `max_risk_rounds`
-- [ ] 11.6 Write integration test: phase snapshots — verify 5 snapshots written to SQLite after full cycle
-- [ ] 11.7 Write integration test: token usage — verify `AgentTokenUsage` entries accumulated correctly
+- [x] 11.6 Write integration test: phase snapshots — verify 5 snapshots written to SQLite after full cycle
+- [x] 11.7 Write integration test: token usage — verify `AgentTokenUsage` entries accumulated correctly
       across all phases
 - [x] 11.8 Implement error mapping from `graph-flow` errors (e.g., `GraphError`, `TaskError`) to
       `TradingError` variants so that pipeline callers receive typed errors; add a
@@ -179,8 +179,43 @@ from the same round. This is NOT a fan-out.
       does not already exist) that preserves structured context per the spec requirement
 - [x] 11.9 Write unit tests for error propagation: graph-flow errors are correctly mapped to
       `TradingError` and propagated from `run_analysis_cycle`
-- [ ] 11.10 Write integration test: tracing emits phase/task/round transition events usable by downstream
+- [x] 11.10 Write integration test: tracing emits phase/task/round transition events usable by downstream
       CLI/TUI streaming
+
+## 11-R. Remediation: Real Per-Node Execution
+
+_These tasks were not in the original implementation plan. They are required to bring the
+implementation into full spec-compliance. All tasks below are blocked on cross-owner approval
+for `src/agents/researcher/mod.rs`, `src/agents/risk/mod.rs`, and `src/agents/analyst/mod.rs`._
+
+- [x] R-1 Add single-step researcher public helpers to `src/agents/researcher/mod.rs`:
+      `run_bullish_researcher_turn`, `run_bearish_researcher_turn`, `run_debate_moderation`
+- [x] R-2 Add single-step risk public helpers to `src/agents/risk/mod.rs`:
+      `run_aggressive_risk_turn`, `run_conservative_risk_turn`, `run_neutral_risk_turn`,
+      `run_risk_moderation`
+- [x] R-3 Add shared cached-news prefetch helper to `src/agents/analyst/mod.rs`:
+      `fetch_shared_news` (or equivalent)
+- [x] R-4 Refactor `BullishResearcherTask` to call `run_bullish_researcher_turn` (not the full loop)
+- [x] R-5 Refactor `BearishResearcherTask` from a no-op to call `run_bearish_researcher_turn`
+- [x] R-6 Refactor `DebateModeratorTask` to call `run_debate_moderation` and increment `debate_round`
+      at the moderator checkpoint
+- [x] R-7 Refactor `AggressiveRiskTask` to call `run_aggressive_risk_turn` (not the full loop);
+      do not increment `risk_round` here
+- [x] R-8 Refactor `ConservativeRiskTask` from a no-op to call `run_conservative_risk_turn`
+- [x] R-9 Refactor `NeutralRiskTask` from a no-op to call `run_neutral_risk_turn`
+- [x] R-10 Refactor `RiskModeratorTask` to call `run_risk_moderation` and increment `risk_round`
+       at the moderator checkpoint
+- [x] R-11 Make `run_analysis_cycle` generate a fresh `Uuid` and write it to
+       `TradingState.execution_id` before the graph starts (overwriting caller-supplied IDs)
+- [x] R-12 Make snapshot persistence failures fatal in all workflow tasks (remove log-and-continue)
+- [x] R-13 Switch `SnapshotStore` schema initialization to `sqlx::migrate!` (migration-driven)
+- [x] R-14 Write per-phase `PhaseTokenUsage` entries into `TradingState.token_usage` at phase
+       boundaries (analyst, per-debate-round, debate-moderation, trader, per-risk-round,
+       risk-moderation, fund-manager)
+- [x] R-15 Fix `TradingError::GraphFlow` mapping to carry real phase/task identity (not `step_N`)
+- [x] R-16 Add tests for zero-round debate routing to `DebateModeratorTask` with real moderator call
+- [x] R-17 Add tests for zero-round risk routing to `RiskModeratorTask` with real moderator call
+- [x] R-18 Add tests verifying snapshot failure causes task error propagation
 
 ## 12. Cross-Owner Changes
 
@@ -207,5 +242,6 @@ from the same round. This is NOT a fan-out.
 - [x] 14.1 Run full `cargo test` suite and confirm zero failures
 - [x] 14.2 Run `cargo clippy -- -D warnings` and confirm zero warnings
 - [x] 14.3 Run `cargo fmt -- --check` and confirm no formatting diffs
-- [ ] 14.4 Run `openspec validate add-graph-orchestration --strict` and confirm the change remains valid
-- [ ] 14.5 Verify all 14 sections above are complete with every task checked off
+- [x] 14.4 Run `openspec validate add-graph-orchestration --strict` and confirm the change remains valid
+- [x] 14.5 Verify all 14 sections above are complete with every task checked off
+- [x] 14.6 After remediation: re-run full verification suite and confirm all new and original tests pass

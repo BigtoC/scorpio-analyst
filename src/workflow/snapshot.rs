@@ -1,28 +1,91 @@
 //! Phase snapshot persistence using SQLite.
 //!
 //! [`SnapshotStore`] saves and loads immutable point-in-time snapshots of
-//! [`TradingState`] for each of the 5 pipeline phases.  The SQLite database is
+//! [`TradingState`] for each workflow [`SnapshotPhase`]. The SQLite database is
 //! stored at `$HOME/.scorpio-analyst/phase_snapshots.db` by default; callers
 //! may override this by passing an explicit path to [`SnapshotStore::new`].
+//! [`SnapshotStore::load_snapshot`] returns a [`LoadedSnapshot`] with named fields
+//! instead of a positional tuple.
+//! Snapshot setup failures from [`SnapshotStore::new`] return
+//! [`TradingError::Config`], while snapshot save/load runtime and payload failures
+//! return [`TradingError::Storage`].
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use chrono::Utc;
+use serde::Serialize;
 use sqlx::SqlitePool;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::{
+    config::Config,
     error::TradingError,
     state::{AgentTokenUsage, TradingState},
 };
 
+/// Named workflow phases that can be persisted as snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotPhase {
+    AnalystTeam,
+    ResearcherDebate,
+    Trader,
+    RiskDiscussion,
+    FundManager,
+}
+
+impl SnapshotPhase {
+    /// Return the persisted phase number used as the storage key.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::AnalystTeam => 1,
+            Self::ResearcherDebate => 2,
+            Self::Trader => 3,
+            Self::RiskDiscussion => 4,
+            Self::FundManager => 5,
+        }
+    }
+
+    /// Return the stable phase name stored alongside the snapshot.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AnalystTeam => "analyst_team",
+            Self::ResearcherDebate => "researcher_debate",
+            Self::Trader => "trader",
+            Self::RiskDiscussion => "risk_discussion",
+            Self::FundManager => "fund_manager",
+        }
+    }
+}
+
+/// Loaded snapshot payload with named fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedSnapshot {
+    pub state: TradingState,
+    pub token_usage: Option<Vec<AgentTokenUsage>>,
+}
+
 /// Manages SQLite-backed phase-snapshot persistence for a trading pipeline run.
+#[derive(Debug)]
 pub struct SnapshotStore {
     pool: SqlitePool,
 }
 
 impl SnapshotStore {
+    /// Open (or create) the snapshot store configured for this application.
+    ///
+    /// Uses [`crate::config::StorageConfig::snapshot_db_path`] after applying
+    /// the project's `~/` / `$HOME/` expansion rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`SnapshotStore::new`] if path resolution,
+    /// directory creation, or SQLite initialization fails.
+    pub async fn from_config(config: &Config) -> Result<Self, TradingError> {
+        let db_path = crate::config::expand_path(&config.storage.snapshot_db_path);
+        Self::new(Some(&db_path)).await
+    }
+
     /// Open (or create) the snapshot store at the given path.
     ///
     /// If `db_path` is `None`, the default path
@@ -49,29 +112,19 @@ impl SnapshotStore {
         }
 
         let db_url = format!("sqlite://{}?mode=rwc", resolved.display());
-        info!(path = %resolved.display(), "opening phase snapshot store");
+        debug!(path = %resolved.display(), "opening phase snapshot store");
 
         let pool = SqlitePool::connect(&db_url)
             .await
             .with_context(|| format!("failed to open SQLite pool at {}", resolved.display()))
             .map_err(TradingError::Config)?;
 
-        // Run inline migration.
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS phase_snapshots (
-                execution_id        TEXT    NOT NULL,
-                phase_number        INTEGER NOT NULL,
-                phase_name          TEXT    NOT NULL,
-                trading_state_json  TEXT    NOT NULL,
-                token_usage_json    TEXT,
-                created_at          TEXT    NOT NULL,
-                UNIQUE(execution_id, phase_number)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .with_context(|| "failed to run phase_snapshots migration")
-        .map_err(TradingError::Config)?;
+        // Run migrations from the `migrations/` directory (path relative to crate root).
+        sqlx::migrate!()
+            .run(&pool)
+            .await
+            .with_context(|| "failed to run phase_snapshots migration")
+            .map_err(TradingError::Config)?;
 
         Ok(Self { pool })
     }
@@ -81,25 +134,22 @@ impl SnapshotStore {
     ///
     /// # Errors
     ///
-    /// Returns `TradingError::Config` on serialization or database errors.
+    /// Returns [`TradingError::Storage`] for snapshot serialization and database
+    /// failures that occur at runtime after the store is configured.
     pub async fn save_snapshot(
         &self,
         execution_id: &str,
-        phase_number: u8,
-        phase_name: &str,
+        phase: SnapshotPhase,
         state: &TradingState,
         token_usage: Option<&[AgentTokenUsage]>,
     ) -> Result<(), TradingError> {
-        let state_json = serde_json::to_string(state)
-            .with_context(|| "failed to serialize TradingState for snapshot")
-            .map_err(TradingError::Config)?;
+        let phase_number = phase.number();
+        let phase_name = phase.name();
+
+        let state_json = serialize_snapshot_json(state, "TradingState")?;
 
         let usage_json = token_usage
-            .map(|u| {
-                serde_json::to_string(u)
-                    .with_context(|| "failed to serialize token usage for snapshot")
-                    .map_err(TradingError::Config)
-            })
+            .map(|u| serialize_snapshot_json(u, "token usage"))
             .transpose()?;
 
         let created_at = Utc::now().to_rfc3339();
@@ -123,7 +173,7 @@ impl SnapshotStore {
         .execute(&self.pool)
         .await
         .with_context(|| format!("failed to save snapshot phase={phase_number} exec={execution_id}"))
-        .map_err(TradingError::Config)?;
+        .map_err(TradingError::Storage)?;
 
         debug!(
             execution_id,
@@ -132,19 +182,31 @@ impl SnapshotStore {
         Ok(())
     }
 
-    /// Load a phase snapshot by `execution_id` and `phase_number`.
+    /// Close the underlying connection pool.
+    ///
+    /// For use in unit tests only — calling this makes all subsequent save/load
+    /// operations fail with a pool-closed error, which lets tests verify that
+    /// snapshot failures propagate as `Err` out of workflow tasks.
+    #[cfg(test)]
+    pub(crate) async fn close_for_test(&self) {
+        self.pool.close().await;
+    }
+
+    /// Load a phase snapshot by `execution_id` and [`SnapshotPhase`].
     ///
     /// Returns `Ok(None)` if no matching row exists.
     ///
     /// # Errors
     ///
-    /// Returns `TradingError::Config` on database errors or deserialization
-    /// failures.
+    /// Returns [`TradingError::Storage`] on database failures and snapshot payload
+    /// decode failures that occur at runtime.
     pub async fn load_snapshot(
         &self,
         execution_id: &str,
-        phase_number: u8,
-    ) -> Result<Option<(TradingState, Option<Vec<AgentTokenUsage>>)>, TradingError> {
+        phase: SnapshotPhase,
+    ) -> Result<Option<LoadedSnapshot>, TradingError> {
+        let phase_number = phase.number();
+
         let row: Option<(String, Option<String>)> = sqlx::query_as(
             "SELECT trading_state_json, token_usage_json
              FROM phase_snapshots
@@ -157,35 +219,83 @@ impl SnapshotStore {
         .with_context(|| {
             format!("failed to load snapshot phase={phase_number} exec={execution_id}")
         })
-        .map_err(TradingError::Config)?;
+        .map_err(TradingError::Storage)?;
 
         match row {
             None => Ok(None),
             Some((state_json, usage_json)) => {
                 let state: TradingState = serde_json::from_str(&state_json)
                     .with_context(|| "failed to deserialize TradingState from snapshot")
-                    .map_err(TradingError::Config)?;
+                    .map_err(TradingError::Storage)?;
 
                 let usage = usage_json
                     .map(|json| {
                         serde_json::from_str::<Vec<AgentTokenUsage>>(&json)
                             .with_context(|| "failed to deserialize token usage from snapshot")
-                            .map_err(TradingError::Config)
+                            .map_err(TradingError::Storage)
                     })
                     .transpose()?;
 
-                Ok(Some((state, usage)))
+                Ok(Some(LoadedSnapshot {
+                    state,
+                    token_usage: usage,
+                }))
             }
         }
     }
 }
 
+fn serialize_snapshot_json<T: Serialize + ?Sized>(
+    value: &T,
+    label: &str,
+) -> Result<String, TradingError> {
+    serde_json::to_string(value)
+        .with_context(|| format!("failed to serialize {label} for snapshot"))
+        .map_err(TradingError::Storage)
+}
+
 /// Resolve the SQLite database path.
 ///
-/// If `db_path` is `Some`, it is used as-is.  Otherwise the default
-/// `$HOME/.scorpio-analyst/phase_snapshots.db` is returned.
+/// If `db_path` is `Some`, basic validation is applied to reject clearly unsafe
+/// or malformed inputs (empty paths, embedded null bytes, bare path-traversal
+/// sequences).  Otherwise the default `$HOME/.scorpio-analyst/phase_snapshots.db`
+/// is returned.
 fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf, TradingError> {
     if let Some(p) = db_path {
+        let s = p.to_string_lossy();
+
+        // Reject empty paths.
+        if s.is_empty() {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "snapshot db_path must not be empty"
+            )));
+        }
+
+        // Reject embedded null bytes (would truncate the path in C-based libs
+        // like SQLite).
+        if s.contains('\0') {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "snapshot db_path must not contain null bytes"
+            )));
+        }
+
+        // Reject paths that are *purely* traversal sequences (e.g. "../../../"
+        // or "..").  We do NOT reject paths like "/legit/dir/../file.db" because
+        // those are normal relative references; we only block paths whose
+        // *every* component is `.` or `..`, which have no meaningful file
+        // destination.
+        let all_traversal = p.components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        });
+        if all_traversal {
+            return Err(TradingError::Config(anyhow::anyhow!(
+                "snapshot db_path must not be a bare traversal path: {s}"
+            )));
+        }
+
         return Ok(p.to_path_buf());
     }
 
@@ -206,6 +316,7 @@ fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf, TradingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::TradingError;
     use crate::state::TradingState;
 
     /// Open an in-memory SQLite snapshot store for tests.
@@ -224,6 +335,40 @@ mod tests {
         TradingState::new("AAPL", "2026-01-15")
     }
 
+    #[derive(Debug)]
+    struct FailingSerialize;
+
+    impl serde::Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom(
+                "intentional serialization failure",
+            ))
+        }
+    }
+
+    #[test]
+    fn snapshot_phase_reports_storage_number_and_name() {
+        assert_eq!(SnapshotPhase::AnalystTeam.number(), 1);
+        assert_eq!(SnapshotPhase::AnalystTeam.name(), "analyst_team");
+        assert_eq!(SnapshotPhase::ResearcherDebate.number(), 2);
+        assert_eq!(SnapshotPhase::ResearcherDebate.name(), "researcher_debate");
+        assert_eq!(SnapshotPhase::Trader.number(), 3);
+        assert_eq!(SnapshotPhase::Trader.name(), "trader");
+        assert_eq!(SnapshotPhase::RiskDiscussion.number(), 4);
+        assert_eq!(SnapshotPhase::RiskDiscussion.name(), "risk_discussion");
+        assert_eq!(SnapshotPhase::FundManager.number(), 5);
+        assert_eq!(SnapshotPhase::FundManager.name(), "fund_manager");
+    }
+
+    #[test]
+    fn storage_error_preserves_source() {
+        let error = TradingError::Storage(anyhow::anyhow!("snapshot failed"));
+        assert!(std::error::Error::source(&error).is_some());
+    }
+
     #[tokio::test]
     async fn save_and_load_round_trip() {
         let store = in_memory_store().await;
@@ -231,19 +376,19 @@ mod tests {
         let exec_id = state.execution_id.to_string();
 
         store
-            .save_snapshot(&exec_id, 1, "analyst_sync", &state, None)
+            .save_snapshot(&exec_id, SnapshotPhase::AnalystTeam, &state, None)
             .await
             .expect("save should succeed");
 
         let loaded = store
-            .load_snapshot(&exec_id, 1)
+            .load_snapshot(&exec_id, SnapshotPhase::AnalystTeam)
             .await
             .expect("load should succeed")
             .expect("snapshot should exist");
 
-        assert_eq!(loaded.0.asset_symbol, state.asset_symbol);
-        assert_eq!(loaded.0.target_date, state.target_date);
-        assert!(loaded.1.is_none());
+        assert_eq!(loaded.state.asset_symbol, state.asset_symbol);
+        assert_eq!(loaded.state.target_date, state.target_date);
+        assert!(loaded.token_usage.is_none());
     }
 
     #[tokio::test]
@@ -253,25 +398,25 @@ mod tests {
         let exec_id = state.execution_id.to_string();
 
         store
-            .save_snapshot(&exec_id, 1, "phase_one_v1", &state, None)
+            .save_snapshot(&exec_id, SnapshotPhase::AnalystTeam, &state, None)
             .await
             .unwrap();
 
         // Modify state and save again under the same phase.
         state.target_date = "2026-03-19".to_string();
         store
-            .save_snapshot(&exec_id, 1, "phase_one_v2", &state, None)
+            .save_snapshot(&exec_id, SnapshotPhase::AnalystTeam, &state, None)
             .await
             .unwrap();
 
         let loaded = store
-            .load_snapshot(&exec_id, 1)
+            .load_snapshot(&exec_id, SnapshotPhase::AnalystTeam)
             .await
             .unwrap()
             .expect("snapshot should exist");
 
         // Should reflect the updated state.
-        assert_eq!(loaded.0.target_date, "2026-03-19");
+        assert_eq!(loaded.state.target_date, "2026-03-19");
     }
 
     #[tokio::test]
@@ -279,7 +424,7 @@ mod tests {
         let store = in_memory_store().await;
 
         let result = store
-            .load_snapshot("non-existent-id", 99)
+            .load_snapshot("non-existent-id", SnapshotPhase::FundManager)
             .await
             .expect("query should not fail");
 
@@ -305,20 +450,122 @@ mod tests {
         }];
 
         store
-            .save_snapshot(&exec_id, 1, "analyst_sync", &state, Some(&usage))
+            .save_snapshot(&exec_id, SnapshotPhase::AnalystTeam, &state, Some(&usage))
             .await
             .unwrap();
 
-        let (_, loaded_usage) = store
-            .load_snapshot(&exec_id, 1)
+        let loaded = store
+            .load_snapshot(&exec_id, SnapshotPhase::AnalystTeam)
             .await
             .unwrap()
             .expect("snapshot should exist");
 
-        let loaded_usage = loaded_usage.expect("token usage should be present");
+        let loaded_usage = loaded.token_usage.expect("token usage should be present");
         assert_eq!(loaded_usage.len(), 1);
         assert_eq!(loaded_usage[0].agent_name, "FundamentalAnalyst");
         assert_eq!(loaded_usage[0].total_tokens, 150);
+    }
+
+    #[tokio::test]
+    async fn save_snapshot_returns_storage_error_for_runtime_failures() {
+        let store = in_memory_store().await;
+        let state = sample_state();
+
+        store.close_for_test().await;
+
+        let error = store
+            .save_snapshot(
+                &state.execution_id.to_string(),
+                SnapshotPhase::AnalystTeam,
+                &state,
+                None,
+            )
+            .await
+            .expect_err("closed pool should fail");
+
+        assert!(matches!(error, TradingError::Storage(_)));
+    }
+
+    #[tokio::test]
+    async fn save_snapshot_uses_typed_phase_api() {
+        let store = in_memory_store().await;
+        let state = sample_state();
+
+        store
+            .save_snapshot(
+                &state.execution_id.to_string(),
+                SnapshotPhase::Trader,
+                &state,
+                None,
+            )
+            .await
+            .expect("typed phase save should succeed");
+
+        let loaded = store
+            .load_snapshot(&state.execution_id.to_string(), SnapshotPhase::Trader)
+            .await
+            .expect("load should succeed")
+            .expect("snapshot should exist");
+
+        assert_eq!(loaded.state.asset_symbol, state.asset_symbol);
+    }
+
+    #[test]
+    fn serialize_snapshot_json_returns_storage_error_for_serialization_failures() {
+        let error = serialize_snapshot_json(&FailingSerialize, "failing value")
+            .expect_err("intentional serializer failure should propagate");
+
+        assert!(matches!(error, TradingError::Storage(_)));
+    }
+
+    #[tokio::test]
+    async fn load_snapshot_returns_storage_error_for_runtime_failures() {
+        let store = in_memory_store().await;
+
+        store.close_for_test().await;
+
+        let error = store
+            .load_snapshot("exec-id", SnapshotPhase::AnalystTeam)
+            .await
+            .expect_err("closed pool should fail");
+
+        assert!(matches!(error, TradingError::Storage(_)));
+    }
+
+    #[tokio::test]
+    async fn load_snapshot_returns_storage_error_for_decode_failures() {
+        let store = in_memory_store().await;
+        let state = sample_state();
+        let exec_id = state.execution_id.to_string();
+
+        sqlx::query(
+            "INSERT INTO phase_snapshots
+                (execution_id, phase_number, phase_name, trading_state_json, token_usage_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&exec_id)
+        .bind(SnapshotPhase::AnalystTeam.number() as i64)
+        .bind(SnapshotPhase::AnalystTeam.name())
+        .bind("{\"asset_symbol\":true}")
+        .bind(Option::<&str>::None)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&store.pool)
+        .await
+        .expect("seed invalid row");
+
+        let error = store
+            .load_snapshot(&exec_id, SnapshotPhase::AnalystTeam)
+            .await
+            .expect_err("invalid snapshot JSON should fail decode");
+
+        assert!(matches!(error, TradingError::Storage(_)));
+    }
+
+    #[tokio::test]
+    async fn snapshot_store_implements_debug() {
+        let store = in_memory_store().await;
+        let rendered = format!("{store:?}");
+        assert!(rendered.contains("SnapshotStore"));
     }
 
     #[test]
@@ -340,6 +587,73 @@ mod tests {
         let custom = Path::new("/tmp/custom_test.db");
         let resolved = resolve_db_path(Some(custom)).expect("should resolve");
         assert_eq!(resolved, custom);
+    }
+
+    #[tokio::test]
+    async fn from_config_uses_expanded_snapshot_db_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("configured.db");
+        let mut config = crate::config::Config::load_from("config.toml").expect("config load");
+        config.storage.snapshot_db_path = db_path.to_string_lossy().into_owned();
+
+        let store = SnapshotStore::from_config(&config)
+            .await
+            .expect("store should open from config path");
+
+        assert!(
+            db_path.exists(),
+            "configured snapshot db path should be created"
+        );
+        drop(store);
+    }
+
+    // ── Path-validation edge cases ───────────────────────────────────────
+
+    #[test]
+    fn empty_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new("")));
+        assert!(result.is_err(), "empty path should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("must not be empty"),
+            "error should mention empty: {msg}"
+        );
+    }
+
+    #[test]
+    fn null_byte_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new("/tmp/bad\0.db")));
+        assert!(result.is_err(), "null-byte path should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("null bytes"),
+            "error should mention null bytes: {msg}"
+        );
+    }
+
+    #[test]
+    fn bare_traversal_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new("../../..")));
+        assert!(result.is_err(), "bare traversal path should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("bare traversal"),
+            "error should mention traversal: {msg}"
+        );
+    }
+
+    #[test]
+    fn dot_only_path_is_rejected() {
+        let result = resolve_db_path(Some(Path::new(".")));
+        assert!(result.is_err(), "bare '.' path should be rejected");
+    }
+
+    #[test]
+    fn legitimate_path_with_parent_ref_is_accepted() {
+        // Paths like "/tmp/foo/../bar.db" are legitimate relative refs.
+        let p = Path::new("/tmp/foo/../bar.db");
+        let resolved = resolve_db_path(Some(p)).expect("should resolve");
+        assert_eq!(resolved, p);
     }
 
     #[tokio::test]

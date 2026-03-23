@@ -1,6 +1,7 @@
 use scorpio_analyst::config::Config;
 use scorpio_analyst::observability::init_tracing;
 use scorpio_analyst::providers::factory::preflight_configured_providers;
+use scorpio_analyst::workflow::SnapshotStore;
 
 fn main() {
     init_tracing();
@@ -22,6 +23,19 @@ fn main() {
                 eprintln!("failed to preflight configured providers: {e:#}");
                 std::process::exit(1);
             }
+
+            let snapshot_store = match runtime.block_on(SnapshotStore::from_config(&cfg)) {
+                Ok(store) => store,
+                Err(e) => {
+                    eprintln!("failed to initialize snapshot storage: {e:#}");
+                    std::process::exit(1);
+                }
+            };
+
+            tracing::info!(
+                snapshot_store = ?snapshot_store,
+                "storage configured"
+            );
 
             tracing::info!(
                 quick_provider = %cfg.llm.quick_thinking_provider,

@@ -47,11 +47,75 @@ and `async-trait` for the graph-flow `Task` trait.
 - **Non-Goals:**
     - Reverting to the upstream graph-flow release without the forked `rig-core 0.32` compatibility.
     - PostgreSQL storage (deferred to future; SQLite for MVP).
-    - Agent implementation changes (this is purely an orchestration wrapper layer).
+    - Broad agent refactoring — only narrow single-step helper additions to researcher, risk, and analyst modules.
     - CLI integration (owned by `add-cli`).
     - Backtesting integration (owned by `add-backtesting`).
     - Per-agent timeout configuration (uses existing per-agent timeouts from the agent layer).
     - Memory/past experience retrieval (deferred to future enhancement).
+
+## Remediation Addendum
+
+The initial implementation compiled and passed tests but deviated from several approved behaviors:
+
+- `BullishResearcherTask` called `run_researcher_debate` with `max_rounds=1`, running the full loop (bull + bear + moderator) inside one node. `BearishResearcherTask` and `DebateModeratorTask` were no-op placeholders.
+- `AggressiveRiskTask` called `run_risk_discussion` with `max_rounds=1`, running the full risk round. `ConservativeRiskTask`, `NeutralRiskTask`, and `RiskModeratorTask` were no-op placeholders.
+- `run_analysis_cycle` used a time-based session ID, not a per-run generated UUID written to `TradingState.execution_id`.
+- Snapshot persistence failures logged a warning and continued instead of failing the task.
+- Per-phase token accounting was not written back into `TradingState.token_usage`.
+- No integration tests covered `run_analysis_cycle` end-to-end.
+
+### Corrected per-node execution model
+
+**Phase 2 — Researcher Debate:**
+
+The researcher module exposes three narrowly-scoped public helpers:
+
+- `run_bullish_researcher_turn(state, handle, llm_config)` — executes exactly one bullish turn, appends one `DebateMessage` to `state.debate_history`, returns `AgentTokenUsage`.
+- `run_bearish_researcher_turn(state, handle, llm_config)` — executes exactly one bearish turn, appends one `DebateMessage` to `state.debate_history`, returns `AgentTokenUsage`.
+- `run_debate_moderation(state, handle, llm_config)` — executes the moderator synthesis, sets `state.consensus_summary`, returns `AgentTokenUsage`.
+
+`BullishResearcherTask` calls `run_bullish_researcher_turn`. `BearishResearcherTask` calls `run_bearish_researcher_turn`. `DebateModeratorTask` calls `run_debate_moderation` and owns the round-completion checkpoint.
+
+The `debate_round` counter increments at the `DebateModeratorTask` checkpoint (not at `BullishResearcherTask` entry). This ensures the conditional edge evaluates correctly after a complete bull+bear+moderator sequence.
+
+If `max_debate_rounds = 0`, the graph routes directly to `DebateModeratorTask`, which calls `run_debate_moderation` on the empty debate history to produce a consensus from analyst data alone.
+
+**Phase 4 — Risk Discussion:**
+
+The risk module exposes four narrowly-scoped public helpers:
+
+- `run_aggressive_risk_turn(state, handle, llm_config)` — executes exactly one aggressive risk turn, writes `state.aggressive_risk_report`, returns `AgentTokenUsage`.
+- `run_conservative_risk_turn(state, handle, llm_config)` — executes one conservative turn, writes `state.conservative_risk_report`, returns `AgentTokenUsage`.
+- `run_neutral_risk_turn(state, handle, llm_config)` — executes one neutral turn, writes `state.neutral_risk_report`, returns `AgentTokenUsage`.
+- `run_risk_moderation(state, handle, llm_config)` — executes the moderator synthesis, appends to `state.risk_discussion_history`, returns `AgentTokenUsage`.
+
+`RiskModeratorTask` owns the round-completion checkpoint and increments `risk_round` after the full Aggressive → Conservative → Neutral → Moderator sequence.
+
+### Execution identity and mandatory snapshots
+
+`run_analysis_cycle` generates a fresh `Uuid` at the start of each invocation and writes it to the working copy of `TradingState.execution_id` before the graph starts. Caller-provided execution IDs are overwritten.
+
+Snapshot persistence is mandatory. If `save_snapshot` fails, the task returns an error and the pipeline halts. Log-and-continue is not permitted for snapshot failures.
+
+### Migration-driven snapshot schema
+
+`SnapshotStore` uses `sqlx::migrate!` to initialize the `phase_snapshots` schema from the `migrations/` directory. Inline schema definitions in Rust are removed. This eliminates drift between the SQL migration file and the Rust initialization path.
+
+### Token accounting
+
+The workflow layer accumulates `AgentTokenUsage` entries during each phase and writes them into `TradingState.token_usage` at phase boundaries:
+
+- Phase 1: one `PhaseTokenUsage` entry for the analyst fan-out (four analyst agent entries).
+- Phase 2: separate `PhaseTokenUsage` entries per debate round (`Researcher Debate Round N`) plus one for moderation (`Researcher Debate Moderation`).
+- Phase 3: one `PhaseTokenUsage` entry for the trader.
+- Phase 4: separate entries per risk round (`Risk Discussion Round N`) plus one for moderation (`Risk Discussion Moderation`).
+- Phase 5: one `PhaseTokenUsage` entry for the fund manager.
+
+Providers that do not return authoritative counts may still use `AgentTokenUsage::unavailable`, but `PhaseTokenUsage` entries must be materialized and totals must be internally consistent.
+
+### Error mapping
+
+`TradingError::GraphFlow` carries real phase and task identity. Errors must not collapse to generic `step_N` labels when the real task and phase are known. Workflow error messages apply the same sanitization posture used for provider-layer errors.
 
 ## Architectural Overview
 

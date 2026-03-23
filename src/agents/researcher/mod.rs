@@ -161,6 +161,99 @@ pub async fn run_researcher_debate(
     run_researcher_debate_with_executor(state, max_rounds, &mut executor).await
 }
 
+/// Execute a single Bullish Researcher turn and append the result to
+/// `state.debate_history`.
+///
+/// Used by [`BullishResearcherTask`][crate::workflow::tasks::BullishResearcherTask]
+/// so that each graph node performs exactly one agent step.
+///
+/// # Errors
+///
+/// Returns [`TradingError`] on LLM failure or schema violation.
+pub async fn run_bullish_researcher_turn(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    let mut executor = RealDebateExecutor {
+        bull: BullishResearcher::new(handle, state, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, &config.llm)?,
+    };
+
+    let bear_latest = state
+        .debate_history
+        .iter()
+        .rev()
+        .find(|m| m.role == "bearish_researcher")
+        .map(|m| m.content.as_str());
+
+    let (msg, usage) = executor
+        .bullish_turn(&state.debate_history, bear_latest)
+        .await?;
+    state.debate_history.push(msg);
+    Ok(usage)
+}
+
+/// Execute a single Bearish Researcher turn and append the result to
+/// `state.debate_history`.
+///
+/// Used by [`BearishResearcherTask`][crate::workflow::tasks::BearishResearcherTask]
+/// so that each graph node performs exactly one agent step.
+///
+/// # Errors
+///
+/// Returns [`TradingError`] on LLM failure or schema violation.
+pub async fn run_bearish_researcher_turn(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    let mut executor = RealDebateExecutor {
+        bull: BullishResearcher::new(handle, state, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, &config.llm)?,
+    };
+
+    let bull_latest = state
+        .debate_history
+        .iter()
+        .rev()
+        .find(|m| m.role == "bullish_researcher")
+        .map(|m| m.content.as_str());
+
+    let (msg, usage) = executor
+        .bearish_turn(&state.debate_history, bull_latest)
+        .await?;
+    state.debate_history.push(msg);
+    Ok(usage)
+}
+
+/// Run the Debate Moderator once, writing the consensus summary to
+/// `state.consensus_summary`.
+///
+/// Used by [`DebateModeratorTask`][crate::workflow::tasks::DebateModeratorTask]
+/// so the moderator runs as its own dedicated graph node.
+///
+/// # Errors
+///
+/// Returns [`TradingError`] on LLM failure or schema violation.
+pub async fn run_debate_moderation(
+    state: &mut TradingState,
+    config: &Config,
+    handle: &CompletionModelHandle,
+) -> Result<AgentTokenUsage, TradingError> {
+    let mut executor = RealDebateExecutor {
+        bull: BullishResearcher::new(handle, state, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, &config.llm)?,
+    };
+
+    let (consensus, usage) = executor.moderate(state).await?;
+    state.consensus_summary = Some(consensus);
+    Ok(usage)
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

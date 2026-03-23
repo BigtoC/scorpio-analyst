@@ -59,6 +59,19 @@ impl FinnhubClient {
         })
     }
 
+    /// Construct a non-functional client for use in tests only.
+    ///
+    /// The resulting client has a real `FhClient` built with a dummy key.
+    /// Any API call made through this client will fail with an auth error —
+    /// this is intentional for structural tests that do not make network requests.
+    #[doc(hidden)]
+    pub fn for_test() -> Self {
+        Self {
+            inner: FhClient::new("test-dummy-key"),
+            limiter: SharedRateLimiter::new("test-finnhub", 30),
+        }
+    }
+
     // ─── Public async methods ────────────────────────────────────────────────
 
     /// Fetch corporate financials and company profile, returning a

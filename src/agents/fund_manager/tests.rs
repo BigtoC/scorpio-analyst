@@ -57,6 +57,7 @@ fn sample_config() -> Config {
             backtest_end: None,
         },
         api: sample_api_config(),
+        storage: Default::default(),
     }
 }
 
