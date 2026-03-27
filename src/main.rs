@@ -1,7 +1,12 @@
+use chrono::Local;
 use scorpio_analyst::config::Config;
+use scorpio_analyst::data::{FinnhubClient, YFinanceClient};
 use scorpio_analyst::observability::init_tracing;
-use scorpio_analyst::providers::factory::preflight_configured_providers;
-use scorpio_analyst::workflow::SnapshotStore;
+use scorpio_analyst::providers::factory::{create_completion_model, preflight_configured_providers};
+use scorpio_analyst::providers::ModelTier;
+use scorpio_analyst::rate_limit::SharedRateLimiter;
+use scorpio_analyst::state::TradingState;
+use scorpio_analyst::workflow::{SnapshotStore, TradingPipeline};
 
 fn main() {
     init_tracing();
@@ -32,17 +37,85 @@ fn main() {
                 }
             };
 
-            tracing::info!(
-                snapshot_store = ?snapshot_store,
-                "storage configured"
-            );
+            tracing::info!(snapshot_store = ?snapshot_store, "storage configured");
+
+            let quick_handle =
+                match create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.api) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("failed to create quick-thinking model handle: {e:#}");
+                        std::process::exit(1);
+                    }
+                };
+
+            let deep_handle =
+                match create_completion_model(ModelTier::DeepThinking, &cfg.llm, &cfg.api) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("failed to create deep-thinking model handle: {e:#}");
+                        std::process::exit(1);
+                    }
+                };
+
+            let finnhub_limiter =
+                SharedRateLimiter::new("finnhub", cfg.api.finnhub_rate_limit);
+            let finnhub = match FinnhubClient::new(&cfg.api, finnhub_limiter) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("failed to initialize Finnhub client: {e:#}");
+                    std::process::exit(1);
+                }
+            };
+            let yfinance = YFinanceClient::default();
+
+            let symbol = cfg.trading.asset_symbol.clone();
+            let target_date = Local::now().format("%Y-%m-%d").to_string();
 
             tracing::info!(
                 quick_provider = %cfg.llm.quick_thinking_provider,
                 deep_provider = %cfg.llm.deep_thinking_provider,
-                symbol = %cfg.trading.asset_symbol,
+                symbol = %symbol,
+                target_date = %target_date,
                 "scorpio-analyst initialized"
             );
+
+            let pipeline = TradingPipeline::new(
+                cfg,
+                finnhub,
+                yfinance,
+                snapshot_store,
+                quick_handle,
+                deep_handle,
+            );
+
+            let initial_state = TradingState::new(&symbol, &target_date);
+
+            match runtime.block_on(pipeline.run_analysis_cycle(initial_state)) {
+                Ok(state) => {
+                    match &state.final_execution_status {
+                        Some(execution) => {
+                            println!(
+                                "\n=== DECISION: {:?} ===\n{}\n",
+                                execution.decision, execution.rationale
+                            );
+                        }
+                        None => {
+                            eprintln!("pipeline completed without a final execution status");
+                            std::process::exit(1);
+                        }
+                    }
+                    println!(
+                        "Token usage: {} total ({} prompt / {} completion)",
+                        state.token_usage.total_tokens,
+                        state.token_usage.total_prompt_tokens,
+                        state.token_usage.total_completion_tokens,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("analysis cycle failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
         }
         Err(e) => {
             eprintln!("failed to load configuration: {e:#}");
