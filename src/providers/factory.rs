@@ -143,7 +143,7 @@ pub fn create_completion_model(
 ) -> Result<CompletionModelHandle, TradingError> {
     let provider = validate_provider_id(tier.provider_id(llm_config))?;
     let model_id = validate_model_id(tier.model_id(llm_config))?;
-    let client = create_provider_client_for(provider, api_config)?;
+    let client = create_provider_client_for(provider, api_config, &model_id)?;
     info!(provider = provider.as_str(), model = model_id.as_str(), tier = %tier, "LLM completion model handle created");
     Ok(CompletionModelHandle {
         provider,
@@ -184,6 +184,7 @@ pub async fn preflight_configured_providers(
 fn create_provider_client_for(
     provider: ProviderId,
     api_config: &ApiConfig,
+    model_id: &str,
 ) -> Result<ProviderClient, TradingError> {
     match provider {
         ProviderId::OpenAI => {
@@ -222,7 +223,7 @@ fn create_provider_client_for(
                 .unwrap_or_else(|_| resolve_copilot_exe_path());
             validate_copilot_cli_path(&exe_path)?;
             Ok(ProviderClient::Copilot(CopilotProviderClient::new(
-                exe_path,
+                exe_path, model_id,
             )))
         }
     }

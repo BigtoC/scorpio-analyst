@@ -311,8 +311,21 @@ impl AcpTransport {
 
     /// Send `session/new` and return the assigned request ID.
     pub async fn send_session_new(&mut self) -> Result<u64, AcpTransportError> {
+        let cwd = std::env::current_dir()
+            .map_err(AcpTransportError::Io)?
+            .into_os_string()
+            .into_string()
+            .map_err(|p| {
+                AcpTransportError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "current working directory contains non-UTF-8 characters: {}",
+                        p.to_string_lossy()
+                    ),
+                ))
+            })?;
         let params = NewSessionParams {
-            cwd: ".".to_owned(),
+            cwd,
             mcp_servers: vec![],
         };
         let params_value =
@@ -587,13 +600,13 @@ mod tests {
     }
 
     #[test]
-    fn new_session_params_serializes_empty_mcp_servers() {
+    fn new_session_params_serializes_with_cwd_and_empty_mcp_servers() {
         let params = NewSessionParams {
-            cwd: ".".to_owned(),
+            cwd: "/home/user/project".to_owned(),
             mcp_servers: vec![],
         };
         let json = serde_json::to_string(&params).unwrap();
-        assert!(json.contains("\"cwd\":\".\""));
+        assert!(json.contains("\"cwd\":\"/home/user/project\""));
         assert!(json.contains("\"mcpServers\":[]"));
     }
 
