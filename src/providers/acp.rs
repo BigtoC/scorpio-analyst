@@ -255,6 +255,32 @@ impl AcpTransport {
         Ok(id)
     }
 
+    /// Write a JSON-RPC 2.0 response to a server-initiated request.
+    ///
+    /// Unlike [`send_request`], this does **not** allocate a new client-side ID.
+    /// The response carries the server's original request `id` so the server can
+    /// correlate it.
+    pub async fn send_response(
+        &mut self,
+        server_request_id: u64,
+        result: Value,
+    ) -> Result<(), AcpTransportError> {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            id: server_request_id,
+            result: Some(result),
+            error: None,
+        };
+        let mut line = serde_json::to_string(&resp).map_err(AcpTransportError::Serialization)?;
+        line.push('\n');
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(AcpTransportError::Io)?;
+        self.stdin.flush().await.map_err(AcpTransportError::Io)?;
+        Ok(())
+    }
+
     /// Read one NDJSON line from stdout and deserialize it as an [`AcpMessage`].
     ///
     /// Returns `None` when the process closes its stdout (EOF).
@@ -351,27 +377,6 @@ impl AcpTransport {
             .await
     }
 
-    /// Send `session/requestPermission` response (always cancels).
-    pub async fn send_permission_response(
-        &mut self,
-        session_id: &str,
-        permission_id: &str,
-    ) -> Result<u64, AcpTransportError> {
-        let result = RequestPermissionResult {
-            outcome: RequestPermissionOutcome {
-                outcome: "cancelled".to_owned(),
-            },
-        };
-        // ACP uses a notification-style response for permission: send as a regular request.
-        let params = serde_json::json!({
-            "sessionId": session_id,
-            "permissionId": permission_id,
-            "outcome": result.outcome,
-        });
-        self.send_request("session/respondPermission", Some(params))
-            .await
-    }
-
     /// Wait for the response to request `expected_id`, processing and returning any
     /// interleaved notifications via `on_notification`.
     ///
@@ -405,7 +410,7 @@ impl AcpTransport {
                         let params: RequestPermissionParams =
                             serde_json::from_value(req.params.clone().unwrap_or(Value::Null))
                                 .map_err(AcpTransportError::Deserialization)?;
-                        self.send_permission_response(&params.session_id, &params.permission_id)
+                        self.send_response(req.id, serde_json::json!({ "outcome": "cancelled" }))
                             .await?;
                         tracing::warn!(
                             session_id = %params.session_id,
@@ -625,6 +630,38 @@ mod tests {
         let json = r#"{"stopReason":"end_turn"}"#;
         let result: PromptResult = serde_json::from_str(json).unwrap();
         assert_eq!(result.stop_reason, Some(StopReason::EndTurn));
+    }
+
+    #[test]
+    fn json_rpc_response_serializes_correctly() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            id: 7,
+            result: Some(serde_json::json!({ "outcome": "cancelled" })),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"id\":7"));
+        assert!(json.contains("\"outcome\":\"cancelled\""));
+        // A response must NOT contain "method"
+        assert!(!json.contains("\"method\""));
+        // error is None, should be skipped
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn json_rpc_response_with_null_result_serializes_correctly() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            id: 42,
+            result: Some(Value::Null),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"id\":42"));
+        assert!(json.contains("\"result\":null"));
+        assert!(!json.contains("\"method\""));
     }
 
     #[test]
