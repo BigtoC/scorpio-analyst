@@ -410,8 +410,14 @@ impl AcpTransport {
                         let params: RequestPermissionParams =
                             serde_json::from_value(req.params.clone().unwrap_or(Value::Null))
                                 .map_err(AcpTransportError::Deserialization)?;
-                        self.send_response(req.id, serde_json::json!({ "outcome": "cancelled" }))
-                            .await?;
+                        let result = RequestPermissionResult {
+                            outcome: RequestPermissionOutcome {
+                                outcome: "cancelled".to_owned(),
+                            },
+                        };
+                        let result_value = serde_json::to_value(result)
+                            .map_err(AcpTransportError::Serialization)?;
+                        self.send_response(req.id, result_value).await?;
                         tracing::warn!(
                             session_id = %params.session_id,
                             permission_id = %params.permission_id,
@@ -637,17 +643,32 @@ mod tests {
         let resp = JsonRpcResponse {
             jsonrpc: "2.0".to_owned(),
             id: 7,
-            result: Some(serde_json::json!({ "outcome": "cancelled" })),
+            result: Some(serde_json::json!({ "key": "value" })),
             error: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"id\":7"));
-        assert!(json.contains("\"outcome\":\"cancelled\""));
+        assert!(json.contains("\"key\":\"value\""));
         // A response must NOT contain "method"
         assert!(!json.contains("\"method\""));
         // error is None, should be skipped
         assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn permission_response_payload_has_nested_outcome() {
+        // Per spec: "the system MUST respond with { outcome: { outcome: "cancelled" } }"
+        let result = RequestPermissionResult {
+            outcome: RequestPermissionOutcome {
+                outcome: "cancelled".to_owned(),
+            },
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        // The outer "outcome" wraps the inner struct which also has an "outcome" field.
+        let outer = value.get("outcome").expect("missing outer 'outcome' key");
+        let inner = outer.get("outcome").expect("missing inner 'outcome' key");
+        assert_eq!(inner.as_str().unwrap(), "cancelled");
     }
 
     #[test]
