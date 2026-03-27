@@ -33,6 +33,38 @@ follow-up that should be revisited later.
 - **Revisit trigger**: After the MVP provider, agent, and workflow layers are stable enough to evaluate whether
   mixed-provider routing is worth the added complexity
 
+### Copilot tool calling for Phase 1 analysts
+
+- **Status**: Not yet implemented — Phase 1 analysts are non-functional when Copilot is the provider
+- **Source**: `docs/superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md`
+- **Current baseline**: The Copilot provider communicates over ACP via a single shared subprocess. Two specific gaps
+  block tool use entirely:
+    1. `send_session_new()` in `src/providers/acp.rs` hardcodes `mcp_servers: vec![]`, so no MCP tool server is ever
+       registered with the Copilot session.
+    2. `build_prompt_text()` in `src/providers/copilot.rs` ignores `request.tools` completely — tools passed by analyst
+       agents are silently dropped before the ACP request is sent.
+  As a result, all four Phase 1 analyst agents (Fundamental, Sentiment, News, Technical) cannot invoke their
+  data-fetching tools when Copilot is configured as the provider.
+- **Why it is not yet implemented**: The fix requires non-trivial architectural work: splitting the Copilot monolith
+  into focused modules (`mod.rs`, `contracts.rs`, `request.rs`, `worker.rs`, `pool.rs`), introducing a per-session
+  stdio MCP helper server (via `rmcp`), refactoring the provider factory to support bundle-aware agent construction,
+  and migrating all four analysts onto the new tool-bundle path. The scope is intentionally deferred to avoid
+  destabilizing the provider and analyst layers before the core workflow is stable.
+- **Why revisit later**: Copilot is the only zero-marginal-cost LLM option available via the GitHub Copilot
+  subscription. Making it work as the Phase 1 analyst provider removes the requirement for an OpenAI/Anthropic/Gemini
+  API key for local development and reduces operational cost for production runs.
+- **Intentionally deferred details**:
+    - ACP wire contract refresh: nested `session/update` parsing, typed `mcpServers`, `session/cancel` support
+    - Worker pool design: bounded FIFO checkout, respawn policy, taint/discard on timeout
+    - `AnalystToolBundle` and `AnalystToolSpec` design — tool identity vs. runtime call parameters
+    - Hidden stdio MCP entrypoint in `src/cli/mod.rs`
+    - Regression test coverage for timeouts, tool calls, and fan-out concurrency
+- **Revisit trigger**: After the core workflow (researcher debate, risk management, fund manager) is stable enough that
+  refactoring the provider and analyst layers does not risk regressing the end-to-end pipeline. See the full
+  implementation plan at
+  [`docs/superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md`](superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md)
+  for the detailed task breakdown.
+
 ### Copilot heuristic token estimation
 
 - **Status**: Deferred until after the MVP is finished
