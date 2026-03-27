@@ -1079,8 +1079,9 @@ dependencies = [
 
 [[package]]
 name = "graph-flow"
-version = "0.4.1"
-source = "git+https://github.com/BigtoC/rs-graph-llm?branch=feature%2Fupdate-rig-version#266f2af5411df045121ce6e9be672ed0a39b4352"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7e4e0538561831c0b6a495fe3ed316a9c21b3ee2601e190f119a7c26ec9a86b"
 dependencies = [
  "anyhow",
  "async-trait",
