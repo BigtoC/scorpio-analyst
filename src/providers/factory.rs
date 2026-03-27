@@ -214,10 +214,12 @@ fn create_provider_client_for(
             Ok(ProviderClient::Gemini(client))
         }
         ProviderId::Copilot => {
-            // Copilot requires no API key; the CLI executable path defaults to "copilot".
-            // Use SCORPIO_COPILOT_CLI_PATH env var to override if needed.
-            let exe_path =
-                std::env::var("SCORPIO_COPILOT_CLI_PATH").unwrap_or_else(|_| "copilot".to_owned());
+            // Copilot requires no API key. Resolve the CLI path in priority order:
+            // 1. SCORPIO_COPILOT_CLI_PATH env var (explicit override)
+            // 2. `which copilot` (absolute path from PATH)
+            // 3. "copilot" plain name (last resort, relies on PATH at exec time)
+            let exe_path = std::env::var("SCORPIO_COPILOT_CLI_PATH")
+                .unwrap_or_else(|_| resolve_copilot_exe_path());
             validate_copilot_cli_path(&exe_path)?;
             Ok(ProviderClient::Copilot(CopilotProviderClient::new(
                 exe_path,
@@ -1197,6 +1199,22 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
 }
 
 /// Validate the Copilot CLI executable path supplied via `SCORPIO_COPILOT_CLI_PATH`.
+/// Resolve the absolute path to the `copilot` CLI using `which`.
+///
+/// Returns the trimmed stdout of `which copilot` on success, or falls back to
+/// the plain name `"copilot"` if `which` is unavailable or returns no output.
+fn resolve_copilot_exe_path() -> String {
+    std::process::Command::new("which")
+        .arg("copilot")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "copilot".to_owned())
+}
+
 ///
 /// Rejects paths that:
 /// - Contain shell metacharacters that could enable injection.
