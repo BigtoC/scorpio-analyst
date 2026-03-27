@@ -190,7 +190,9 @@ pub struct SessionUpdateParams {
 #[serde(rename_all = "camelCase")]
 pub struct RequestPermissionParams {
     pub session_id: String,
-    pub permission_id: String,
+    /// May be absent in some ACP server implementations.
+    #[serde(default)]
+    pub permission_id: Option<String>,
     #[serde(default)]
     pub details: Value,
 }
@@ -244,6 +246,7 @@ impl AcpTransport {
     ) -> Result<u64, AcpTransportError> {
         let id = self.next_id;
         self.next_id += 1;
+        tracing::debug!(id, method, "ACP: sending request");
         let req = JsonRpcRequest::new(id, method, params);
         let mut line = serde_json::to_string(&req).map_err(AcpTransportError::Serialization)?;
         line.push('\n');
@@ -265,6 +268,7 @@ impl AcpTransport {
         server_request_id: u64,
         result: Value,
     ) -> Result<(), AcpTransportError> {
+        tracing::debug!(server_request_id, "ACP: sending response to server request");
         let resp = JsonRpcResponse {
             jsonrpc: "2.0".to_owned(),
             id: server_request_id,
@@ -392,6 +396,7 @@ impl AcpTransport {
                     return Err(AcpTransportError::UnexpectedEof);
                 }
                 Some(AcpMessage::Response(resp)) if resp.id == expected_id => {
+                    tracing::debug!(id = resp.id, "ACP: matched response");
                     if let Some(err) = resp.error {
                         return Err(AcpTransportError::RpcError(err));
                     }
@@ -407,9 +412,8 @@ impl AcpTransport {
                 }
                 Some(AcpMessage::Request(req)) => {
                     if req.method == "session/request_permission" {
-                        let params: RequestPermissionParams =
-                            serde_json::from_value(req.params.clone().unwrap_or(Value::Null))
-                                .map_err(AcpTransportError::Deserialization)?;
+                        // Always send cancellation response, even if params are
+                        // malformed — refusing to respond would hang the server.
                         let result = RequestPermissionResult {
                             outcome: RequestPermissionOutcome {
                                 outcome: "cancelled".to_owned(),
@@ -418,11 +422,24 @@ impl AcpTransport {
                         let result_value = serde_json::to_value(result)
                             .map_err(AcpTransportError::Serialization)?;
                         self.send_response(req.id, result_value).await?;
-                        tracing::warn!(
-                            session_id = %params.session_id,
-                            permission_id = %params.permission_id,
-                            "ACP: permission request refused"
-                        );
+
+                        match serde_json::from_value::<RequestPermissionParams>(
+                            req.params.unwrap_or(Value::Null),
+                        ) {
+                            Ok(params) => {
+                                tracing::warn!(
+                                    session_id = %params.session_id,
+                                    permission_id = params.permission_id.as_deref().unwrap_or("<none>"),
+                                    "ACP: permission request refused"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "ACP: permission request refused (params could not be parsed)"
+                                );
+                            }
+                        }
                     } else {
                         tracing::warn!(
                             id = req.id,
@@ -556,7 +573,7 @@ mod tests {
         let json = r#"{"sessionId":"session-1","permissionId":"perm-1","details":{"kind":"fs"}}"#;
         let params: RequestPermissionParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.session_id, "session-1");
-        assert_eq!(params.permission_id, "perm-1");
+        assert_eq!(params.permission_id, Some("perm-1".to_owned()));
         assert_eq!(params.details["kind"], "fs");
     }
 
@@ -683,6 +700,26 @@ mod tests {
         assert!(json.contains("\"id\":42"));
         assert!(json.contains("\"result\":null"));
         assert!(!json.contains("\"method\""));
+    }
+
+    #[test]
+    fn request_permission_params_deserializes_without_permission_id() {
+        // The ACP server may omit permissionId; deserialization must not fail.
+        let json = r#"{"sessionId":"session-1","details":{"kind":"fs"}}"#;
+        let params: RequestPermissionParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.session_id, "session-1");
+        assert_eq!(params.permission_id, None);
+        assert_eq!(params.details["kind"], "fs");
+    }
+
+    #[test]
+    fn request_permission_params_deserializes_with_permission_id() {
+        // When permissionId IS present, it should be captured.
+        let json = r#"{"sessionId":"session-1","permissionId":"perm-1","details":{"kind":"fs"}}"#;
+        let params: RequestPermissionParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.session_id, "session-1");
+        assert_eq!(params.permission_id, Some("perm-1".to_owned()));
+        assert_eq!(params.details["kind"], "fs");
     }
 
     #[test]
