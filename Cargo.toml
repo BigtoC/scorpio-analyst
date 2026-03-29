@@ -50,7 +50,7 @@ yfinance-rs = "0.7.2"
 kand = "0.2.2"
 
 # Graph orchestration
-graph-flow = { git = "https://github.com/BigtoC/rs-graph-llm", branch = "feature/update-rig-version", features = ["rig"] }
+graph-flow = { version = "0.5.0", features = ["rig"] }
 async-trait = "0.1"
 
 # Phase snapshot persistence

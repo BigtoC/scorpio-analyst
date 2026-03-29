@@ -101,6 +101,8 @@ impl rig::completion::GetTokenUsage for CopilotRawResponse {
 pub struct CopilotClient {
     /// Path to the Copilot CLI executable (default: `"copilot"`).
     exe_path: String,
+    /// The model to request from the Copilot CLI (e.g. `"claude-haiku-4.5"`).
+    model_id: String,
     /// Live ACP transport, present when the subprocess is running and initialized.
     transport: Option<AcpTransport>,
     /// Handle to the child process (needed for graceful shutdown).
@@ -110,14 +112,20 @@ pub struct CopilotClient {
 }
 
 impl CopilotClient {
-    /// Create a new client with the given executable path.
-    pub fn new(exe_path: impl Into<String>) -> Self {
+    /// Create a new client with the given executable path and model.
+    pub fn new(exe_path: impl Into<String>, model_id: impl Into<String>) -> Self {
         Self {
             exe_path: exe_path.into(),
+            model_id: model_id.into(),
             transport: None,
             child: None,
             stderr_task: None,
         }
+    }
+
+    /// The model ID this client is configured for.
+    pub fn model_id(&self) -> &str {
+        &self.model_id
     }
 
     /// Poll the child process status non-blockingly and return `true` if it is still running.
@@ -155,7 +163,7 @@ impl CopilotClient {
         self.reset_process_state().await;
 
         let mut child = tokio::process::Command::new(&self.exe_path)
-            .args(["--acp", "--stdio"])
+            .args(["--acp", "--stdio", "--model", &self.model_id])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -397,6 +405,7 @@ impl std::fmt::Debug for CopilotClient {
         // only the fields that are safe to print.
         f.debug_struct("CopilotClient")
             .field("exe_path", &self.exe_path)
+            .field("model_id", &self.model_id)
             .field("transport_active", &self.transport.is_some())
             .field("child_active", &self.child.is_some())
             .finish()
@@ -436,12 +445,45 @@ impl CopilotCompletionModel {
 
 /// Build the prompt text from a rig `CompletionRequest`.
 ///
-/// Assembles: optional preamble, chat history, then the final user message.
+/// Assembles: optional preamble, documents, output schema, then chat history.
+/// Documents and schema are critical for typed prompts — rig injects JSON schema
+/// constraints via `documents` and `output_schema` that the model needs to see.
 fn build_prompt_text(request: &CompletionRequest) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     if let Some(preamble) = &request.preamble {
         parts.push(format!("[System]\n{preamble}"));
+    }
+
+    // Include documents (schema instructions, context) — rig injects these for
+    // typed prompts.  Since Copilot ACP accepts only plain text, we render each
+    // document using its Display impl (which produces <file id:...>...</file>).
+    if !request.documents.is_empty() {
+        let doc_text: String = request
+            .documents
+            .iter()
+            .map(|doc| doc.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("[Documents]\n{doc_text}"));
+    }
+
+    // Include output schema instructions when present — this tells the model
+    // to return JSON matching the schema, which is critical for typed prompts.
+    if let Some(schema) = &request.output_schema {
+        match serde_json::to_string_pretty(schema) {
+            Ok(schema_json) => {
+                parts.push(format!(
+                    "[Output Schema]\nYou MUST respond with valid JSON matching this schema:\n{schema_json}"
+                ));
+            }
+            Err(err) => {
+                // Serialization of a Schema should never fail in practice, but if it
+                // does the model will silently receive no schema constraint — warn loudly
+                // so the caller can diagnose the issue.
+                tracing::warn!(error = %err, "failed to serialize output_schema; typed prompt will lack schema constraints");
+            }
+        }
     }
 
     for msg in request.chat_history.iter() {
@@ -565,8 +607,9 @@ impl rig::completion::CompletionModel for CopilotCompletionModel {
 
 /// A thin provider-client wrapper that satisfies `rig`'s [`CompletionClient`] trait boundary.
 ///
-/// Holds a shared `CopilotCompletionModel`; `completion_model()` always returns the same
-/// underlying model regardless of the `model` parameter (Copilot CLI determines its own model).
+/// Holds a shared `CopilotCompletionModel`. `completion_model(model_id)` delegates to the
+/// default trait impl which calls `CopilotCompletionModel::make()`, creating a new model
+/// handle with the requested `model_id`.
 #[derive(Clone, Debug)]
 pub struct CopilotProviderClient {
     model: CopilotCompletionModel,
@@ -575,10 +618,12 @@ pub struct CopilotProviderClient {
 impl CopilotProviderClient {
     /// Create a provider client wrapping the given shared `CopilotClient`.
     ///
-    /// `exe_path` is the path to the Copilot CLI binary (default: `"copilot"`).
-    pub fn new(exe_path: impl Into<String>) -> Self {
-        let client = Arc::new(Mutex::new(CopilotClient::new(exe_path)));
-        let model = CopilotCompletionModel::new(client, "copilot");
+    /// - `exe_path` — path to the Copilot CLI binary (e.g. `"copilot"`).
+    /// - `model_id` — model identifier to associate with the default completion model.
+    pub fn new(exe_path: impl Into<String>, model_id: impl Into<String>) -> Self {
+        let model_id = model_id.into();
+        let client = Arc::new(Mutex::new(CopilotClient::new(exe_path, &model_id)));
+        let model = CopilotCompletionModel::new(client, model_id);
         Self { model }
     }
 
@@ -600,11 +645,6 @@ impl CopilotProviderClient {
 
 impl rig::prelude::CompletionClient for CopilotProviderClient {
     type CompletionModel = CopilotCompletionModel;
-
-    fn completion_model(&self, _model: impl Into<String>) -> Self::CompletionModel {
-        // Copilot CLI determines its own model; we always return the same handle.
-        self.model.clone()
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -786,8 +826,14 @@ mod tests {
     }
 
     #[test]
+    fn copilot_client_stores_model_id() {
+        let client = CopilotClient::new("copilot", "claude-haiku-4.5");
+        assert_eq!(client.model_id(), "claude-haiku-4.5");
+    }
+
+    #[test]
     fn copilot_client_check_alive_returns_false_when_no_child() {
-        let mut client = CopilotClient::new("copilot");
+        let mut client = CopilotClient::new("copilot", "test-model");
         assert!(!client.check_alive());
     }
 
@@ -801,7 +847,7 @@ mod tests {
             .spawn()
             .expect("spawn sleep child");
 
-        let mut client = CopilotClient::new("copilot");
+        let mut client = CopilotClient::new("copilot", "test-model");
         client.child = Some(child);
 
         assert!(client.check_alive());
@@ -820,7 +866,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let mut client = CopilotClient::new("copilot");
+        let mut client = CopilotClient::new("copilot", "test-model");
         client.child = Some(child);
 
         assert!(!client.check_alive());
@@ -835,7 +881,7 @@ mod tests {
             shell_quote(&spawn_count_path),
         ));
 
-        let mut client = CopilotClient::new(script_path.display().to_string());
+        let mut client = CopilotClient::new(script_path.display().to_string(), "test-model");
         client
             .ensure_initialized()
             .await
@@ -877,7 +923,7 @@ mod tests {
             shell_quote(&pid_path),
         ));
 
-        let mut client = CopilotClient::new(script_path.display().to_string());
+        let mut client = CopilotClient::new(script_path.display().to_string(), "test-model");
         let error = client
             .ensure_initialized()
             .await
@@ -909,7 +955,7 @@ mod tests {
     #[test]
     fn copilot_completion_model_is_clone() {
         // Verify that CopilotCompletionModel can be cloned (required by rig's CompletionModel).
-        let client = Arc::new(Mutex::new(CopilotClient::new("copilot")));
+        let client = Arc::new(Mutex::new(CopilotClient::new("copilot", "test-model")));
         let model = CopilotCompletionModel::new(client, "copilot");
         let _cloned = model.clone();
     }
@@ -968,5 +1014,81 @@ mod tests {
         let mut buf = String::new();
         handle_session_update(&notif, "s1", &mut buf);
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn build_prompt_includes_documents() {
+        use rig::completion::Document;
+
+        let mut req = make_request(
+            Some("System prompt"),
+            vec![Message::User {
+                content: OneOrMany::one(UserContent::text("Analyze this")),
+            }],
+        );
+        req.documents = vec![Document {
+            id: "doc-1".to_owned(),
+            text: "Revenue grew 15% YoY".to_owned(),
+            additional_props: Default::default(),
+        }];
+
+        let prompt = build_prompt_text(&req);
+        assert!(
+            prompt.contains("Revenue grew 15% YoY"),
+            "documents must be included in prompt text, got: {prompt}"
+        );
+        let system_pos = prompt.find("[System]").unwrap();
+        let doc_pos = prompt.find("Revenue grew").unwrap();
+        let user_pos = prompt.find("[User]").unwrap();
+        assert!(system_pos < doc_pos, "documents should come after preamble");
+        assert!(
+            doc_pos < user_pos,
+            "documents should come before chat history"
+        );
+    }
+
+    #[test]
+    fn completion_model_returns_requested_model_id() {
+        use rig::prelude::CompletionClient;
+        // CopilotClient::new() is lazy — no subprocess is spawned until preflight().
+        let provider = CopilotProviderClient::new("copilot", "default-model");
+        let model = provider.completion_model("claude-haiku-4.5");
+        assert_eq!(model.model_id(), "claude-haiku-4.5");
+    }
+
+    #[test]
+    fn build_prompt_includes_output_schema() {
+        let mut req = make_request(
+            None,
+            vec![Message::User {
+                content: OneOrMany::one(UserContent::text("Analyze")),
+            }],
+        );
+        req.output_schema = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "decision": { "type": "string" }
+                },
+                "required": ["decision"]
+            }))
+            .unwrap(),
+        );
+
+        let prompt = build_prompt_text(&req);
+        assert!(
+            prompt.contains("[Output Schema]"),
+            "output schema section must be present, got: {prompt}"
+        );
+        assert!(
+            prompt.contains("\"decision\""),
+            "schema content must be included, got: {prompt}"
+        );
+        let schema_pos = prompt.find("[Output Schema]").unwrap();
+        let user_pos = prompt.find("[User]").unwrap();
+        assert!(
+            schema_pos < user_pos,
+            "schema should come before chat history"
+        );
     }
 }
