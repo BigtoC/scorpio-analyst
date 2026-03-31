@@ -6,7 +6,7 @@ use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::providers::factory::{
     create_completion_model, preflight_configured_providers,
 };
-use scorpio_analyst::rate_limit::SharedRateLimiter;
+use scorpio_analyst::rate_limit::{ProviderRateLimiters, SharedRateLimiter};
 use scorpio_analyst::state::TradingState;
 use scorpio_analyst::workflow::{SnapshotStore, TradingPipeline};
 
@@ -26,7 +26,11 @@ fn main() {
                 }
             };
 
-            if let Err(e) = runtime.block_on(preflight_configured_providers(&cfg.llm, &cfg.api)) {
+            if let Err(e) = runtime.block_on(preflight_configured_providers(
+                &cfg.llm,
+                &cfg.api,
+                &ProviderRateLimiters::from_config(&cfg.rate_limits),
+            )) {
                 eprintln!("failed to preflight configured providers: {e:#}");
                 std::process::exit(1);
             }
@@ -41,25 +45,36 @@ fn main() {
 
             tracing::info!(snapshot_store = ?snapshot_store, "storage configured");
 
-            let quick_handle =
-                match create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.api) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        eprintln!("failed to create quick-thinking model handle: {e:#}");
-                        std::process::exit(1);
-                    }
-                };
+            let rate_limiters = ProviderRateLimiters::from_config(&cfg.rate_limits);
 
-            let deep_handle =
-                match create_completion_model(ModelTier::DeepThinking, &cfg.llm, &cfg.api) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        eprintln!("failed to create deep-thinking model handle: {e:#}");
-                        std::process::exit(1);
-                    }
-                };
+            let quick_handle = match create_completion_model(
+                ModelTier::QuickThinking,
+                &cfg.llm,
+                &cfg.api,
+                &rate_limiters,
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("failed to create quick-thinking model handle: {e:#}");
+                    std::process::exit(1);
+                }
+            };
 
-            let finnhub_limiter = SharedRateLimiter::new("finnhub", cfg.api.finnhub_rate_limit);
+            let deep_handle = match create_completion_model(
+                ModelTier::DeepThinking,
+                &cfg.llm,
+                &cfg.api,
+                &rate_limiters,
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("failed to create deep-thinking model handle: {e:#}");
+                    std::process::exit(1);
+                }
+            };
+
+            let finnhub_limiter = SharedRateLimiter::finnhub_from_config(&cfg.rate_limits)
+                .unwrap_or_else(|| SharedRateLimiter::new("finnhub", 30));
             let finnhub = match FinnhubClient::new(&cfg.api, finnhub_limiter) {
                 Ok(c) => c,
                 Err(e) => {

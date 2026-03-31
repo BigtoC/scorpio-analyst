@@ -126,7 +126,7 @@ impl AggressiveRiskAgent {
         let prompt =
             build_aggressive_prompt(state, proposal, conservative_response, neutral_response);
 
-        let response = chat_with_retry_details(
+        let outcome = chat_with_retry_details(
             &self.core.agent,
             &prompt,
             &mut self.chat_history,
@@ -136,10 +136,11 @@ impl AggressiveRiskAgent {
         .await?;
 
         build_aggressive_result(
-            response.output,
+            outcome.result.output,
             &self.core.model_id,
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         )
     }
 }
@@ -171,6 +172,7 @@ fn build_aggressive_result(
     model_id: &str,
     usage: rig::completion::Usage,
     started_at: Instant,
+    rate_limit_wait_ms: u64,
 ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
     validate_raw_model_output_size("AggressiveRiskAgent", &output)?;
     let report: RiskReport =
@@ -196,7 +198,13 @@ fn build_aggressive_result(
     }
 
     let report = redact_risk_report_for_storage(report);
-    let token_usage = usage_from_response("Aggressive Risk Analyst", model_id, usage, started_at);
+    let token_usage = usage_from_response(
+        "Aggressive Risk Analyst",
+        model_id,
+        usage,
+        started_at,
+        rate_limit_wait_ms,
+    );
     Ok((report, token_usage))
 }
 
@@ -230,11 +238,8 @@ mod tests {
 
     fn api_config_with_openai() -> ApiConfig {
         ApiConfig {
-            finnhub_rate_limit: 30,
             openai_api_key: Some(SecretString::from("test-key")),
-            anthropic_api_key: None,
-            gemini_api_key: None,
-            finnhub_api_key: None,
+            ..ApiConfig::default()
         }
     }
 
@@ -439,8 +444,13 @@ mod tests {
 
     #[test]
     fn build_aggressive_result_rejects_malformed_json() {
-        let result =
-            build_aggressive_result("not json".to_owned(), "o3", mock_usage(2), Instant::now());
+        let result = build_aggressive_result(
+            "not json".to_owned(),
+            "o3",
+            mock_usage(2),
+            Instant::now(),
+            0,
+        );
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
     }
 
@@ -450,7 +460,7 @@ mod tests {
         let json = format!(
             r#"{{"risk_level":"Aggressive","assessment":"Fine.","recommended_adjustments":["{big}"],"flags_violation":false}}"#
         );
-        let result = build_aggressive_result(json, "o3", mock_usage(2), Instant::now());
+        let result = build_aggressive_result(json, "o3", mock_usage(2), Instant::now(), 0);
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
     }
 
@@ -458,7 +468,8 @@ mod tests {
     fn build_aggressive_result_redacts_secret_from_stored_output() {
         let json = r#"{"risk_level":"Aggressive","assessment":"api_key=abcd1234","recommended_adjustments":["token=qwerty"],"flags_violation":false}"#;
         let (report, _) =
-            build_aggressive_result(json.to_owned(), "o3", mock_usage(2), Instant::now()).unwrap();
+            build_aggressive_result(json.to_owned(), "o3", mock_usage(2), Instant::now(), 0)
+                .unwrap();
         assert_eq!(report.assessment, "api_key=[REDACTED]");
         assert_eq!(report.recommended_adjustments, vec!["token=[REDACTED]"]);
     }
@@ -478,6 +489,7 @@ mod tests {
                 cached_input_tokens: 0,
             },
             Instant::now(),
+            0,
         );
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
     }
@@ -498,6 +510,7 @@ mod tests {
                 cached_input_tokens: 0,
             },
             Instant::now(),
+            0,
         );
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
     }
@@ -515,6 +528,7 @@ mod tests {
                 cached_input_tokens: 0,
             },
             Instant::now(),
+            0,
         );
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
     }
@@ -531,6 +545,7 @@ mod tests {
                 cached_input_tokens: 0,
             },
             Instant::now(),
+            0,
         )
         .unwrap();
         assert_eq!(report.risk_level, RiskLevel::Aggressive);
@@ -564,9 +579,13 @@ mod tests {
     #[test]
     fn constructor_rejects_quick_thinking_handle() {
         let cfg = sample_llm_config();
-        let handle =
-            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
-                .unwrap();
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &crate::rate_limit::ProviderRateLimiters::default(),
+        )
+        .unwrap();
         let state = sample_state_with_proposal();
         let result = AggressiveRiskAgent::new(&handle, &state, &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
@@ -584,6 +603,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 5,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "Aggressive Risk Analyst");
         assert_eq!(usage.model_id, "o3");

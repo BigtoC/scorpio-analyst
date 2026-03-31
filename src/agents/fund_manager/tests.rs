@@ -14,7 +14,10 @@ use super::{
 use crate::{
     config::{ApiConfig, Config, LlmConfig, TradingConfig},
     error::{RetryPolicy, TradingError},
-    providers::{ModelTier, factory::CompletionModelHandle},
+    providers::{
+        ModelTier,
+        factory::{CompletionModelHandle, RetryOutcome},
+    },
     state::{
         Decision, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData, RiskLevel,
         RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction, TradeProposal,
@@ -40,11 +43,8 @@ fn sample_llm_config() -> LlmConfig {
 
 fn sample_api_config() -> ApiConfig {
     ApiConfig {
-        finnhub_rate_limit: 30,
         openai_api_key: Some(SecretString::from("test-key")),
-        anthropic_api_key: None,
-        gemini_api_key: None,
-        finnhub_api_key: None,
+        ..ApiConfig::default()
     }
 }
 
@@ -58,6 +58,7 @@ fn sample_config() -> Config {
         },
         api: sample_api_config(),
         storage: Default::default(),
+        rate_limits: Default::default(),
     }
 }
 
@@ -190,14 +191,23 @@ fn zero_usage() -> Usage {
 // ── stub inference ────────────────────────────────────────────────────────
 
 struct StubInference {
-    responses: Mutex<VecDeque<Result<PromptResponse, TradingError>>>,
+    responses: Mutex<VecDeque<Result<RetryOutcome<PromptResponse>, TradingError>>>,
     call_count: Mutex<u32>,
 }
 
 impl StubInference {
     fn new(responses: Vec<Result<PromptResponse, TradingError>>) -> Self {
+        let wrapped = responses
+            .into_iter()
+            .map(|r| {
+                r.map(|inner| RetryOutcome {
+                    result: inner,
+                    rate_limit_wait_ms: 0,
+                })
+            })
+            .collect();
         Self {
-            responses: Mutex::new(responses.into()),
+            responses: Mutex::new(wrapped),
             call_count: Mutex::new(0),
         }
     }
@@ -215,13 +225,18 @@ impl FundManagerInference for StubInference {
         _user_prompt: &str,
         _timeout: Duration,
         _retry_policy: &RetryPolicy,
-    ) -> Result<PromptResponse, TradingError> {
+    ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
         *self.call_count.lock().unwrap() += 1;
         self.responses
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or_else(|| Ok(make_prompt_response(&approved_json(), zero_usage())))
+            .unwrap_or_else(|| {
+                Ok(RetryOutcome {
+                    result: make_prompt_response(&approved_json(), zero_usage()),
+                    rate_limit_wait_ms: 0,
+                })
+            })
     }
 }
 
@@ -231,6 +246,7 @@ fn fund_manager_for_test() -> FundManagerAgent {
         ModelTier::DeepThinking,
         &sample_llm_config(),
         &sample_api_config(),
+        &crate::rate_limit::ProviderRateLimiters::default(),
     )
     .unwrap();
     FundManagerAgent::new(handle, "AAPL", "2026-03-15", &sample_llm_config()).unwrap()
@@ -681,8 +697,13 @@ async fn missing_analyst_inputs_without_acknowledgment_is_rejected() {
 fn constructor_rejects_wrong_model_id() {
     use crate::providers::factory::create_completion_model;
     let cfg = sample_llm_config();
-    let handle =
-        create_completion_model(ModelTier::QuickThinking, &cfg, &sample_api_config()).unwrap();
+    let handle = create_completion_model(
+        ModelTier::QuickThinking,
+        &cfg,
+        &sample_api_config(),
+        &crate::rate_limit::ProviderRateLimiters::default(),
+    )
+    .unwrap();
     let result = FundManagerAgent::new(handle, "AAPL", "2026-03-15", &cfg);
     assert!(matches!(result, Err(TradingError::Config(_))));
 }

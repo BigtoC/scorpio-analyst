@@ -16,10 +16,11 @@
 //! ```no_run
 //! use scorpio_analyst::config::Config;
 //! use scorpio_analyst::providers::{ModelTier, factory};
+//! use scorpio_analyst::rate_limit::ProviderRateLimiters;
 //!
 //! # async fn example() -> Result<(), scorpio_analyst::error::TradingError> {
 //! let cfg = Config::load().expect("config");
-//! let handle = factory::create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.api)?;
+//! let handle = factory::create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.api, &ProviderRateLimiters::default())?;
 //! let agent = factory::build_agent(&handle, "You are a fast analyst.");
 //! let _model_id = agent.model_id();
 //! # Ok(())
@@ -31,6 +32,40 @@ pub mod copilot;
 pub mod factory;
 
 use crate::config::LlmConfig;
+
+/// Identifies an LLM provider.
+///
+/// Used as a key in [`crate::rate_limit::ProviderRateLimiters`] and for provider-specific
+/// error messages. Defined here (rather than in `factory`) to avoid a circular dependency
+/// between `rate_limit` (which maps provider IDs to limiters) and `factory` (which uses both).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProviderId {
+    OpenAI,
+    Anthropic,
+    Gemini,
+    /// GitHub Copilot via ACP (no API key required; spawns local CLI).
+    Copilot,
+}
+
+impl ProviderId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
+        }
+    }
+
+    pub(crate) const fn missing_key_hint(self) -> &'static str {
+        match self {
+            Self::OpenAI => "SCORPIO_OPENAI_API_KEY",
+            Self::Anthropic => "SCORPIO_ANTHROPIC_API_KEY",
+            Self::Gemini => "SCORPIO_GEMINI_API_KEY",
+            Self::Copilot => "(no API key required — install the Copilot CLI and authenticate)",
+        }
+    }
+}
 
 /// Cognitive routing tier for model selection.
 ///

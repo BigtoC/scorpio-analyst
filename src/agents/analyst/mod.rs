@@ -354,6 +354,7 @@ mod tests {
             completion_tokens: 50,
             total_tokens: 150,
             latency_ms: 300,
+            rate_limit_wait_ms: 0,
         }
     }
 

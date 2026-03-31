@@ -223,6 +223,7 @@ pub(super) fn usage_from_response(
     model_id: &str,
     usage: rig::completion::Usage,
     started_at: Instant,
+    rate_limit_wait_ms: u64,
 ) -> AgentTokenUsage {
     AgentTokenUsage {
         agent_name: agent_name.to_owned(),
@@ -234,6 +235,7 @@ pub(super) fn usage_from_response(
         completion_tokens: usage.output_tokens,
         total_tokens: usage.total_tokens,
         latency_ms: started_at.elapsed().as_millis() as u64,
+        rate_limit_wait_ms,
     }
 }
 
@@ -317,9 +319,10 @@ pub(super) fn build_debate_result(
     model_id: &str,
     usage: rig::completion::Usage,
     started_at: std::time::Instant,
+    rate_limit_wait_ms: u64,
 ) -> Result<(DebateMessage, AgentTokenUsage), TradingError> {
     validate_debate_content(agent_name, &output)?;
-    let usage = usage_from_response(agent_name, model_id, usage, started_at);
+    let usage = usage_from_response(agent_name, model_id, usage, started_at, rate_limit_wait_ms);
     let message = DebateMessage {
         role: role.to_owned(),
         content: output,
@@ -428,7 +431,7 @@ mod tests {
             total_tokens: 200,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("Agent", "o3", usage, Instant::now());
+        let result = usage_from_response("Agent", "o3", usage, Instant::now(), 0);
         assert!(result.token_counts_available);
         assert_eq!(result.total_tokens, 200);
     }
@@ -441,7 +444,7 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("Agent", "o3", usage, Instant::now());
+        let result = usage_from_response("Agent", "o3", usage, Instant::now(), 0);
         assert!(!result.token_counts_available);
     }
 
@@ -525,7 +528,7 @@ mod tests {
             total_tokens: 225,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("Bullish Researcher", "o3", usage, Instant::now());
+        let result = usage_from_response("Bullish Researcher", "o3", usage, Instant::now(), 0);
         assert_eq!(result.agent_name, "Bullish Researcher");
         assert_eq!(result.model_id, "o3");
         assert_eq!(result.prompt_tokens, 150);

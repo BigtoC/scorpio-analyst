@@ -98,7 +98,7 @@ impl BullishResearcher {
         let started_at = Instant::now();
         let prompt = build_bullish_prompt(debate_history, bear_argument);
 
-        let response = chat_with_retry_details(
+        let outcome = chat_with_retry_details(
             &self.core.agent,
             &prompt,
             &mut self.chat_history,
@@ -110,10 +110,11 @@ impl BullishResearcher {
         build_debate_result(
             "Bullish Researcher",
             "bullish_researcher",
-            response.output,
+            outcome.result.output,
             &self.core.model_id,
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         )
     }
 }
@@ -162,11 +163,8 @@ mod tests {
 
     fn api_config_with_openai() -> ApiConfig {
         ApiConfig {
-            finnhub_rate_limit: 30,
             openai_api_key: Some(SecretString::from("test-key")),
-            anthropic_api_key: None,
-            gemini_api_key: None,
-            finnhub_api_key: None,
+            ..ApiConfig::default()
         }
     }
 
@@ -215,6 +213,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 10,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "Bullish Researcher");
         assert_eq!(usage.model_id, "o3");
@@ -285,6 +284,7 @@ mod tests {
             "o3",
             usage,
             started_at,
+            0,
         )
         .unwrap();
 
@@ -361,9 +361,13 @@ mod tests {
     #[test]
     fn constructor_rejects_quick_thinking_handle() {
         let cfg = sample_llm_config();
-        let handle =
-            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
-                .unwrap();
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &crate::rate_limit::ProviderRateLimiters::default(),
+        )
+        .unwrap();
         let result = BullishResearcher::new(&handle, &sample_state(), &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
     }

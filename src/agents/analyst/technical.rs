@@ -159,7 +159,7 @@ impl TechnicalAnalyst {
             self.symbol, start_date, self.target_date
         );
 
-        let response = prompt_typed_with_retry::<TechnicalData>(
+        let outcome = prompt_typed_with_retry::<TechnicalData>(
             &agent,
             &prompt,
             self.timeout,
@@ -168,16 +168,17 @@ impl TechnicalAnalyst {
         )
         .await?;
 
-        validate_technical(&response.output)?;
+        validate_technical(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "Technical Analyst",
             self.handle.model_id(),
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         );
 
-        Ok((response.output, usage))
+        Ok((outcome.result.output, usage))
     }
 }
 
@@ -337,6 +338,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 300,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "Technical Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");
