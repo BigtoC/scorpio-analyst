@@ -38,6 +38,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
 
@@ -48,4 +51,4 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --locked
+        run: cargo nextest run --locked
