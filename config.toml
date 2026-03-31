@@ -24,6 +24,7 @@ openai_rpm = 500
 anthropic_rpm = 500
 gemini_rpm = 500
 copilot_rpm = 0  # No documented rate limit for Copilot ACP
+openrouter_rpm = 20  # Free-tier limit; paid accounts can increase this
 
 # Finnhub data API rate limit (requests per second).
 finnhub_rps = 30
