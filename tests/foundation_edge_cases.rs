@@ -15,6 +15,7 @@ fn api_config_debug_never_leaks_secrets() {
         anthropic_api_key: Some(SecretString::from("sk-ant-secret")),
         gemini_api_key: None,
         finnhub_api_key: Some(SecretString::from("ct_finnhub_key")),
+        openrouter_api_key: None,
     };
     let debug = format!("{api:?}");
 
