@@ -216,6 +216,20 @@ mod tests {
     }
 
     #[test]
+    fn provider_rate_limiters_get_returns_some_for_custom_openrouter_rate() {
+        let cfg = RateLimitConfig {
+            openai_rpm: 0,
+            anthropic_rpm: 0,
+            gemini_rpm: 0,
+            copilot_rpm: 0,
+            openrouter_rpm: 100,
+            finnhub_rps: 0,
+        };
+        let registry = ProviderRateLimiters::from_config(&cfg);
+        assert!(registry.get(ProviderId::OpenRouter).is_some());
+    }
+
+    #[test]
     fn provider_rate_limiters_get_returns_none_for_disabled() {
         let cfg = RateLimitConfig {
             openai_rpm: 0,

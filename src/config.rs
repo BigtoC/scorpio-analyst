@@ -276,17 +276,20 @@ impl Config {
             bail!("config validation: trading.asset_symbol must not be empty");
         }
         // Check that at least one LLM key is available
-        let has_key = self.api.openai_api_key.is_some()
-            || self.api.anthropic_api_key.is_some()
-            || self.api.gemini_api_key.is_some()
-            || self.api.openrouter_api_key.is_some();
-        if !has_key {
+        if !self.has_any_llm_key() {
             tracing::warn!(
                 "no LLM provider API key found — set SCORPIO_OPENAI_API_KEY, \
                  SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, or SCORPIO_OPENROUTER_API_KEY"
             );
         }
         Ok(())
+    }
+
+    fn has_any_llm_key(&self) -> bool {
+        self.api.openai_api_key.is_some()
+            || self.api.anthropic_api_key.is_some()
+            || self.api.gemini_api_key.is_some()
+            || self.api.openrouter_api_key.is_some()
     }
 }
 
@@ -297,6 +300,31 @@ fn secret_from_env(key: &str) -> Option<SecretString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
+
+    fn sample_config_with_api(api: ApiConfig) -> Config {
+        Config {
+            llm: LlmConfig {
+                quick_thinking_provider: "openai".to_owned(),
+                deep_thinking_provider: "openai".to_owned(),
+                quick_thinking_model: "gpt-4o-mini".to_owned(),
+                deep_thinking_model: "o3".to_owned(),
+                max_debate_rounds: 3,
+                max_risk_rounds: 2,
+                analyst_timeout_secs: 30,
+                retry_max_retries: 3,
+                retry_base_delay_ms: 500,
+            },
+            trading: TradingConfig {
+                asset_symbol: "AAPL".to_owned(),
+                backtest_start: None,
+                backtest_end: None,
+            },
+            api,
+            storage: StorageConfig::default(),
+            rate_limits: RateLimitConfig::default(),
+        }
+    }
 
     /// Serializes tests that mutate environment variables.
     /// `std::env::set_var` is not thread-safe; all tests touching env vars must
@@ -328,7 +356,7 @@ mod tests {
             anthropic_api_key: None,
             gemini_api_key: None,
             finnhub_api_key: None,
-            openrouter_api_key: None,
+            openrouter_api_key: Some(SecretString::from("or-super-secret")),
         };
         let debug_output = format!("{api:?}");
         assert!(
@@ -338,6 +366,10 @@ mod tests {
         assert!(
             !debug_output.contains("super-secret"),
             "must not leak secret value"
+        );
+        assert!(
+            !debug_output.contains("or-super-secret"),
+            "must not leak openrouter secret value"
         );
         assert!(
             debug_output.contains("<not set>"),
@@ -385,6 +417,10 @@ mod tests {
             msg.contains("badprovider"),
             "error message should include the offending value: {msg}"
         );
+        assert!(
+            msg.contains("openrouter"),
+            "error message should list openrouter among supported providers: {msg}"
+        );
     }
 
     #[test]
@@ -406,6 +442,72 @@ mod tests {
             serde::de::value::Error,
         >::new("  OpenAI  "));
         assert_eq!(result.unwrap(), "openai");
+    }
+
+    #[test]
+    fn deserialize_provider_name_normalises_openrouter_case() {
+        let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
+            serde::de::value::Error,
+        >::new("  OpenRouter  "));
+        assert_eq!(result.unwrap(), "openrouter");
+    }
+
+    #[test]
+    fn load_from_reads_openrouter_api_key_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("SCORPIO_OPENROUTER_API_KEY").ok();
+        unsafe {
+            std::env::set_var("SCORPIO_OPENROUTER_API_KEY", "test-openrouter-key-from-env");
+        }
+
+        let result = Config::load_from("config.toml");
+
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("SCORPIO_OPENROUTER_API_KEY", value),
+                None => std::env::remove_var("SCORPIO_OPENROUTER_API_KEY"),
+            }
+        }
+
+        let cfg = result.expect("config should load with openrouter key from env");
+        assert_eq!(
+            cfg.api
+                .openrouter_api_key
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+            Some("test-openrouter-key-from-env")
+        );
+    }
+
+    #[test]
+    fn has_any_llm_key_counts_openrouter_key() {
+        let cfg = sample_config_with_api(ApiConfig {
+            openrouter_api_key: Some(SecretString::from("test-openrouter-key")),
+            ..ApiConfig::default()
+        });
+
+        assert!(cfg.has_any_llm_key());
+    }
+
+    #[test]
+    fn env_override_supports_openrouter_rate_limit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM").ok();
+        unsafe {
+            std::env::set_var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM", "40");
+        }
+
+        let result = Config::load_from("config.toml");
+
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM", value),
+                None => std::env::remove_var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM"),
+            }
+        }
+
+        let cfg = result.expect("config should load with openrouter rpm override");
+        assert_eq!(cfg.rate_limits.openrouter_rpm, 40);
     }
 
     #[test]

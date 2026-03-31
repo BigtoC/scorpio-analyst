@@ -716,7 +716,6 @@ fn map_structured_output_error_with_context(
             tracing::debug!(
                 provider,
                 model_id,
-                error = %_e,
                 "structured output deserialization failed"
             );
             TradingError::SchemaViolation {
@@ -1446,6 +1445,11 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
     if trimmed.is_empty() {
         return Err(config_error("LLM model ID must not be empty"));
     }
+    if trimmed.chars().any(char::is_control) {
+        return Err(config_error(
+            "LLM model ID must not contain control characters",
+        ));
+    }
     Ok(trimmed.to_owned())
 }
 
@@ -1610,6 +1614,39 @@ mod tests {
     use super::*;
     use crate::config::{ApiConfig, LlmConfig};
     use secrecy::SecretString;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).expect("valid utf8 logs")
+        }
+    }
+
+    struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn sample_llm_config() -> LlmConfig {
         LlmConfig {
@@ -1883,6 +1920,19 @@ mod tests {
     }
 
     #[test]
+    fn validate_provider_id_openrouter_normalises_case_and_whitespace() {
+        let result = validate_provider_id("  OpenRouter  ");
+        assert_eq!(result.unwrap(), ProviderId::OpenRouter);
+    }
+
+    #[test]
+    fn validate_provider_id_unknown_error_lists_openrouter() {
+        let result = validate_provider_id("unknown-provider");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("openrouter"), "expected openrouter in: {msg}");
+    }
+
+    #[test]
     fn factory_missing_openrouter_key_returns_config_error() {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "openrouter".to_owned();
@@ -1917,6 +1967,26 @@ mod tests {
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "openrouter");
         assert_eq!(handle.model_id(), "qwen/qwen3.6-plus-preview:free");
+        assert!(matches!(handle.client, ProviderClient::OpenRouter(_)));
+    }
+
+    #[test]
+    fn factory_creates_openrouter_client_for_deep_thinking_tier() {
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "openrouter".to_owned();
+        cfg.deep_thinking_model = "minimax/minimax-m2.5:free".to_owned();
+
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_with_openrouter(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
+
+        assert_eq!(handle.provider_name(), "openrouter");
+        assert_eq!(handle.model_id(), "minimax/minimax-m2.5:free");
+        assert!(matches!(handle.client, ProviderClient::OpenRouter(_)));
     }
 
     #[tokio::test]
@@ -1935,6 +2005,27 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "openrouter");
         assert_eq!(agent.model_id(), "qwen/qwen3.6-plus-preview:free");
+        assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
+    }
+
+    #[tokio::test]
+    async fn build_agent_creates_openrouter_deep_thinking_agent() {
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "openrouter".to_owned();
+        cfg.deep_thinking_model = "minimax/minimax-m2.5:free".to_owned();
+
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_with_openrouter(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
+        let agent = build_agent(&handle, "You are a deep-thinking test agent.");
+
+        assert_eq!(agent.provider_name(), "openrouter");
+        assert_eq!(agent.model_id(), "minimax/minimax-m2.5:free");
+        assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
     }
 
     #[test]
@@ -1966,6 +2057,29 @@ mod tests {
                 "model id should be passed through unchanged"
             );
         }
+    }
+
+    #[test]
+    fn openrouter_model_id_with_control_chars_is_rejected() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "openrouter".to_owned();
+        cfg.quick_thinking_model = "qwen/qwen3\n:free".to_owned();
+
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openrouter(),
+            &ProviderRateLimiters::default(),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("control characters"),
+            "expected control-character validation error"
+        );
     }
 
     // ── Error mapping ────────────────────────────────────────────────────
@@ -2012,6 +2126,41 @@ mod tests {
         let sanitized = sanitize_error_summary("authorization failed for sk-secret-value");
         assert!(!sanitized.contains("sk-secret-value"));
         assert!(sanitized.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn sanitize_error_summary_redacts_openrouter_query_style_key() {
+        let sanitized = sanitize_error_summary(
+            "openrouter request failed: api_key=or-secret-value for model qwen/qwen3.6-plus-preview:free",
+        );
+        assert!(!sanitized.contains("or-secret-value"));
+        assert!(sanitized.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn structured_output_deserialization_logs_do_not_include_raw_payload() {
+        let logs = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .without_time()
+            .with_writer(logs.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            let json_err = serde_json::from_str::<i32>("\"super-secret-payload\"").unwrap_err();
+            let mapped = map_structured_output_error_with_context(
+                "openrouter",
+                "qwen/qwen3.6-plus-preview:free",
+                StructuredOutputError::DeserializationError(json_err),
+            );
+            assert!(matches!(mapped, TradingError::SchemaViolation { .. }));
+        });
+
+        let output = logs.contents();
+        assert!(
+            !output.contains("super-secret-payload"),
+            "raw payload should not appear in debug logs: {output}"
+        );
     }
 
     #[test]
