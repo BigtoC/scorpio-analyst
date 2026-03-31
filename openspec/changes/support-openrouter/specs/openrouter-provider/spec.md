@@ -21,6 +21,11 @@ The provider factory MUST accept `"openrouter"` as a valid provider name in `Llm
 - **WHEN** `LlmConfig.deep_thinking_provider` is set to `"openrouter"` and a valid `openrouter_api_key` is present
 - **THEN** the factory constructs an OpenRouter-backed completion model for the deep-thinking tier
 
+#### Scenario: Free-Tier Model Identifier Passes Through Unchanged
+
+- **WHEN** `LlmConfig.quick_thinking_model` is set to `qwen/qwen3.6-plus-preview:free` or `minimax/minimax-m2.5:free`
+- **THEN** the provider layer accepts the model identifier as a non-empty string and passes it unchanged to rig's OpenRouter client
+
 ### Requirement: OpenRouter Enum Dispatch
 
 The system MUST add an `OpenRouter` variant to `ProviderId`, `ProviderClient`, and `LlmAgentInner` enums. All existing match sites (prompt, prompt_details, prompt_typed_details, chat, chat_details, build_agent_inner) MUST include the `OpenRouter` arm. The OpenRouter variant MUST follow the same dispatch pattern as OpenAI and Gemini (no provider-specific overrides like Anthropic's `max_tokens`).

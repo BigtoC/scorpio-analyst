@@ -1,3 +1,7 @@
+## 0. Approval Gate
+
+- [ ] 0.1 Obtain approval for the cross-owner file changes listed in `proposal.md` before implementation begins
+
 ## 1. Configuration Layer
 
 - [ ] 1.1 Add `"openrouter"` to `deserialize_provider_name()` in `src/config.rs` — accept it as a valid provider name (case-insensitive, whitespace-trimmed) and update the error message listing supported providers
@@ -30,6 +34,7 @@
 - [ ] 6.1 Update config tests in `src/config.rs` — add `"openrouter"` to `deserialize_provider_name_accepts_valid`, verify `openrouter_rpm` default in `load_from_defaults_only`, add `openrouter_api_key` assertion to `api_config_debug_redacts_secrets`
 - [ ] 6.2 Update rate limit tests in `src/rate_limit.rs` — add `ProviderId::OpenRouter` assertions to existing tests that verify limiter registration
 - [ ] 6.3 Update factory tests in `src/providers/factory.rs` — add OpenRouter to any existing provider validation tests, verify `validate_provider_id("openrouter")` returns `ProviderId::OpenRouter`
+- [ ] 6.4 Add a factory/config test proving OpenRouter free-model identifiers such as `qwen/qwen3.6-plus-preview:free` and `minimax/minimax-m2.5:free` are accepted unchanged
 
 ## 7. Verification
 

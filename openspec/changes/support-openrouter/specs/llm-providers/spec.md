@@ -7,7 +7,7 @@
 The provider factory and helpers MUST be implemented within `src/providers/mod.rs` and
 `src/providers/factory.rs`. The module MUST re-export all public types needed by downstream agent
 code from `src/providers/mod.rs`. The module MUST NOT modify foundation-owned files (`src/config.rs`,
-`src/error.rs`, `src/state/*`).
+`src/error.rs`, `src/state/*`) except for minimal additive registration edits required to expose a newly supported native provider through shared configuration and rate-limiting surfaces.
 This capability MUST remain limited to native `rig-core` providers for OpenAI, Anthropic, Gemini, and OpenRouter. It MUST NOT add
 ACP transport, subprocess spawning, or GitHub Copilot-specific transport logic, which belong exclusively to
 `add-copilot-provider`.
@@ -17,6 +17,10 @@ ACP transport, subprocess spawning, or GitHub Copilot-specific transport logic, 
 When an agent change imports the provider factory, it uses `use scorpio_analyst::providers::{...}`
 and receives `ModelTier`, the factory function, the agent builder helper, and the retry-wrapped
 completion helper through a single module path.
+
+#### Scenario: Native Provider Extension Requires Minimal Registration Edits
+
+When a new native `rig-core` provider such as OpenRouter is added, the implementation may make minimal additive edits in `src/config.rs`, `src/rate_limit.rs`, `config.toml`, and `.env.example` to register provider credentials and rate-limit defaults, while keeping all provider-specific client construction and prompt/chat logic inside `src/providers/mod.rs` and `src/providers/factory.rs`.
 
 ### Requirement: Provider Factory Construction
 

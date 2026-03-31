@@ -54,3 +54,14 @@ rig-core 0.32 (our current dependency) already ships `rig::providers::openrouter
 **[Risk] rig-core's openrouter module may have undiscovered quirks at 0.32** → Mitigation: Low probability — the module has a full `CompletionModel` impl, `Usage` struct, and follows the same pattern as all other rig providers. Integration tests with a real OpenRouter key will surface any issues early.
 
 **[Trade-off] No Anthropic-style `max_tokens` override for OpenRouter** → The `build_agent_inner` function sets `.max_tokens(4096)` only for the Anthropic variant (required by Anthropic's API). OpenRouter does not require this. The OpenRouter match arm in `build_agent_inner` will follow the OpenAI/Gemini pattern (no `max_tokens` call).
+
+## Migration Plan
+
+- Obtain approval for the cross-owner file edits listed in `proposal.md` before implementation begins.
+- Implement the change as additive registration only: add the provider enum/client/match arms, add the API key and RPM config surfaces, then wire the shared rate limiter registry.
+- Verify that existing provider selections remain unchanged when `openrouter` is not configured.
+- Rollback is trivial: revert the additive OpenRouter registration changes and remove any `openrouter_*` configuration entries. No state or data migration is involved.
+
+## Open Questions
+
+- None at the proposal stage. The OpenRouter client exists in rig-core 0.32, the free-tier RPM is fixed at 20 for this change, and the requested models are represented as ordinary string model IDs.
