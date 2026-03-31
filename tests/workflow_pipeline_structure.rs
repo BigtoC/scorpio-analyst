@@ -532,6 +532,7 @@ async fn zero_round_debate_does_not_create_phantom_round_entry() {
         total_tokens: 150,
         latency_ms: 200,
         token_counts_available: true,
+        rate_limit_wait_ms: 0,
     };
 
     let (store, _dir) = make_store().await;
@@ -577,6 +578,7 @@ async fn zero_round_risk_does_not_create_phantom_round_entry() {
         total_tokens: 150,
         latency_ms: 200,
         token_counts_available: true,
+        rate_limit_wait_ms: 0,
     };
 
     let (store, _dir) = make_store().await;
@@ -620,6 +622,7 @@ fn token_tracker_accumulates_multiple_phases() {
             total_tokens: 150,
             latency_ms: 200,
             token_counts_available: true,
+            rate_limit_wait_ms: 0,
         }],
         phase_prompt_tokens: 100,
         phase_completion_tokens: 50,
@@ -637,6 +640,7 @@ fn token_tracker_accumulates_multiple_phases() {
             total_tokens: 300,
             latency_ms: 500,
             token_counts_available: true,
+            rate_limit_wait_ms: 0,
         }],
         phase_prompt_tokens: 200,
         phase_completion_tokens: 100,

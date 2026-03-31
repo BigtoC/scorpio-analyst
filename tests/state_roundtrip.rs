@@ -295,6 +295,7 @@ fn arb_agent_token_usage() -> impl Strategy<Value = AgentTokenUsage> {
         0..10_000u64,
         0..20_000u64,
         0..5_000u64,
+        0..60_000u64,
     )
         .prop_map(
             |(
@@ -305,6 +306,7 @@ fn arb_agent_token_usage() -> impl Strategy<Value = AgentTokenUsage> {
                 completion_tokens,
                 total_tokens,
                 latency_ms,
+                rate_limit_wait_ms,
             )| {
                 AgentTokenUsage {
                     agent_name,
@@ -314,6 +316,7 @@ fn arb_agent_token_usage() -> impl Strategy<Value = AgentTokenUsage> {
                     completion_tokens,
                     total_tokens,
                     latency_ms,
+                    rate_limit_wait_ms,
                 }
             },
         )

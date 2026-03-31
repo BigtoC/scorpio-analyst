@@ -102,6 +102,7 @@ pub fn stub_usage(agent_name: &str) -> AgentTokenUsage {
         completion_tokens: 5,
         total_tokens: 15,
         latency_ms: 1,
+        rate_limit_wait_ms: 0,
     }
 }
 

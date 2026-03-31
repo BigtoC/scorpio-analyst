@@ -35,13 +35,10 @@ fn obs_test_config() -> Config {
             backtest_end: None,
         },
         api: ApiConfig {
-            finnhub_rate_limit: 30,
-            openai_api_key: None,
-            anthropic_api_key: None,
-            gemini_api_key: None,
-            finnhub_api_key: None,
+            ..ApiConfig::default()
         },
         storage: Default::default(),
+        rate_limits: Default::default(),
     }
 }
 

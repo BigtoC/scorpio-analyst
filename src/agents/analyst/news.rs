@@ -134,7 +134,7 @@ impl NewsAnalyst {
             self.symbol, self.target_date
         );
 
-        let response = prompt_typed_with_retry::<NewsData>(
+        let outcome = prompt_typed_with_retry::<NewsData>(
             &agent,
             &prompt,
             self.timeout,
@@ -143,16 +143,17 @@ impl NewsAnalyst {
         )
         .await?;
 
-        validate_news(&response.output)?;
+        validate_news(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "News Analyst",
             self.handle.model_id(),
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         );
 
-        Ok((response.output, usage))
+        Ok((outcome.result.output, usage))
     }
 }
 
@@ -287,6 +288,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 220,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "News Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");

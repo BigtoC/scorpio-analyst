@@ -6,6 +6,7 @@ use secrecy::SecretString;
 use super::*;
 use crate::{
     config::{ApiConfig, TradingConfig},
+    providers::factory::RetryOutcome,
     state::{
         FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData, SentimentData,
         SentimentSource, TechnicalData, TradeAction, TradeProposal, TradingState,
@@ -28,11 +29,8 @@ fn sample_llm_config() -> LlmConfig {
 
 fn sample_api_config() -> ApiConfig {
     ApiConfig {
-        finnhub_rate_limit: 30,
         openai_api_key: Some(SecretString::from("test-key")),
-        anthropic_api_key: None,
-        gemini_api_key: None,
-        finnhub_api_key: None,
+        ..ApiConfig::default()
     }
 }
 
@@ -46,6 +44,7 @@ fn sample_config() -> Config {
         },
         api: sample_api_config(),
         storage: Default::default(),
+        rate_limits: Default::default(),
     }
 }
 
@@ -125,15 +124,25 @@ fn populated_state() -> TradingState {
 }
 
 struct StubInference {
-    responses: Mutex<VecDeque<Result<TypedPromptResponse<TradeProposal>, TradingError>>>,
+    responses:
+        Mutex<VecDeque<Result<RetryOutcome<TypedPromptResponse<TradeProposal>>, TradingError>>>,
     observed_system_prompts: Mutex<Vec<String>>,
     observed_user_prompts: Mutex<Vec<String>>,
 }
 
 impl StubInference {
     fn new(responses: Vec<Result<TypedPromptResponse<TradeProposal>, TradingError>>) -> Self {
+        let wrapped = responses
+            .into_iter()
+            .map(|r| {
+                r.map(|inner| RetryOutcome {
+                    result: inner,
+                    rate_limit_wait_ms: 0,
+                })
+            })
+            .collect();
         Self {
-            responses: Mutex::new(responses.into()),
+            responses: Mutex::new(wrapped),
             observed_system_prompts: Mutex::new(Vec::new()),
             observed_user_prompts: Mutex::new(Vec::new()),
         }
@@ -152,7 +161,7 @@ impl TraderInference for StubInference {
         user_prompt: &str,
         _timeout: Duration,
         _retry_policy: &RetryPolicy,
-    ) -> Result<TypedPromptResponse<TradeProposal>, TradingError> {
+    ) -> Result<RetryOutcome<TypedPromptResponse<TradeProposal>>, TradingError> {
         self.observed_system_prompts
             .lock()
             .unwrap()
@@ -166,15 +175,18 @@ impl TraderInference for StubInference {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| {
-                Ok(TypedPromptResponse::new(
-                    valid_proposal(),
-                    Usage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        total_tokens: 0,
-                        cached_input_tokens: 0,
-                    },
-                ))
+                Ok(RetryOutcome {
+                    result: TypedPromptResponse::new(
+                        valid_proposal(),
+                        Usage {
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            total_tokens: 0,
+                            cached_input_tokens: 0,
+                        },
+                    ),
+                    rate_limit_wait_ms: 0,
+                })
             })
     }
 }
@@ -184,6 +196,7 @@ fn trader_agent_for_test(state: &TradingState) -> TraderAgent {
         ModelTier::DeepThinking,
         &sample_llm_config(),
         &sample_api_config(),
+        &crate::rate_limit::ProviderRateLimiters::default(),
     )
     .unwrap();
     TraderAgent::new(
@@ -689,7 +702,7 @@ fn usage_from_typed_response_agent_name_and_model_id() {
         total_tokens: 150,
         cached_input_tokens: 0,
     };
-    let result = usage_from_typed_response("Trader Agent", "o3", usage, Instant::now());
+    let result = usage_from_typed_response("Trader Agent", "o3", usage, Instant::now(), 0);
     assert_eq!(result.agent_name, "Trader Agent");
     assert_eq!(result.model_id, "o3");
     assert!(result.token_counts_available);
@@ -706,7 +719,7 @@ fn usage_from_typed_response_unavailable_when_all_zero() {
         total_tokens: 0,
         cached_input_tokens: 0,
     };
-    let result = usage_from_typed_response("Trader Agent", "o3", usage, Instant::now());
+    let result = usage_from_typed_response("Trader Agent", "o3", usage, Instant::now(), 0);
     assert!(!result.token_counts_available);
 }
 
@@ -853,8 +866,13 @@ async fn provider_facing_prompt_mentions_missing_data_when_inputs_are_absent() {
 #[test]
 fn constructor_rejects_wrong_model_id() {
     let cfg = sample_llm_config();
-    let handle =
-        create_completion_model(ModelTier::QuickThinking, &cfg, &sample_api_config()).unwrap();
+    let handle = create_completion_model(
+        ModelTier::QuickThinking,
+        &cfg,
+        &sample_api_config(),
+        &crate::rate_limit::ProviderRateLimiters::default(),
+    )
+    .unwrap();
     let result = TraderAgent::new(handle, "AAPL", "2026-03-15", &cfg);
     assert!(matches!(result, Err(TradingError::Config(_))));
 }

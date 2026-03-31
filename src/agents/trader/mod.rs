@@ -15,9 +15,11 @@ use crate::{
     providers::{
         ModelTier,
         factory::{
-            CompletionModelHandle, build_agent, create_completion_model, prompt_typed_with_retry,
+            CompletionModelHandle, RetryOutcome, build_agent, create_completion_model,
+            prompt_typed_with_retry,
         },
     },
+    rate_limit::ProviderRateLimiters,
     state::{AgentTokenUsage, TradeAction, TradeProposal, TradingState},
 };
 
@@ -83,7 +85,7 @@ trait TraderInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
-    ) -> Result<TypedPromptResponse<TradeProposal>, TradingError>;
+    ) -> Result<RetryOutcome<TypedPromptResponse<TradeProposal>>, TradingError>;
 }
 
 struct RigTraderInference;
@@ -96,7 +98,7 @@ impl TraderInference for RigTraderInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
-    ) -> Result<TypedPromptResponse<TradeProposal>, TradingError> {
+    ) -> Result<RetryOutcome<TypedPromptResponse<TradeProposal>>, TradingError> {
         let agent = build_agent(handle, system_prompt);
         prompt_typed_with_retry::<TradeProposal>(
             &agent,
@@ -177,7 +179,7 @@ impl TraderAgent {
         let started_at = Instant::now();
         let prompt_context = build_prompt_context(state, &self.symbol, &self.target_date);
 
-        let response = inference
+        let outcome = inference
             .infer(
                 &self.handle,
                 &prompt_context.system_prompt,
@@ -187,17 +189,18 @@ impl TraderAgent {
             )
             .await?;
 
-        validate_trade_proposal(&response.output)?;
-        validate_trade_proposal_context(state, &response.output)?;
+        validate_trade_proposal(&outcome.result.output)?;
+        validate_trade_proposal_context(state, &outcome.result.output)?;
 
         let usage = usage_from_typed_response(
             "Trader Agent",
             self.handle.model_id(),
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         );
 
-        state.trader_proposal = Some(response.output);
+        state.trader_proposal = Some(outcome.result.output);
         Ok(usage)
     }
 }
@@ -228,7 +231,12 @@ async fn run_trader_with_inference<I: TraderInference>(
     config: &Config,
     inference: &I,
 ) -> Result<AgentTokenUsage, TradingError> {
-    let handle = create_completion_model(ModelTier::DeepThinking, &config.llm, &config.api)?;
+    let handle = create_completion_model(
+        ModelTier::DeepThinking,
+        &config.llm,
+        &config.api,
+        &ProviderRateLimiters::from_config(&config.rate_limits),
+    )?;
     let agent = TraderAgent::new(handle, &state.asset_symbol, &state.target_date, &config.llm)?;
     agent.run_with_inference(state, inference).await
 }
@@ -523,6 +531,7 @@ fn usage_from_typed_response(
     model_id: &str,
     usage: rig::completion::Usage,
     started_at: Instant,
+    rate_limit_wait_ms: u64,
 ) -> AgentTokenUsage {
     AgentTokenUsage {
         agent_name: agent_name.to_owned(),
@@ -534,5 +543,6 @@ fn usage_from_typed_response(
         completion_tokens: usage.output_tokens,
         total_tokens: usage.total_tokens,
         latency_ms: started_at.elapsed().as_millis() as u64,
+        rate_limit_wait_ms,
     }
 }

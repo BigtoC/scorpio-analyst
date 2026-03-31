@@ -141,7 +141,7 @@ impl SentimentAnalyst {
             self.symbol, self.target_date
         );
 
-        let response = prompt_typed_with_retry::<SentimentData>(
+        let outcome = prompt_typed_with_retry::<SentimentData>(
             &agent,
             &prompt,
             self.timeout,
@@ -150,16 +150,17 @@ impl SentimentAnalyst {
         )
         .await?;
 
-        validate_sentiment(&response.output)?;
+        validate_sentiment(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "Sentiment Analyst",
             self.handle.model_id(),
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         );
 
-        Ok((response.output, usage))
+        Ok((outcome.result.output, usage))
     }
 }
 
@@ -303,6 +304,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 180,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "Sentiment Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");

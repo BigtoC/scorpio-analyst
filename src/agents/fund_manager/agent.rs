@@ -8,9 +8,11 @@ use crate::{
     providers::{
         ModelTier,
         factory::{
-            CompletionModelHandle, build_agent, create_completion_model, prompt_with_retry_details,
+            CompletionModelHandle, RetryOutcome, build_agent, create_completion_model,
+            prompt_with_retry_details,
         },
     },
+    rate_limit::ProviderRateLimiters,
     state::{AgentTokenUsage, Decision, ExecutionStatus, TradingState},
 };
 
@@ -31,7 +33,7 @@ pub(super) trait FundManagerInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
-    ) -> Result<PromptResponse, TradingError>;
+    ) -> Result<RetryOutcome<PromptResponse>, TradingError>;
 }
 
 struct RigFundManagerInference;
@@ -44,7 +46,7 @@ impl FundManagerInference for RigFundManagerInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
-    ) -> Result<PromptResponse, TradingError> {
+    ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
         let agent = build_agent(handle, system_prompt);
         prompt_with_retry_details(&agent, user_prompt, timeout, retry_policy).await
     }
@@ -137,7 +139,7 @@ impl FundManagerAgent {
         let (system_prompt, user_prompt) =
             build_prompt_context(state, &self.symbol, &self.target_date);
 
-        let response = inference
+        let outcome = inference
             .infer(
                 &self.handle,
                 &system_prompt,
@@ -148,7 +150,7 @@ impl FundManagerAgent {
             .await?;
 
         let mut status = parse_and_validate_execution_status(
-            &response.output,
+            &outcome.result.output,
             state_has_missing_inputs(state),
             &state.target_date,
         )?;
@@ -158,8 +160,9 @@ impl FundManagerAgent {
         let usage = usage_from_response(
             "Fund Manager",
             self.handle.model_id(),
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         );
 
         state.final_execution_status = Some(status);
@@ -179,7 +182,12 @@ pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
     config: &Config,
     inference: &I,
 ) -> Result<AgentTokenUsage, TradingError> {
-    let handle = create_completion_model(ModelTier::DeepThinking, &config.llm, &config.api)?;
+    let handle = create_completion_model(
+        ModelTier::DeepThinking,
+        &config.llm,
+        &config.api,
+        &ProviderRateLimiters::from_config(&config.rate_limits),
+    )?;
     let agent =
         FundManagerAgent::new(handle, &state.asset_symbol, &state.target_date, &config.llm)?;
     agent.run_with_inference(state, inference).await

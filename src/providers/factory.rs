@@ -31,46 +31,24 @@ use crate::{
     config::{ApiConfig, LlmConfig},
     error::{RetryPolicy, TradingError},
     providers::copilot::{CopilotCompletionModel, CopilotProviderClient},
+    rate_limit::{ProviderRateLimiters, SharedRateLimiter},
 };
 
 use super::ModelTier;
 
+// Re-export ProviderId from this module for backward compatibility with existing
+// import paths (`crate::providers::factory::ProviderId`).
+pub use super::ProviderId;
+
 const MAX_ERROR_SUMMARY_CHARS: usize = 200;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProviderId {
-    OpenAI,
-    Anthropic,
-    Gemini,
-    /// GitHub Copilot via ACP (no API key required; spawns local CLI).
-    Copilot,
-}
-
-impl ProviderId {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenAI => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Gemini => "gemini",
-            Self::Copilot => "copilot",
-        }
-    }
-
-    const fn missing_key_hint(self) -> &'static str {
-        match self {
-            Self::OpenAI => "SCORPIO_OPENAI_API_KEY",
-            Self::Anthropic => "SCORPIO_ANTHROPIC_API_KEY",
-            Self::Gemini => "SCORPIO_GEMINI_API_KEY",
-            Self::Copilot => "(no API key required — install the Copilot CLI and authenticate)",
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct CompletionModelHandle {
     provider: ProviderId,
     model_id: String,
     client: ProviderClient,
+    /// Rate limiter for this provider, or `None` if rate limiting is disabled.
+    rate_limiter: Option<SharedRateLimiter>,
 }
 
 impl CompletionModelHandle {
@@ -84,6 +62,11 @@ impl CompletionModelHandle {
 
     pub fn model_id(&self) -> &str {
         &self.model_id
+    }
+
+    /// Return the rate limiter for this provider, if one is configured.
+    pub fn rate_limiter(&self) -> Option<&SharedRateLimiter> {
+        self.rate_limiter.as_ref()
     }
 
     /// Construct a non-functional handle for use in tests only.
@@ -106,6 +89,7 @@ impl CompletionModelHandle {
             client: ProviderClient::OpenAI(
                 openai::Client::new("test-dummy-key").expect("openai client construction"),
             ),
+            rate_limiter: None,
         }
     }
 }
@@ -136,19 +120,25 @@ pub enum ProviderClient {
 /// Resolves provider from the requested `tier`, then extracts the
 /// corresponding API key from `api_config`. Returns `TradingError::Config` for unknown
 /// providers, invalid model IDs, or missing keys.
+///
+/// The `rate_limiters` registry is used to attach a per-provider rate limiter to the
+/// handle. Pass `&ProviderRateLimiters::default()` to disable rate limiting.
 pub fn create_completion_model(
     tier: ModelTier,
     llm_config: &LlmConfig,
     api_config: &ApiConfig,
+    rate_limiters: &ProviderRateLimiters,
 ) -> Result<CompletionModelHandle, TradingError> {
     let provider = validate_provider_id(tier.provider_id(llm_config))?;
     let model_id = validate_model_id(tier.model_id(llm_config))?;
     let client = create_provider_client_for(provider, api_config, &model_id)?;
+    let rate_limiter = rate_limiters.get(provider).cloned();
     info!(provider = provider.as_str(), model = model_id.as_str(), tier = %tier, "LLM completion model handle created");
     Ok(CompletionModelHandle {
         provider,
         model_id,
         client,
+        rate_limiter,
     })
 }
 
@@ -158,15 +148,22 @@ pub fn create_provider_client(
     llm_config: &LlmConfig,
     api_config: &ApiConfig,
 ) -> Result<ProviderClient, TradingError> {
-    create_completion_model(tier, llm_config, api_config).map(|handle| handle.client)
+    create_completion_model(
+        tier,
+        llm_config,
+        api_config,
+        &ProviderRateLimiters::default(),
+    )
+    .map(|handle| handle.client)
 }
 
 pub async fn preflight_configured_providers(
     llm_config: &LlmConfig,
     api_config: &ApiConfig,
+    rate_limiters: &ProviderRateLimiters,
 ) -> Result<(), TradingError> {
     for tier in [ModelTier::QuickThinking, ModelTier::DeepThinking] {
-        let handle = create_completion_model(tier, llm_config, api_config)?;
+        let handle = create_completion_model(tier, llm_config, api_config, rate_limiters)?;
         if let ProviderClient::Copilot(client) = &handle.client {
             client.preflight().await.map_err(|err| {
                 TradingError::Rig(format!(
@@ -309,6 +306,7 @@ pub(crate) fn mock_llm_agent(
             provider: ProviderId::OpenAI,
             model_id: model_id.to_owned(),
             inner: LlmAgentInner::Mock(inner),
+            rate_limiter: None,
         },
         MockLlmAgentController {
             observed_history_lengths,
@@ -323,6 +321,11 @@ impl LlmAgent {
 
     pub fn model_id(&self) -> &str {
         &self.model_id
+    }
+
+    /// Return the rate limiter for this agent's provider, if one is configured.
+    pub fn rate_limiter(&self) -> Option<&SharedRateLimiter> {
+        self.rate_limiter.as_ref()
     }
 
     /// Send a one-shot prompt and return the response text.
@@ -535,6 +538,8 @@ pub struct LlmAgent {
     provider: ProviderId,
     model_id: String,
     inner: LlmAgentInner,
+    /// Rate limiter for this provider's LLM calls, or `None` if disabled.
+    pub(crate) rate_limiter: Option<SharedRateLimiter>,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -607,6 +612,7 @@ fn build_agent_inner(
                 provider: handle.provider_id(),
                 model_id: handle.model_id().to_owned(),
                 inner: LlmAgentInner::$variant(agent),
+                rate_limiter: handle.rate_limiter().cloned(),
             }
         }};
     }
@@ -695,6 +701,20 @@ fn map_structured_output_error_with_context(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// RetryOutcome
+// ────────────────────────────────────────────────────────────────────────────
+
+/// The result of a retry-wrapped LLM call, bundling the response with the
+/// total time spent waiting for rate-limit permits across all attempts.
+#[derive(Debug)]
+pub struct RetryOutcome<T> {
+    /// The successful LLM response.
+    pub result: T,
+    /// Total milliseconds spent in `limiter.acquire()` across all attempts.
+    pub rate_limit_wait_ms: u64,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Retry-wrapped completion helpers
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -703,6 +723,9 @@ fn map_structured_output_error_with_context(
 /// Each attempt is guarded by `tokio::time::timeout(timeout)`. Transient errors
 /// (rate limit, timeout) trigger a retry up to `policy.max_retries` times. Permanent
 /// errors fail immediately.
+///
+/// Rate-limit acquire is performed outside the per-attempt timeout but is bounded
+/// by the remaining total budget (Option C semantics).
 ///
 /// # Errors
 ///
@@ -713,7 +736,7 @@ pub async fn prompt_with_retry(
     prompt: &str,
     timeout: Duration,
     policy: &RetryPolicy,
-) -> Result<String, TradingError> {
+) -> Result<RetryOutcome<String>, TradingError> {
     let total_budget = total_request_budget(timeout, policy);
     prompt_with_retry_budget(agent, prompt, timeout, total_budget, policy).await
 }
@@ -724,7 +747,7 @@ pub async fn prompt_with_retry_details(
     prompt: &str,
     timeout: Duration,
     policy: &RetryPolicy,
-) -> Result<PromptResponse, TradingError> {
+) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     let total_budget = total_request_budget(timeout, policy);
     prompt_with_retry_details_budget(agent, prompt, timeout, total_budget, policy).await
 }
@@ -735,7 +758,7 @@ pub(crate) async fn prompt_with_retry_details_budget(
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
-) -> Result<PromptResponse, TradingError> {
+) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
         agent.prompt_details(prompt)
     })
@@ -748,7 +771,7 @@ pub(crate) async fn prompt_with_retry_budget(
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
-) -> Result<String, TradingError> {
+) -> Result<RetryOutcome<String>, TradingError> {
     retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
         agent.prompt(prompt)
     })
@@ -761,18 +784,22 @@ pub(crate) async fn prompt_with_retry_budget(
 /// `call_fn` is invoked on each attempt and must return a `Future` that resolves to
 /// `Result<R, PromptError>`. The two callers differ only in which `LlmAgent` method
 /// they invoke (`prompt` vs `prompt_details`).
+///
+/// Before each attempt, acquires a rate-limit permit (if one is configured) outside
+/// the per-attempt timeout, but bounded by the remaining total budget (Option C).
 async fn retry_prompt_budget_loop<R, F, Fut>(
     agent: &LlmAgent,
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
     call_fn: F,
-) -> Result<R, TradingError>
+) -> Result<RetryOutcome<R>, TradingError>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<R, PromptError>>,
 {
     let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
         if attempt > 0 {
@@ -787,6 +814,31 @@ where
             tokio::time::sleep(delay).await;
         }
 
+        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
+        // The acquire itself is bounded by remaining budget to avoid blocking forever.
+        if let Some(limiter) = agent.rate_limiter() {
+            let remaining = total_budget.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "prompt retry budget exhausted before rate-limit acquire".to_owned(),
+                });
+            }
+            let acquire_start = Instant::now();
+            match tokio::time::timeout(remaining, limiter.acquire()).await {
+                Ok(()) => {
+                    rate_limit_wait_ms = rate_limit_wait_ms
+                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
+                }
+                Err(_) => {
+                    return Err(TradingError::NetworkTimeout {
+                        elapsed: started_at.elapsed(),
+                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
+                    });
+                }
+            }
+        }
+
         let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
         if remaining_budget.is_zero() {
             return Err(TradingError::NetworkTimeout {
@@ -797,7 +849,12 @@ where
         let attempt_timeout = timeout.min(remaining_budget);
 
         match tokio::time::timeout(attempt_timeout, call_fn()).await {
-            Ok(Ok(response)) => return Ok(response),
+            Ok(Ok(response)) => {
+                return Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                });
+            }
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
@@ -837,6 +894,9 @@ where
 /// Behaves identically to [`prompt_with_retry`] but passes `chat_history` to the agent.
 /// The history is cloned on each attempt so retries replay the full context.
 ///
+/// Rate-limit acquire is performed outside the per-attempt timeout but is bounded
+/// by the remaining total budget (Option C semantics).
+///
 /// # Errors
 ///
 /// Same as [`prompt_with_retry`].
@@ -846,7 +906,7 @@ pub async fn chat_with_retry(
     chat_history: &[Message],
     timeout: Duration,
     policy: &RetryPolicy,
-) -> Result<String, TradingError> {
+) -> Result<RetryOutcome<String>, TradingError> {
     let total_budget = total_request_budget(timeout, policy);
     chat_with_retry_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
 }
@@ -858,8 +918,9 @@ pub async fn chat_with_retry_budget(
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
-) -> Result<String, TradingError> {
+) -> Result<RetryOutcome<String>, TradingError> {
     let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
         if attempt > 0 {
@@ -874,6 +935,30 @@ pub async fn chat_with_retry_budget(
             tokio::time::sleep(delay).await;
         }
 
+        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
+        if let Some(limiter) = agent.rate_limiter() {
+            let remaining = total_budget.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "chat retry budget exhausted before rate-limit acquire".to_owned(),
+                });
+            }
+            let acquire_start = Instant::now();
+            match tokio::time::timeout(remaining, limiter.acquire()).await {
+                Ok(()) => {
+                    rate_limit_wait_ms = rate_limit_wait_ms
+                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
+                }
+                Err(_) => {
+                    return Err(TradingError::NetworkTimeout {
+                        elapsed: started_at.elapsed(),
+                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
+                    });
+                }
+            }
+        }
+
         let history = chat_history.to_vec();
         let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
         if remaining_budget.is_zero() {
@@ -885,7 +970,12 @@ pub async fn chat_with_retry_budget(
         let attempt_timeout = timeout.min(remaining_budget);
 
         match tokio::time::timeout(attempt_timeout, agent.chat(prompt, history)).await {
-            Ok(Ok(response)) => return Ok(response),
+            Ok(Ok(response)) => {
+                return Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                });
+            }
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat error, will retry");
@@ -925,6 +1015,9 @@ pub async fn chat_with_retry_budget(
 /// The `chat_history` is updated in place by appending each new message pair. This is the
 /// correct API for multi-turn debates where callers maintain history across rounds.
 ///
+/// Rate-limit acquire is performed outside the per-attempt timeout but is bounded
+/// by the remaining total budget (Option C semantics).
+///
 /// # Errors
 ///
 /// Same as [`chat_with_retry`].
@@ -934,7 +1027,7 @@ pub async fn chat_with_retry_details(
     chat_history: &mut Vec<Message>,
     timeout: Duration,
     policy: &RetryPolicy,
-) -> Result<PromptResponse, TradingError> {
+) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     let total_budget = total_request_budget(timeout, policy);
     chat_with_retry_details_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
 }
@@ -947,8 +1040,9 @@ pub async fn chat_with_retry_details_budget(
     timeout: Duration,
     total_budget: Duration,
     policy: &RetryPolicy,
-) -> Result<PromptResponse, TradingError> {
+) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
 
     // Snapshot the history length before each attempt so we can truncate on retry.
     let initial_len = chat_history.len();
@@ -972,6 +1066,30 @@ pub async fn chat_with_retry_details_budget(
             tokio::time::sleep(delay).await;
         }
 
+        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
+        if let Some(limiter) = agent.rate_limiter() {
+            let remaining = total_budget.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "chat-details budget exhausted before rate-limit acquire".to_owned(),
+                });
+            }
+            let acquire_start = Instant::now();
+            match tokio::time::timeout(remaining, limiter.acquire()).await {
+                Ok(()) => {
+                    rate_limit_wait_ms = rate_limit_wait_ms
+                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
+                }
+                Err(_) => {
+                    return Err(TradingError::NetworkTimeout {
+                        elapsed: started_at.elapsed(),
+                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
+                    });
+                }
+            }
+        }
+
         let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
         if remaining_budget.is_zero() {
             return Err(TradingError::NetworkTimeout {
@@ -983,7 +1101,12 @@ pub async fn chat_with_retry_details_budget(
 
         match tokio::time::timeout(attempt_timeout, agent.chat_details(prompt, chat_history)).await
         {
-            Ok(Ok(response)) => return Ok(response),
+            Ok(Ok(response)) => {
+                return Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                });
+            }
             Ok(Err(err)) => {
                 if is_transient_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat-details error, will retry");
@@ -1059,12 +1182,13 @@ pub async fn prompt_typed_with_retry<T>(
     timeout: Duration,
     policy: &RetryPolicy,
     max_turns: usize,
-) -> Result<TypedPromptResponse<T>, TradingError>
+) -> Result<RetryOutcome<TypedPromptResponse<T>>, TradingError>
 where
     T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
 {
     let total_budget = total_request_budget(timeout, policy);
     let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
         if attempt > 0 {
@@ -1083,6 +1207,30 @@ where
             tokio::time::sleep(delay).await;
         }
 
+        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
+        if let Some(limiter) = agent.rate_limiter() {
+            let remaining = total_budget.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: started_at.elapsed(),
+                    message: "typed prompt budget exhausted before rate-limit acquire".to_owned(),
+                });
+            }
+            let acquire_start = Instant::now();
+            match tokio::time::timeout(remaining, limiter.acquire()).await {
+                Ok(()) => {
+                    rate_limit_wait_ms = rate_limit_wait_ms
+                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
+                }
+                Err(_) => {
+                    return Err(TradingError::NetworkTimeout {
+                        elapsed: started_at.elapsed(),
+                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
+                    });
+                }
+            }
+        }
+
         let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
         if remaining_budget.is_zero() {
             return Err(TradingError::NetworkTimeout {
@@ -1098,7 +1246,12 @@ where
         )
         .await
         {
-            Ok(Ok(response)) => return Ok(response),
+            Ok(Ok(response)) => {
+                return Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                });
+            }
             Ok(Err(err)) => {
                 if should_retry_typed_error(&err) && attempt < policy.max_retries {
                     continue;
@@ -1435,13 +1588,7 @@ mod tests {
     }
 
     fn empty_api_config() -> ApiConfig {
-        ApiConfig {
-            finnhub_rate_limit: 30,
-            openai_api_key: None,
-            anthropic_api_key: None,
-            gemini_api_key: None,
-            finnhub_api_key: None,
-        }
+        ApiConfig::default()
     }
 
     fn api_config_with_openai() -> ApiConfig {
@@ -1476,7 +1623,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "unsupported".to_owned();
 
-        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &empty_api_config(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = err.to_string();
@@ -1489,7 +1641,12 @@ mod tests {
     #[test]
     fn factory_missing_openai_key_returns_config_error() {
         let cfg = sample_llm_config();
-        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &empty_api_config(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -1503,7 +1660,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "anthropic".to_owned();
 
-        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &empty_api_config(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -1517,7 +1679,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "gemini".to_owned();
 
-        let result = create_completion_model(ModelTier::QuickThinking, &cfg, &empty_api_config());
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &empty_api_config(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -1531,8 +1698,12 @@ mod tests {
     #[test]
     fn factory_creates_openai_client() {
         let cfg = sample_llm_config();
-        let handle =
-            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(handle.is_ok());
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "openai");
@@ -1544,8 +1715,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "anthropic".to_owned();
 
-        let handle =
-            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_anthropic());
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_with_anthropic(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(handle.is_ok());
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "anthropic");
@@ -1557,8 +1732,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "gemini".to_owned();
 
-        let handle =
-            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_gemini());
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_with_gemini(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(handle.is_ok());
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "gemini");
@@ -1570,8 +1749,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_model = "   ".to_owned();
 
-        let result =
-            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai());
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("model ID"));
     }
@@ -1581,8 +1764,12 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "copilot".to_owned();
 
-        let handle =
-            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_for_copilot());
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_for_copilot(),
+            &ProviderRateLimiters::default(),
+        );
         assert!(handle.is_ok());
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "copilot");
@@ -1594,9 +1781,13 @@ mod tests {
     #[tokio::test]
     async fn build_agent_creates_openai_agent() {
         let cfg = sample_llm_config();
-        let handle =
-            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
-                .unwrap();
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "openai");
         assert_eq!(agent.model_id(), "gpt-4o-mini");
@@ -1606,9 +1797,13 @@ mod tests {
     async fn build_agent_creates_anthropic_agent() {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "anthropic".to_owned();
-        let handle =
-            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_anthropic())
-                .unwrap();
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_with_anthropic(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "anthropic");
         assert_eq!(agent.model_id(), "o3");
@@ -1618,9 +1813,13 @@ mod tests {
     async fn build_agent_creates_gemini_agent() {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "gemini".to_owned();
-        let handle =
-            create_completion_model(ModelTier::DeepThinking, &cfg, &api_config_with_gemini())
-                .unwrap();
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_with_gemini(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "gemini");
         assert_eq!(agent.model_id(), "o3");
@@ -1871,9 +2070,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(response.output, "Recovered response");
-        assert_eq!(response.usage.total_tokens, 15);
-        assert_eq!(response.usage.output_tokens, 5);
+        assert_eq!(response.result.output, "Recovered response");
+        assert_eq!(response.result.usage.total_tokens, 15);
+        assert_eq!(response.result.usage.output_tokens, 5);
         assert_eq!(history.len(), 3);
         assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
     }

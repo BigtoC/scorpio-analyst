@@ -106,7 +106,7 @@ impl RiskModerator {
         let started_at = Instant::now();
         let prompt = build_moderator_prompt(state);
 
-        let response = prompt_with_retry_details(
+        let outcome = prompt_with_retry_details(
             &self.core.agent,
             &prompt,
             self.core.timeout,
@@ -115,11 +115,12 @@ impl RiskModerator {
         .await?;
 
         build_moderator_result(
-            response.output,
+            outcome.result.output,
             state,
             &self.core.model_id,
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         )
     }
 }
@@ -179,6 +180,7 @@ fn build_moderator_result(
     model_id: &str,
     usage: rig::completion::Usage,
     started_at: Instant,
+    rate_limit_wait_ms: u64,
 ) -> Result<(String, AgentTokenUsage), TradingError> {
     let expect_both_violation = state
         .conservative_risk_report
@@ -190,7 +192,13 @@ fn build_moderator_result(
             .is_some_and(|r| r.flags_violation);
     validate_moderator_output(&output, expect_both_violation)?;
     let output = redact_text_for_storage(&output);
-    let token_usage = usage_from_response("Risk Moderator", model_id, usage, started_at);
+    let token_usage = usage_from_response(
+        "Risk Moderator",
+        model_id,
+        usage,
+        started_at,
+        rate_limit_wait_ms,
+    );
     Ok((output, token_usage))
 }
 
@@ -224,11 +232,8 @@ mod tests {
 
     fn api_config_with_openai() -> ApiConfig {
         ApiConfig {
-            finnhub_rate_limit: 30,
             openai_api_key: Some(SecretString::from("test-key")),
-            anthropic_api_key: None,
-            gemini_api_key: None,
-            finnhub_api_key: None,
+            ..ApiConfig::default()
         }
     }
 
@@ -413,6 +418,7 @@ mod tests {
                 cached_input_tokens: 0,
             },
             started_at,
+            0,
         )
         .unwrap();
         assert!(!synthesis.is_empty());
@@ -438,6 +444,7 @@ mod tests {
             "o3",
             mock_usage(10),
             Instant::now(),
+            0,
         )
         .unwrap();
         assert!(!synthesis.contains("abcd1234"));
@@ -454,6 +461,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 5,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "Risk Moderator");
     }
@@ -461,9 +469,13 @@ mod tests {
     #[test]
     fn constructor_rejects_quick_thinking_handle() {
         let cfg = sample_llm_config();
-        let handle =
-            create_completion_model(ModelTier::QuickThinking, &cfg, &api_config_with_openai())
-                .unwrap();
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &crate::rate_limit::ProviderRateLimiters::default(),
+        )
+        .unwrap();
         let result = RiskModerator::new(&handle, &sample_state(), &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
     }

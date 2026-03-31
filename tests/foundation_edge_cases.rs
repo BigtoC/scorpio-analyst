@@ -11,7 +11,6 @@ use secrecy::SecretString;
 #[test]
 fn api_config_debug_never_leaks_secrets() {
     let api = ApiConfig {
-        finnhub_rate_limit: 30,
         openai_api_key: Some(SecretString::from("sk-live-abc123")),
         anthropic_api_key: Some(SecretString::from("sk-ant-secret")),
         gemini_api_key: None,

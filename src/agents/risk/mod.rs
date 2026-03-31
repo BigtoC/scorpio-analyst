@@ -542,6 +542,7 @@ mod tests {
                         completion_tokens: 0,
                         total_tokens: 0,
                         latency_ms: 1,
+                        rate_limit_wait_ms: 0,
                     }
                 } else {
                     AgentTokenUsage::unavailable("Conservative Risk Analyst", "o3", 1)

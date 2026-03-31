@@ -33,6 +33,10 @@ pub struct AgentTokenUsage {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub latency_ms: u64,
+    /// Total milliseconds spent waiting for rate-limit permits across all retry attempts.
+    /// Zero when rate limiting is disabled for this provider.
+    #[serde(default)]
+    pub rate_limit_wait_ms: u64,
 }
 
 impl TokenUsageTracker {
@@ -60,6 +64,7 @@ impl AgentTokenUsage {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms,
+            rate_limit_wait_ms: 0,
         }
     }
 }

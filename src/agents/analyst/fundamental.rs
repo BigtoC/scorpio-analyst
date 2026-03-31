@@ -131,7 +131,7 @@ impl FundamentalAnalyst {
             self.symbol, self.target_date
         );
 
-        let response = prompt_typed_with_retry::<FundamentalData>(
+        let outcome = prompt_typed_with_retry::<FundamentalData>(
             &agent,
             &prompt,
             self.timeout,
@@ -140,16 +140,17 @@ impl FundamentalAnalyst {
         )
         .await?;
 
-        validate_fundamental(&response.output)?;
+        validate_fundamental(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "Fundamental Analyst",
             self.handle.model_id(),
-            response.usage,
+            outcome.result.usage,
             started_at,
+            outcome.rate_limit_wait_ms,
         );
 
-        Ok((response.output, usage))
+        Ok((outcome.result.output, usage))
     }
 }
 
@@ -268,6 +269,7 @@ mod tests {
             completion_tokens: 0,
             total_tokens: 0,
             latency_ms: 250,
+            rate_limit_wait_ms: 0,
         };
         assert_eq!(usage.agent_name, "Fundamental Analyst");
         assert_eq!(usage.model_id, "gpt-4o-mini");

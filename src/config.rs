@@ -9,9 +9,12 @@ use serde::{Deserialize, Deserializer};
 pub struct Config {
     pub llm: LlmConfig,
     pub trading: TradingConfig,
+    #[serde(default)]
     pub api: ApiConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub rate_limits: RateLimitConfig,
 }
 
 /// LLM provider and model routing settings.
@@ -83,12 +86,9 @@ pub struct TradingConfig {
     pub backtest_end: Option<String>,
 }
 
-/// API keys and rate-limit quota settings.
-#[derive(Clone, Deserialize)]
+/// API keys (loaded from environment, not from config.toml).
+#[derive(Clone, Deserialize, Default)]
 pub struct ApiConfig {
-    #[serde(default = "default_finnhub_rate_limit")]
-    pub finnhub_rate_limit: u32,
-
     // Secret keys — loaded from env, not from config.toml
     #[serde(skip)]
     pub openai_api_key: Option<SecretString>,
@@ -100,8 +100,53 @@ pub struct ApiConfig {
     pub finnhub_api_key: Option<SecretString>,
 }
 
-fn default_finnhub_rate_limit() -> u32 {
+/// Per-provider rate-limit settings.
+///
+/// All values in requests per minute (RPM) for LLM providers; `finnhub_rps` is
+/// requests per second. Setting a value to `0` disables rate limiting for that
+/// provider.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    /// OpenAI requests per minute (0 = disabled).
+    #[serde(default = "default_openai_rpm")]
+    pub openai_rpm: u32,
+    /// Anthropic requests per minute (0 = disabled).
+    #[serde(default = "default_anthropic_rpm")]
+    pub anthropic_rpm: u32,
+    /// Google Gemini requests per minute (0 = disabled).
+    #[serde(default = "default_gemini_rpm")]
+    pub gemini_rpm: u32,
+    /// GitHub Copilot requests per minute (0 = disabled; no documented limit).
+    #[serde(default)]
+    pub copilot_rpm: u32,
+    /// Finnhub requests per second (0 = disabled).
+    #[serde(default = "default_finnhub_rps")]
+    pub finnhub_rps: u32,
+}
+
+fn default_openai_rpm() -> u32 {
+    500
+}
+fn default_anthropic_rpm() -> u32 {
+    500
+}
+fn default_gemini_rpm() -> u32 {
+    500
+}
+fn default_finnhub_rps() -> u32 {
     30
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            openai_rpm: default_openai_rpm(),
+            anthropic_rpm: default_anthropic_rpm(),
+            gemini_rpm: default_gemini_rpm(),
+            copilot_rpm: 0,
+            finnhub_rps: default_finnhub_rps(),
+        }
+    }
 }
 
 /// Storage backend settings.
@@ -152,7 +197,6 @@ pub fn expand_path(s: &str) -> std::path::PathBuf {
 impl std::fmt::Debug for ApiConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApiConfig")
-            .field("finnhub_rate_limit", &self.finnhub_rate_limit)
             .field("openai_api_key", &secret_display(&self.openai_api_key))
             .field(
                 "anthropic_api_key",
@@ -265,7 +309,6 @@ mod tests {
     #[test]
     fn api_config_debug_redacts_secrets() {
         let api = ApiConfig {
-            finnhub_rate_limit: 30,
             openai_api_key: Some(SecretString::from("super-secret")),
             anthropic_api_key: None,
             gemini_api_key: None,
@@ -297,7 +340,11 @@ mod tests {
         );
         let cfg = cfg.unwrap();
         assert_eq!(cfg.llm.max_debate_rounds, 3);
-        assert_eq!(cfg.api.finnhub_rate_limit, 30);
+        assert_eq!(cfg.rate_limits.finnhub_rps, 30);
+        assert_eq!(cfg.rate_limits.openai_rpm, 500);
+        assert_eq!(cfg.rate_limits.anthropic_rpm, 500);
+        assert_eq!(cfg.rate_limits.gemini_rpm, 500);
+        assert_eq!(cfg.rate_limits.copilot_rpm, 0);
     }
 
     #[test]
