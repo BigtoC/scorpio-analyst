@@ -104,7 +104,7 @@ The `RateLimitConfig` MUST include an `openrouter_rpm: u32` field with a default
 
 ### Requirement: OpenRouter Token Usage Reporting
 
-The OpenRouter provider MUST report completion metadata to the `TokenUsageTracker` via the same interface used by other providers. Because rig-core's OpenRouter module exposes a `Usage` struct with token count fields, the OpenRouter provider MUST report authoritative provider-reported token counts (prompt, completion, total) when the API response includes them. The `token_counts_available` flag MUST be set to `true` when at least one token count is non-zero, following the same logic used for OpenAI, Anthropic, and Gemini.
+The OpenRouter provider MUST report completion metadata to the `TokenUsageTracker` via the same shared `rig::completion::Usage` path used by the existing HTTP providers. This change MUST NOT introduce OpenRouter-specific token accounting structs or separate state fields. When the API response includes provider-reported token counts, the existing usage helpers MUST populate `AgentTokenUsage` with prompt, completion, and total counts. The `token_counts_available` flag MUST be set to `true` when at least one token count is non-zero, following the same logic used for OpenAI, Anthropic, and Gemini.
 
 #### Scenario: Token Usage Recorded With Counts
 
@@ -115,3 +115,8 @@ The OpenRouter provider MUST report completion metadata to the `TokenUsageTracke
 
 - **WHEN** a completion call through OpenRouter succeeds but the API returns zero token counts
 - **THEN** the `AgentTokenUsage` record has `token_counts_available` set to `false`, consistent with how other providers handle zero-count responses
+
+#### Scenario: No Provider-specific Usage State Added
+
+- **WHEN** OpenRouter support is added to the provider layer
+- **THEN** the implementation reuses the existing shared `AgentTokenUsage` / `TokenUsageTracker` plumbing rather than adding OpenRouter-specific state types or storage fields

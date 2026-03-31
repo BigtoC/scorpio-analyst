@@ -35,6 +35,7 @@
 - [x] 6.2 Update rate limit tests in `src/rate_limit.rs` — add `ProviderId::OpenRouter` assertions to existing tests that verify limiter registration
 - [x] 6.3 Update factory tests in `src/providers/factory.rs` — add OpenRouter to any existing provider validation tests, verify `validate_provider_id("openrouter")` returns `ProviderId::OpenRouter`
 - [x] 6.4 Add a factory/config test proving OpenRouter free-model identifiers such as `qwen/qwen3.6-plus-preview:free` and `minimax/minimax-m2.5:free` are accepted unchanged
+- [x] 6.5 Update shared integration tests that manually construct `ApiConfig` literals (notably `tests/foundation_edge_cases.rs`) so the new `openrouter_api_key` field is covered without breaking the foundation-owned regression harness
 
 ## 7. Verification
 

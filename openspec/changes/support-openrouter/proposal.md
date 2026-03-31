@@ -10,6 +10,7 @@ The current provider set (OpenAI, Anthropic, Gemini, Copilot) requires paid API 
 - Add `SCORPIO_OPENROUTER_API_KEY` environment variable and `openrouter_api_key` field to `ApiConfig`.
 - Add `openrouter_rpm` to `RateLimitConfig` with a default of 20 RPM (free-tier limit).
 - Extend the shared `llm-rate-limiting` contract so OpenRouter participates in the existing per-provider RPM configuration and limiter registry.
+- Keep token accounting on the existing shared `rig::completion::Usage` path so OpenRouter reports usage through the same `AgentTokenUsage` / `TokenUsageTracker` flow as OpenAI, Anthropic, and Gemini without introducing provider-specific accounting code.
 - Update `config.toml` and `.env.example` with the new provider's defaults.
 
 ## Capabilities
@@ -31,10 +32,11 @@ This change requires approved cross-owner edits before implementation begins.
 - `src/rate_limit.rs` (owner: `add-project-foundation` and shared `llm-rate-limiting` behavior): register `ProviderId::OpenRouter` in `ProviderRateLimiters::from_config()`.
 - `config.toml` (owner: `add-project-foundation`): document the checked-in `openrouter_rpm = 20` default in `[rate_limits]`.
 - `.env.example` (owner: `add-project-foundation`): document `SCORPIO_OPENROUTER_API_KEY` for operators.
+- `tests/foundation_edge_cases.rs` (owner: `add-project-foundation` / `testing-strategy`): update `ApiConfig` struct literals for the new `openrouter_api_key` field and preserve the secret-redaction regression coverage owned by the shared test harness.
 
 ## Impact
 
-- **Code**: `src/providers/mod.rs`, `src/providers/factory.rs`, `src/config.rs`, `src/rate_limit.rs` — purely additive match arms and struct fields. No changes to existing provider logic, agent behavior, or state management.
+- **Code**: `src/providers/mod.rs`, `src/providers/factory.rs`, `src/config.rs`, `src/rate_limit.rs`, `tests/foundation_edge_cases.rs` — additive provider registration, config surfaces, and required shared-test fixture updates. No changes to downstream agent workflows or state schemas.
 - **Cross-owner approval required**: Implementation touches files owned by `add-project-foundation`, `add-llm-providers`, and the shared `llm-rate-limiting` change. Those edits are limited to additive provider registration and configuration surfaces.
 - **Dependencies**: None — `rig::providers::openrouter` is already available in rig-core 0.32 with no feature flag required.
 - **Configuration**: New env var `SCORPIO_OPENROUTER_API_KEY`, new config field `openrouter_rpm`. Existing configs remain valid without modification.
