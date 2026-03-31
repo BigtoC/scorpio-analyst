@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use scorpio_analyst::config::{ApiConfig, Config};
-use scorpio_analyst::error::{RetryPolicy, TradingError, check_analyst_degradation};
+use scorpio_analyst::error::{check_analyst_degradation, RetryPolicy, TradingError};
 use secrecy::SecretString;
 
 // ── Secret redaction ───────────────────────────────────────────────
@@ -15,7 +15,6 @@ fn api_config_debug_never_leaks_secrets() {
         anthropic_api_key: Some(SecretString::from("sk-ant-secret")),
         gemini_api_key: None,
         finnhub_api_key: Some(SecretString::from("ct_finnhub_key")),
-        ..ApiConfig::default()
     };
     let debug = format!("{api:?}");
 
