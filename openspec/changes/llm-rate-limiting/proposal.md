@@ -8,7 +8,7 @@ LLM API calls during fan-out phases (4 analysts in parallel, 3 risk agents in pa
 - **BREAKING**: Migrate `[api].finnhub_rate_limit` to `[rate_limits].finnhub_rps` and remove the old field.
 - Extend `SharedRateLimiter` so it can be constructed from an exact `governor::Quota`, then create a `ProviderRateLimiters` registry that maps `ProviderId` to `SharedRateLimiter`, constructed from config using `governor::Quota::with_period` for exact RPM-to-request-spacing conversion.
 - Embed an `Option<SharedRateLimiter>` in `CompletionModelHandle` and copy it into `LlmAgent` during agent construction so the limiter is available inside retry helpers.
-- Insert `limiter.acquire().await` before each attempt inside the retry loops (`retry_prompt_budget_loop`, `retry_chat_budget_loop`, `retry_typed_loop`), using Option C semantics: acquire sits outside the per-attempt timeout but is bounded by the total budget, so LLM calls always get their full per-attempt timeout.
+- Insert `limiter.acquire().await` before each attempt inside the retry loops (`retry_prompt_budget_loop`, `chat_with_retry_budget` / `chat_with_retry_details_budget`, and the inline loop in `prompt_typed_with_retry`), using Option C semantics: acquire sits outside the per-attempt timeout but is bounded by the total budget, so LLM calls always get their full per-attempt timeout.
 - Add `rate_limit_wait_ms` field to `AgentTokenUsage` to track time spent waiting for rate limit permits, surfaced in the per-agent usage output.
 - Introduce a `RetryOutcome<T>` wrapper returned from retry functions to thread wait-time measurements back to callers alongside the response.
 
