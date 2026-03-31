@@ -2,10 +2,10 @@ use chrono::Local;
 use scorpio_analyst::config::Config;
 use scorpio_analyst::data::{FinnhubClient, YFinanceClient};
 use scorpio_analyst::observability::init_tracing;
+use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::providers::factory::{
     create_completion_model, preflight_configured_providers,
 };
-use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::rate_limit::{ProviderRateLimiters, SharedRateLimiter};
 use scorpio_analyst::state::TradingState;
 use scorpio_analyst::workflow::{SnapshotStore, TradingPipeline};
