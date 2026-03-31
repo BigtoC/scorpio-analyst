@@ -45,6 +45,8 @@ pub enum ProviderId {
     Gemini,
     /// GitHub Copilot via ACP (no API key required; spawns local CLI).
     Copilot,
+    /// OpenRouter API aggregator (300+ models, including free-tier).
+    OpenRouter,
 }
 
 impl ProviderId {
@@ -54,6 +56,7 @@ impl ProviderId {
             Self::Anthropic => "anthropic",
             Self::Gemini => "gemini",
             Self::Copilot => "copilot",
+            Self::OpenRouter => "openrouter",
         }
     }
 
@@ -63,6 +66,7 @@ impl ProviderId {
             Self::Anthropic => "SCORPIO_ANTHROPIC_API_KEY",
             Self::Gemini => "SCORPIO_GEMINI_API_KEY",
             Self::Copilot => "(no API key required — install the Copilot CLI and authenticate)",
+            Self::OpenRouter => "SCORPIO_OPENROUTER_API_KEY",
         }
     }
 }

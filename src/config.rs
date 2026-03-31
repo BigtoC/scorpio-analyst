@@ -42,10 +42,10 @@ pub struct LlmConfig {
 
 /// Validate and normalize an LLM provider name during deserialization.
 ///
-/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, and `"copilot"` (case-insensitive,
-/// leading/trailing whitespace ignored). Returns a lower-case canonical form.
-/// Unknown values produce a `serde` deserialization error at config-load time,
-/// before any provider client is constructed.
+/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, `"copilot"`, and `"openrouter"`
+/// (case-insensitive, leading/trailing whitespace ignored). Returns a lower-case
+/// canonical form. Unknown values produce a `serde` deserialization error at
+/// config-load time, before any provider client is constructed.
 fn deserialize_provider_name<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
@@ -53,9 +53,9 @@ where
     let raw = String::deserialize(deserializer)?;
     let canonical = raw.trim().to_ascii_lowercase();
     match canonical.as_str() {
-        "openai" | "anthropic" | "gemini" | "copilot" => Ok(canonical),
+        "openai" | "anthropic" | "gemini" | "copilot" | "openrouter" => Ok(canonical),
         unknown => Err(serde::de::Error::custom(format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot)"
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter)"
         ))),
     }
 }
@@ -98,6 +98,8 @@ pub struct ApiConfig {
     pub gemini_api_key: Option<SecretString>,
     #[serde(skip)]
     pub finnhub_api_key: Option<SecretString>,
+    #[serde(skip)]
+    pub openrouter_api_key: Option<SecretString>,
 }
 
 /// Per-provider rate-limit settings.
@@ -119,6 +121,9 @@ pub struct RateLimitConfig {
     /// GitHub Copilot requests per minute (0 = disabled; no documented limit).
     #[serde(default)]
     pub copilot_rpm: u32,
+    /// OpenRouter requests per minute (0 = disabled; free-tier default: 20 RPM).
+    #[serde(default = "default_openrouter_rpm")]
+    pub openrouter_rpm: u32,
     /// Finnhub requests per second (0 = disabled).
     #[serde(default = "default_finnhub_rps")]
     pub finnhub_rps: u32,
@@ -133,6 +138,9 @@ fn default_anthropic_rpm() -> u32 {
 fn default_gemini_rpm() -> u32 {
     500
 }
+fn default_openrouter_rpm() -> u32 {
+    20
+}
 fn default_finnhub_rps() -> u32 {
     30
 }
@@ -144,6 +152,7 @@ impl Default for RateLimitConfig {
             anthropic_rpm: default_anthropic_rpm(),
             gemini_rpm: default_gemini_rpm(),
             copilot_rpm: 0,
+            openrouter_rpm: default_openrouter_rpm(),
             finnhub_rps: default_finnhub_rps(),
         }
     }
@@ -204,6 +213,10 @@ impl std::fmt::Debug for ApiConfig {
             )
             .field("gemini_api_key", &secret_display(&self.gemini_api_key))
             .field("finnhub_api_key", &secret_display(&self.finnhub_api_key))
+            .field(
+                "openrouter_api_key",
+                &secret_display(&self.openrouter_api_key),
+            )
             .finish()
     }
 }
@@ -249,6 +262,7 @@ impl Config {
         cfg.api.anthropic_api_key = secret_from_env("SCORPIO_ANTHROPIC_API_KEY");
         cfg.api.gemini_api_key = secret_from_env("SCORPIO_GEMINI_API_KEY");
         cfg.api.finnhub_api_key = secret_from_env("SCORPIO_FINNHUB_API_KEY");
+        cfg.api.openrouter_api_key = secret_from_env("SCORPIO_OPENROUTER_API_KEY");
 
         cfg.validate()?;
         Ok(cfg)
@@ -264,11 +278,12 @@ impl Config {
         // Check that at least one LLM key is available
         let has_key = self.api.openai_api_key.is_some()
             || self.api.anthropic_api_key.is_some()
-            || self.api.gemini_api_key.is_some();
+            || self.api.gemini_api_key.is_some()
+            || self.api.openrouter_api_key.is_some();
         if !has_key {
             tracing::warn!(
                 "no LLM provider API key found — set SCORPIO_OPENAI_API_KEY, \
-                 SCORPIO_ANTHROPIC_API_KEY, or SCORPIO_GEMINI_API_KEY"
+                 SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, or SCORPIO_OPENROUTER_API_KEY"
             );
         }
         Ok(())
@@ -313,6 +328,7 @@ mod tests {
             anthropic_api_key: None,
             gemini_api_key: None,
             finnhub_api_key: None,
+            openrouter_api_key: None,
         };
         let debug_output = format!("{api:?}");
         assert!(
@@ -326,6 +342,10 @@ mod tests {
         assert!(
             debug_output.contains("<not set>"),
             "should mark absent keys"
+        );
+        assert!(
+            debug_output.contains("openrouter_api_key"),
+            "debug output should include openrouter_api_key field"
         );
     }
 
@@ -345,6 +365,10 @@ mod tests {
         assert_eq!(cfg.rate_limits.anthropic_rpm, 500);
         assert_eq!(cfg.rate_limits.gemini_rpm, 500);
         assert_eq!(cfg.rate_limits.copilot_rpm, 0);
+        assert_eq!(
+            cfg.rate_limits.openrouter_rpm, 20,
+            "openrouter_rpm default should be 20"
+        );
     }
 
     #[test]
@@ -365,7 +389,7 @@ mod tests {
 
     #[test]
     fn deserialize_provider_name_accepts_valid() {
-        for name in &["openai", "anthropic", "gemini", "copilot"] {
+        for name in &["openai", "anthropic", "gemini", "copilot", "openrouter"] {
             let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
                 serde::de::value::Error,
             >::new(name));

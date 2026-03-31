@@ -20,7 +20,7 @@ use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
     completion::{Chat, Message, Prompt, PromptError, StructuredOutputError},
-    providers::{anthropic, gemini, openai},
+    providers::{anthropic, gemini, openai, openrouter},
     tool::ToolDyn,
 };
 use secrecy::ExposeSecret;
@@ -113,6 +113,8 @@ pub enum ProviderClient {
     Gemini(gemini::Client),
     /// GitHub Copilot via ACP (local CLI subprocess, no API key).
     Copilot(CopilotProviderClient),
+    /// OpenRouter API aggregator (300+ models, including free-tier).
+    OpenRouter(openrouter::Client),
 }
 
 /// Construct a reusable completion-model handle from configuration.
@@ -223,6 +225,15 @@ fn create_provider_client_for(
                 exe_path, model_id,
             )))
         }
+        ProviderId::OpenRouter => {
+            let key = api_config
+                .openrouter_api_key
+                .as_ref()
+                .ok_or_else(|| missing_key_error(provider))?;
+            let client = openrouter::Client::new(key.expose_secret())
+                .map_err(|e| config_error(&format!("failed to create OpenRouter client: {e}")))?;
+            Ok(ProviderClient::OpenRouter(client))
+        }
     }
 }
 
@@ -234,6 +245,7 @@ fn create_provider_client_for(
 type OpenAIModel = rig::providers::openai::responses_api::ResponsesCompletionModel;
 type AnthropicModel = rig::providers::anthropic::completion::CompletionModel;
 type GeminiModel = rig::providers::gemini::completion::CompletionModel;
+type OpenRouterModel = rig::providers::openrouter::completion::CompletionModel;
 
 /// A provider-agnostic agent that implements uniform `prompt` and `chat` operations.
 ///
@@ -249,6 +261,8 @@ enum LlmAgentInner {
     Gemini(rig::agent::Agent<GeminiModel>),
     /// Agent backed by GitHub Copilot via ACP.
     Copilot(rig::agent::Agent<CopilotCompletionModel>),
+    /// Agent backed by OpenRouter API aggregator.
+    OpenRouter(rig::agent::Agent<OpenRouterModel>),
     #[cfg(test)]
     Mock(MockLlmAgent),
 }
@@ -335,6 +349,7 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Gemini(agent) => agent.prompt(prompt).await,
             LlmAgentInner::Copilot(agent) => agent.prompt(prompt).await,
+            LlmAgentInner::OpenRouter(agent) => agent.prompt(prompt).await,
             #[cfg(test)]
             LlmAgentInner::Mock(agent) => Ok(agent.prompt_details(prompt).await?.output),
         }
@@ -347,6 +362,7 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).extended_details().await,
             LlmAgentInner::Gemini(agent) => agent.prompt(prompt).extended_details().await,
             LlmAgentInner::Copilot(agent) => agent.prompt(prompt).extended_details().await,
+            LlmAgentInner::OpenRouter(agent) => agent.prompt(prompt).extended_details().await,
             #[cfg(test)]
             LlmAgentInner::Mock(agent) => agent.prompt_details(prompt).await,
         }
@@ -393,6 +409,12 @@ impl LlmAgent {
                 .extended_details()
                 .await
                 .map_err(map_err),
+            LlmAgentInner::OpenRouter(agent) => agent
+                .prompt_typed::<T>(prompt)
+                .max_turns(max_turns)
+                .extended_details()
+                .await
+                .map_err(map_err),
             #[cfg(test)]
             LlmAgentInner::Mock(_) => Err(TradingError::Config(anyhow::anyhow!(
                 "typed prompt not supported for mock llm agent"
@@ -411,6 +433,7 @@ impl LlmAgent {
             LlmAgentInner::Anthropic(agent) => agent.chat(prompt, chat_history).await,
             LlmAgentInner::Gemini(agent) => agent.chat(prompt, chat_history).await,
             LlmAgentInner::Copilot(agent) => agent.chat(prompt, chat_history).await,
+            LlmAgentInner::OpenRouter(agent) => agent.chat(prompt, chat_history).await,
             #[cfg(test)]
             LlmAgentInner::Mock(agent) => {
                 let mut history = chat_history;
@@ -450,6 +473,12 @@ impl LlmAgent {
                     .await
             }
             LlmAgentInner::Copilot(agent) => {
+                PromptRequest::from_agent(agent, prompt)
+                    .with_history(chat_history)
+                    .extended_details()
+                    .await
+            }
+            LlmAgentInner::OpenRouter(agent) => {
                 PromptRequest::from_agent(agent, prompt)
                     .with_history(chat_history)
                     .extended_details()
@@ -640,6 +669,11 @@ fn build_agent_inner(
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
             make_agent!(c, base, Copilot)
+        }
+        ProviderClient::OpenRouter(c) => {
+            use rig::prelude::CompletionClient;
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(c, base, OpenRouter)
         }
     }
 }
@@ -1168,6 +1202,9 @@ where
         LlmAgentInner::Copilot(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
             map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
         }),
+        LlmAgentInner::OpenRouter(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
+            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
+        }),
         #[cfg(test)]
         LlmAgentInner::Mock(_) => Err(TradingError::Config(anyhow::anyhow!(
             "typed prompt not supported for mock llm agent"
@@ -1346,8 +1383,9 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
         "anthropic" => Ok(ProviderId::Anthropic),
         "gemini" => Ok(ProviderId::Gemini),
         "copilot" => Ok(ProviderId::Copilot),
+        "openrouter" => Ok(ProviderId::OpenRouter),
         unknown => Err(config_error(&format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot)"
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter)"
         ))),
     }
 }
@@ -1616,6 +1654,13 @@ mod tests {
         empty_api_config()
     }
 
+    fn api_config_with_openrouter() -> ApiConfig {
+        ApiConfig {
+            openrouter_api_key: Some(SecretString::from("test-openrouter-key")),
+            ..empty_api_config()
+        }
+    }
+
     // ── Factory error paths ──────────────────────────────────────────────
 
     #[test]
@@ -1823,6 +1868,104 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "gemini");
         assert_eq!(agent.model_id(), "o3");
+    }
+
+    // ── OpenRouter provider ──────────────────────────────────────────────
+
+    #[test]
+    fn validate_provider_id_openrouter_returns_openrouter() {
+        let result = validate_provider_id("openrouter");
+        assert!(
+            result.is_ok(),
+            "\"openrouter\" should be a valid provider id: {result:?}"
+        );
+        assert_eq!(result.unwrap(), ProviderId::OpenRouter);
+    }
+
+    #[test]
+    fn factory_missing_openrouter_key_returns_config_error() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "openrouter".to_owned();
+
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &empty_api_config(),
+            &ProviderRateLimiters::default(),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("SCORPIO_OPENROUTER_API_KEY"),
+            "expected env var hint in: {msg}"
+        );
+    }
+
+    #[test]
+    fn factory_creates_openrouter_client() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "openrouter".to_owned();
+        cfg.quick_thinking_model = "qwen/qwen3.6-plus-preview:free".to_owned();
+
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openrouter(),
+            &ProviderRateLimiters::default(),
+        );
+        assert!(handle.is_ok(), "OpenRouter client creation should succeed");
+        let handle = handle.unwrap();
+        assert_eq!(handle.provider_name(), "openrouter");
+        assert_eq!(handle.model_id(), "qwen/qwen3.6-plus-preview:free");
+    }
+
+    #[tokio::test]
+    async fn build_agent_creates_openrouter_agent() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "openrouter".to_owned();
+        cfg.quick_thinking_model = "qwen/qwen3.6-plus-preview:free".to_owned();
+
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openrouter(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
+        let agent = build_agent(&handle, "You are a test agent.");
+        assert_eq!(agent.provider_name(), "openrouter");
+        assert_eq!(agent.model_id(), "qwen/qwen3.6-plus-preview:free");
+    }
+
+    #[test]
+    fn openrouter_free_model_identifiers_accepted_unchanged() {
+        // Free-model identifiers include slashes and `:free` suffixes — they must
+        // pass through `validate_model_id` unmodified (only empty/whitespace-only
+        // values are rejected).
+        for model in &[
+            "qwen/qwen3.6-plus-preview:free",
+            "minimax/minimax-m2.5:free",
+        ] {
+            let mut cfg = sample_llm_config();
+            cfg.quick_thinking_provider = "openrouter".to_owned();
+            cfg.quick_thinking_model = model.to_string();
+
+            let handle = create_completion_model(
+                ModelTier::QuickThinking,
+                &cfg,
+                &api_config_with_openrouter(),
+                &ProviderRateLimiters::default(),
+            );
+            assert!(
+                handle.is_ok(),
+                "free-model identifier '{model}' should be accepted: {handle:?}"
+            );
+            assert_eq!(
+                handle.unwrap().model_id(),
+                *model,
+                "model id should be passed through unchanged"
+            );
+        }
     }
 
     // ── Error mapping ────────────────────────────────────────────────────
