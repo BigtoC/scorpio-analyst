@@ -14,11 +14,13 @@ use crate::providers::ProviderId;
 /// enforce per-provider request quotas across concurrent operations.
 #[derive(Debug, Clone)]
 pub struct SharedRateLimiter {
-    inner: Arc<
-        RateLimiter<
-            governor::state::NotKeyed,
-            governor::state::InMemoryState,
-            governor::clock::DefaultClock,
+    inner: Option<
+        Arc<
+            RateLimiter<
+                governor::state::NotKeyed,
+                governor::state::InMemoryState,
+                governor::clock::DefaultClock,
+            >,
         >,
     >,
     label: String,
@@ -33,7 +35,17 @@ impl SharedRateLimiter {
         let nz = NonZeroU32::new(per_second).expect("per_second must be > 0");
         let quota = Quota::per_second(nz);
         Self {
-            inner: Arc::new(RateLimiter::direct(quota)),
+            inner: Some(Arc::new(RateLimiter::direct(quota))),
+            label: label.into(),
+        }
+    }
+
+    /// Create a disabled/no-op rate limiter.
+    ///
+    /// Calls to [`acquire`](Self::acquire) return immediately.
+    pub fn disabled(label: impl Into<String>) -> Self {
+        Self {
+            inner: None,
             label: label.into(),
         }
     }
@@ -49,7 +61,7 @@ impl SharedRateLimiter {
     /// practice for well-formed `Quota` values).
     pub fn from_quota(label: impl Into<String>, quota: Quota) -> Self {
         Self {
-            inner: Arc::new(RateLimiter::direct(quota)),
+            inner: Some(Arc::new(RateLimiter::direct(quota))),
             label: label.into(),
         }
     }
@@ -66,7 +78,9 @@ impl SharedRateLimiter {
 
     /// Wait until a single permit becomes available. This is cancel-safe.
     pub async fn acquire(&self) {
-        self.inner.until_ready().await;
+        if let Some(inner) = &self.inner {
+            inner.until_ready().await;
+        }
     }
 
     /// The human-readable label for this limiter (e.g., provider name).
@@ -132,6 +146,13 @@ mod tests {
         // Should not block for a single permit
         limiter.acquire().await;
         assert_eq!(limiter.label(), "test");
+    }
+
+    #[tokio::test]
+    async fn disabled_limiter_is_noop() {
+        let limiter = SharedRateLimiter::disabled("disabled-test");
+        limiter.acquire().await;
+        assert_eq!(limiter.label(), "disabled-test");
     }
 
     #[tokio::test]

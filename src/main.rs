@@ -2,10 +2,10 @@ use chrono::Local;
 use scorpio_analyst::config::Config;
 use scorpio_analyst::data::{FinnhubClient, YFinanceClient};
 use scorpio_analyst::observability::init_tracing;
-use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::providers::factory::{
     create_completion_model, preflight_configured_providers,
 };
+use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::rate_limit::{ProviderRateLimiters, SharedRateLimiter};
 use scorpio_analyst::state::TradingState;
 use scorpio_analyst::workflow::{SnapshotStore, TradingPipeline};
@@ -74,7 +74,7 @@ fn main() {
             };
 
             let finnhub_limiter = SharedRateLimiter::finnhub_from_config(&cfg.rate_limits)
-                .unwrap_or_else(|| SharedRateLimiter::new("finnhub", 30));
+                .unwrap_or_else(|| SharedRateLimiter::disabled("finnhub"));
             let finnhub = match FinnhubClient::new(&cfg.api, finnhub_limiter) {
                 Ok(c) => c,
                 Err(e) => {
