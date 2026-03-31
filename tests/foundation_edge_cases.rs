@@ -15,7 +15,7 @@ fn api_config_debug_never_leaks_secrets() {
         anthropic_api_key: Some(SecretString::from("sk-ant-secret")),
         gemini_api_key: None,
         finnhub_api_key: Some(SecretString::from("ct_finnhub_key")),
-        openrouter_api_key: None,
+        openrouter_api_key: Some(SecretString::from("or-live-secret")),
     };
     let debug = format!("{api:?}");
 
@@ -23,8 +23,9 @@ fn api_config_debug_never_leaks_secrets() {
     assert!(!debug.contains("sk-live-abc123"));
     assert!(!debug.contains("sk-ant-secret"));
     assert!(!debug.contains("ct_finnhub_key"));
+    assert!(!debug.contains("or-live-secret"));
     // All present keys should show [REDACTED]
-    assert_eq!(debug.matches("[REDACTED]").count(), 3);
+    assert_eq!(debug.matches("[REDACTED]").count(), 4);
     // Absent key should show <not set>
     assert!(debug.contains("<not set>"));
 }
