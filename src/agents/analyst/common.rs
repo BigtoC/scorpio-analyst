@@ -108,6 +108,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for AnalystInferenceOutcome<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnalystInferenceOutcome")
             .field("output", &self.output)
+            .field("usage", &self.usage)
             .field("rate_limit_wait_ms", &self.rate_limit_wait_ms)
             .finish()
     }
@@ -169,8 +170,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::providers::factory::agent_test_support;
     use crate::providers::ProviderId;
+    use crate::providers::factory::agent_test_support;
     use std::time::{Duration, Instant};
 
     use rig::completion::Usage;
@@ -219,8 +220,12 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) =
-            agent_test_support::mock_llm_agent_with_provider(ProviderId::OpenAI, "m", vec![], vec![]);
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenAI,
+            "m",
+            vec![],
+            vec![],
+        );
         agent.push_typed_ok(TypedPromptResponse::new(
             Output { value: 42 },
             sample_usage(10),
@@ -232,7 +237,9 @@ mod tests {
             Duration::from_millis(50),
             &fast_policy(),
             1,
-            |_s: &str| -> Result<Output, crate::error::TradingError> { unreachable!("parse hook should not be called on non-OpenRouter path") },
+            |_s: &str| -> Result<Output, crate::error::TradingError> {
+                unreachable!("parse hook should not be called on non-OpenRouter path")
+            },
             |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
         )
         .await
@@ -260,10 +267,7 @@ mod tests {
             vec![],
             vec![],
         );
-        agent.push_text_turn_ok(PromptResponse::new(
-            r#"{"value": 99}"#,
-            sample_usage(8),
-        ));
+        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 99}"#, sample_usage(8)));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -321,7 +325,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(err, crate::error::TradingError::SchemaViolation { .. }));
+        assert!(matches!(
+            err,
+            crate::error::TradingError::SchemaViolation { .. }
+        ));
         // Confirm no retry — still exactly 1 text-turn attempt
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
     }
@@ -374,8 +381,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_analyst_inference_returns_terminal_schema_violation_for_semantically_invalid_fallback_output(
-    ) {
+    async fn run_analyst_inference_returns_terminal_schema_violation_for_semantically_invalid_fallback_output()
+     {
         use rig::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
@@ -417,7 +424,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(err, crate::error::TradingError::SchemaViolation { .. }));
+        assert!(matches!(
+            err,
+            crate::error::TradingError::SchemaViolation { .. }
+        ));
         // Terminal — no retry
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
     }
