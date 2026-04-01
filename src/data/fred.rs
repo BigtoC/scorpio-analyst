@@ -52,7 +52,7 @@ impl FredClient {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .map_err(|e| TradingError::Config(anyhow::anyhow!("reqwest client build: {e}")))?,
-            api_key: SecretString::from(key.expose_secret().to_owned()),
+            api_key: key.clone(),
             limiter,
         })
     }
