@@ -106,9 +106,9 @@ pub struct ApiConfig {
 
 /// Per-provider rate-limit settings.
 ///
-/// All values in requests per minute (RPM) for LLM providers; `finnhub_rps` is
-/// requests per second. Setting a value to `0` disables rate limiting for that
-/// provider.
+/// All values in requests per minute (RPM) for LLM providers; `finnhub_rps` and
+/// `fred_rps` are requests per second. Setting a value to `0` disables rate limiting
+/// for that provider.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitConfig {
     /// OpenAI requests per minute (0 = disabled).
@@ -405,6 +405,7 @@ mod tests {
         let cfg = cfg.unwrap();
         assert_eq!(cfg.llm.max_debate_rounds, 3);
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
+        assert_eq!(cfg.rate_limits.fred_rps, 2, "fred_rps default should be 2");
         assert_eq!(cfg.rate_limits.openai_rpm, 500);
         assert_eq!(cfg.rate_limits.anthropic_rpm, 500);
         assert_eq!(cfg.rate_limits.gemini_rpm, 500);
