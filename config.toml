@@ -8,7 +8,7 @@ deep_thinking_provider = "openrouter"
 deep_thinking_model = "qwen/qwen3.6-plus-preview:free"
 max_debate_rounds = 3
 max_risk_rounds = 2
-agent_timeout_secs = 30
+agent_timeout_secs = 300
 
 [trading]
 asset_symbol = "AAPL"

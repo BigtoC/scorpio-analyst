@@ -67,7 +67,7 @@ fn default_risk_rounds() -> u32 {
     2
 }
 fn default_agent_timeout() -> u64 {
-    30
+    300
 }
 fn default_retry_max_retries() -> u32 {
     3
