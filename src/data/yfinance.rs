@@ -370,6 +370,17 @@ impl Tool for GetOhlcv {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.validate_scope(&args)?;
+
+        // If the context already contains candles from a previous call, return
+        // them directly without hitting the network or calling store again.
+        // This makes duplicate `get_ohlcv` calls within the same analysis scope
+        // idempotent while preserving write-once semantics on the context itself.
+        if let Some(context) = &self.context {
+            if let Ok(cached) = context.load().await {
+                return Ok((*cached).clone());
+            }
+        }
+
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!("YFinanceClient not set on GetOhlcv tool"))
         })?;
@@ -569,6 +580,76 @@ mod tests {
             .await;
         // Should reach the "client not set" error, not a scope error.
         assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+    }
+
+    // ── Idempotent reuse ─────────────────────────────────────────────────
+
+    fn sample_candle() -> Candle {
+        Candle {
+            date: "2024-01-02".to_owned(),
+            open: 185.0,
+            high: 186.5,
+            low: 184.0,
+            close: 185.9,
+            volume: Some(50_000_000),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_ohlcv_returns_cached_candles_when_context_is_already_populated() {
+        let ctx = OhlcvToolContext::new();
+        ctx.store(vec![sample_candle()])
+            .await
+            .expect("pre-populate must succeed");
+
+        let tool = GetOhlcv {
+            client: None,
+            allowed_symbol: Some("AAPL".to_owned()),
+            allowed_start: Some("2024-01-01".to_owned()),
+            allowed_end: Some("2024-01-31".to_owned()),
+            context: Some(ctx),
+        };
+
+        let result = tool
+            .call(OhlcvArgs {
+                symbol: "AAPL".to_owned(),
+                start: "2024-01-01".to_owned(),
+                end: "2024-01-31".to_owned(),
+            })
+            .await;
+
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.unwrap_err());
+        assert_eq!(result.unwrap(), vec![sample_candle()]);
+    }
+
+    #[tokio::test]
+    async fn get_ohlcv_still_rejects_mismatched_scoped_args_after_context_is_populated() {
+        let ctx = OhlcvToolContext::new();
+        ctx.store(vec![sample_candle()])
+            .await
+            .expect("pre-populate must succeed");
+
+        let tool = GetOhlcv {
+            client: None,
+            allowed_symbol: Some("AAPL".to_owned()),
+            allowed_start: Some("2024-01-01".to_owned()),
+            allowed_end: Some("2024-01-31".to_owned()),
+            context: Some(ctx),
+        };
+
+        let result = tool
+            .call(OhlcvArgs {
+                symbol: "AAPL".to_owned(),
+                start: "2024-01-01".to_owned(),
+                end: "2024-02-01".to_owned(), // mismatched end date
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), TradingError::SchemaViolation { ref message } if message.contains("2024-01-31")),
+            "expected SchemaViolation mentioning the scoped end date"
+        );
     }
 
     // ── Chronological ordering ────────────────────────────────────────────
