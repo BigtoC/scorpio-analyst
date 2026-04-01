@@ -310,9 +310,9 @@ fn map_finnhub_err(err: finnhub::Error) -> TradingError {
             elapsed: Duration::from_secs(30),
             message: "Finnhub request timed out".to_owned(),
         },
-        finnhub::Error::Http(_) => TradingError::NetworkTimeout {
-            elapsed: Duration::ZERO,
-            message: "Finnhub HTTP request failed".to_owned(),
+        finnhub::Error::Http(ref e) => TradingError::AnalystError {
+            agent: "finnhub".to_owned(),
+            message: format!("Finnhub HTTP request failed: {e}"),
         },
         finnhub::Error::Deserialization(_e) => {
             // Do not include the raw serde error in the public message — it can
@@ -322,9 +322,9 @@ fn map_finnhub_err(err: finnhub::Error) -> TradingError {
                 message: "Finnhub response could not be parsed".to_owned(),
             }
         }
-        _ => TradingError::NetworkTimeout {
-            elapsed: Duration::ZERO,
-            message: "Finnhub request failed".to_owned(),
+        other => TradingError::AnalystError {
+            agent: "finnhub".to_owned(),
+            message: format!("Finnhub request failed: {other}"),
         },
     }
 }
