@@ -131,6 +131,7 @@ pub enum WorkflowTestSeamError {
 pub struct TradingPipeline {
     config: Arc<Config>,
     finnhub: FinnhubClient,
+    fred: FredClient,
     yfinance: YFinanceClient,
     snapshot_store: Arc<SnapshotStore>,
     /// Handle for quick-thinking agents (Analyst Team — Phase 1).
@@ -148,6 +149,7 @@ impl TradingPipeline {
     ///
     /// - `config` — application configuration (will be `Arc`-wrapped internally)
     /// - `finnhub` — Finnhub API client (used by analyst tasks)
+    /// - `fred` — FRED API client (used by the news analyst's macro tool)
     /// - `yfinance` — yfinance client (used by the technical analyst)
     /// - `snapshot_store` — SQLite-backed snapshot store for phase persistence
     /// - `quick_handle` — pre-built completion-model handle for quick-thinking agents (Phase 1)
@@ -155,6 +157,7 @@ impl TradingPipeline {
     pub fn new(
         config: Config,
         finnhub: FinnhubClient,
+        fred: FredClient,
         yfinance: YFinanceClient,
         snapshot_store: SnapshotStore,
         quick_handle: CompletionModelHandle,
@@ -165,6 +168,7 @@ impl TradingPipeline {
         let graph = Self::build_graph_impl(
             Arc::clone(&config),
             &finnhub,
+            &fred,
             &yfinance,
             Arc::clone(&snapshot_store),
             &quick_handle,
@@ -173,6 +177,7 @@ impl TradingPipeline {
         Self {
             config,
             finnhub,
+            fred,
             yfinance,
             snapshot_store,
             quick_handle,
@@ -190,6 +195,7 @@ impl TradingPipeline {
         Self::build_graph_impl(
             Arc::clone(&self.config),
             &self.finnhub,
+            &self.fred,
             &self.yfinance,
             Arc::clone(&self.snapshot_store),
             &self.quick_handle,
@@ -227,19 +233,13 @@ impl TradingPipeline {
     fn build_graph_impl(
         config: Arc<Config>,
         finnhub: &FinnhubClient,
+        fred: &FredClient,
         yfinance: &YFinanceClient,
         snapshot_store: Arc<SnapshotStore>,
         quick_handle: &CompletionModelHandle,
         deep_handle: &CompletionModelHandle,
     ) -> Arc<Graph> {
         let graph = Arc::new(Graph::new("trading_pipeline"));
-
-        // ── Construct FredClient for news analyst ─────────────────────────
-        let fred_limiter =
-            crate::rate_limit::SharedRateLimiter::fred_from_config(&config.rate_limits)
-                .unwrap_or_else(|| crate::rate_limit::SharedRateLimiter::disabled("fred"));
-        let fred = FredClient::new(&config.api, fred_limiter)
-            .expect("FredClient construction failed — is SCORPIO_FRED_API_KEY set?");
 
         // ── Phase 1: analyst fan-out (QUICK handle) ───────────────────────
         let fan_out = FanOutTask::new(

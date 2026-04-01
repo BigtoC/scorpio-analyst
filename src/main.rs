@@ -1,7 +1,7 @@
 use chrono::Local;
 use figlet_rs::Toilet;
 use scorpio_analyst::config::Config;
-use scorpio_analyst::data::{FinnhubClient, YFinanceClient};
+use scorpio_analyst::data::{FinnhubClient, FredClient, YFinanceClient};
 use scorpio_analyst::observability::init_tracing;
 use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::providers::factory::{
@@ -14,10 +14,10 @@ use scorpio_analyst::workflow::{SnapshotStore, TradingPipeline};
 fn main() {
     init_tracing();
 
-    if let Ok(font) = Toilet::mono12() {
-        if let Some(figure) = font.convert("Scorpio Analyst") {
-            println!("{}", figure.as_str());
-        }
+    if let Ok(font) = Toilet::mono12()
+        && let Some(figure) = font.convert("Scorpio Analyst")
+    {
+        println!("{}", figure.as_str());
     }
 
     match Config::load() {
@@ -89,6 +89,15 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let fred_limiter = SharedRateLimiter::fred_from_config(&cfg.rate_limits)
+                .unwrap_or_else(|| SharedRateLimiter::disabled("fred"));
+            let fred = match FredClient::new(&cfg.api, fred_limiter) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("failed to initialize FRED client: {e:#}");
+                    std::process::exit(1);
+                }
+            };
             let yfinance = YFinanceClient::default();
 
             let symbol = cfg.trading.asset_symbol.clone();
@@ -105,6 +114,7 @@ fn main() {
             let pipeline = TradingPipeline::new(
                 cfg,
                 finnhub,
+                fred,
                 yfinance,
                 snapshot_store,
                 quick_handle,
