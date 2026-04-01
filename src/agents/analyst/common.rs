@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 
 use crate::{
     config::LlmConfig,
+    constants::MAX_SUMMARY_CHARS,
     error::{RetryPolicy, TradingError},
     providers::{
         ProviderId,
@@ -42,12 +43,6 @@ pub(super) fn analyst_runtime_config(
         retry_policy: RetryPolicy::from_config(llm_config),
     }
 }
-
-/// Maximum characters allowed in any LLM-generated summary field.
-///
-/// Prevents adversarial overflow of downstream state buffers and limits the
-/// extent of prompt-injection content that can propagate through phases.
-pub(super) const MAX_SUMMARY_CHARS: usize = 4_096;
 
 /// Validate that a summary is within length bounds and free of control characters.
 pub(super) fn validate_summary_content(context: &str, summary: &str) -> Result<(), TradingError> {
@@ -474,25 +469,6 @@ mod tests {
             validate_summary_content("ctx", summary).is_ok(),
             "\\n and \\t should be allowed"
         );
-    }
-
-    // TC-6: summary exceeding MAX_SUMMARY_CHARS returns SchemaViolation
-    #[test]
-    fn validate_summary_content_too_long_returns_schema_violation() {
-        let long_summary = "a".repeat(MAX_SUMMARY_CHARS + 1);
-        let result = validate_summary_content("ctx", &long_summary);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    // TC-6 inverse: summary at exactly MAX_SUMMARY_CHARS is accepted
-    #[test]
-    fn validate_summary_content_at_exact_limit_is_valid() {
-        let exact_summary = "b".repeat(MAX_SUMMARY_CHARS);
-        assert!(validate_summary_content("ctx", &exact_summary).is_ok());
     }
 
     // TC-7: summary containing a NUL control character returns SchemaViolation

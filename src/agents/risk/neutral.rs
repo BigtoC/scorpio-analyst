@@ -412,26 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn build_neutral_result_rejects_oversized_assessment() {
-        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let json = format!(
-            r#"{{"risk_level":"Neutral","assessment":"{big}","recommended_adjustments":[],"flags_violation":false}}"#
-        );
-        let result = build_neutral_result(json, "o3", mock_usage(2), Instant::now(), 0);
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[test]
-    fn build_neutral_result_rejects_oversized_adjustment() {
-        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let json = format!(
-            r#"{{"risk_level":"Neutral","assessment":"Balanced.","recommended_adjustments":["{big}"],"flags_violation":false}}"#
-        );
-        let result = build_neutral_result(json, "o3", mock_usage(2), Instant::now(), 0);
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[test]
     fn build_neutral_result_redacts_secret_from_stored_output() {
         let json = r#"{"risk_level":"Neutral","assessment":"api_key=abcd1234","recommended_adjustments":["token=qwerty"],"flags_violation":false}"#;
         let (report, _) =

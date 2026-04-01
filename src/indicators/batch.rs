@@ -5,6 +5,7 @@
 //! - [`calculate_all_indicators`] – compute all indicators and assemble a
 //!   [`TechnicalData`] snapshot.
 
+use crate::constants::MAX_INDICATOR_NAME_LEN;
 use crate::data::yfinance::Candle;
 use crate::error::TradingError;
 use crate::state::{MacdValues, TechnicalData};
@@ -33,12 +34,6 @@ use super::utils::last_valid;
 ///
 /// Returns `TradingError::SchemaViolation` for an empty candle array or an
 /// unrecognised indicator name.
-/// Maximum length for a caller-supplied indicator name.
-///
-/// Limits the surface area for error-message injection via the `indicator`
-/// field of `CalculateIndicatorByNameArgs`.
-const MAX_INDICATOR_NAME_LEN: usize = 64;
-
 pub fn calculate_indicator_by_name(
     name: &str,
     candles: &[Candle],

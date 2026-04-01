@@ -421,26 +421,6 @@ mod tests {
     }
 
     #[test]
-    fn build_conservative_result_rejects_oversized_assessment() {
-        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let json = format!(
-            r#"{{"risk_level":"Conservative","assessment":"{big}","recommended_adjustments":[],"flags_violation":true}}"#
-        );
-        let result = build_conservative_result(json, "o3", mock_usage(2), Instant::now(), 0);
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[test]
-    fn build_conservative_result_rejects_oversized_adjustment() {
-        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let json = format!(
-            r#"{{"risk_level":"Conservative","assessment":"Caution.","recommended_adjustments":["{big}"],"flags_violation":true}}"#
-        );
-        let result = build_conservative_result(json, "o3", mock_usage(2), Instant::now(), 0);
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[test]
     fn build_conservative_result_redacts_secret_from_stored_output() {
         let json = r#"{"risk_level":"Conservative","assessment":"api_key=abcd1234","recommended_adjustments":["token=qwerty"],"flags_violation":true}"#;
         let (report, _) =

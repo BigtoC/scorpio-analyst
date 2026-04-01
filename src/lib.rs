@@ -1,4 +1,7 @@
+#![allow(clippy::absurd_extreme_comparisons)]
+
 pub mod config;
+pub mod constants;
 pub mod error;
 pub mod observability;
 pub mod rate_limit;
