@@ -557,11 +557,11 @@ mod tests {
 
     #[tokio::test]
     async fn news_run_uses_shared_inference_helper_for_openrouter() {
+        use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
         use crate::providers::factory::agent_test_support;
         use rig::agent::PromptResponse;
         use rig::completion::Usage;
-        use super::super::common::run_analyst_inference;
 
         let valid_json = r#"{
             "articles": [

@@ -375,10 +375,10 @@ impl Tool for GetOhlcv {
         // them directly without hitting the network or calling store again.
         // This makes duplicate `get_ohlcv` calls within the same analysis scope
         // idempotent while preserving write-once semantics on the context itself.
-        if let Some(context) = &self.context {
-            if let Ok(cached) = context.load().await {
-                return Ok((*cached).clone());
-            }
+        if let Some(context) = &self.context
+            && let Ok(cached) = context.load().await
+        {
+            return Ok((*cached).clone());
         }
 
         let client = self.client.as_ref().ok_or_else(|| {
@@ -618,7 +618,11 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_ok(), "expected Ok, got: {:?}", result.unwrap_err());
+        assert!(
+            result.is_ok(),
+            "expected Ok, got: {:?}",
+            result.unwrap_err()
+        );
         assert_eq!(result.unwrap(), vec![sample_candle()]);
     }
 

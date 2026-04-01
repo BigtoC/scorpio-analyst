@@ -21,7 +21,9 @@ use crate::{
     state::{AgentTokenUsage, TechnicalData},
 };
 
-use super::common::{analyst_runtime_config, run_analyst_inference, usage_from_response, validate_summary_content};
+use super::common::{
+    analyst_runtime_config, run_analyst_inference, usage_from_response, validate_summary_content,
+};
 
 const MAX_TOOL_TURNS: usize = 10;
 
@@ -564,11 +566,11 @@ mod tests {
 
     #[tokio::test]
     async fn technical_run_uses_shared_inference_helper_for_openrouter() {
+        use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
         use crate::providers::factory::agent_test_support;
         use rig::agent::PromptResponse;
         use rig::completion::Usage;
-        use super::super::common::run_analyst_inference;
 
         let valid_json = r#"{
             "rsi": 55.0,

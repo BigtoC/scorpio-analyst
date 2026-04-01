@@ -11,8 +11,8 @@ use finnhub::FinnhubClient as FhClient;
 use finnhub::models::news::NewsCategory;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
-use secrecy::ExposeSecret;
 use schemars::JsonSchema;
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
