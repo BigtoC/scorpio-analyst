@@ -146,7 +146,17 @@ where
         // OpenRouter fallback: raw text prompt, then parse + validate
         let outcome =
             prompt_text_with_retry(agent, prompt, timeout, retry_policy, max_turns).await?;
-        let output = parse(&outcome.result.output)?;
+        let raw = &outcome.result.output;
+        if raw.trim().is_empty() {
+            return Err(TradingError::SchemaViolation {
+                message: format!(
+                    "{}: LLM returned empty response (model: {})",
+                    std::any::type_name::<T>().rsplit("::").next().unwrap_or("unknown"),
+                    agent.model_id(),
+                ),
+            });
+        }
+        let output = parse(raw)?;
         validate(&output)?;
         Ok(AnalystInferenceOutcome {
             output,
