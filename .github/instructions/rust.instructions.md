@@ -143,4 +143,4 @@ Before publishing or reviewing Rust code, ensure:
 - [ ] **Duplicated codes**: Identify duplicated codes and refactored into reusable functions or modules
 - [ ] **Design Patterns**: Apply proper design patterns (e.g., Builder, Strategy, Factory, Newtype, Facade) to write clean, maintainable code
 - [ ] **Module Cohesion**: Each file has a single, focused responsibility; split files exceeding ~300 lines or mixing multiple concerns into separate modules. Use the Facade pattern in `mod.rs` to shield consumers from internal refactoring and prevent downstream API breakage.
-- [ ] **Tooling**: Code passes `cargo fmt`, `cargo clippy`, and `cargo test`
+- [ ] **Tooling**: Code passes `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo nextest run --all-features`
