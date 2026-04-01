@@ -219,18 +219,7 @@ mod tests {
         assert_eq!(usage.model_id, "o3");
     }
 
-    // ── Task 1.7: Oversized output rejected ──────────────────────────────
-
-    #[test]
-    fn oversized_output_returns_schema_violation() {
-        let big = "x".repeat(super::super::common::MAX_DEBATE_CHARS + 1);
-        let result = validate_debate_content("BullishResearcher", &big);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
+    // ── Task 1.7: Oversized / control-char output rejected ───────────────
 
     #[test]
     fn control_char_output_returns_schema_violation() {

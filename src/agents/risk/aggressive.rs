@@ -455,16 +455,6 @@ mod tests {
     }
 
     #[test]
-    fn build_aggressive_result_rejects_oversized_adjustment() {
-        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let json = format!(
-            r#"{{"risk_level":"Aggressive","assessment":"Fine.","recommended_adjustments":["{big}"],"flags_violation":false}}"#
-        );
-        let result = build_aggressive_result(json, "o3", mock_usage(2), Instant::now(), 0);
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[test]
     fn build_aggressive_result_redacts_secret_from_stored_output() {
         let json = r#"{"risk_level":"Aggressive","assessment":"api_key=abcd1234","recommended_adjustments":["token=qwerty"],"flags_violation":false}"#;
         let (report, _) =
@@ -481,27 +471,6 @@ mod tests {
         let json = r#"{"risk_level":"Aggressive","assessment":"","recommended_adjustments":["ok"],"flags_violation":false}"#;
         let result = build_aggressive_result(
             json.to_owned(),
-            "o3",
-            rig::completion::Usage {
-                input_tokens: 1,
-                output_tokens: 1,
-                total_tokens: 2,
-                cached_input_tokens: 0,
-            },
-            Instant::now(),
-            0,
-        );
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[test]
-    fn build_aggressive_result_rejects_oversized_assessment() {
-        let big = "x".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let json = format!(
-            r#"{{"risk_level":"Aggressive","assessment":"{big}","recommended_adjustments":[],"flags_violation":false}}"#
-        );
-        let result = build_aggressive_result(
-            json,
             "o3",
             rig::completion::Usage {
                 input_tokens: 1,

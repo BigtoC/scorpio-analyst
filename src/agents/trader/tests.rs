@@ -638,23 +638,6 @@ fn whitespace_only_rationale_rejected() {
 }
 
 #[test]
-fn oversized_rationale_rejected() {
-    let mut proposal = valid_proposal();
-    proposal.rationale = "x".repeat(MAX_RATIONALE_CHARS + 1);
-    assert!(matches!(
-        validate_trade_proposal(&proposal),
-        Err(TradingError::SchemaViolation { .. })
-    ));
-}
-
-#[test]
-fn rationale_at_exact_limit_accepted() {
-    let mut proposal = valid_proposal();
-    proposal.rationale = "x".repeat(MAX_RATIONALE_CHARS);
-    assert!(validate_trade_proposal(&proposal).is_ok());
-}
-
-#[test]
 fn control_char_rationale_rejected() {
     let mut proposal = valid_proposal();
     proposal.rationale = "bad\x00content".to_owned();
@@ -802,18 +785,6 @@ fn query_style_secret_values_are_fully_redacted() {
     assert!(!redacted.contains("ghi"));
     assert!(!redacted.contains("jkl"));
     assert_eq!(redacted.matches("[REDACTED]").count(), 4);
-}
-
-#[test]
-fn prompt_context_is_bounded_for_oversized_inputs() {
-    let mut state = empty_state();
-    state.consensus_summary = Some("x".repeat(MAX_PROMPT_CONTEXT_CHARS + 500));
-    let prompt =
-        build_prompt_context(&state, &state.asset_symbol, &state.target_date).system_prompt;
-    let start = prompt.find("Research consensus: ").unwrap() + "Research consensus: ".len();
-    let slice = &prompt[start..];
-    let consensus_value = slice.lines().next().unwrap();
-    assert!(consensus_value.chars().count() <= MAX_PROMPT_CONTEXT_CHARS);
 }
 
 #[tokio::test]

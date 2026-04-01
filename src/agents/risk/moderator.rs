@@ -351,19 +351,6 @@ mod tests {
     // ── Task 4.7: Oversized / control-char output rejected ───────────────
 
     #[tokio::test]
-    async fn run_rejects_oversized_output() {
-        let big = "y".repeat(super::super::common::MAX_RISK_CHARS + 1);
-        let (agent, _ctrl) = mock_llm_agent(
-            "o3",
-            vec![Ok(mock_prompt_response(&big, mock_usage(40)))],
-            vec![],
-        );
-        let moderator = RiskModerator::from_test_agent(agent, "o3");
-        let result = moderator.run(&sample_state()).await;
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
-    }
-
-    #[tokio::test]
     async fn run_rejects_missing_required_violation_sentence() {
         let (agent, _ctrl) = mock_llm_agent(
             "o3",

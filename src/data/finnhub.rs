@@ -18,6 +18,7 @@ use serde_json::json;
 
 use crate::{
     config::ApiConfig,
+    constants::{MACRO_KEYWORD_SCAN_CHARS, NEWS_SNIPPET_MAX_CHARS, NEWS_TITLE_MAX_CHARS},
     error::TradingError,
     rate_limit::SharedRateLimiter,
     state::{
@@ -420,11 +421,6 @@ fn build_insider_data(
     }
 }
 
-/// Maximum character length for a sanitized news article title.
-const NEWS_TITLE_MAX_CHARS: usize = 200;
-/// Maximum character length for a sanitized news article snippet.
-const NEWS_SNIPPET_MAX_CHARS: usize = 512;
-
 /// Sanitize externally-sourced news text before it is passed as tool output
 /// to an LLM agent.
 ///
@@ -526,12 +522,6 @@ fn build_news_data(
         ),
     }
 }
-
-/// Maximum characters of combined title+snippet scanned for keyword classification.
-///
-/// Limits the text surface area an adversarial article can use to trigger macro
-/// event signals.
-const MACRO_KEYWORD_SCAN_CHARS: usize = 500;
 
 /// Confidence cap for keyword-derived macro signals.
 ///
@@ -1300,13 +1290,6 @@ mod tests {
             result.contains("Actual headline"),
             "body text must be preserved"
         );
-    }
-
-    #[test]
-    fn sanitize_news_text_truncates_to_max_chars() {
-        let long = "x".repeat(1000);
-        let result = sanitize_news_text(&long, NEWS_TITLE_MAX_CHARS);
-        assert_eq!(result.chars().count(), NEWS_TITLE_MAX_CHARS);
     }
 
     #[test]

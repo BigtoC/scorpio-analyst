@@ -7,9 +7,7 @@
 
 use rig::completion::{PromptError, StructuredOutputError};
 
-use crate::error::TradingError;
-
-pub(super) const MAX_ERROR_SUMMARY_CHARS: usize = 200;
+use crate::{constants::MAX_ERROR_SUMMARY_CHARS, error::TradingError};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Error mapping

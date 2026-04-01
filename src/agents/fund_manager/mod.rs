@@ -23,9 +23,7 @@ use crate::{
 };
 
 pub use self::agent::FundManagerAgent;
-
-/// Maximum characters allowed in the `rationale` field.
-pub const MAX_RATIONALE_CHARS: usize = 4_096;
+pub use crate::constants::MAX_RATIONALE_CHARS;
 
 /// Construct a [`FundManagerAgent`] and run it against `state`.
 ///

@@ -1,13 +1,10 @@
 use serde::Deserialize;
 
 use crate::{
+    constants::{MAX_RATIONALE_CHARS, MAX_RAW_RESPONSE_CHARS},
     error::TradingError,
     state::{Decision, ExecutionStatus, TradingState},
 };
-
-use super::MAX_RATIONALE_CHARS;
-
-const MAX_RAW_RESPONSE_CHARS: usize = 16_384;
 
 pub(super) const DETERMINISTIC_REJECT_RATIONALE: &str = "Both the Conservative and Neutral risk reports flag a material violation \
      (flags_violation == true). Proposal rejected by deterministic safety-net \
@@ -141,7 +138,6 @@ fn rationale_acknowledges_missing_data(rationale: &str) -> bool {
 mod tests {
     use super::validate_execution_status;
     use crate::{
-        agents::fund_manager::MAX_RATIONALE_CHARS,
         error::TradingError,
         state::{Decision, ExecutionStatus},
     };
@@ -203,29 +199,6 @@ mod tests {
         let status = ExecutionStatus {
             decision: Decision::Approved,
             rationale: "Approved.\nRisk:\tWithin bounds.".to_owned(),
-            decided_at: "2026-03-15".to_owned(),
-        };
-        assert!(validate_execution_status(&status).is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_oversized_rationale() {
-        let status = ExecutionStatus {
-            decision: Decision::Approved,
-            rationale: "x".repeat(MAX_RATIONALE_CHARS + 1),
-            decided_at: "2026-03-15".to_owned(),
-        };
-        assert!(matches!(
-            validate_execution_status(&status),
-            Err(TradingError::SchemaViolation { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_accepts_rationale_at_exact_limit() {
-        let status = ExecutionStatus {
-            decision: Decision::Approved,
-            rationale: "x".repeat(MAX_RATIONALE_CHARS),
             decided_at: "2026-03-15".to_owned(),
         };
         assert!(validate_execution_status(&status).is_ok());

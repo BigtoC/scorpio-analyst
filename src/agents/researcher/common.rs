@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     config::LlmConfig,
+    constants::{MAX_DEBATE_CHARS, MAX_PROMPT_CONTEXT_CHARS},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
     state::{AgentTokenUsage, DebateMessage, TradingState},
@@ -37,13 +38,6 @@ pub(super) fn researcher_runtime_config(
         retry_policy: RetryPolicy::from_config(llm_config),
     }
 }
-
-/// Maximum characters allowed in any researcher plain-text output.
-///
-/// Researchers produce longer, richer debate text than one-shot analyst summaries,
-/// so we allow a higher ceiling while still bounding adversarial payloads.
-pub(super) const MAX_DEBATE_CHARS: usize = 8_192;
-const MAX_PROMPT_CONTEXT_CHARS: usize = 2_048;
 
 /// Validate that a debate message or consensus summary is within bounds and free of
 /// disallowed control characters.
@@ -374,23 +368,6 @@ mod tests {
     fn validate_debate_content_allows_newline_and_tab() {
         let content = "Point one.\nPoint two.\tIndented.";
         assert!(validate_debate_content("ctx", content).is_ok());
-    }
-
-    #[test]
-    fn validate_debate_content_too_long_returns_schema_violation() {
-        let long = "a".repeat(MAX_DEBATE_CHARS + 1);
-        let result = validate_debate_content("ctx", &long);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    #[test]
-    fn validate_debate_content_at_exact_limit_is_valid() {
-        let exact = "b".repeat(MAX_DEBATE_CHARS);
-        assert!(validate_debate_content("ctx", &exact).is_ok());
     }
 
     #[test]

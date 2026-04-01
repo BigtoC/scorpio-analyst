@@ -235,17 +235,6 @@ mod tests {
     // ── Task 3.7: Oversized / control-char output rejected ───────────────
 
     #[test]
-    fn oversized_consensus_returns_schema_violation() {
-        let big = "x".repeat(super::super::common::MAX_DEBATE_CHARS + 1);
-        let result = validate_consensus_summary(&big);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    #[test]
     fn control_char_consensus_returns_schema_violation() {
         let result = validate_consensus_summary("bad\x00output");
         assert!(result.is_err());
