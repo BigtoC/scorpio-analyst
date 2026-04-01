@@ -6,9 +6,15 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use serde::de::DeserializeOwned;
+
 use crate::{
     config::LlmConfig,
     error::{RetryPolicy, TradingError},
+    providers::{
+        ProviderId,
+        factory::{LlmAgent, prompt_text_with_retry, prompt_typed_with_retry},
+    },
     state::AgentTokenUsage,
 };
 
@@ -83,10 +89,88 @@ pub(super) fn usage_from_response(
     }
 }
 
+// ─── run_analyst_inference ────────────────────────────────────────────────────
+
+/// Result of a single analyst LLM inference call.
+///
+/// Bundles the parsed/validated output with usage metadata so callers can
+/// forward both pieces to `usage_from_response` without re-querying the agent.
+pub(super) struct AnalystInferenceOutcome<T> {
+    /// The successfully parsed and validated output from the LLM.
+    pub output: T,
+    /// Provider-reported token usage from the underlying LLM call.
+    pub usage: rig::completion::Usage,
+    /// Total milliseconds spent waiting for rate-limit permits.
+    pub rate_limit_wait_ms: u64,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for AnalystInferenceOutcome<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnalystInferenceOutcome")
+            .field("output", &self.output)
+            .field("rate_limit_wait_ms", &self.rate_limit_wait_ms)
+            .finish()
+    }
+}
+
+/// Send an analyst inference to the LLM, choosing the correct path based on provider.
+///
+/// # Provider routing
+///
+/// - **Non-OpenRouter providers**: use `prompt_typed_with_retry` (native structured-output).
+///   The `parse` hook is NOT called. Runs `validate` on the typed output.
+/// - **OpenRouter**: use `prompt_text_with_retry` (fallback text path, since OpenRouter
+///   does not reliably support structured outputs). Runs `parse` on the raw text,
+///   then `validate` on the parsed output.
+///
+/// # Schema failures
+///
+/// On the OpenRouter path, if either `parse` or `validate` returns an error it is
+/// returned **immediately** as a `TradingError::SchemaViolation` without retry.
+pub(super) async fn run_analyst_inference<T, Parse, Validate>(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    retry_policy: &RetryPolicy,
+    max_turns: usize,
+    parse: Parse,
+    validate: Validate,
+) -> Result<AnalystInferenceOutcome<T>, TradingError>
+where
+    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    Parse: Fn(&str) -> Result<T, TradingError>,
+    Validate: Fn(&T) -> Result<(), TradingError>,
+{
+    if agent.provider_id() == ProviderId::OpenRouter {
+        // OpenRouter fallback: raw text prompt, then parse + validate
+        let outcome =
+            prompt_text_with_retry(agent, prompt, timeout, retry_policy, max_turns).await?;
+        let output = parse(&outcome.result.output)?;
+        validate(&output)?;
+        Ok(AnalystInferenceOutcome {
+            output,
+            usage: outcome.result.usage,
+            rate_limit_wait_ms: outcome.rate_limit_wait_ms,
+        })
+    } else {
+        // Native typed-output path (OpenAI, Anthropic, Gemini, Copilot)
+        let outcome =
+            prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns).await?;
+        validate(&outcome.result.output)?;
+        Ok(AnalystInferenceOutcome {
+            output: outcome.result.output,
+            usage: outcome.result.usage,
+            rate_limit_wait_ms: outcome.rate_limit_wait_ms,
+        })
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+    use crate::providers::factory::agent_test_support;
+    use crate::providers::ProviderId;
     use std::time::{Duration, Instant};
 
     use rig::completion::Usage;
@@ -107,7 +191,236 @@ mod tests {
         }
     }
 
-    // ── analyst_runtime_config ───────────────────────────────────────────
+    // ── run_analyst_inference ─────────────────────────────────────────────
+
+    fn fast_policy() -> crate::error::RetryPolicy {
+        crate::error::RetryPolicy {
+            max_retries: 0,
+            base_delay: Duration::from_millis(1),
+        }
+    }
+
+    fn sample_usage(total: u64) -> Usage {
+        Usage {
+            input_tokens: total / 2,
+            output_tokens: total / 2,
+            total_tokens: total,
+            cached_input_tokens: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_uses_typed_path_for_non_openrouter() {
+        use rig::agent::TypedPromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) =
+            agent_test_support::mock_llm_agent_with_provider(ProviderId::OpenAI, "m", vec![], vec![]);
+        agent.push_typed_ok(TypedPromptResponse::new(
+            Output { value: 42 },
+            sample_usage(10),
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |_s: &str| -> Result<Output, crate::error::TradingError> { unreachable!("parse hook should not be called on non-OpenRouter path") },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.output.value, 42);
+        assert_eq!(agent_test_support::typed_attempts(&agent), 1);
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 0);
+        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_uses_text_fallback_for_openrouter() {
+        use rig::agent::PromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new(
+            r#"{"value": 99}"#,
+            sample_usage(8),
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.output.value, 99);
+        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_returns_schema_violation_for_invalid_fallback_json() {
+        use rig::agent::PromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new("not valid json", sample_usage(5)));
+
+        let err = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, crate::error::TradingError::SchemaViolation { .. }));
+        // Confirm no retry — still exactly 1 text-turn attempt
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_preserves_usage_from_fallback_response() {
+        use rig::agent::PromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+        struct Output {
+            v: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new(
+            r#"{"v": 7}"#,
+            Usage {
+                input_tokens: 11,
+                output_tokens: 13,
+                total_tokens: 24,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.usage.input_tokens, 11);
+        assert_eq!(outcome.usage.output_tokens, 13);
+        assert_eq!(outcome.usage.total_tokens, 24);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_returns_terminal_schema_violation_for_semantically_invalid_fallback_output(
+    ) {
+        use rig::agent::PromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        // JSON parses fine but fails semantic validation
+        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": -1}"#, sample_usage(6)));
+
+        let err = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |o: &Output| -> Result<(), crate::error::TradingError> {
+                if o.value < 0 {
+                    Err(crate::error::TradingError::SchemaViolation {
+                        message: "value must be non-negative".to_owned(),
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, crate::error::TradingError::SchemaViolation { .. }));
+        // Terminal — no retry
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+    }
 
     #[test]
     fn analyst_runtime_config_uses_symbol_target_and_retry_settings() {

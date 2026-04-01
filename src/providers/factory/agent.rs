@@ -136,6 +136,16 @@ pub(crate) fn mock_llm_agent(
     prompt_results: Vec<Result<PromptResponse, PromptError>>,
     chat_results: Vec<MockChatOutcome>,
 ) -> (LlmAgent, MockLlmAgentController) {
+    mock_llm_agent_with_provider_id(ProviderId::OpenAI, model_id, prompt_results, chat_results)
+}
+
+#[cfg(test)]
+pub(crate) fn mock_llm_agent_with_provider_id(
+    provider: ProviderId,
+    model_id: &str,
+    prompt_results: Vec<Result<PromptResponse, PromptError>>,
+    chat_results: Vec<MockChatOutcome>,
+) -> (LlmAgent, MockLlmAgentController) {
     let observed_prompts = Arc::new(Mutex::new(Vec::new()));
     let observed_history_lengths = Arc::new(Mutex::new(Vec::new()));
     let observed_history_ptrs = Arc::new(Mutex::new(Vec::new()));
@@ -157,7 +167,7 @@ pub(crate) fn mock_llm_agent(
 
     (
         LlmAgent {
-            provider: ProviderId::OpenAI,
+            provider,
             model_id: model_id.to_owned(),
             inner: LlmAgentInner::Mock(inner),
             rate_limiter: None,
@@ -185,6 +195,10 @@ pub struct LlmAgent {
 impl LlmAgent {
     pub fn provider_name(&self) -> &'static str {
         self.provider.as_str()
+    }
+
+    pub fn provider_id(&self) -> ProviderId {
+        self.provider
     }
 
     pub fn model_id(&self) -> &str {

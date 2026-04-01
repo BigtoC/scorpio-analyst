@@ -5,20 +5,26 @@
 
 use rig::agent::PromptResponse;
 
+use crate::providers::ProviderId;
+
 use super::agent::LlmAgent;
 
 /// Create a mock `LlmAgent` pre-loaded with one-shot `PromptResponse` results
 /// and returning it alongside a controller for inspection.
 ///
+/// The `provider` parameter controls what `agent.provider_id()` returns, which
+/// in turn determines which inference path `run_analyst_inference` takes.
+///
 /// The `prompt_results` queue is consumed by `prompt_details` calls (the one-shot path).
 /// Use [`LlmAgent::push_text_turn_ok`] / [`LlmAgent::push_text_turn_error`] for the
 /// tool-enabled text-turn path tested by `text_retry`.
 pub(crate) fn mock_llm_agent_with_provider(
+    provider: ProviderId,
     model_id: &str,
     prompt_results: Vec<Result<PromptResponse, rig::completion::PromptError>>,
     chat_results: Vec<super::agent::MockChatOutcome>,
 ) -> (LlmAgent, super::agent::MockLlmAgentController) {
-    super::agent::mock_llm_agent(model_id, prompt_results, chat_results)
+    super::agent::mock_llm_agent_with_provider_id(provider, model_id, prompt_results, chat_results)
 }
 
 /// Return the number of times the one-shot `prompt_details` path was invoked on
@@ -32,4 +38,10 @@ pub(crate) fn prompt_attempts(agent: &LlmAgent) -> usize {
 /// was invoked on the mock agent.
 pub(crate) fn text_turn_attempts(agent: &LlmAgent) -> usize {
     agent.text_turn_attempts()
+}
+
+/// Return the number of times the typed-prompt path (`prompt_typed_details`)
+/// was invoked on the mock agent.
+pub(crate) fn typed_attempts(agent: &LlmAgent) -> usize {
+    agent.typed_attempts()
 }

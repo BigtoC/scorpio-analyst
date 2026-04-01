@@ -17,7 +17,7 @@
 
 mod agent;
 #[cfg(test)]
-mod agent_test_support;
+pub(crate) mod agent_test_support;
 mod client;
 mod error;
 mod retry;
