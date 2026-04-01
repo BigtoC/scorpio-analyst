@@ -1,21 +1,18 @@
 //! Provider client construction and configuration validation.
 //!
-//! - [`ProviderClient`] — enum dispatching over concrete `rig` provider clients.
 //! - [`CompletionModelHandle`] — reusable handle bundling provider, model ID, client, and rate limiter.
 //! - [`create_completion_model`] — construct a handle from tier + config.
-//! - [`preflight_configured_providers`] — validate provider connectivity before the pipeline starts.
+//! - [`preflight_copilot_if_configured`] — validate configured Copilot providers before the pipeline starts.
 
 use rig::providers::{anthropic, gemini, openai, openrouter};
 use secrecy::ExposeSecret;
+use std::path::Path;
 use tracing::info;
 
 use crate::{
     config::{ApiConfig, LlmConfig},
     error::TradingError,
-    providers::{
-        ModelTier, ProviderId,
-        copilot::CopilotProviderClient,
-    },
+    providers::{ModelTier, ProviderId, copilot::CopilotProviderClient},
     rate_limit::{ProviderRateLimiters, SharedRateLimiter},
 };
 
@@ -87,7 +84,7 @@ impl CompletionModelHandle {
 /// returns and requires `Clone`), we use enum dispatch to support multiple providers
 /// behind a single type.
 #[derive(Debug, Clone)]
-pub enum ProviderClient {
+pub(crate) enum ProviderClient {
     /// OpenAI Responses API client (default for OpenAI).
     OpenAI(openai::Client),
     /// Anthropic Messages API client.
@@ -131,27 +128,19 @@ pub fn create_completion_model(
     })
 }
 
-/// Backwards-compatible helper that returns only the provider client.
-pub fn create_provider_client(
-    tier: ModelTier,
-    llm_config: &LlmConfig,
-    api_config: &ApiConfig,
-) -> Result<ProviderClient, TradingError> {
-    create_completion_model(
-        tier,
-        llm_config,
-        api_config,
-        &ProviderRateLimiters::default(),
-    )
-    .map(|handle| handle.client)
-}
-
-pub async fn preflight_configured_providers(
+pub async fn preflight_copilot_if_configured(
     llm_config: &LlmConfig,
     api_config: &ApiConfig,
     rate_limiters: &ProviderRateLimiters,
 ) -> Result<(), TradingError> {
     for tier in [ModelTier::QuickThinking, ModelTier::DeepThinking] {
+        if !matches!(
+            validate_provider_id(tier.provider_id(llm_config)),
+            Ok(ProviderId::Copilot)
+        ) {
+            continue;
+        }
+
         let handle = create_completion_model(tier, llm_config, api_config, rate_limiters)?;
         if let ProviderClient::Copilot(client) = &handle.client {
             client.preflight().await.map_err(|err| {
@@ -201,12 +190,7 @@ fn create_provider_client_for(
             Ok(ProviderClient::Gemini(client))
         }
         ProviderId::Copilot => {
-            // Copilot requires no API key. Resolve the CLI path in priority order:
-            // 1. SCORPIO_COPILOT_CLI_PATH env var (explicit override)
-            // 2. `which copilot` (absolute path from PATH)
-            // 3. "copilot" plain name (last resort, relies on PATH at exec time)
-            let exe_path = std::env::var("SCORPIO_COPILOT_CLI_PATH")
-                .unwrap_or_else(|_| resolve_copilot_exe_path());
+            let exe_path = resolve_copilot_exe_path()?;
             validate_copilot_cli_path(&exe_path)?;
             Ok(ProviderClient::Copilot(CopilotProviderClient::new(
                 exe_path, model_id,
@@ -218,9 +202,7 @@ fn create_provider_client_for(
                 .as_ref()
                 .ok_or_else(|| missing_key_error(provider))?;
             let client = openrouter::Client::new(key.expose_secret())
-                .map_err(|e| {
-                    config_error(&format!("failed to create OpenRouter client: {e}"))
-                })?;
+                .map_err(|e| config_error(&format!("failed to create OpenRouter client: {e}")))?;
             Ok(ProviderClient::OpenRouter(client))
         }
     }
@@ -243,20 +225,22 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
     }
 }
 
-/// Resolve the absolute path to the `copilot` CLI using `which`.
-///
-/// Returns the trimmed stdout of `which copilot` on success, or falls back to
-/// the plain name `"copilot"` if `which` is unavailable or returns no output.
-fn resolve_copilot_exe_path() -> String {
-    std::process::Command::new("which")
-        .arg("copilot")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "copilot".to_owned())
+fn resolve_copilot_exe_path() -> Result<String, TradingError> {
+    std::env::var("SCORPIO_COPILOT_CLI_PATH")
+        .map_err(|_| {
+            config_error(
+                "SCORPIO_COPILOT_CLI_PATH must be set to the absolute path of the Copilot CLI executable. Scorpio no longer falls back to PATH lookup; install the Copilot CLI and set SCORPIO_COPILOT_CLI_PATH=/absolute/path/to/copilot.",
+            )
+        })
+        .and_then(|path| resolve_copilot_exe_path_from(&path))
+}
+
+fn resolve_copilot_exe_path_from(path: &str) -> Result<String, TradingError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(config_error("SCORPIO_COPILOT_CLI_PATH must not be empty"));
+    }
+    Ok(trimmed.to_owned())
 }
 
 /// Validate the Copilot CLI executable path.
@@ -264,8 +248,8 @@ fn resolve_copilot_exe_path() -> String {
 /// Rejects paths that:
 /// - Contain shell metacharacters that could enable injection.
 /// - Contain `..` path-traversal sequences.
-/// - Are relative paths containing `/` but not starting with `/` (must be either
-///   a plain filename or an absolute path).
+/// - Are not absolute filesystem paths.
+/// - Do not exist, are not regular files, or are not executable.
 fn validate_copilot_cli_path(path: &str) -> Result<(), TradingError> {
     const FORBIDDEN_CHARS: &[char] = &[
         ';', '|', '&', '$', '`', '(', ')', '<', '>', '"', '\'', '\n', '\r', '\0', '*', '?', '[',
@@ -285,12 +269,38 @@ fn validate_copilot_cli_path(path: &str) -> Result<(), TradingError> {
             "SCORPIO_COPILOT_CLI_PATH must not contain path traversal (..)",
         ));
     }
-    // Relative paths with '/' (but not absolute) are ambiguous and disallowed.
-    if path.contains('/') && !path.starts_with('/') {
+    if !path.starts_with('/') {
         return Err(config_error(
-            "SCORPIO_COPILOT_CLI_PATH must be a plain executable name or an absolute path",
+            "SCORPIO_COPILOT_CLI_PATH must be an absolute path to an executable file. Plain command names are no longer accepted because Scorpio no longer falls back to PATH lookup.",
         ));
     }
+
+    let cli_path = Path::new(path);
+    if !cli_path.exists() {
+        return Err(config_error(&format!(
+            "SCORPIO_COPILOT_CLI_PATH points to '{path}', but that file does not exist. Install the Copilot CLI and set SCORPIO_COPILOT_CLI_PATH to its absolute path."
+        )));
+    }
+
+    let metadata = std::fs::metadata(cli_path).map_err(|err| {
+        config_error(&format!(
+            "failed to read Copilot CLI metadata at '{path}': {err}"
+        ))
+    })?;
+
+    if !metadata.is_file() {
+        return Err(config_error(&format!(
+            "SCORPIO_COPILOT_CLI_PATH points to '{path}', but it is not a file. Set SCORPIO_COPILOT_CLI_PATH to the Copilot CLI executable file."
+        )));
+    }
+
+    #[cfg(unix)]
+    if std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o111 == 0 {
+        return Err(config_error(&format!(
+            "SCORPIO_COPILOT_CLI_PATH points to '{path}', but it is not executable. Run 'chmod +x {path}' or point SCORPIO_COPILOT_CLI_PATH at the executable Copilot CLI binary."
+        )));
+    }
+
     Ok(())
 }
 
@@ -330,6 +340,68 @@ mod tests {
     use super::*;
     use crate::config::{ApiConfig, LlmConfig};
     use secrecy::SecretString;
+    use std::{
+        env,
+        ffi::OsString,
+        os::unix::fs::PermissionsExt,
+        sync::{Mutex, OnceLock},
+    };
+    use tempfile::tempdir;
+
+    fn copilot_cli_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn lock_copilot_cli_env() -> std::sync::MutexGuard<'static, ()> {
+        copilot_cli_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct CopilotCliPathEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<OsString>,
+    }
+
+    impl CopilotCliPathEnvGuard {
+        fn set(value: &str) -> Self {
+            let lock = lock_copilot_cli_env();
+            let previous = env::var_os("SCORPIO_COPILOT_CLI_PATH");
+            // SAFETY: Tests serialize access to this process-global variable via the mutex above.
+            unsafe { env::set_var("SCORPIO_COPILOT_CLI_PATH", value) };
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+
+        fn unset() -> Self {
+            let lock = lock_copilot_cli_env();
+            let previous = env::var_os("SCORPIO_COPILOT_CLI_PATH");
+            // SAFETY: Tests serialize access to this process-global variable via the mutex above.
+            unsafe { env::remove_var("SCORPIO_COPILOT_CLI_PATH") };
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for CopilotCliPathEnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => {
+                    // SAFETY: Tests serialize access to this process-global variable via the mutex above.
+                    unsafe { env::set_var("SCORPIO_COPILOT_CLI_PATH", previous) };
+                }
+                None => {
+                    // SAFETY: Tests serialize access to this process-global variable via the mutex above.
+                    unsafe { env::remove_var("SCORPIO_COPILOT_CLI_PATH") };
+                }
+            }
+        }
+    }
 
     fn sample_llm_config() -> LlmConfig {
         LlmConfig {
@@ -473,6 +545,7 @@ mod tests {
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "openai");
         assert_eq!(handle.model_id(), "gpt-4o-mini");
+        assert!(matches!(handle.client, ProviderClient::OpenAI(_)));
     }
 
     #[test]
@@ -490,6 +563,7 @@ mod tests {
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "anthropic");
         assert_eq!(handle.model_id(), "o3");
+        assert!(matches!(handle.client, ProviderClient::Anthropic(_)));
     }
 
     #[test]
@@ -507,6 +581,7 @@ mod tests {
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "gemini");
         assert_eq!(handle.model_id(), "o3");
+        assert!(matches!(handle.client, ProviderClient::Gemini(_)));
     }
 
     #[test]
@@ -526,6 +601,13 @@ mod tests {
 
     #[test]
     fn factory_creates_copilot_client_without_api_key() {
+        let dir = tempdir().expect("tempdir");
+        let cli_path = dir.path().join("copilot");
+        std::fs::write(&cli_path, "#!/bin/sh\nexit 0\n").expect("write cli stub");
+        std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o755))
+            .expect("set executable permissions");
+        let cli_path = cli_path.to_string_lossy().into_owned();
+        let _guard = CopilotCliPathEnvGuard::set(&cli_path);
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "copilot".to_owned();
 
@@ -539,6 +621,30 @@ mod tests {
         let handle = handle.unwrap();
         assert_eq!(handle.provider_name(), "copilot");
         assert_eq!(handle.model_id(), "o3");
+        assert!(matches!(handle.client, ProviderClient::Copilot(_)));
+    }
+
+    #[test]
+    fn create_completion_model_attaches_provider_rate_limiter() {
+        let cfg = sample_llm_config();
+        let limiters = ProviderRateLimiters::from_config(&crate::config::RateLimitConfig {
+            openai_rpm: 60,
+            anthropic_rpm: 0,
+            gemini_rpm: 0,
+            copilot_rpm: 0,
+            openrouter_rpm: 0,
+            finnhub_rps: 0,
+        });
+
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &limiters,
+        )
+        .unwrap();
+
+        assert_eq!(handle.rate_limiter().map(|l| l.label()), Some("openai"));
     }
 
     // ── OpenRouter provider ──────────────────────────────────────────────
@@ -680,13 +786,150 @@ mod tests {
     // ── validate_copilot_cli_path ────────────────────────────────────────
 
     #[test]
-    fn copilot_path_plain_name_accepted() {
-        assert!(validate_copilot_cli_path("copilot").is_ok());
+    fn factory_copilot_requires_explicit_cli_path_env_var() {
+        let _guard = CopilotCliPathEnvGuard::unset();
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "copilot".to_owned();
+
+        let result = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_for_copilot(),
+            &ProviderRateLimiters::default(),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no longer falls back to PATH lookup"),
+            "expected missing Copilot CLI path error"
+        );
+    }
+
+    #[test]
+    fn factory_copilot_rejects_plain_cli_name_from_env() {
+        let _guard = CopilotCliPathEnvGuard::set("copilot");
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "copilot".to_owned();
+
+        let result = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_for_copilot(),
+            &ProviderRateLimiters::default(),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("absolute path to an executable file"),
+            "expected actionable absolute-path validation error"
+        );
+    }
+
+    #[test]
+    fn factory_copilot_rejects_nonexistent_cli_path_from_env() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing-copilot");
+        let missing_path = missing_path.to_string_lossy().into_owned();
+        let _guard = CopilotCliPathEnvGuard::set(&missing_path);
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "copilot".to_owned();
+
+        let result = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_for_copilot(),
+            &ProviderRateLimiters::default(),
+        );
+
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("does not exist"), "expected missing-file error in: {msg}");
+        assert!(
+            msg.contains("Install the Copilot CLI and set SCORPIO_COPILOT_CLI_PATH"),
+            "expected actionable setup guidance in: {msg}"
+        );
+    }
+
+    #[test]
+    fn factory_copilot_rejects_non_executable_cli_path_from_env() {
+        let dir = tempdir().expect("tempdir");
+        let cli_path = dir.path().join("copilot");
+        std::fs::write(&cli_path, "#!/bin/sh\nexit 0\n").expect("write cli stub");
+        std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o644))
+            .expect("set non-executable permissions");
+        let cli_path = cli_path.to_string_lossy().into_owned();
+        let _guard = CopilotCliPathEnvGuard::set(&cli_path);
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "copilot".to_owned();
+
+        let result = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_for_copilot(),
+            &ProviderRateLimiters::default(),
+        );
+
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("is not executable"),
+            "expected non-executable error in: {msg}"
+        );
+        assert!(
+            msg.contains("chmod +x"),
+            "expected executable remediation hint in: {msg}"
+        );
+    }
+
+    #[test]
+    fn factory_copilot_accepts_executable_cli_path_from_env() {
+        let dir = tempdir().expect("tempdir");
+        let cli_path = dir.path().join("copilot");
+        std::fs::write(&cli_path, "#!/bin/sh\nexit 0\n").expect("write cli stub");
+        std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o755))
+            .expect("set executable permissions");
+        let cli_path = cli_path.to_string_lossy().into_owned();
+        let _guard = CopilotCliPathEnvGuard::set(&cli_path);
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "copilot".to_owned();
+
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &api_config_for_copilot(),
+            &ProviderRateLimiters::default(),
+        );
+
+        assert!(handle.is_ok(), "expected executable Copilot path to be accepted");
+    }
+
+    #[tokio::test]
+    async fn preflight_copilot_if_configured_ignores_non_copilot_providers() {
+        let result = preflight_copilot_if_configured(
+            &sample_llm_config(),
+            &empty_api_config(),
+            &ProviderRateLimiters::default(),
+        )
+        .await;
+
+        assert!(result.is_ok());
     }
 
     #[test]
     fn copilot_path_absolute_accepted() {
-        assert!(validate_copilot_cli_path("/usr/local/bin/copilot").is_ok());
+        let dir = tempdir().expect("tempdir");
+        let cli_path = dir.path().join("copilot");
+        std::fs::write(&cli_path, "#!/bin/sh\nexit 0\n").expect("write cli stub");
+        std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o755))
+            .expect("set executable permissions");
+
+        assert!(validate_copilot_cli_path(cli_path.to_str().expect("utf8 path")).is_ok());
     }
 
     #[test]
@@ -702,5 +945,25 @@ mod tests {
     #[test]
     fn copilot_path_relative_with_slash_rejected() {
         assert!(validate_copilot_cli_path("bin/copilot").is_err());
+    }
+
+    #[test]
+    fn copilot_path_plain_name_rejected() {
+        assert!(validate_copilot_cli_path("copilot").is_err());
+    }
+
+    #[test]
+    fn copilot_path_empty_after_trim_is_rejected() {
+        assert!(resolve_copilot_exe_path_from("   ").is_err());
+    }
+
+    #[test]
+    fn copilot_path_newline_rejected() {
+        assert!(validate_copilot_cli_path("/usr/local/bin/copilot\n").is_err());
+    }
+
+    #[test]
+    fn copilot_path_embedded_double_dot_segment_rejected() {
+        assert!(validate_copilot_cli_path("/usr/local/bin/copilot..bak").is_err());
     }
 }

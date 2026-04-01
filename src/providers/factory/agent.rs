@@ -11,6 +11,7 @@
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 #[cfg(test)]
@@ -39,6 +40,20 @@ type OpenAIModel = rig::providers::openai::responses_api::ResponsesCompletionMod
 type AnthropicModel = rig::providers::anthropic::completion::CompletionModel;
 type GeminiModel = rig::providers::gemini::completion::CompletionModel;
 type OpenRouterModel = rig::providers::openrouter::completion::CompletionModel;
+
+macro_rules! dispatch_llm_agent {
+    ($inner:expr, |$agent:ident| $body:expr, mock = |$mock:ident| $mock_body:expr) => {
+        match $inner {
+            LlmAgentInner::OpenAI($agent) => $body,
+            LlmAgentInner::Anthropic($agent) => $body,
+            LlmAgentInner::Gemini($agent) => $body,
+            LlmAgentInner::Copilot($agent) => $body,
+            LlmAgentInner::OpenRouter($agent) => $body,
+            #[cfg(test)]
+            LlmAgentInner::Mock($mock) => $mock_body,
+        }
+    };
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // LlmAgentInner (private dispatch enum)
@@ -73,14 +88,19 @@ enum LlmAgentInner {
 pub(crate) struct MockLlmAgent {
     prompt_results: Arc<Mutex<VecDeque<Result<PromptResponse, PromptError>>>>,
     chat_results: Arc<Mutex<VecDeque<MockChatOutcome>>>,
+    typed_results: Arc<Mutex<VecDeque<Result<Box<dyn std::any::Any + Send>, TradingError>>>>,
     observed_prompts: Arc<Mutex<Vec<String>>>,
     observed_history_lengths: Arc<Mutex<Vec<usize>>>,
+    observed_history_ptrs: Arc<Mutex<Vec<usize>>>,
+    prompt_delay: Arc<Mutex<Duration>>,
+    typed_attempts: Arc<Mutex<usize>>,
 }
 
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct MockLlmAgentController {
     observed_history_lengths: Arc<Mutex<Vec<usize>>>,
+    observed_history_ptrs: Arc<Mutex<Vec<usize>>>,
 }
 
 #[cfg(test)]
@@ -93,6 +113,10 @@ pub(crate) enum MockChatOutcome {
 impl MockLlmAgentController {
     pub(crate) fn observed_history_lengths(&self) -> Vec<usize> {
         self.observed_history_lengths.lock().unwrap().clone()
+    }
+
+    pub(crate) fn observed_history_ptrs(&self) -> Vec<usize> {
+        self.observed_history_ptrs.lock().unwrap().clone()
     }
 }
 
@@ -109,11 +133,16 @@ pub(crate) fn mock_llm_agent(
 ) -> (LlmAgent, MockLlmAgentController) {
     let observed_prompts = Arc::new(Mutex::new(Vec::new()));
     let observed_history_lengths = Arc::new(Mutex::new(Vec::new()));
+    let observed_history_ptrs = Arc::new(Mutex::new(Vec::new()));
     let inner = MockLlmAgent {
         prompt_results: Arc::new(Mutex::new(prompt_results.into())),
         chat_results: Arc::new(Mutex::new(chat_results.into())),
+        typed_results: Arc::new(Mutex::new(VecDeque::new())),
         observed_prompts: Arc::clone(&observed_prompts),
         observed_history_lengths: Arc::clone(&observed_history_lengths),
+        observed_history_ptrs: Arc::clone(&observed_history_ptrs),
+        prompt_delay: Arc::new(Mutex::new(Duration::ZERO)),
+        typed_attempts: Arc::new(Mutex::new(0)),
     };
 
     (
@@ -125,6 +154,7 @@ pub(crate) fn mock_llm_agent(
         },
         MockLlmAgentController {
             observed_history_lengths,
+            observed_history_ptrs,
         },
     )
 }
@@ -156,30 +186,58 @@ impl LlmAgent {
         self.rate_limiter.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_prompt_delay(&self, delay: Duration) {
+        if let LlmAgentInner::Mock(agent) = &self.inner {
+            *agent.prompt_delay.lock().unwrap() = delay;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_typed_error(&self, err: TradingError) {
+        if let LlmAgentInner::Mock(agent) = &self.inner {
+            agent.typed_results.lock().unwrap().push_back(Err(err));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_typed_ok<T>(&self, response: TypedPromptResponse<T>)
+    where
+        T: Send + 'static,
+    {
+        if let LlmAgentInner::Mock(agent) = &self.inner {
+            agent
+                .typed_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(Box::new(response)));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn typed_attempts(&self) -> usize {
+        match &self.inner {
+            LlmAgentInner::Mock(agent) => *agent.typed_attempts.lock().unwrap(),
+            _ => 0,
+        }
+    }
+
     /// Send a one-shot prompt and return the response text.
     pub async fn prompt(&self, prompt: &str) -> Result<String, PromptError> {
-        match &self.inner {
-            LlmAgentInner::OpenAI(agent) => agent.prompt(prompt).await,
-            LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).await,
-            LlmAgentInner::Gemini(agent) => agent.prompt(prompt).await,
-            LlmAgentInner::Copilot(agent) => agent.prompt(prompt).await,
-            LlmAgentInner::OpenRouter(agent) => agent.prompt(prompt).await,
-            #[cfg(test)]
-            LlmAgentInner::Mock(agent) => Ok(agent.prompt_details(prompt).await?.output),
-        }
+        dispatch_llm_agent!(
+            &self.inner,
+            |agent| agent.prompt(prompt).await,
+            mock = |agent| { Ok(agent.prompt_details(prompt).await?.output) }
+        )
     }
 
     /// Send a one-shot prompt and return text plus aggregated usage details.
     pub async fn prompt_details(&self, prompt: &str) -> Result<PromptResponse, PromptError> {
-        match &self.inner {
-            LlmAgentInner::OpenAI(agent) => agent.prompt(prompt).extended_details().await,
-            LlmAgentInner::Anthropic(agent) => agent.prompt(prompt).extended_details().await,
-            LlmAgentInner::Gemini(agent) => agent.prompt(prompt).extended_details().await,
-            LlmAgentInner::Copilot(agent) => agent.prompt(prompt).extended_details().await,
-            LlmAgentInner::OpenRouter(agent) => agent.prompt(prompt).extended_details().await,
-            #[cfg(test)]
-            LlmAgentInner::Mock(agent) => agent.prompt_details(prompt).await,
-        }
+        dispatch_llm_agent!(
+            &self.inner,
+            |agent| agent.prompt(prompt).extended_details().await,
+            mock = |agent| agent.prompt_details(prompt).await
+        )
     }
 
     /// Send a typed prompt and return parsed output plus aggregated usage details.
@@ -198,42 +256,18 @@ impl LlmAgent {
             map_structured_output_error_with_context(self.provider_name(), self.model_id(), err)
         };
 
-        match &self.inner {
-            LlmAgentInner::OpenAI(agent) => agent
+        dispatch_llm_agent!(
+            &self.inner,
+            |agent| agent
                 .prompt_typed::<T>(prompt)
                 .max_turns(max_turns)
                 .extended_details()
                 .await
                 .map_err(map_err),
-            LlmAgentInner::Anthropic(agent) => agent
-                .prompt_typed::<T>(prompt)
-                .max_turns(max_turns)
-                .extended_details()
+            mock = |mock_agent| mock_agent
+                .prompt_typed_details::<T>(prompt, max_turns)
                 .await
-                .map_err(map_err),
-            LlmAgentInner::Gemini(agent) => agent
-                .prompt_typed::<T>(prompt)
-                .max_turns(max_turns)
-                .extended_details()
-                .await
-                .map_err(map_err),
-            LlmAgentInner::Copilot(agent) => agent
-                .prompt_typed::<T>(prompt)
-                .max_turns(max_turns)
-                .extended_details()
-                .await
-                .map_err(map_err),
-            LlmAgentInner::OpenRouter(agent) => agent
-                .prompt_typed::<T>(prompt)
-                .max_turns(max_turns)
-                .extended_details()
-                .await
-                .map_err(map_err),
-            #[cfg(test)]
-            LlmAgentInner::Mock(_) => Err(TradingError::Config(anyhow::anyhow!(
-                "typed prompt not supported for mock llm agent"
-            ))),
-        }
+        )
     }
 
     /// Send a prompt with chat history and return the response text.
@@ -242,18 +276,14 @@ impl LlmAgent {
         prompt: &str,
         chat_history: Vec<Message>,
     ) -> Result<String, PromptError> {
-        match &self.inner {
-            LlmAgentInner::OpenAI(agent) => agent.chat(prompt, chat_history).await,
-            LlmAgentInner::Anthropic(agent) => agent.chat(prompt, chat_history).await,
-            LlmAgentInner::Gemini(agent) => agent.chat(prompt, chat_history).await,
-            LlmAgentInner::Copilot(agent) => agent.chat(prompt, chat_history).await,
-            LlmAgentInner::OpenRouter(agent) => agent.chat(prompt, chat_history).await,
-            #[cfg(test)]
-            LlmAgentInner::Mock(agent) => {
+        dispatch_llm_agent!(
+            &self.inner,
+            |agent| agent.chat(prompt, chat_history).await,
+            mock = |agent| {
                 let mut history = chat_history;
                 Ok(agent.chat_details(prompt, &mut history).await?.output)
             }
-        }
+        )
     }
 
     /// Send a prompt with mutable chat history and return response text plus usage details.
@@ -267,40 +297,16 @@ impl LlmAgent {
     ) -> Result<PromptResponse, PromptError> {
         use rig::agent::PromptRequest;
 
-        match &self.inner {
-            LlmAgentInner::OpenAI(agent) => {
+        dispatch_llm_agent!(
+            &self.inner,
+            |agent| {
                 PromptRequest::from_agent(agent, prompt)
                     .with_history(chat_history)
                     .extended_details()
                     .await
-            }
-            LlmAgentInner::Anthropic(agent) => {
-                PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history)
-                    .extended_details()
-                    .await
-            }
-            LlmAgentInner::Gemini(agent) => {
-                PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history)
-                    .extended_details()
-                    .await
-            }
-            LlmAgentInner::Copilot(agent) => {
-                PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history)
-                    .extended_details()
-                    .await
-            }
-            LlmAgentInner::OpenRouter(agent) => {
-                PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history)
-                    .extended_details()
-                    .await
-            }
-            #[cfg(test)]
-            LlmAgentInner::Mock(agent) => agent.chat_details(prompt, chat_history).await,
-        }
+            },
+            mock = |agent| agent.chat_details(prompt, chat_history).await
+        )
     }
 }
 
@@ -315,6 +321,10 @@ impl MockLlmAgent {
             .lock()
             .unwrap()
             .push(prompt.to_owned());
+        let delay = *self.prompt_delay.lock().unwrap();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         self.prompt_results
             .lock()
             .unwrap()
@@ -345,6 +355,10 @@ impl MockLlmAgent {
             .lock()
             .unwrap()
             .push(chat_history.len());
+        self.observed_history_ptrs
+            .lock()
+            .unwrap()
+            .push(chat_history.as_ptr() as usize);
 
         let outcome = self
             .chat_results
@@ -378,6 +392,37 @@ impl MockLlmAgent {
             MockChatOutcome::PartialUserThenErr(err) => Err(err),
         }
     }
+
+    async fn prompt_typed_details<T>(
+        &self,
+        prompt: &str,
+        _max_turns: usize,
+    ) -> Result<TypedPromptResponse<T>, TradingError>
+    where
+        T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    {
+        self.observed_prompts
+            .lock()
+            .unwrap()
+            .push(prompt.to_owned());
+        *self.typed_attempts.lock().unwrap() += 1;
+
+        let next = self.typed_results.lock().unwrap().pop_front();
+        match next {
+            Some(Ok(response)) => response
+                .downcast::<TypedPromptResponse<T>>()
+                .map(|response| *response)
+                .map_err(|_| {
+                    TradingError::Config(anyhow::anyhow!(
+                        "typed mock response type mismatch for requested schema"
+                    ))
+                }),
+            Some(Err(err)) => Err(err),
+            None => Err(TradingError::Config(anyhow::anyhow!(
+                "no typed mock response configured"
+            ))),
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -389,11 +434,6 @@ impl MockLlmAgent {
 /// This thin helper wraps `rig::AgentBuilder` so downstream agents don't repeat boilerplate.
 /// Tools and structured output are **not** attached here — callers extend the agent
 /// as needed after creation, or use [`build_agent_with_tools`] for tool-enabled agents.
-///
-/// # Errors
-///
-/// Returns `TradingError::Config` if the provider is unknown or the API key is missing
-/// (delegated to [`super::client::create_completion_model`]).
 pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAgent {
     build_agent_inner(handle, system_prompt, None)
 }
@@ -441,7 +481,7 @@ fn build_agent_inner(
     // Produces the base builder (without Anthropic's extra `.max_tokens`) and
     // dispatches on `tools` to avoid the typestate assignment problem.
     macro_rules! make_agent {
-        ($client:expr, $base_builder:expr, $variant:ident) => {{
+        ($base_builder:expr, $variant:ident) => {{
             let agent = match tools {
                 None => $base_builder.build(),
                 Some(t) => $base_builder.tools(t).build(),
@@ -459,7 +499,7 @@ fn build_agent_inner(
         ProviderClient::OpenAI(c) => {
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(c, base, OpenAI)
+            make_agent!(base, OpenAI)
         }
         ProviderClient::Anthropic(c) => {
             use rig::prelude::CompletionClient;
@@ -467,22 +507,22 @@ fn build_agent_inner(
                 .agent(handle.model_id())
                 .preamble(system_prompt)
                 .max_tokens(4096);
-            make_agent!(c, base, Anthropic)
+            make_agent!(base, Anthropic)
         }
         ProviderClient::Gemini(c) => {
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(c, base, Gemini)
+            make_agent!(base, Gemini)
         }
         ProviderClient::Copilot(c) => {
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(c, base, Copilot)
+            make_agent!(base, Copilot)
         }
         ProviderClient::OpenRouter(c) => {
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(c, base, OpenRouter)
+            make_agent!(base, OpenRouter)
         }
     }
 }
@@ -506,27 +546,15 @@ where
     T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
 {
     use rig::completion::TypedPrompt;
-    match &agent.inner {
-        LlmAgentInner::OpenAI(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
+    dispatch_llm_agent!(
+        &agent.inner,
+        |agent_inner| agent_inner.prompt_typed::<T>(prompt).await.map_err(|err| {
             map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
         }),
-        LlmAgentInner::Anthropic(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
-            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-        }),
-        LlmAgentInner::Gemini(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
-            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-        }),
-        LlmAgentInner::Copilot(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
-            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-        }),
-        LlmAgentInner::OpenRouter(a) => a.prompt_typed::<T>(prompt).await.map_err(|err| {
-            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-        }),
-        #[cfg(test)]
-        LlmAgentInner::Mock(_) => Err(TradingError::Config(anyhow::anyhow!(
+        mock = |_mock_agent| Err(TradingError::Config(anyhow::anyhow!(
             "typed prompt not supported for mock llm agent"
-        ))),
-    }
+        )))
+    )
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -538,7 +566,11 @@ mod tests {
     use super::*;
     use crate::config::{ApiConfig, LlmConfig};
     use crate::rate_limit::ProviderRateLimiters;
+    use crate::state::TradeProposal;
+    use crate::{config::RateLimitConfig, providers::ProviderId};
+    use rig::tool::Tool;
     use secrecy::SecretString;
+    use serde::{Deserialize, Serialize};
 
     fn sample_llm_config() -> LlmConfig {
         LlmConfig {
@@ -582,6 +614,35 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct TestTool;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct TestToolArgs {}
+
+    impl Tool for TestTool {
+        const NAME: &'static str = "test_tool";
+        type Error = TradingError;
+        type Args = TestToolArgs;
+        type Output = String;
+
+        async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
+            rig::completion::ToolDefinition {
+                name: Self::NAME.to_owned(),
+                description: "test tool".to_owned(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            }
+        }
+
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            Ok("ok".to_owned())
+        }
+    }
+
     // ── Agent builder ────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -597,6 +658,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "openai");
         assert_eq!(agent.model_id(), "gpt-4o-mini");
+        assert!(matches!(&agent.inner, LlmAgentInner::OpenAI(_)));
     }
 
     #[tokio::test]
@@ -613,6 +675,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "anthropic");
         assert_eq!(agent.model_id(), "o3");
+        assert!(matches!(&agent.inner, LlmAgentInner::Anthropic(_)));
     }
 
     #[tokio::test]
@@ -629,6 +692,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider_name(), "gemini");
         assert_eq!(agent.model_id(), "o3");
+        assert!(matches!(&agent.inner, LlmAgentInner::Gemini(_)));
     }
 
     #[tokio::test]
@@ -668,5 +732,96 @@ mod tests {
         assert_eq!(agent.provider_name(), "openrouter");
         assert_eq!(agent.model_id(), "minimax/minimax-m2.5:free");
         assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
+    }
+
+    #[tokio::test]
+    async fn build_agent_propagates_openai_rate_limiter_from_handle() {
+        let cfg = sample_llm_config();
+        let limiters = ProviderRateLimiters::from_config(&RateLimitConfig {
+            openai_rpm: 60,
+            anthropic_rpm: 0,
+            gemini_rpm: 0,
+            copilot_rpm: 0,
+            openrouter_rpm: 0,
+            finnhub_rps: 0,
+        });
+
+        let handle = super::super::client::create_completion_model(
+            crate::providers::ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openai(),
+            &limiters,
+        )
+        .unwrap();
+        let expected = handle.rate_limiter().unwrap().label().to_owned();
+
+        let agent = build_agent(&handle, "You are a test agent.");
+
+        assert_eq!(handle.provider_id(), ProviderId::OpenAI);
+        assert_eq!(
+            agent.rate_limiter().map(|l| l.label()),
+            Some(expected.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_with_tools_preserves_provider_variant_and_rate_limiter() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "openrouter".to_owned();
+        cfg.quick_thinking_model = "qwen/qwen3.6-plus-preview:free".to_owned();
+        let limiters = ProviderRateLimiters::from_config(&RateLimitConfig {
+            openai_rpm: 0,
+            anthropic_rpm: 0,
+            gemini_rpm: 0,
+            copilot_rpm: 0,
+            openrouter_rpm: 20,
+            finnhub_rps: 0,
+        });
+
+        let handle = super::super::client::create_completion_model(
+            crate::providers::ModelTier::QuickThinking,
+            &cfg,
+            &api_config_with_openrouter(),
+            &limiters,
+        )
+        .unwrap();
+
+        let agent = build_agent_with_tools(
+            &handle,
+            "You are a tool-using test agent.",
+            vec![Box::new(TestTool)],
+        );
+
+        assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
+        assert_eq!(agent.provider_name(), "openrouter");
+        assert_eq!(agent.rate_limiter().map(|l| l.label()), Some("openrouter"));
+    }
+
+    #[tokio::test]
+    async fn mock_agent_supports_typed_prompt_details_for_retry_tests() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(rig::agent::TypedPromptResponse::new(
+            TradeProposal {
+                action: crate::state::TradeAction::Buy,
+                target_price: 123.0,
+                stop_loss: 111.0,
+                confidence: 0.6,
+                rationale: "typed mock".to_owned(),
+            },
+            rig::completion::Usage {
+                input_tokens: 4,
+                output_tokens: 2,
+                total_tokens: 6,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let response = agent
+            .prompt_typed_details::<TradeProposal>("prompt", 1)
+            .await
+            .unwrap();
+
+        assert_eq!(response.output.target_price, 123.0);
+        assert_eq!(agent.typed_attempts(), 1);
     }
 }

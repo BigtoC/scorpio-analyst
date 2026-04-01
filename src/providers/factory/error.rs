@@ -1,9 +1,8 @@
 //! Error conversion and sanitization utilities for the provider factory.
 //!
-//! - [`map_prompt_error`] / [`map_prompt_error_with_context`] — map `rig` prompt errors to
-//!   [`TradingError`].
-//! - [`map_structured_output_error`] / [`map_structured_output_error_with_context`] — map
-//!   structured-output errors, distinguishing schema violations from transport failures.
+//! - `map_prompt_error_with_context` — map `rig` prompt errors to [`TradingError`].
+//! - `map_structured_output_error_with_context` — map structured-output errors,
+//!   distinguishing schema violations from transport failures.
 //! - [`sanitize_error_summary`] — redact credentials and truncate error strings for safe logging.
 
 use rig::completion::{PromptError, StructuredOutputError};
@@ -16,13 +15,6 @@ pub(super) const MAX_ERROR_SUMMARY_CHARS: usize = 200;
 // Error mapping
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Map a `rig` [`PromptError`] to [`TradingError`].
-///
-/// Transport, provider, and tool errors become `TradingError::Rig` with sanitized context.
-pub fn map_prompt_error(err: PromptError) -> TradingError {
-    map_prompt_error_with_context("unknown", "unknown", err)
-}
-
 pub(super) fn map_prompt_error_with_context(
     provider: &str,
     model_id: &str,
@@ -32,14 +24,6 @@ pub(super) fn map_prompt_error_with_context(
         "provider={provider} model={model_id} summary={}",
         sanitize_error_summary(&err.to_string())
     ))
-}
-
-/// Map a `rig` [`StructuredOutputError`] to [`TradingError`].
-///
-/// Deserialization and empty-response failures become `TradingError::SchemaViolation`.
-/// Underlying prompt/transport errors fall through to `TradingError::Rig`.
-pub fn map_structured_output_error(err: StructuredOutputError) -> TradingError {
-    map_structured_output_error_with_context("unknown", "unknown", err)
 }
 
 pub(super) fn map_structured_output_error_with_context(
@@ -75,16 +59,10 @@ pub(super) fn map_structured_output_error_with_context(
 // Sanitization utilities
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Replace ASCII/Unicode control characters (except `\n` and `\t`) with a space.
+/// Replace ASCII/Unicode control characters with a space.
 pub(crate) fn replace_control_chars(s: &str) -> String {
     s.chars()
-        .map(|ch| {
-            if ch.is_control() && ch != '\n' && ch != '\t' {
-                ' '
-            } else {
-                ch
-            }
-        })
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect()
 }
 
@@ -298,6 +276,37 @@ mod tests {
         );
         assert!(!sanitized.contains("or-secret-value"));
         assert!(sanitized.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn sanitize_error_summary_flattens_multiline_input_for_single_line_logging() {
+        let sanitized = sanitize_error_summary(
+            "request failed\nAuthorization: Bearer secret-token\tapi_key=secret123",
+        );
+
+        assert!(!sanitized.contains('\n'));
+        assert!(!sanitized.contains('\r'));
+        assert!(!sanitized.contains('\t'));
+        assert!(!sanitized.contains("secret-token"));
+        assert!(!sanitized.contains("secret123"));
+        assert!(sanitized.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn map_prompt_error_flattens_summary_before_embedding_in_error_message() {
+        let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
+            "first line\napi_key=secret123\tsecond line".to_owned(),
+        ));
+
+        let mapped =
+            map_prompt_error_with_context("openrouter", "qwen/qwen3.6-plus-preview:free", err);
+        let message = mapped.to_string();
+
+        assert!(!message.contains('\n'));
+        assert!(!message.contains('\r'));
+        assert!(!message.contains('\t'));
+        assert!(!message.contains("secret123"));
+        assert!(message.contains("[REDACTED]"));
     }
 
     #[test]

@@ -60,7 +60,7 @@ pub async fn prompt_with_retry(
     timeout: Duration,
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<String>, TradingError> {
-    let total_budget = total_request_budget(timeout, policy);
+    let total_budget = policy.total_budget(timeout);
     prompt_with_retry_budget(agent, prompt, timeout, total_budget, policy).await
 }
 
@@ -71,7 +71,7 @@ pub async fn prompt_with_retry_details(
     timeout: Duration,
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
-    let total_budget = total_request_budget(timeout, policy);
+    let total_budget = policy.total_budget(timeout);
     prompt_with_retry_details_budget(agent, prompt, timeout, total_budget, policy).await
 }
 
@@ -125,53 +125,22 @@ where
     let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
-        if attempt > 0 {
-            let delay = policy.delay_for_attempt(attempt - 1);
-            if started_at.elapsed().saturating_add(delay) > total_budget {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "prompt retry budget exhausted before next attempt".to_owned(),
-                });
-            }
-            warn!(attempt, ?delay, "retrying prompt after transient error");
-            tokio::time::sleep(delay).await;
-        }
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            "retrying prompt after transient error",
+            "prompt retry budget exhausted before next attempt",
+            "prompt retry budget exhausted before rate-limit acquire",
+            "prompt retry budget exhausted",
+        )
+        .await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
-        // The acquire itself is bounded by remaining budget to avoid blocking forever.
-        if let Some(limiter) = agent.rate_limiter() {
-            let remaining = total_budget.saturating_sub(started_at.elapsed());
-            if remaining.is_zero() {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "prompt retry budget exhausted before rate-limit acquire".to_owned(),
-                });
-            }
-            let acquire_start = Instant::now();
-            match tokio::time::timeout(remaining, limiter.acquire()).await {
-                Ok(()) => {
-                    rate_limit_wait_ms = rate_limit_wait_ms
-                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
-                }
-                Err(_) => {
-                    return Err(TradingError::NetworkTimeout {
-                        elapsed: started_at.elapsed(),
-                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
-                    });
-                }
-            }
-        }
-
-        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
-        if remaining_budget.is_zero() {
-            return Err(TradingError::NetworkTimeout {
-                elapsed: started_at.elapsed(),
-                message: "prompt retry budget exhausted".to_owned(),
-            });
-        }
-        let attempt_timeout = timeout.min(remaining_budget);
-
-        match tokio::time::timeout(attempt_timeout, call_fn()).await {
+        match tokio::time::timeout(attempt_budget.timeout, call_fn()).await {
             Ok(Ok(response)) => {
                 return Ok(RetryOutcome {
                     result: response,
@@ -179,9 +148,11 @@ where
                 });
             }
             Ok(Err(err)) => {
-                if is_transient_error(&err) && attempt < policy.max_retries {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient prompt error, will retry");
-                    continue;
+                if attempt < policy.max_retries {
+                    if let Some(error) = transient_prompt_error_summary(&err) {
+                        warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient prompt error, will retry");
+                        continue;
+                    }
                 }
                 return Err(map_prompt_error_with_context(
                     agent.provider_name(),
@@ -190,13 +161,7 @@ where
                 ));
             }
             Err(_elapsed) => {
-                let err = TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: format!(
-                        "prompt timed out on attempt {attempt} for model {}",
-                        agent.model_id()
-                    ),
-                };
+                let err = attempt_timeout_error(started_at, agent, attempt, "prompt");
                 if attempt < policy.max_retries {
                     warn!(attempt, "prompt timed out, will retry");
                     continue;
@@ -234,11 +199,11 @@ pub async fn chat_with_retry(
     timeout: Duration,
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<String>, TradingError> {
-    let total_budget = total_request_budget(timeout, policy);
+    let total_budget = policy.total_budget(timeout);
     chat_with_retry_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
 }
 
-pub async fn chat_with_retry_budget(
+pub(crate) async fn chat_with_retry_budget(
     agent: &LlmAgent,
     prompt: &str,
     chat_history: &[Message],
@@ -246,95 +211,16 @@ pub async fn chat_with_retry_budget(
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<String>, TradingError> {
-    let started_at = Instant::now();
-    let mut rate_limit_wait_ms: u64 = 0;
+    let mut history = Vec::with_capacity(chat_history.len().saturating_add(2));
+    history.extend_from_slice(chat_history);
+    let outcome =
+        chat_with_retry_details_budget(agent, prompt, &mut history, timeout, total_budget, policy)
+            .await?;
 
-    for attempt in 0..=policy.max_retries {
-        if attempt > 0 {
-            let delay = policy.delay_for_attempt(attempt - 1);
-            if started_at.elapsed().saturating_add(delay) > total_budget {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "chat retry budget exhausted before next attempt".to_owned(),
-                });
-            }
-            warn!(attempt, ?delay, "retrying chat after transient error");
-            tokio::time::sleep(delay).await;
-        }
-
-        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
-        if let Some(limiter) = agent.rate_limiter() {
-            let remaining = total_budget.saturating_sub(started_at.elapsed());
-            if remaining.is_zero() {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "chat retry budget exhausted before rate-limit acquire".to_owned(),
-                });
-            }
-            let acquire_start = Instant::now();
-            match tokio::time::timeout(remaining, limiter.acquire()).await {
-                Ok(()) => {
-                    rate_limit_wait_ms = rate_limit_wait_ms
-                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
-                }
-                Err(_) => {
-                    return Err(TradingError::NetworkTimeout {
-                        elapsed: started_at.elapsed(),
-                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
-                    });
-                }
-            }
-        }
-
-        let history = chat_history.to_vec();
-        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
-        if remaining_budget.is_zero() {
-            return Err(TradingError::NetworkTimeout {
-                elapsed: started_at.elapsed(),
-                message: "chat retry budget exhausted".to_owned(),
-            });
-        }
-        let attempt_timeout = timeout.min(remaining_budget);
-
-        match tokio::time::timeout(attempt_timeout, agent.chat(prompt, history)).await {
-            Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                });
-            }
-            Ok(Err(err)) => {
-                if is_transient_error(&err) && attempt < policy.max_retries {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat error, will retry");
-                    continue;
-                }
-                return Err(map_prompt_error_with_context(
-                    agent.provider_name(),
-                    agent.model_id(),
-                    err,
-                ));
-            }
-            Err(_elapsed) => {
-                let err = TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: format!(
-                        "chat timed out on attempt {attempt} for model {}",
-                        agent.model_id()
-                    ),
-                };
-                if attempt < policy.max_retries {
-                    warn!(attempt, "chat timed out, will retry");
-                    continue;
-                }
-                return Err(err);
-            }
-        }
-    }
-
-    // The loop runs for `0..=max_retries` iterations. Every iteration either
-    // returns early or continues. Reaching here requires zero iterations,
-    // which is impossible because `max_retries >= 0` guarantees at least one.
-    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
+    Ok(RetryOutcome {
+        result: outcome.result.output,
+        rate_limit_wait_ms: outcome.rate_limit_wait_ms,
+    })
 }
 
 /// Send a chat prompt (with mutable history) with timeout/retry and return response plus usage.
@@ -355,12 +241,12 @@ pub async fn chat_with_retry_details(
     timeout: Duration,
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
-    let total_budget = total_request_budget(timeout, policy);
+    let total_budget = policy.total_budget(timeout);
     chat_with_retry_details_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
 }
 
 /// Budget-constrained variant of [`chat_with_retry_details`].
-pub async fn chat_with_retry_details_budget(
+pub(crate) async fn chat_with_retry_details_budget(
     agent: &LlmAgent,
     prompt: &str,
     chat_history: &mut Vec<Message>,
@@ -376,57 +262,29 @@ pub async fn chat_with_retry_details_budget(
 
     for attempt in 0..=policy.max_retries {
         if attempt > 0 {
-            let delay = policy.delay_for_attempt(attempt - 1);
-            if started_at.elapsed().saturating_add(delay) > total_budget {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "chat-details retry budget exhausted before next attempt".to_owned(),
-                });
-            }
-            warn!(
-                attempt,
-                ?delay,
-                "retrying chat-details after transient error"
-            );
             // Truncate any partial messages that were appended during the failed attempt.
             chat_history.truncate(initial_len);
-            tokio::time::sleep(delay).await;
         }
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            "retrying chat-details after transient error",
+            "chat-details retry budget exhausted before next attempt",
+            "chat-details budget exhausted before rate-limit acquire",
+            "chat-details retry budget exhausted",
+        )
+        .await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
-        if let Some(limiter) = agent.rate_limiter() {
-            let remaining = total_budget.saturating_sub(started_at.elapsed());
-            if remaining.is_zero() {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "chat-details budget exhausted before rate-limit acquire".to_owned(),
-                });
-            }
-            let acquire_start = Instant::now();
-            match tokio::time::timeout(remaining, limiter.acquire()).await {
-                Ok(()) => {
-                    rate_limit_wait_ms = rate_limit_wait_ms
-                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
-                }
-                Err(_) => {
-                    return Err(TradingError::NetworkTimeout {
-                        elapsed: started_at.elapsed(),
-                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
-                    });
-                }
-            }
-        }
-
-        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
-        if remaining_budget.is_zero() {
-            return Err(TradingError::NetworkTimeout {
-                elapsed: started_at.elapsed(),
-                message: "chat-details retry budget exhausted".to_owned(),
-            });
-        }
-        let attempt_timeout = timeout.min(remaining_budget);
-
-        match tokio::time::timeout(attempt_timeout, agent.chat_details(prompt, chat_history)).await
+        match tokio::time::timeout(
+            attempt_budget.timeout,
+            agent.chat_details(prompt, chat_history),
+        )
+        .await
         {
             Ok(Ok(response)) => {
                 return Ok(RetryOutcome {
@@ -435,9 +293,13 @@ pub async fn chat_with_retry_details_budget(
                 });
             }
             Ok(Err(err)) => {
-                if is_transient_error(&err) && attempt < policy.max_retries {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %sanitize_error_summary(&err.to_string()), "transient chat-details error, will retry");
-                    continue;
+                // Restore caller-owned history on any failed attempt before retrying or returning.
+                chat_history.truncate(initial_len);
+                if attempt < policy.max_retries {
+                    if let Some(error) = transient_prompt_error_summary(&err) {
+                        warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient chat-details error, will retry");
+                        continue;
+                    }
                 }
                 return Err(map_prompt_error_with_context(
                     agent.provider_name(),
@@ -448,13 +310,7 @@ pub async fn chat_with_retry_details_budget(
             Err(_elapsed) => {
                 // On timeout, also truncate any partial messages.
                 chat_history.truncate(initial_len);
-                let err = TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: format!(
-                        "chat-details timed out on attempt {attempt} for model {}",
-                        agent.model_id()
-                    ),
-                };
+                let err = attempt_timeout_error(started_at, agent, attempt, "chat-details");
                 if attempt < policy.max_retries {
                     warn!(attempt, "chat-details timed out, will retry");
                     continue;
@@ -482,62 +338,28 @@ pub async fn prompt_typed_with_retry<T>(
 where
     T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
 {
-    let total_budget = total_request_budget(timeout, policy);
+    let total_budget = policy.total_budget(timeout);
     let started_at = Instant::now();
     let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
-        if attempt > 0 {
-            let delay = policy.delay_for_attempt(attempt - 1);
-            if started_at.elapsed().saturating_add(delay) > total_budget {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "typed prompt retry budget exhausted before next attempt".to_owned(),
-                });
-            }
-            warn!(
-                attempt,
-                ?delay,
-                "retrying typed prompt after transient error"
-            );
-            tokio::time::sleep(delay).await;
-        }
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            "retrying typed prompt after transient error",
+            "typed prompt retry budget exhausted before next attempt",
+            "typed prompt budget exhausted before rate-limit acquire",
+            "typed prompt retry budget exhausted",
+        )
+        .await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        // Acquire rate-limit permit outside the per-attempt timeout (Option C).
-        if let Some(limiter) = agent.rate_limiter() {
-            let remaining = total_budget.saturating_sub(started_at.elapsed());
-            if remaining.is_zero() {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: "typed prompt budget exhausted before rate-limit acquire".to_owned(),
-                });
-            }
-            let acquire_start = Instant::now();
-            match tokio::time::timeout(remaining, limiter.acquire()).await {
-                Ok(()) => {
-                    rate_limit_wait_ms = rate_limit_wait_ms
-                        .saturating_add(acquire_start.elapsed().as_millis() as u64);
-                }
-                Err(_) => {
-                    return Err(TradingError::NetworkTimeout {
-                        elapsed: started_at.elapsed(),
-                        message: "rate-limit acquire timed out (budget exhausted)".to_owned(),
-                    });
-                }
-            }
-        }
-
-        let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
-        if remaining_budget.is_zero() {
-            return Err(TradingError::NetworkTimeout {
-                elapsed: started_at.elapsed(),
-                message: "typed prompt retry budget exhausted".to_owned(),
-            });
-        }
-
-        let attempt_timeout = timeout.min(remaining_budget);
         match tokio::time::timeout(
-            attempt_timeout,
+            attempt_budget.timeout,
             agent.prompt_typed_details::<T>(prompt, max_turns),
         )
         .await
@@ -555,13 +377,7 @@ where
                 return Err(err);
             }
             Err(_elapsed) => {
-                let err = TradingError::NetworkTimeout {
-                    elapsed: started_at.elapsed(),
-                    message: format!(
-                        "typed prompt timed out on attempt {attempt} for model {}",
-                        agent.model_id()
-                    ),
-                };
+                let err = attempt_timeout_error(started_at, agent, attempt, "typed prompt");
                 if attempt < policy.max_retries {
                     continue;
                 }
@@ -580,32 +396,129 @@ where
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
 
+struct AttemptBudget {
+    timeout: Duration,
+    rate_limit_wait_ms: u64,
+}
+
+async fn prepare_attempt(
+    agent: &LlmAgent,
+    started_at: Instant,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+    attempt: u32,
+    retrying_message: &str,
+    retry_budget_message: &str,
+    acquire_budget_message: &str,
+    exhausted_message: &str,
+) -> Result<AttemptBudget, TradingError> {
+    if attempt > 0 {
+        let delay = policy.delay_for_attempt(attempt - 1);
+        if started_at.elapsed().saturating_add(delay) > total_budget {
+            return Err(budget_timeout(started_at, retry_budget_message));
+        }
+        warn!(attempt, ?delay, "{retrying_message}");
+        tokio::time::sleep(delay).await;
+    }
+
+    let rate_limit_wait_ms =
+        acquire_rate_limit_permit(agent, started_at, total_budget, acquire_budget_message).await?;
+    let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
+    if remaining_budget.is_zero() {
+        return Err(budget_timeout(started_at, exhausted_message));
+    }
+
+    Ok(AttemptBudget {
+        timeout: timeout.min(remaining_budget),
+        rate_limit_wait_ms,
+    })
+}
+
+async fn acquire_rate_limit_permit(
+    agent: &LlmAgent,
+    started_at: Instant,
+    total_budget: Duration,
+    exhausted_message: &str,
+) -> Result<u64, TradingError> {
+    let Some(limiter) = agent.rate_limiter() else {
+        return Ok(0);
+    };
+
+    let remaining = total_budget.saturating_sub(started_at.elapsed());
+    if remaining.is_zero() {
+        return Err(budget_timeout(started_at, exhausted_message));
+    }
+
+    let acquire_start = Instant::now();
+    match tokio::time::timeout(remaining, limiter.acquire()).await {
+        Ok(()) => Ok(acquire_start.elapsed().as_millis() as u64),
+        Err(_) => Err(budget_timeout(
+            started_at,
+            "rate-limit acquire timed out (budget exhausted)",
+        )),
+    }
+}
+
+fn budget_timeout(started_at: Instant, message: &str) -> TradingError {
+    TradingError::NetworkTimeout {
+        elapsed: started_at.elapsed(),
+        message: message.to_owned(),
+    }
+}
+
+fn attempt_timeout_error(
+    started_at: Instant,
+    agent: &LlmAgent,
+    attempt: u32,
+    operation: &str,
+) -> TradingError {
+    TradingError::NetworkTimeout {
+        elapsed: started_at.elapsed(),
+        message: format!(
+            "{operation} timed out on attempt {attempt} for model {}",
+            agent.model_id()
+        ),
+    }
+}
+
 /// Classify whether a `PromptError` is likely transient (worth retrying).
 ///
 /// Rate-limit and HTTP transport errors are considered transient.
 /// Authentication, schema, and tool errors are permanent.
+#[cfg(test)]
 fn is_transient_error(err: &PromptError) -> bool {
+    transient_prompt_error_summary(err).is_some()
+}
+
+fn transient_prompt_error_summary(err: &PromptError) -> Option<String> {
     match err {
         PromptError::CompletionError(ce) => {
-            let msg = ce.to_string().to_lowercase();
-            // Rate-limit indicators from various providers
-            msg.contains("rate limit")
-                || msg.contains("429")
-                || msg.contains("too many requests")
-                // Transient transport / server errors
-                || msg.contains("timeout")
-                || msg.contains("connection")
-                || msg.contains("500")
-                || msg.contains("502")
-                || msg.contains("503")
-                || msg.contains("504")
+            let message = ce.to_string();
+            is_transient_message(&message).then(|| sanitize_error_summary(&message))
         }
         // Tool errors and cancellations are not transient
         PromptError::ToolError(_)
         | PromptError::ToolServerError(_)
         | PromptError::MaxTurnsError { .. }
-        | PromptError::PromptCancelled { .. } => false,
+        | PromptError::PromptCancelled { .. } => None,
     }
+}
+
+fn is_transient_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+
+    // Rate-limit indicators from various providers
+    message.contains("rate limit")
+        || message.contains("429")
+        || message.contains("too many requests")
+        // Transient transport / server errors
+        || message.contains("timeout")
+        || message.contains("connection")
+        || message.contains("500")
+        || message.contains("502")
+        || message.contains("503")
+        || message.contains("504")
 }
 
 fn should_retry_typed_error(err: &TradingError) -> bool {
@@ -615,18 +528,7 @@ fn should_retry_typed_error(err: &TradingError) -> bool {
         // prompt to the same model is unlikely to produce a valid response on retry,
         // and retrying wastes token budget. Fail fast on schema errors.
         TradingError::SchemaViolation { .. } => false,
-        TradingError::Rig(message) => {
-            let msg = message.to_ascii_lowercase();
-            msg.contains("rate limit")
-                || msg.contains("429")
-                || msg.contains("too many requests")
-                || msg.contains("timeout")
-                || msg.contains("connection")
-                || msg.contains("500")
-                || msg.contains("502")
-                || msg.contains("503")
-                || msg.contains("504")
-        }
+        TradingError::Rig(message) => is_transient_message(message),
         TradingError::AnalystError { .. } | TradingError::Config(_) | TradingError::Storage(_) => {
             false
         }
@@ -634,15 +536,6 @@ fn should_retry_typed_error(err: &TradingError) -> bool {
         // so retrying the typed prompt won't help.
         TradingError::GraphFlow { .. } => false,
     }
-}
-
-fn total_request_budget(timeout: Duration, policy: &RetryPolicy) -> Duration {
-    let attempts = policy.max_retries.saturating_add(1);
-    let base_budget = timeout.saturating_mul(attempts);
-    let backoff_budget = (0..policy.max_retries).fold(Duration::ZERO, |acc, attempt| {
-        acc.saturating_add(policy.delay_for_attempt(attempt))
-    });
-    base_budget.saturating_add(backoff_budget)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -653,9 +546,10 @@ fn total_request_budget(timeout: Duration, policy: &RetryPolicy) -> Duration {
 mod tests {
     use super::*;
     use crate::error::RetryPolicy;
+    use crate::state::{TradeAction, TradeProposal};
+    use rig::OneOrMany;
     use rig::completion::Message;
     use rig::message::UserContent;
-    use rig::OneOrMany;
 
     use super::super::agent::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
 
@@ -719,7 +613,7 @@ mod tests {
             max_retries: 2,
             base_delay: Duration::from_millis(100),
         };
-        let budget = total_request_budget(Duration::from_secs(1), &policy);
+        let budget = policy.total_budget(Duration::from_secs(1));
         assert_eq!(budget, Duration::from_millis(3300));
     }
 
@@ -745,6 +639,27 @@ mod tests {
         assert!(should_retry_typed_error(&err));
     }
 
+    #[test]
+    fn rig_timeout_message_is_retryable_for_typed_prompts() {
+        let err =
+            TradingError::Rig("provider=openai model=o3 summary=connection timeout".to_owned());
+        assert!(should_retry_typed_error(&err));
+    }
+
+    #[test]
+    fn rig_auth_message_is_not_retryable_for_typed_prompts() {
+        let err = TradingError::Rig("provider=openai model=o3 summary=invalid api key".to_owned());
+        assert!(!should_retry_typed_error(&err));
+    }
+
+    #[test]
+    fn rate_limit_exceeded_is_retryable_for_typed_prompts() {
+        let err = TradingError::RateLimitExceeded {
+            provider: "openai".to_owned(),
+        };
+        assert!(should_retry_typed_error(&err));
+    }
+
     // ── Integration: chat_with_retry_details ─────────────────────────────
 
     #[tokio::test]
@@ -754,9 +669,7 @@ mod tests {
             vec![],
             vec![
                 MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
-                    rig::completion::CompletionError::ResponseError(
-                        "rate limit 429".to_owned(),
-                    ),
+                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
                 )),
                 MockChatOutcome::Ok(mock_prompt_response(
                     "Recovered response",
@@ -793,5 +706,339 @@ mod tests {
         assert_eq!(response.result.usage.output_tokens, 5);
         assert_eq!(history.len(), 3);
         assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
+    }
+
+    #[tokio::test]
+    async fn chat_with_retry_details_truncates_partial_history_on_final_permanent_error() {
+        let (agent, controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![
+                MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
+                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
+                )),
+                MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
+                    rig::completion::CompletionError::ProviderError("invalid API key".to_owned()),
+                )),
+            ],
+        );
+
+        let mut history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("initial context")),
+        }];
+
+        let err = chat_with_retry_details_budget(
+            &agent,
+            "next prompt",
+            &mut history,
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            TradingError::Rig(message) => assert!(message.contains("invalid API key")),
+            other => panic!("expected TradingError::Rig, got {other:?}"),
+        }
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
+    }
+
+    #[tokio::test]
+    async fn chat_with_retry_retries_without_accumulating_history() {
+        let (agent, controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![
+                MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
+                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
+                )),
+                MockChatOutcome::Ok(mock_prompt_response(
+                    "Recovered response",
+                    rig::completion::Usage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        total_tokens: 15,
+                        cached_input_tokens: 0,
+                    },
+                )),
+            ],
+        );
+
+        let history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("initial context")),
+        }];
+
+        let response = chat_with_retry_budget(
+            &agent,
+            "next prompt",
+            &history,
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.result, "Recovered response");
+        assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
+        assert_eq!(controller.observed_history_ptrs().len(), 2);
+        assert_eq!(
+            controller.observed_history_ptrs()[0],
+            controller.observed_history_ptrs()[1],
+            "chat retries should reuse the same history buffer across attempts"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_retries_transient_error_once() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![
+                Err(PromptError::CompletionError(
+                    rig::completion::CompletionError::ResponseError(
+                        "HTTP 429 Too Many Requests".to_owned(),
+                    ),
+                )),
+                Ok(mock_prompt_response(
+                    "Recovered response",
+                    rig::completion::Usage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        total_tokens: 15,
+                        cached_input_tokens: 0,
+                    },
+                )),
+            ],
+            vec![],
+        );
+
+        let response = prompt_with_retry_budget(
+            &agent,
+            "next prompt",
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.result, "Recovered response");
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_details_public_entrypoint_returns_usage_and_rate_limit_wait() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![Ok(mock_prompt_response(
+                "Detailed response",
+                rig::completion::Usage {
+                    input_tokens: 7,
+                    output_tokens: 3,
+                    total_tokens: 10,
+                    cached_input_tokens: 0,
+                },
+            ))],
+            vec![],
+        );
+
+        let response = prompt_with_retry_details(
+            &agent,
+            "next prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 0,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.result.output, "Detailed response");
+        assert_eq!(response.result.usage.total_tokens, 10);
+        assert_eq!(response.rate_limit_wait_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_public_entrypoint_maps_permanent_errors_without_retry() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![Err(PromptError::CompletionError(
+                rig::completion::CompletionError::ProviderError("invalid API key".to_owned()),
+            ))],
+            vec![],
+        );
+
+        let err = prompt_with_retry(
+            &agent,
+            "next prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 3,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            TradingError::Rig(message) => {
+                assert!(message.contains("provider=openai"));
+                assert!(message.contains("model=o3"));
+                assert!(message.contains("invalid API key"));
+            }
+            other => panic!("expected TradingError::Rig, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_public_entrypoint_returns_attempt_timeout_after_budget_exhaustion() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.set_prompt_delay(Duration::from_millis(25));
+
+        let err = prompt_with_retry(
+            &agent,
+            "next prompt",
+            Duration::from_millis(5),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            TradingError::NetworkTimeout { message, .. } => {
+                assert!(message.contains("prompt timed out on attempt 1"));
+                assert!(message.contains("model o3"));
+            }
+            other => panic!("expected TradingError::NetworkTimeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_public_entrypoint_surfaces_retry_budget_exhaustion_before_next_attempt()
+     {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![Err(PromptError::CompletionError(
+                rig::completion::CompletionError::ResponseError(
+                    "HTTP 429 Too Many Requests".to_owned(),
+                ),
+            ))],
+            vec![],
+        );
+        agent.set_prompt_delay(Duration::from_millis(18));
+
+        let err = prompt_with_retry_budget(
+            &agent,
+            "next prompt",
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(5),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            TradingError::NetworkTimeout { message, .. } => {
+                assert!(message.contains("prompt retry budget exhausted before next attempt"));
+            }
+            other => panic!("expected TradingError::NetworkTimeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_public_entrypoint_retries_transient_rig_errors() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_error(TradingError::Rig(
+            "provider=openai model=o3 summary=connection timeout".to_owned(),
+        ));
+        agent.push_typed_ok(rig::agent::TypedPromptResponse::new(
+            TradeProposal {
+                action: TradeAction::Buy,
+                target_price: 150.0,
+                stop_loss: 140.0,
+                confidence: 0.7,
+                rationale: "Recovered after transient timeout".to_owned(),
+            },
+            rig::completion::Usage {
+                input_tokens: 12,
+                output_tokens: 8,
+                total_tokens: 20,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let outcome = prompt_typed_with_retry::<TradeProposal>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.result.output.action, TradeAction::Buy);
+        assert_eq!(outcome.result.usage.total_tokens, 20);
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_public_entrypoint_does_not_retry_schema_violations() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_error(TradingError::SchemaViolation {
+            message: "provider=openai model=o3: structured output could not be parsed".to_owned(),
+        });
+        agent.push_typed_ok(rig::agent::TypedPromptResponse::new(
+            TradeProposal {
+                action: TradeAction::Buy,
+                target_price: 150.0,
+                stop_loss: 140.0,
+                confidence: 0.7,
+                rationale: "Should not be reached".to_owned(),
+            },
+            rig::completion::Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+                total_tokens: 2,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let err = prompt_typed_with_retry::<TradeProposal>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
+        assert_eq!(agent.typed_attempts(), 1);
     }
 }
