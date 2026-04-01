@@ -1,4 +1,5 @@
 use chrono::Local;
+use figlet_rs::Toilet;
 use scorpio_analyst::config::Config;
 use scorpio_analyst::data::{FinnhubClient, YFinanceClient};
 use scorpio_analyst::observability::init_tracing;
@@ -12,6 +13,12 @@ use scorpio_analyst::workflow::{SnapshotStore, TradingPipeline};
 
 fn main() {
     init_tracing();
+
+    if let Ok(font) = Toilet::mono12() {
+        if let Some(figure) = font.convert("Scorpio Analyst") {
+            println!("{}", figure.as_str());
+        }
+    }
 
     match Config::load() {
         Ok(cfg) => {
