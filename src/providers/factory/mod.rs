@@ -13,11 +13,15 @@
 //! | [`client`] | [`CompletionModelHandle`], [`create_completion_model`], [`preflight_copilot_if_configured`] |
 //! | [`agent`]  | [`LlmAgent`], [`build_agent`], [`build_agent_with_tools`], [`prompt_typed`], mock infrastructure |
 //! | [`retry`]  | [`RetryOutcome`], all retry/budget loop functions |
+//! | [`text_retry`] | [`prompt_text_with_retry`] — tool-enabled text prompt with retry |
 
 mod agent;
+#[cfg(test)]
+mod agent_test_support;
 mod client;
 mod error;
 mod retry;
+mod text_retry;
 
 // ── client submodule ─────────────────────────────────────────────────────────
 
@@ -33,6 +37,10 @@ pub use retry::{
     RetryOutcome, chat_with_retry, chat_with_retry_details, prompt_typed_with_retry,
     prompt_with_retry, prompt_with_retry_details,
 };
+
+// ── text_retry submodule ─────────────────────────────────────────────────────
+
+pub use text_retry::prompt_text_with_retry;
 
 pub(crate) use error::sanitize_error_summary;
 

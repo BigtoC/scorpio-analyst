@@ -89,11 +89,16 @@ pub(crate) struct MockLlmAgent {
     prompt_results: Arc<Mutex<VecDeque<Result<PromptResponse, PromptError>>>>,
     chat_results: Arc<Mutex<VecDeque<MockChatOutcome>>>,
     typed_results: Arc<Mutex<VecDeque<Result<Box<dyn std::any::Any + Send>, TradingError>>>>,
+    text_turn_results: Arc<Mutex<VecDeque<Result<PromptResponse, TradingError>>>>,
     observed_prompts: Arc<Mutex<Vec<String>>>,
     observed_history_lengths: Arc<Mutex<Vec<usize>>>,
     observed_history_ptrs: Arc<Mutex<Vec<usize>>>,
+    observed_max_turns: Arc<Mutex<Vec<usize>>>,
     prompt_delay: Arc<Mutex<Duration>>,
+    text_turn_delay: Arc<Mutex<Duration>>,
     typed_attempts: Arc<Mutex<usize>>,
+    prompt_attempts: Arc<Mutex<usize>>,
+    text_turn_attempts: Arc<Mutex<usize>>,
 }
 
 #[cfg(test)]
@@ -138,11 +143,16 @@ pub(crate) fn mock_llm_agent(
         prompt_results: Arc::new(Mutex::new(prompt_results.into())),
         chat_results: Arc::new(Mutex::new(chat_results.into())),
         typed_results: Arc::new(Mutex::new(VecDeque::new())),
+        text_turn_results: Arc::new(Mutex::new(VecDeque::new())),
         observed_prompts: Arc::clone(&observed_prompts),
         observed_history_lengths: Arc::clone(&observed_history_lengths),
         observed_history_ptrs: Arc::clone(&observed_history_ptrs),
+        observed_max_turns: Arc::new(Mutex::new(Vec::new())),
         prompt_delay: Arc::new(Mutex::new(Duration::ZERO)),
+        text_turn_delay: Arc::new(Mutex::new(Duration::ZERO)),
         typed_attempts: Arc::new(Mutex::new(0)),
+        prompt_attempts: Arc::new(Mutex::new(0)),
+        text_turn_attempts: Arc::new(Mutex::new(0)),
     };
 
     (
@@ -222,6 +232,55 @@ impl LlmAgent {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn prompt_attempts(&self) -> usize {
+        match &self.inner {
+            LlmAgentInner::Mock(agent) => *agent.prompt_attempts.lock().unwrap(),
+            _ => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn text_turn_attempts(&self) -> usize {
+        match &self.inner {
+            LlmAgentInner::Mock(agent) => *agent.text_turn_attempts.lock().unwrap(),
+            _ => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed_max_turns(&self) -> Vec<usize> {
+        match &self.inner {
+            LlmAgentInner::Mock(agent) => agent.observed_max_turns.lock().unwrap().clone(),
+            _ => vec![],
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_text_turn_delay(&self, delay: Duration) {
+        if let LlmAgentInner::Mock(agent) = &self.inner {
+            *agent.text_turn_delay.lock().unwrap() = delay;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_text_turn_error(&self, err: TradingError) {
+        if let LlmAgentInner::Mock(agent) = &self.inner {
+            agent.text_turn_results.lock().unwrap().push_back(Err(err));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_text_turn_ok(&self, response: PromptResponse) {
+        if let LlmAgentInner::Mock(agent) = &self.inner {
+            agent
+                .text_turn_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(response));
+        }
+    }
+
     /// Send a one-shot prompt and return the response text.
     pub async fn prompt(&self, prompt: &str) -> Result<String, PromptError> {
         dispatch_llm_agent!(
@@ -267,6 +326,43 @@ impl LlmAgent {
             mock = |mock_agent| mock_agent
                 .prompt_typed_details::<T>(prompt, max_turns)
                 .await
+        )
+    }
+
+    /// Send a tool-enabled text prompt and return text plus aggregated usage details.
+    ///
+    /// Unlike [`prompt_details`] (which is a one-shot call without a tool-turn loop),
+    /// this method runs the agent's full multi-turn loop up to `max_turns` so that
+    /// tool calls embedded in the prompt are honoured.  The final text output and
+    /// provider-reported usage are returned as a [`PromptResponse`].
+    ///
+    /// This is the production path used by [`super::text_retry::prompt_text_with_retry`].
+    pub async fn prompt_text_details(
+        &self,
+        prompt: &str,
+        max_turns: usize,
+    ) -> Result<PromptResponse, TradingError> {
+        let map_err = |err| {
+            super::error::map_prompt_error_with_context(
+                self.provider_name(),
+                self.model_id(),
+                err,
+            )
+        };
+
+        // Use PromptRequest with the multi-turn loop to honour tool calls, returning
+        // the raw text output and usage without a structured-output parse step.
+        dispatch_llm_agent!(
+            &self.inner,
+            |agent| {
+                use rig::agent::PromptRequest;
+                PromptRequest::from_agent(agent, prompt)
+                    .max_turns(max_turns)
+                    .extended_details()
+                    .await
+                    .map_err(map_err)
+            },
+            mock = |mock_agent| mock_agent.prompt_text_details(prompt, max_turns).await
         )
     }
 
@@ -321,6 +417,7 @@ impl MockLlmAgent {
             .lock()
             .unwrap()
             .push(prompt.to_owned());
+        *self.prompt_attempts.lock().unwrap() += 1;
         let delay = *self.prompt_delay.lock().unwrap();
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
@@ -340,6 +437,38 @@ impl MockLlmAgent {
                     },
                 ))
             })
+    }
+
+    async fn prompt_text_details(
+        &self,
+        prompt: &str,
+        max_turns: usize,
+    ) -> Result<PromptResponse, TradingError> {
+        self.observed_prompts
+            .lock()
+            .unwrap()
+            .push(prompt.to_owned());
+        self.observed_max_turns.lock().unwrap().push(max_turns);
+        *self.text_turn_attempts.lock().unwrap() += 1;
+
+        let delay = *self.text_turn_delay.lock().unwrap();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+
+        let next = self.text_turn_results.lock().unwrap().pop_front();
+        match next {
+            Some(result) => result,
+            None => Ok(mock_prompt_response(
+                "",
+                rig::completion::Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 0,
+                    cached_input_tokens: 0,
+                },
+            )),
+        }
     }
 
     async fn chat_details(

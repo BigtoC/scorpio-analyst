@@ -396,9 +396,9 @@ where
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-struct AttemptBudget {
-    timeout: Duration,
-    rate_limit_wait_ms: u64,
+pub(super) struct AttemptBudget {
+    pub(super) timeout: Duration,
+    pub(super) rate_limit_wait_ms: u64,
 }
 
 async fn prepare_attempt(
@@ -489,6 +489,37 @@ fn attempt_timeout_error(
 #[cfg(test)]
 fn is_transient_error(err: &PromptError) -> bool {
     transient_prompt_error_summary(err).is_some()
+}
+
+/// Shared transient-message check exposed to sibling submodules (e.g. `text_retry`).
+pub(super) fn is_transient_message_pub(message: &str) -> bool {
+    is_transient_message(message)
+}
+
+/// Shared attempt-preparation logic exposed to sibling submodules (e.g. `text_retry`).
+///
+/// Uses fixed log messages appropriate for the "text prompt" operation.
+pub(super) async fn prepare_attempt_text(
+    agent: &LlmAgent,
+    started_at: Instant,
+    timeout: Duration,
+    total_budget: Duration,
+    policy: &RetryPolicy,
+    attempt: u32,
+) -> Result<AttemptBudget, TradingError> {
+    prepare_attempt(
+        agent,
+        started_at,
+        timeout,
+        total_budget,
+        policy,
+        attempt,
+        "retrying text prompt after transient error",
+        "text prompt retry budget exhausted before next attempt",
+        "text prompt budget exhausted before rate-limit acquire",
+        "text prompt retry budget exhausted",
+    )
+    .await
 }
 
 fn transient_prompt_error_summary(err: &PromptError) -> Option<String> {
