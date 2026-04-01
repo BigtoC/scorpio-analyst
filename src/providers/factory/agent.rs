@@ -337,7 +337,7 @@ impl LlmAgent {
     /// provider-reported usage are returned as a [`PromptResponse`].
     ///
     /// This is the production path used by [`super::text_retry::prompt_text_with_retry`].
-    pub async fn prompt_text_details(
+    pub(crate) async fn prompt_text_details(
         &self,
         prompt: &str,
         max_turns: usize,

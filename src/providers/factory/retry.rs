@@ -132,10 +132,12 @@ where
             total_budget,
             policy,
             attempt,
-            "retrying prompt after transient error",
-            "prompt retry budget exhausted before next attempt",
-            "prompt retry budget exhausted before rate-limit acquire",
-            "prompt retry budget exhausted",
+            &RetryMessages {
+                retrying: "retrying prompt after transient error",
+                retry_budget: "prompt retry budget exhausted before next attempt",
+                acquire_budget: "prompt retry budget exhausted before rate-limit acquire",
+                exhausted: "prompt retry budget exhausted",
+            },
         )
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
@@ -148,11 +150,11 @@ where
                 });
             }
             Ok(Err(err)) => {
-                if attempt < policy.max_retries {
-                    if let Some(error) = transient_prompt_error_summary(&err) {
-                        warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient prompt error, will retry");
-                        continue;
-                    }
+                if attempt < policy.max_retries
+                    && let Some(error) = transient_prompt_error_summary(&err)
+                {
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient prompt error, will retry");
+                    continue;
                 }
                 return Err(map_prompt_error_with_context(
                     agent.provider_name(),
@@ -272,10 +274,12 @@ pub(crate) async fn chat_with_retry_details_budget(
             total_budget,
             policy,
             attempt,
-            "retrying chat-details after transient error",
-            "chat-details retry budget exhausted before next attempt",
-            "chat-details budget exhausted before rate-limit acquire",
-            "chat-details retry budget exhausted",
+            &RetryMessages {
+                retrying: "retrying chat-details after transient error",
+                retry_budget: "chat-details retry budget exhausted before next attempt",
+                acquire_budget: "chat-details budget exhausted before rate-limit acquire",
+                exhausted: "chat-details retry budget exhausted",
+            },
         )
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
@@ -295,11 +299,11 @@ pub(crate) async fn chat_with_retry_details_budget(
             Ok(Err(err)) => {
                 // Restore caller-owned history on any failed attempt before retrying or returning.
                 chat_history.truncate(initial_len);
-                if attempt < policy.max_retries {
-                    if let Some(error) = transient_prompt_error_summary(&err) {
-                        warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient chat-details error, will retry");
-                        continue;
-                    }
+                if attempt < policy.max_retries
+                    && let Some(error) = transient_prompt_error_summary(&err)
+                {
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient chat-details error, will retry");
+                    continue;
                 }
                 return Err(map_prompt_error_with_context(
                     agent.provider_name(),
@@ -350,10 +354,12 @@ where
             total_budget,
             policy,
             attempt,
-            "retrying typed prompt after transient error",
-            "typed prompt retry budget exhausted before next attempt",
-            "typed prompt budget exhausted before rate-limit acquire",
-            "typed prompt retry budget exhausted",
+            &RetryMessages {
+                retrying: "retrying typed prompt after transient error",
+                retry_budget: "typed prompt retry budget exhausted before next attempt",
+                acquire_budget: "typed prompt budget exhausted before rate-limit acquire",
+                exhausted: "typed prompt retry budget exhausted",
+            },
         )
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
@@ -401,6 +407,14 @@ pub(super) struct AttemptBudget {
     pub(super) rate_limit_wait_ms: u64,
 }
 
+/// Log/error messages emitted by [`prepare_attempt`] for a given retry operation.
+struct RetryMessages {
+    retrying: &'static str,
+    retry_budget: &'static str,
+    acquire_budget: &'static str,
+    exhausted: &'static str,
+}
+
 async fn prepare_attempt(
     agent: &LlmAgent,
     started_at: Instant,
@@ -408,25 +422,22 @@ async fn prepare_attempt(
     total_budget: Duration,
     policy: &RetryPolicy,
     attempt: u32,
-    retrying_message: &str,
-    retry_budget_message: &str,
-    acquire_budget_message: &str,
-    exhausted_message: &str,
+    msgs: &RetryMessages,
 ) -> Result<AttemptBudget, TradingError> {
     if attempt > 0 {
         let delay = policy.delay_for_attempt(attempt - 1);
         if started_at.elapsed().saturating_add(delay) > total_budget {
-            return Err(budget_timeout(started_at, retry_budget_message));
+            return Err(budget_timeout(started_at, msgs.retry_budget));
         }
-        warn!(attempt, ?delay, "{retrying_message}");
+        warn!(attempt, ?delay, "{}", msgs.retrying);
         tokio::time::sleep(delay).await;
     }
 
     let rate_limit_wait_ms =
-        acquire_rate_limit_permit(agent, started_at, total_budget, acquire_budget_message).await?;
+        acquire_rate_limit_permit(agent, started_at, total_budget, msgs.acquire_budget).await?;
     let remaining_budget = total_budget.saturating_sub(started_at.elapsed());
     if remaining_budget.is_zero() {
-        return Err(budget_timeout(started_at, exhausted_message));
+        return Err(budget_timeout(started_at, msgs.exhausted));
     }
 
     Ok(AttemptBudget {
@@ -491,10 +502,7 @@ fn is_transient_error(err: &PromptError) -> bool {
     transient_prompt_error_summary(err).is_some()
 }
 
-/// Shared transient-message check exposed to sibling submodules (e.g. `text_retry`).
-pub(super) fn is_transient_message_pub(message: &str) -> bool {
-    is_transient_message(message)
-}
+
 
 /// Shared attempt-preparation logic exposed to sibling submodules (e.g. `text_retry`).
 ///
@@ -514,10 +522,12 @@ pub(super) async fn prepare_attempt_text(
         total_budget,
         policy,
         attempt,
-        "retrying text prompt after transient error",
-        "text prompt retry budget exhausted before next attempt",
-        "text prompt budget exhausted before rate-limit acquire",
-        "text prompt retry budget exhausted",
+        &RetryMessages {
+            retrying: "retrying text prompt after transient error",
+            retry_budget: "text prompt retry budget exhausted before next attempt",
+            acquire_budget: "text prompt budget exhausted before rate-limit acquire",
+            exhausted: "text prompt retry budget exhausted",
+        },
     )
     .await
 }
@@ -536,7 +546,7 @@ fn transient_prompt_error_summary(err: &PromptError) -> Option<String> {
     }
 }
 
-fn is_transient_message(message: &str) -> bool {
+pub(super) fn is_transient_message(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
 
     // Rate-limit indicators from various providers
@@ -552,7 +562,11 @@ fn is_transient_message(message: &str) -> bool {
         || message.contains("504")
 }
 
-fn should_retry_typed_error(err: &TradingError) -> bool {
+/// Shared retry predicate for `TradingError` variants, used by both typed and text retry paths.
+///
+/// Rate-limit and transient transport errors are retryable. Schema violations and
+/// permanent provider errors are not.
+pub(super) fn should_retry_trading_error(err: &TradingError) -> bool {
     match err {
         TradingError::NetworkTimeout { .. } | TradingError::RateLimitExceeded { .. } => true,
         // SchemaViolation is a permanent failure for a given LLM output — the same
@@ -567,6 +581,10 @@ fn should_retry_typed_error(err: &TradingError) -> bool {
         // so retrying the typed prompt won't help.
         TradingError::GraphFlow { .. } => false,
     }
+}
+
+fn should_retry_typed_error(err: &TradingError) -> bool {
+    should_retry_trading_error(err)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

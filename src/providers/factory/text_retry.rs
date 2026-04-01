@@ -16,7 +16,7 @@ use tracing::warn;
 use crate::error::{RetryPolicy, TradingError};
 
 use super::agent::LlmAgent;
-use super::retry::{RetryOutcome, prepare_attempt_text};
+use super::retry::{RetryOutcome, prepare_attempt_text, should_retry_trading_error};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -79,7 +79,7 @@ pub async fn prompt_text_with_retry(
             Err(_elapsed) => {
                 let err = text_timeout_error(started_at, agent, attempt);
                 if attempt < policy.max_retries {
-                    warn!(attempt, "text prompt timed out, will retry");
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), "text prompt timed out, will retry");
                     continue;
                 }
                 return Err(err);
@@ -95,15 +95,7 @@ pub async fn prompt_text_with_retry(
 // ────────────────────────────────────────────────────────────────────────────
 
 fn should_retry_text_error(err: &TradingError) -> bool {
-    match err {
-        TradingError::NetworkTimeout { .. } | TradingError::RateLimitExceeded { .. } => true,
-        TradingError::Rig(message) => super::retry::is_transient_message_pub(message),
-        TradingError::AnalystError { .. }
-        | TradingError::Config(_)
-        | TradingError::Storage(_)
-        | TradingError::SchemaViolation { .. }
-        | TradingError::GraphFlow { .. } => false,
-    }
+    should_retry_trading_error(err)
 }
 
 fn text_timeout_error(started_at: Instant, agent: &LlmAgent, attempt: u32) -> TradingError {
@@ -161,7 +153,7 @@ mod tests {
         };
         let (agent, _ctrl) = mock_llm_agent_with_provider("test-model", vec![], vec![]);
         // Response must be on the text_turn queue (not the one-shot prompt queue)
-        agent.push_text_turn_ok(PromptResponse::new("hello", usage.clone()));
+        agent.push_text_turn_ok(PromptResponse::new("hello", usage));
 
         let outcome = prompt_text_with_retry(
             &agent,
