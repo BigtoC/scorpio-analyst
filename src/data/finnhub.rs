@@ -12,6 +12,7 @@ use finnhub::models::news::NewsCategory;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use secrecy::ExposeSecret;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -626,6 +627,15 @@ pub struct SymbolArgs {
     pub symbol: String,
 }
 
+/// Args for Finnhub tools that take no parameters.
+///
+/// Accepts exactly `{}` from the LLM; rejects any extra keys
+/// (`#[serde(deny_unknown_fields)]`) and advertises
+/// `additionalProperties: false` in the JSON Schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyObjectArgs {}
+
 fn symbol_params() -> serde_json::Value {
     json!({
         "type": "object",
@@ -890,7 +900,7 @@ impl Tool for GetMarketNews {
     const NAME: &'static str = "get_market_news";
 
     type Error = TradingError;
-    type Args = ();
+    type Args = EmptyObjectArgs;
     type Output = NewsData;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -936,7 +946,7 @@ impl Tool for GetEconomicIndicators {
     const NAME: &'static str = "get_economic_indicators";
 
     type Error = TradingError;
-    type Args = ();
+    type Args = EmptyObjectArgs;
     type Output = Vec<MacroEvent>;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -1305,6 +1315,68 @@ mod tests {
         let result = sanitize_news_text(input, 200);
         assert!(!result.contains('\x01'));
         assert!(!result.contains('\x1F'));
+    }
+
+    // ── EmptyObjectArgs ───────────────────────────────────────────────────
+
+    #[test]
+    fn empty_object_args_accepts_empty_json_object() {
+        let parsed: EmptyObjectArgs = serde_json::from_str("{}").expect("{} should deserialize");
+        assert_eq!(parsed, EmptyObjectArgs {});
+    }
+
+    #[test]
+    fn empty_object_args_rejects_unexpected_properties() {
+        let err = serde_json::from_str::<EmptyObjectArgs>(r#"{"unexpected":1}"#).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[tokio::test]
+    async fn get_market_news_accepts_empty_object_args_at_tool_boundary() {
+        let tool = GetMarketNews { client: None };
+        let result = tool.call(EmptyObjectArgs {}).await;
+        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn get_economic_indicators_accepts_empty_object_args_at_tool_boundary() {
+        let tool = GetEconomicIndicators { client: None };
+        let result = tool.call(EmptyObjectArgs {}).await;
+        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn get_market_news_definition_advertises_empty_object_schema() {
+        let tool = GetMarketNews { client: None };
+        let def = tool.definition(String::new()).await;
+        assert_eq!(def.name, "get_market_news");
+        assert_eq!(def.parameters["type"], "object");
+        let props = &def.parameters["properties"];
+        assert!(
+            props.as_object().map(|o| o.is_empty()).unwrap_or(false),
+            "properties must be an empty object, got: {props}"
+        );
+        assert_eq!(
+            def.parameters["additionalProperties"], false,
+            "additionalProperties must be false"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_economic_indicators_definition_advertises_empty_object_schema() {
+        let tool = GetEconomicIndicators { client: None };
+        let def = tool.definition(String::new()).await;
+        assert_eq!(def.name, "get_economic_indicators");
+        assert_eq!(def.parameters["type"], "object");
+        let props = &def.parameters["properties"];
+        assert!(
+            props.as_object().map(|o| o.is_empty()).unwrap_or(false),
+            "properties must be an empty object, got: {props}"
+        );
+        assert_eq!(
+            def.parameters["additionalProperties"], false,
+            "additionalProperties must be false"
+        );
     }
 
     // ── keyword macro signal confidence ──────────────────────────────────
