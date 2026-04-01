@@ -21,6 +21,7 @@
 //! | [`OhlcvToolContext`] | Shared analysis-scoped OHLCV cache for technical tools |
 
 pub mod finnhub;
+pub mod fred;
 mod symbol;
 pub mod yfinance;
 
