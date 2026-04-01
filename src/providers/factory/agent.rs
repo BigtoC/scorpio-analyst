@@ -15,6 +15,9 @@ use std::{
 };
 
 #[cfg(test)]
+type TypedResultQueue = Arc<Mutex<VecDeque<Result<Box<dyn std::any::Any + Send>, TradingError>>>>;
+
+#[cfg(test)]
 use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
@@ -88,7 +91,7 @@ enum LlmAgentInner {
 pub(crate) struct MockLlmAgent {
     prompt_results: Arc<Mutex<VecDeque<Result<PromptResponse, PromptError>>>>,
     chat_results: Arc<Mutex<VecDeque<MockChatOutcome>>>,
-    typed_results: Arc<Mutex<VecDeque<Result<Box<dyn std::any::Any + Send>, TradingError>>>>,
+    typed_results: TypedResultQueue,
     text_turn_results: Arc<Mutex<VecDeque<Result<PromptResponse, TradingError>>>>,
     observed_prompts: Arc<Mutex<Vec<String>>>,
     observed_history_lengths: Arc<Mutex<Vec<usize>>>,
