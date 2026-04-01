@@ -3137,6 +3137,7 @@ dependencies = [
  "paft-money",
  "pretty_assertions",
  "proptest",
+ "reqwest 0.12.28",
  "rig-core",
  "rust_decimal",
  "schemars",
