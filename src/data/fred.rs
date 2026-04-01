@@ -7,8 +7,11 @@
 use std::time::Duration;
 
 use reqwest::Client;
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::{
     config::ApiConfig,
@@ -16,6 +19,8 @@ use crate::{
     rate_limit::SharedRateLimiter,
     state::{ImpactDirection, MacroEvent},
 };
+
+use super::finnhub::EmptyObjectArgs;
 
 /// Base URL for the FRED API series observations endpoint.
 const FRED_BASE_URL: &str = "https://api.stlouisfed.org/fred/series/observations";
@@ -139,6 +144,56 @@ impl FredClient {
         }
 
         Ok(events)
+    }
+}
+
+// ─── rig::tool::Tool wrapper ─────────────────────────────────────────────────
+
+/// `rig` tool: fetch a fixed macro-economic indicator snapshot from FRED.
+///
+/// Replaces the former Finnhub-backed `GetEconomicIndicators` tool. Uses
+/// the free FRED API to fetch the Federal Funds Rate and CPI data.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GetEconomicIndicators {
+    #[serde(skip)]
+    pub(crate) client: Option<FredClient>,
+}
+
+impl GetEconomicIndicators {
+    #[must_use]
+    pub fn new(client: FredClient) -> Self {
+        Self {
+            client: Some(client),
+        }
+    }
+}
+
+impl Tool for GetEconomicIndicators {
+    const NAME: &'static str = "get_economic_indicators";
+
+    type Error = TradingError;
+    type Args = EmptyObjectArgs;
+    type Output = Vec<MacroEvent>;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_owned(),
+            description: "Fetch macro-economic indicators (Federal Funds Rate and CPI) from FRED and summarize them as macro events.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let client = self.client.as_ref().ok_or_else(|| {
+            TradingError::Config(anyhow::anyhow!(
+                "FredClient not set on GetEconomicIndicators tool"
+            ))
+        })?;
+        client.get_economic_indicators().await
     }
 }
 
@@ -312,5 +367,39 @@ mod tests {
         let debug = format!("{:?}", client);
         assert!(debug.contains("FredClient"));
         assert!(debug.contains("test-fred"));
+    }
+
+    #[tokio::test]
+    async fn get_economic_indicators_tool_name() {
+        use rig::tool::Tool;
+        let tool = GetEconomicIndicators { client: None };
+        let def = tool.definition(String::new()).await;
+        assert_eq!(def.name, "get_economic_indicators");
+    }
+
+    #[tokio::test]
+    async fn get_economic_indicators_accepts_empty_object_args_at_tool_boundary() {
+        use rig::tool::Tool;
+        let tool = GetEconomicIndicators { client: None };
+        let result = tool.call(EmptyObjectArgs {}).await;
+        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn get_economic_indicators_definition_advertises_empty_object_schema() {
+        use rig::tool::Tool;
+        let tool = GetEconomicIndicators { client: None };
+        let def = tool.definition(String::new()).await;
+        assert_eq!(def.name, "get_economic_indicators");
+        assert_eq!(def.parameters["type"], "object");
+        let props = &def.parameters["properties"];
+        assert!(
+            props.as_object().map(|o| o.is_empty()).unwrap_or(false),
+            "properties must be an empty object, got: {props}"
+        );
+        assert_eq!(
+            def.parameters["additionalProperties"], false,
+            "additionalProperties must be false"
+        );
     }
 }
