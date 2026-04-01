@@ -151,7 +151,10 @@ where
             return Err(TradingError::SchemaViolation {
                 message: format!(
                     "{}: LLM returned empty response (model: {})",
-                    std::any::type_name::<T>().rsplit("::").next().unwrap_or("unknown"),
+                    std::any::type_name::<T>()
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or("unknown"),
                     agent.model_id(),
                 ),
             });
