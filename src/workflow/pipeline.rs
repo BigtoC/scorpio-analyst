@@ -255,7 +255,12 @@ impl TradingPipeline {
                     finnhub.clone(),
                     config.llm.clone(),
                 ),
-                NewsAnalystTask::new(quick_handle.clone(), finnhub.clone(), fred.clone(), config.llm.clone()),
+                NewsAnalystTask::new(
+                    quick_handle.clone(),
+                    finnhub.clone(),
+                    fred.clone(),
+                    config.llm.clone(),
+                ),
                 TechnicalAnalystTask::new(
                     quick_handle.clone(),
                     yfinance.clone(),

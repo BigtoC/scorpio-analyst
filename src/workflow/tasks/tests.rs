@@ -438,6 +438,7 @@ async fn news_analyst_invalid_cached_news_fails_closed() {
     let task = NewsAnalystTask::new(
         crate::providers::factory::CompletionModelHandle::for_test(),
         crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
         sample_llm_config(),
     );
     let ctx = context_with_invalid_cached_news().await;

@@ -22,8 +22,8 @@ use crate::{
     error::TradingError,
     rate_limit::SharedRateLimiter,
     state::{
-        FundamentalData, ImpactDirection, InsiderTransaction as OurInsiderTransaction,
-        NewsArticle, NewsData, TransactionType,
+        FundamentalData, ImpactDirection, InsiderTransaction as OurInsiderTransaction, NewsArticle,
+        NewsData, TransactionType,
     },
 };
 

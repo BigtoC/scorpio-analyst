@@ -297,14 +297,20 @@ mod tests {
 
     #[test]
     fn fred_from_config_returns_some_when_rps_nonzero() {
-        let cfg = RateLimitConfig { fred_rps: 5, ..Default::default() };
+        let cfg = RateLimitConfig {
+            fred_rps: 5,
+            ..Default::default()
+        };
         let limiter = SharedRateLimiter::fred_from_config(&cfg);
         assert!(limiter.is_some());
     }
 
     #[test]
     fn fred_from_config_returns_none_when_rps_zero() {
-        let cfg = RateLimitConfig { fred_rps: 0, ..Default::default() };
+        let cfg = RateLimitConfig {
+            fred_rps: 0,
+            ..Default::default()
+        };
         let limiter = SharedRateLimiter::fred_from_config(&cfg);
         assert!(limiter.is_none());
     }

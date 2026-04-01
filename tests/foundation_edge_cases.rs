@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use scorpio_analyst::config::{ApiConfig, Config};
-use scorpio_analyst::error::{check_analyst_degradation, RetryPolicy, TradingError};
+use scorpio_analyst::error::{RetryPolicy, TradingError, check_analyst_degradation};
 use secrecy::SecretString;
 
 // ── Secret redaction ───────────────────────────────────────────────

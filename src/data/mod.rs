@@ -27,8 +27,8 @@ mod symbol;
 pub mod yfinance;
 
 pub use finnhub::{
-    FinnhubClient, GetCachedNews, GetEarnings, GetFundamentals,
-    GetInsiderTransactions, GetMarketNews, GetNews, SymbolArgs,
+    FinnhubClient, GetCachedNews, GetEarnings, GetFundamentals, GetInsiderTransactions,
+    GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
 pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};

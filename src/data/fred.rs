@@ -82,10 +82,7 @@ impl FredClient {
     ///
     /// Returns `Ok(None)` when the series exists but the latest value is
     /// missing (reported as `"."`).  Returns `Err` on network/parse failures.
-    pub async fn get_series_latest(
-        &self,
-        series_id: &str,
-    ) -> Result<Option<f64>, TradingError> {
+    pub async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
         self.limiter.acquire().await;
 
         let resp = self
@@ -120,8 +117,7 @@ impl FredClient {
         let interest_fut = self.get_series_latest(SERIES_FEDFUNDS);
         let inflation_fut = self.get_series_latest(SERIES_CPALTT01);
 
-        let (interest_result, inflation_result) =
-            tokio::join!(interest_fut, inflation_fut);
+        let (interest_result, inflation_result) = tokio::join!(interest_fut, inflation_fut);
         let interest_value = interest_result?;
         let inflation_value = inflation_result?;
 
