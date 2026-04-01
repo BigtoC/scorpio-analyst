@@ -76,6 +76,16 @@ impl SharedRateLimiter {
         Some(Self::new("finnhub", cfg.finnhub_rps))
     }
 
+    /// Create a FRED rate limiter from `RateLimitConfig`.
+    ///
+    /// Returns `None` when `cfg.fred_rps == 0` (disabled).
+    pub fn fred_from_config(cfg: &RateLimitConfig) -> Option<Self> {
+        if cfg.fred_rps == 0 {
+            return None;
+        }
+        Some(Self::new("fred", cfg.fred_rps))
+    }
+
     /// Wait until a single permit becomes available. This is cancel-safe.
     pub async fn acquire(&self) {
         if let Some(inner) = &self.inner {
@@ -173,6 +183,7 @@ mod tests {
             copilot_rpm: 0, // disabled
             openrouter_rpm: 20,
             finnhub_rps: 30,
+            fred_rps: 2,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
 
@@ -210,6 +221,7 @@ mod tests {
             copilot_rpm: 0,
             openrouter_rpm: 0,
             finnhub_rps: 0,
+            fred_rps: 0,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenAI).is_some());
@@ -224,6 +236,7 @@ mod tests {
             copilot_rpm: 0,
             openrouter_rpm: 100,
             finnhub_rps: 0,
+            fred_rps: 0,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenRouter).is_some());
@@ -238,6 +251,7 @@ mod tests {
             copilot_rpm: 0,
             openrouter_rpm: 0,
             finnhub_rps: 0,
+            fred_rps: 0,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenAI).is_none());
@@ -259,6 +273,7 @@ mod tests {
             copilot_rpm: 0,
             openrouter_rpm: 0,
             finnhub_rps: 30,
+            fred_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_some());
@@ -274,6 +289,7 @@ mod tests {
             copilot_rpm: 0,
             openrouter_rpm: 0,
             finnhub_rps: 0,
+            fred_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_none());

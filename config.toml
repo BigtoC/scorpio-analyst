@@ -28,6 +28,7 @@ openrouter_rpm = 20  # Free-tier limit; paid accounts can increase this
 
 # Finnhub data API rate limit (requests per second).
 finnhub_rps = 30
+fred_rps = 2
 
 [storage]
 # Path to the SQLite snapshot database. Supports ~ and $HOME expansion.

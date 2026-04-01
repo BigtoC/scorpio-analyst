@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use secrecy::SecretString;
 use serde::{Deserialize, Deserializer};
 
@@ -100,6 +100,8 @@ pub struct ApiConfig {
     pub finnhub_api_key: Option<SecretString>,
     #[serde(skip)]
     pub openrouter_api_key: Option<SecretString>,
+    #[serde(skip)]
+    pub fred_api_key: Option<SecretString>,
 }
 
 /// Per-provider rate-limit settings.
@@ -127,6 +129,9 @@ pub struct RateLimitConfig {
     /// Finnhub requests per second (0 = disabled).
     #[serde(default = "default_finnhub_rps")]
     pub finnhub_rps: u32,
+    /// FRED requests per second (0 = disabled; free tier allows ~2 rps).
+    #[serde(default = "default_fred_rps")]
+    pub fred_rps: u32,
 }
 
 fn default_openai_rpm() -> u32 {
@@ -144,6 +149,9 @@ fn default_openrouter_rpm() -> u32 {
 fn default_finnhub_rps() -> u32 {
     30
 }
+fn default_fred_rps() -> u32 {
+    2
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -154,6 +162,7 @@ impl Default for RateLimitConfig {
             copilot_rpm: 0,
             openrouter_rpm: default_openrouter_rpm(),
             finnhub_rps: default_finnhub_rps(),
+            fred_rps: default_fred_rps(),
         }
     }
 }
@@ -217,6 +226,7 @@ impl std::fmt::Debug for ApiConfig {
                 "openrouter_api_key",
                 &secret_display(&self.openrouter_api_key),
             )
+            .field("fred_api_key", &secret_display(&self.fred_api_key))
             .finish()
     }
 }
@@ -263,6 +273,7 @@ impl Config {
         cfg.api.gemini_api_key = secret_from_env("SCORPIO_GEMINI_API_KEY");
         cfg.api.finnhub_api_key = secret_from_env("SCORPIO_FINNHUB_API_KEY");
         cfg.api.openrouter_api_key = secret_from_env("SCORPIO_OPENROUTER_API_KEY");
+        cfg.api.fred_api_key = secret_from_env("SCORPIO_FRED_API_KEY");
 
         cfg.validate()?;
         Ok(cfg)
@@ -357,6 +368,7 @@ mod tests {
             gemini_api_key: None,
             finnhub_api_key: None,
             openrouter_api_key: Some(SecretString::from("or-super-secret")),
+            fred_api_key: None,
         };
         let debug_output = format!("{api:?}");
         assert!(

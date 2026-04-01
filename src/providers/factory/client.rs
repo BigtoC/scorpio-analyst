@@ -634,6 +634,7 @@ mod tests {
             copilot_rpm: 0,
             openrouter_rpm: 0,
             finnhub_rps: 0,
+            fred_rps: 0,
         });
 
         let handle = create_completion_model(
