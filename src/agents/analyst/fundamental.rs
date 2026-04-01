@@ -17,11 +17,13 @@ use crate::{
     config::LlmConfig,
     data::{FinnhubClient, GetEarnings, GetFundamentals},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools},
     state::{AgentTokenUsage, FundamentalData},
 };
 
-use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
+use super::common::{
+    analyst_runtime_config, run_analyst_inference, usage_from_response, validate_summary_content,
+};
 
 const MAX_TOOL_TURNS: usize = 8;
 
@@ -54,7 +56,7 @@ Instructions:
 3. Populate `insider_transactions` only with actual records from tool output. If none are available, return `[]`.
 4. Keep `summary` short and useful for downstream agents. It should explain what matters, not restate every metric.
 5. Do not invent management guidance, free-cash-flow commentary, or any metric not present in the runtime schema.
-6. Return ONLY the single JSON object required by `FundamentalData`.
+6. Return exactly one JSON object required by `FundamentalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.";
 
@@ -131,26 +133,26 @@ impl FundamentalAnalyst {
             self.symbol, self.target_date
         );
 
-        let outcome = prompt_typed_with_retry::<FundamentalData>(
+        let outcome = run_analyst_inference(
             &agent,
             &prompt,
             self.timeout,
             &self.retry_policy,
             MAX_TOOL_TURNS,
+            parse_fundamental,
+            validate_fundamental,
         )
         .await?;
-
-        validate_fundamental(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "Fundamental Analyst",
             self.handle.model_id(),
-            outcome.result.usage,
+            outcome.usage,
             started_at,
             outcome.rate_limit_wait_ms,
         );
 
-        Ok((outcome.result.output, usage))
+        Ok((outcome.output, usage))
     }
 }
 
@@ -163,6 +165,16 @@ fn validate_fundamental(data: &FundamentalData) -> Result<(), TradingError> {
     validate_summary_content("FundamentalAnalyst", &data.summary)
 }
 
+/// Deserialize a JSON string into [`FundamentalData`], mapping errors to
+/// [`TradingError::SchemaViolation`].
+///
+/// Exposed for use as the `parse` hook in `run_analyst_inference`.
+pub(crate) fn parse_fundamental(json_str: &str) -> Result<FundamentalData, TradingError> {
+    serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
+        message: format!("FundamentalAnalyst: failed to parse LLM output: {e}"),
+    })
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -170,13 +182,11 @@ mod tests {
     use super::*;
     use crate::state::{FundamentalData, InsiderTransaction, TransactionType};
 
-    /// Parse a valid JSON string that matches `FundamentalData` schema.
-    fn parse_fundamental(json: &str) -> Result<FundamentalData, TradingError> {
-        serde_json::from_str(json)
-            .map_err(|e| TradingError::SchemaViolation {
-                message: format!("FundamentalAnalyst: failed to parse LLM output: {e}"),
-            })
-            .and_then(|data| validate_fundamental(&data).map(|()| data))
+    /// Parse and validate a JSON string — combines `parse_fundamental` + `validate_fundamental`
+    /// for test convenience.  Tests that need only structural parsing can call `parse_fundamental`
+    /// directly; tests that also exercise the semantic validation layer call this helper.
+    fn parse_and_validate(json: &str) -> Result<FundamentalData, TradingError> {
+        parse_fundamental(json).and_then(|data| validate_fundamental(&data).map(|()| data))
     }
 
     // ── Task 1.4: Correct FundamentalData extraction ─────────────────────
@@ -309,7 +319,7 @@ mod tests {
             "debt_to_equity": null, "gross_margin": null, "net_income": null,
             "insider_transactions": [], "summary": "   "
         }"#;
-        let result = parse_fundamental(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -421,5 +431,90 @@ mod tests {
             result.unwrap_err(),
             TradingError::SchemaViolation { .. }
         ));
+    }
+
+    // ── Task 3: Migrate to shared inference helper ────────────────────────
+
+    #[test]
+    fn fundamental_prompt_requires_exactly_one_json_object_response() {
+        assert!(
+            FUNDAMENTAL_SYSTEM_PROMPT.contains("exactly one JSON object"),
+            "FUNDAMENTAL_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+        );
+        assert!(
+            FUNDAMENTAL_SYSTEM_PROMPT.contains("no prose"),
+            "FUNDAMENTAL_SYSTEM_PROMPT must contain 'no prose'"
+        );
+        assert!(
+            FUNDAMENTAL_SYSTEM_PROMPT.contains("no markdown fences"),
+            "FUNDAMENTAL_SYSTEM_PROMPT must contain 'no markdown fences'"
+        );
+    }
+
+    #[test]
+    fn parse_fundamental_rejects_unknown_fields() {
+        let result = parse_fundamental(r#"{"unknown_field": 1}"#);
+        assert!(
+            matches!(result, Err(TradingError::SchemaViolation { .. })),
+            "parse_fundamental should return SchemaViolation for unknown fields"
+        );
+    }
+
+    #[tokio::test]
+    async fn fundamental_run_uses_shared_inference_helper_for_openrouter() {
+        use crate::providers::ProviderId;
+        use crate::providers::factory::agent_test_support;
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+        use super::super::common::run_analyst_inference;
+
+        let valid_json = r#"{
+            "revenue_growth_pct": 0.10,
+            "pe_ratio": 25.0,
+            "eps": 5.0,
+            "current_ratio": 1.2,
+            "debt_to_equity": 0.6,
+            "gross_margin": 0.40,
+            "net_income": 80000000000.0,
+            "insider_transactions": [],
+            "summary": "Solid growth with healthy margins."
+        }"#;
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new(
+            valid_json,
+            Usage {
+                input_tokens: 10,
+                output_tokens: 20,
+                total_tokens: 30,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "analyse AAPL",
+            std::time::Duration::from_millis(100),
+            &crate::error::RetryPolicy {
+                max_retries: 0,
+                base_delay: std::time::Duration::from_millis(1),
+            },
+            1,
+            parse_fundamental,
+            validate_fundamental,
+        )
+        .await
+        .expect("inference should succeed");
+
+        let _ = outcome.output;
+
+        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
     }
 }

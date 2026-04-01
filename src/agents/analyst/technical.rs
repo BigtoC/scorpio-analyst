@@ -17,11 +17,11 @@ use crate::{
         CalculateAllIndicators, CalculateAtr, CalculateBollingerBands, CalculateIndicatorByName,
         CalculateMacd, CalculateRsi,
     },
-    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools},
     state::{AgentTokenUsage, TechnicalData},
 };
 
-use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
+use super::common::{analyst_runtime_config, run_analyst_inference, usage_from_response, validate_summary_content};
 
 const MAX_TOOL_TURNS: usize = 10;
 
@@ -30,8 +30,8 @@ const TECHNICAL_SYSTEM_PROMPT: &str = "\
 You are the Technical Analyst for {ticker} as of {current_date}.
 Your job is to interpret tool-computed technical signals and return a `TechnicalData` JSON object.
 
-Use only the technical tools bound for the run. Current runtime tools may include:
-- `get_ohlcv`
+Use only the technical indicator tools bound for the run. Current runtime tools may include:
+- `get_ohlcv` — call get_ohlcv called at most once per run
 - `calculate_all_indicators`
 - `calculate_rsi`
 - `calculate_macd`
@@ -70,7 +70,7 @@ Instructions:
    `close_10_ema` is available, use it for reasoning only and fold the insight into `summary` rather than inventing new \
    JSON keys.
 5. Keep `summary` short and useful for the Trader and risk agents.
-6. Return ONLY the single JSON object required by `TechnicalData`.
+6. Return exactly one JSON object required by `TechnicalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.";
 
@@ -159,26 +159,26 @@ impl TechnicalAnalyst {
             self.symbol, start_date, self.target_date
         );
 
-        let outcome = prompt_typed_with_retry::<TechnicalData>(
+        let outcome = run_analyst_inference(
             &agent,
             &prompt,
             self.timeout,
             &self.retry_policy,
             MAX_TOOL_TURNS,
+            parse_technical,
+            validate_technical,
         )
         .await?;
-
-        validate_technical(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "Technical Analyst",
             self.handle.model_id(),
-            outcome.result.usage,
+            outcome.usage,
             started_at,
             outcome.rate_limit_wait_ms,
         );
 
-        Ok((outcome.result.output, usage))
+        Ok((outcome.output, usage))
     }
 }
 
@@ -197,6 +197,16 @@ fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
         });
     }
     Ok(())
+}
+
+/// Deserialize a JSON string into [`TechnicalData`], mapping errors to
+/// [`TradingError::SchemaViolation`].
+///
+/// Exposed for use as the `parse` hook in `run_analyst_inference`.
+pub(crate) fn parse_technical(json_str: &str) -> Result<TechnicalData, TradingError> {
+    serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
+        message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+    })
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -225,12 +235,11 @@ mod tests {
     use super::*;
     use crate::state::{MacdValues, TechnicalData};
 
-    fn parse_technical(json: &str) -> Result<TechnicalData, TradingError> {
-        serde_json::from_str(json)
-            .map_err(|e| TradingError::SchemaViolation {
-                message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-            })
-            .and_then(|data| validate_technical(&data).map(|()| data))
+    /// Parse and validate a JSON string — combines `parse_technical` + `validate_technical`
+    /// for test convenience. Tests that need only structural parsing can call `parse_technical`
+    /// directly; tests that also exercise the semantic validation layer call this helper.
+    fn parse_and_validate(json: &str) -> Result<TechnicalData, TradingError> {
+        parse_technical(json).and_then(|data| validate_technical(&data).map(|()| data))
     }
 
     // ── Task 4.4: Correct TechnicalData extraction ────────────────────────
@@ -257,7 +266,7 @@ mod tests {
             "summary": "Bullish momentum; RSI moderate, price above SMA50."
         }"#;
 
-        let data = parse_technical(json).expect("should parse");
+        let data = parse_and_validate(json).expect("should parse");
         assert!((data.rsi.unwrap() - 58.3).abs() < 1e-9);
         let macd = data.macd.as_ref().unwrap();
         assert!((macd.macd_line - 0.42).abs() < 1e-9);
@@ -303,7 +312,7 @@ mod tests {
             "summary": "Insufficient OHLCV history for indicator computation."
         }"#;
 
-        let data = parse_technical(json).expect("should parse all-null");
+        let data = parse_and_validate(json).expect("should parse all-null");
         assert!(data.rsi.is_none());
         assert!(data.macd.is_none());
         assert!(data.atr.is_none());
@@ -392,7 +401,7 @@ mod tests {
             "support_level": null, "resistance_level": null, "volume_avg": null,
             "summary": "invalid rsi"
         }"#;
-        let result = parse_technical(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -408,7 +417,7 @@ mod tests {
             "support_level": null, "resistance_level": null, "volume_avg": null,
             "summary": "invalid rsi"
         }"#;
-        let result = parse_technical(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -424,7 +433,7 @@ mod tests {
             "support_level": null, "resistance_level": null, "volume_avg": null,
             "summary": "   "
         }"#;
-        let result = parse_technical(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -471,7 +480,7 @@ mod tests {
             "summary": "boundary"
         }"#;
         assert!(
-            parse_technical(json).is_ok(),
+            parse_and_validate(json).is_ok(),
             "RSI = 0.0 must be accepted (inclusive lower bound)"
         );
     }
@@ -486,7 +495,7 @@ mod tests {
             "summary": "boundary"
         }"#;
         assert!(
-            parse_technical(json).is_ok(),
+            parse_and_validate(json).is_ok(),
             "RSI = 100.0 must be accepted (inclusive upper bound)"
         );
     }
@@ -508,6 +517,111 @@ mod tests {
             result.is_ok(),
             "the earliest parseable year should not overflow; got: {result:?}"
         );
+    }
+
+    // ── Task 6: Migrate to shared inference helper ────────────────────────
+
+    #[test]
+    fn technical_prompt_limits_get_ohlcv_to_one_call() {
+        assert!(
+            TECHNICAL_SYSTEM_PROMPT.contains("get_ohlcv"),
+            "TECHNICAL_SYSTEM_PROMPT must contain 'get_ohlcv'"
+        );
+        assert!(
+            TECHNICAL_SYSTEM_PROMPT.contains("called at most once"),
+            "TECHNICAL_SYSTEM_PROMPT must contain 'called at most once'"
+        );
+        assert!(
+            TECHNICAL_SYSTEM_PROMPT.contains("indicator tools"),
+            "TECHNICAL_SYSTEM_PROMPT must contain 'indicator tools'"
+        );
+    }
+
+    #[test]
+    fn technical_prompt_requires_exactly_one_json_object_response() {
+        assert!(
+            TECHNICAL_SYSTEM_PROMPT.contains("exactly one JSON object"),
+            "TECHNICAL_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+        );
+        assert!(
+            TECHNICAL_SYSTEM_PROMPT.contains("no prose"),
+            "TECHNICAL_SYSTEM_PROMPT must contain 'no prose'"
+        );
+        assert!(
+            TECHNICAL_SYSTEM_PROMPT.contains("no markdown fences"),
+            "TECHNICAL_SYSTEM_PROMPT must contain 'no markdown fences'"
+        );
+    }
+
+    #[test]
+    fn parse_technical_rejects_unknown_fields() {
+        let result = super::parse_technical(r#"{"unknown_field": 1}"#);
+        assert!(
+            matches!(result, Err(TradingError::SchemaViolation { .. })),
+            "parse_technical should return SchemaViolation for unknown fields"
+        );
+    }
+
+    #[tokio::test]
+    async fn technical_run_uses_shared_inference_helper_for_openrouter() {
+        use crate::providers::ProviderId;
+        use crate::providers::factory::agent_test_support;
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+        use super::super::common::run_analyst_inference;
+
+        let valid_json = r#"{
+            "rsi": 55.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "Moderate bullish momentum."
+        }"#;
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new(
+            valid_json,
+            Usage {
+                input_tokens: 10,
+                output_tokens: 20,
+                total_tokens: 30,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let outcome = run_analyst_inference::<TechnicalData, _, _>(
+            &agent,
+            "analyse AAPL technical",
+            std::time::Duration::from_millis(100),
+            &crate::error::RetryPolicy {
+                max_retries: 0,
+                base_delay: std::time::Duration::from_millis(1),
+            },
+            1,
+            super::parse_technical,
+            super::validate_technical,
+        )
+        .await
+        .expect("inference should succeed");
+
+        let _ = outcome.output;
+
+        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
     }
 
     // TC-16: MacdValues rejects extra fields (deny_unknown_fields)
