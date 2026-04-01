@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use scorpio_analyst::{
     config::{ApiConfig, Config, LlmConfig, TradingConfig},
-    data::{FinnhubClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     rate_limit::SharedRateLimiter,
     workflow::{SnapshotStore, TradingPipeline},
@@ -54,12 +54,14 @@ pub async fn make_pipeline(
     };
 
     let finnhub = FinnhubClient::for_test();
+    let fred = FredClient::for_test();
     let yfinance = YFinanceClient::new(SharedRateLimiter::new(limiter_name, 10));
     let handle = CompletionModelHandle::for_test();
 
     let pipeline = TradingPipeline::new(
         config,
         finnhub,
+        fred,
         yfinance,
         pipeline_store,
         handle.clone(),

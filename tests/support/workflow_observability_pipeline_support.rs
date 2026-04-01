@@ -7,7 +7,7 @@ pub use workflow_observability_collectors::{EventCollector, StructuredEventColle
 
 use scorpio_analyst::{
     config::{ApiConfig, Config, LlmConfig, TradingConfig},
-    data::{FinnhubClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     rate_limit::SharedRateLimiter,
     state::TradingState,
@@ -57,12 +57,14 @@ pub fn run_stubbed_pipeline_under_collector(collector: EventCollector, db_name: 
             let pipeline_store = SnapshotStore::new(Some(&db_path)).await.expect("store");
             let config = obs_test_config();
             let finnhub = FinnhubClient::for_test();
+            let fred = FredClient::for_test();
             let yfinance = YFinanceClient::new(SharedRateLimiter::new("obs-test", 10));
             let handle = CompletionModelHandle::for_test();
 
             let pipeline = TradingPipeline::new(
                 config,
                 finnhub,
+                fred,
                 yfinance,
                 pipeline_store,
                 handle.clone(),
@@ -96,12 +98,14 @@ pub fn run_stubbed_pipeline_under_structured_collector(
             let pipeline_store = SnapshotStore::new(Some(&db_path)).await.expect("store");
             let config = obs_test_config();
             let finnhub = FinnhubClient::for_test();
+            let fred = FredClient::for_test();
             let yfinance = YFinanceClient::new(SharedRateLimiter::new("obs-test", 10));
             let handle = CompletionModelHandle::for_test();
 
             let pipeline = TradingPipeline::new(
                 config,
                 finnhub,
+                fred,
                 yfinance,
                 pipeline_store,
                 handle.clone(),
