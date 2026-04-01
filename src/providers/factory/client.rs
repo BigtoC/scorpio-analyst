@@ -117,9 +117,6 @@ pub fn create_completion_model(
 ) -> Result<CompletionModelHandle, TradingError> {
     let provider = validate_provider_id(tier.provider_id(llm_config))?;
     let model_id = validate_model_id(tier.model_id(llm_config))?;
-    if provider == ProviderId::OpenRouter {
-        validate_openrouter_model_id(&model_id)?;
-    }
     let client = create_provider_client_for(provider, api_config, &model_id)?;
     let rate_limiter = rate_limiters.get(provider).cloned();
     info!(provider = provider.as_str(), model = model_id.as_str(), tier = %tier, "LLM completion model handle created");
@@ -318,32 +315,6 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
         ));
     }
     Ok(trimmed.to_owned())
-}
-
-/// Validate that an OpenRouter model ID looks like a real model slug.
-///
-/// OpenRouter models follow the `{org}/{model}` pattern, optionally with a
-/// `:free` or `:extended` variant suffix (e.g. `meta-llama/llama-3.3-70b-instruct:free`).
-/// Generic placeholders like `openrouter/free` or `openrouter/auto` are not valid
-/// model IDs and will time out or return errors from the OpenRouter API.
-fn validate_openrouter_model_id(model_id: &str) -> Result<(), TradingError> {
-    let base = model_id.split(':').next().unwrap_or(model_id);
-    match base.split_once('/') {
-        Some((org, model)) if !org.is_empty() && !model.is_empty() => {
-            if org.eq_ignore_ascii_case("openrouter") {
-                return Err(config_error(&format!(
-                    "invalid OpenRouter model ID \"{model_id}\": \
-                     \"openrouter/...\" is not a real model. Use the full model slug \
-                     from https://openrouter.ai/models (e.g. \"meta-llama/llama-3.3-70b-instruct:free\")"
-                )));
-            }
-            Ok(())
-        }
-        _ => Err(config_error(&format!(
-            "invalid OpenRouter model ID \"{model_id}\": expected format \"org/model\" \
-             (e.g. \"qwen/qwen3.6-plus-preview:free\")"
-        ))),
-    }
 }
 
 /// Convenience for creating `TradingError::Config` from a message.
