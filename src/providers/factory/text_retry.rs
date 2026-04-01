@@ -46,15 +46,8 @@ pub async fn prompt_text_with_retry(
     let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
-        let attempt_budget = prepare_attempt_text(
-            agent,
-            started_at,
-            timeout,
-            total_budget,
-            policy,
-            attempt,
-        )
-        .await?;
+        let attempt_budget =
+            prepare_attempt_text(agent, started_at, timeout, total_budget, policy, attempt).await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
         match tokio::time::timeout(
@@ -79,7 +72,12 @@ pub async fn prompt_text_with_retry(
             Err(_elapsed) => {
                 let err = text_timeout_error(started_at, agent, attempt);
                 if attempt < policy.max_retries {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), "text prompt timed out, will retry");
+                    warn!(
+                        attempt,
+                        provider = agent.provider_name(),
+                        model = agent.model_id(),
+                        "text prompt timed out, will retry"
+                    );
                     continue;
                 }
                 return Err(err);
@@ -152,7 +150,8 @@ mod tests {
             total_tokens: 8,
             cached_input_tokens: 0,
         };
-        let (agent, _ctrl) = mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, _ctrl) =
+            mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // Response must be on the text_turn queue (not the one-shot prompt queue)
         agent.push_text_turn_ok(PromptResponse::new("hello", usage));
 
@@ -177,7 +176,8 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_retries_transient_prompt_errors() {
-        let (agent, _ctrl) = mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, _ctrl) =
+            mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // First attempt: transient Rig error
         agent.push_text_turn_error(TradingError::Rig(
             "connection timeout on attempt 0".to_owned(),
@@ -211,7 +211,8 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_times_out_with_text_prompt_operation_name() {
-        let (agent, _ctrl) = mock_llm_agent_with_provider(ProviderId::OpenAI, "slow-model", vec![], vec![]);
+        let (agent, _ctrl) =
+            mock_llm_agent_with_provider(ProviderId::OpenAI, "slow-model", vec![], vec![]);
         // Delay every text_turn response by 100ms so it times out
         agent.set_text_turn_delay(Duration::from_millis(100));
 
@@ -244,7 +245,8 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_preserves_max_turns_for_tool_enabled_requests() {
-        let (agent, _ctrl) = mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, _ctrl) =
+            mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
         agent.push_text_turn_ok(PromptResponse::new("result", zero_usage()));
 
         // The important thing: max_turns=5 must reach the underlying agent
@@ -271,7 +273,8 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_uses_text_turn_agent_path_not_one_shot_prompt_details() {
-        let (agent, _ctrl) = mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, _ctrl) =
+            mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // Push a response on the text_turn queue (NOT the one-shot prompt queue)
         agent.push_text_turn_ok(PromptResponse::new("from text turn", zero_usage()));
 

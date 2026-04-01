@@ -849,7 +849,10 @@ mod tests {
 
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("does not exist"), "expected missing-file error in: {msg}");
+        assert!(
+            msg.contains("does not exist"),
+            "expected missing-file error in: {msg}"
+        );
         assert!(
             msg.contains("Install the Copilot CLI and set SCORPIO_COPILOT_CLI_PATH"),
             "expected actionable setup guidance in: {msg}"
@@ -906,7 +909,10 @@ mod tests {
             &ProviderRateLimiters::default(),
         );
 
-        assert!(handle.is_ok(), "expected executable Copilot path to be accepted");
+        assert!(
+            handle.is_ok(),
+            "expected executable Copilot path to be accepted"
+        );
     }
 
     #[tokio::test]

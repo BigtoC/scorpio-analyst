@@ -357,11 +357,7 @@ impl LlmAgent {
         max_turns: usize,
     ) -> Result<PromptResponse, TradingError> {
         let map_err = |err| {
-            super::error::map_prompt_error_with_context(
-                self.provider_name(),
-                self.model_id(),
-                err,
-            )
+            super::error::map_prompt_error_with_context(self.provider_name(), self.model_id(), err)
         };
 
         // Use PromptRequest with the multi-turn loop to honour tool calls, returning

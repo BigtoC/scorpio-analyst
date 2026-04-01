@@ -502,8 +502,6 @@ fn is_transient_error(err: &PromptError) -> bool {
     transient_prompt_error_summary(err).is_some()
 }
 
-
-
 /// Shared attempt-preparation logic exposed to sibling submodules (e.g. `text_retry`).
 ///
 /// Uses fixed log messages appropriate for the "text prompt" operation.
