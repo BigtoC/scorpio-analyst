@@ -14,10 +14,16 @@ use crate::{
     config::ApiConfig,
     error::TradingError,
     rate_limit::SharedRateLimiter,
+    state::{ImpactDirection, MacroEvent},
 };
 
 /// Base URL for the FRED API series observations endpoint.
 const FRED_BASE_URL: &str = "https://api.stlouisfed.org/fred/series/observations";
+
+/// FRED series ID for the Federal Funds Effective Rate.
+const SERIES_FEDFUNDS: &str = "FEDFUNDS";
+/// FRED series ID for the CPI: Total All Items for the US.
+const SERIES_CPALTT01: &str = "CPALTT01USM657N";
 
 /// Async client for the FRED (Federal Reserve Economic Data) API.
 ///
@@ -98,6 +104,42 @@ impl FredClient {
 
         Ok(resp.observations.first().and_then(|o| o.parse_value()))
     }
+
+    /// Fetch a small, fixed macro-economic snapshot from FRED.
+    ///
+    /// Replaces the former Finnhub `economic().data()` calls.  Fetches the
+    /// Federal Funds Rate (`FEDFUNDS`) and the CPI Total All Items for the US
+    /// (`CPALTT01USM657N`) concurrently, then classifies each into a
+    /// [`MacroEvent`] with an impact direction and confidence score.
+    pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
+        let interest_fut = self.get_series_latest(SERIES_FEDFUNDS);
+        let inflation_fut = self.get_series_latest(SERIES_CPALTT01);
+
+        let (interest_result, inflation_result) =
+            tokio::join!(interest_fut, inflation_fut);
+        let interest_value = interest_result?;
+        let inflation_value = inflation_result?;
+
+        let mut events = Vec::new();
+
+        if let Some(direction) = classify_interest_rate(interest_value) {
+            events.push(MacroEvent {
+                event: "Interest-rate policy shift".to_owned(),
+                impact_direction: direction,
+                confidence: 0.7,
+            });
+        }
+
+        if let Some(direction) = classify_inflation(inflation_value) {
+            events.push(MacroEvent {
+                event: "Inflation signal".to_owned(),
+                impact_direction: direction,
+                confidence: 0.7,
+            });
+        }
+
+        Ok(events)
+    }
 }
 
 /// Raw JSON response from the FRED `series/observations` endpoint.
@@ -151,9 +193,61 @@ fn map_fred_err(err: reqwest::Error) -> TradingError {
     }
 }
 
+/// Classify the latest interest rate value into an impact direction.
+fn classify_interest_rate(value: Option<f64>) -> Option<ImpactDirection> {
+    value.map(|v| {
+        if v > 3.0 {
+            ImpactDirection::Negative
+        } else {
+            ImpactDirection::Positive
+        }
+    })
+}
+
+/// Classify the latest inflation (CPI) value into an impact direction.
+fn classify_inflation(value: Option<f64>) -> Option<ImpactDirection> {
+    value.map(|v| {
+        if v > 3.0 {
+            ImpactDirection::Negative
+        } else {
+            ImpactDirection::Positive
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interest_rate_above_3_is_negative() {
+        let direction = classify_interest_rate(Some(4.5));
+        assert_eq!(direction, Some(ImpactDirection::Negative));
+    }
+
+    #[test]
+    fn interest_rate_at_or_below_3_is_positive() {
+        let direction = classify_interest_rate(Some(2.5));
+        assert_eq!(direction, Some(ImpactDirection::Positive));
+    }
+
+    #[test]
+    fn interest_rate_none_returns_none() {
+        let direction = classify_interest_rate(None);
+        assert!(direction.is_none());
+    }
+
+    #[test]
+    fn inflation_above_3_is_negative() {
+        let direction = classify_inflation(Some(5.0));
+        assert_eq!(direction, Some(ImpactDirection::Negative));
+    }
+
+    #[test]
+    fn inflation_at_or_below_3_is_positive() {
+        let direction = classify_inflation(Some(2.0));
+        assert_eq!(direction, Some(ImpactDirection::Positive));
+    }
 
     #[test]
     fn fred_client_new_without_key_returns_config_error() {
