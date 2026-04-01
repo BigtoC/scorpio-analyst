@@ -42,10 +42,10 @@ pub struct LlmConfig {
 
 /// Validate and normalize an LLM provider name during deserialization.
 ///
-/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, and `"copilot"` (case-insensitive,
-/// leading/trailing whitespace ignored). Returns a lower-case canonical form.
-/// Unknown values produce a `serde` deserialization error at config-load time,
-/// before any provider client is constructed.
+/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, `"copilot"`, and `"openrouter"`
+/// (case-insensitive, leading/trailing whitespace ignored). Returns a lower-case
+/// canonical form. Unknown values produce a `serde` deserialization error at
+/// config-load time, before any provider client is constructed.
 fn deserialize_provider_name<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
@@ -53,9 +53,9 @@ where
     let raw = String::deserialize(deserializer)?;
     let canonical = raw.trim().to_ascii_lowercase();
     match canonical.as_str() {
-        "openai" | "anthropic" | "gemini" | "copilot" => Ok(canonical),
+        "openai" | "anthropic" | "gemini" | "copilot" | "openrouter" => Ok(canonical),
         unknown => Err(serde::de::Error::custom(format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot)"
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter)"
         ))),
     }
 }
@@ -67,7 +67,7 @@ fn default_risk_rounds() -> u32 {
     2
 }
 fn default_agent_timeout() -> u64 {
-    30
+    300
 }
 fn default_retry_max_retries() -> u32 {
     3
@@ -98,6 +98,8 @@ pub struct ApiConfig {
     pub gemini_api_key: Option<SecretString>,
     #[serde(skip)]
     pub finnhub_api_key: Option<SecretString>,
+    #[serde(skip)]
+    pub openrouter_api_key: Option<SecretString>,
 }
 
 /// Per-provider rate-limit settings.
@@ -119,6 +121,9 @@ pub struct RateLimitConfig {
     /// GitHub Copilot requests per minute (0 = disabled; no documented limit).
     #[serde(default)]
     pub copilot_rpm: u32,
+    /// OpenRouter requests per minute (0 = disabled; free-tier default: 20 RPM).
+    #[serde(default = "default_openrouter_rpm")]
+    pub openrouter_rpm: u32,
     /// Finnhub requests per second (0 = disabled).
     #[serde(default = "default_finnhub_rps")]
     pub finnhub_rps: u32,
@@ -133,6 +138,9 @@ fn default_anthropic_rpm() -> u32 {
 fn default_gemini_rpm() -> u32 {
     500
 }
+fn default_openrouter_rpm() -> u32 {
+    20
+}
 fn default_finnhub_rps() -> u32 {
     30
 }
@@ -144,6 +152,7 @@ impl Default for RateLimitConfig {
             anthropic_rpm: default_anthropic_rpm(),
             gemini_rpm: default_gemini_rpm(),
             copilot_rpm: 0,
+            openrouter_rpm: default_openrouter_rpm(),
             finnhub_rps: default_finnhub_rps(),
         }
     }
@@ -204,6 +213,10 @@ impl std::fmt::Debug for ApiConfig {
             )
             .field("gemini_api_key", &secret_display(&self.gemini_api_key))
             .field("finnhub_api_key", &secret_display(&self.finnhub_api_key))
+            .field(
+                "openrouter_api_key",
+                &secret_display(&self.openrouter_api_key),
+            )
             .finish()
     }
 }
@@ -249,6 +262,7 @@ impl Config {
         cfg.api.anthropic_api_key = secret_from_env("SCORPIO_ANTHROPIC_API_KEY");
         cfg.api.gemini_api_key = secret_from_env("SCORPIO_GEMINI_API_KEY");
         cfg.api.finnhub_api_key = secret_from_env("SCORPIO_FINNHUB_API_KEY");
+        cfg.api.openrouter_api_key = secret_from_env("SCORPIO_OPENROUTER_API_KEY");
 
         cfg.validate()?;
         Ok(cfg)
@@ -262,16 +276,20 @@ impl Config {
             bail!("config validation: trading.asset_symbol must not be empty");
         }
         // Check that at least one LLM key is available
-        let has_key = self.api.openai_api_key.is_some()
-            || self.api.anthropic_api_key.is_some()
-            || self.api.gemini_api_key.is_some();
-        if !has_key {
+        if !self.has_any_llm_key() {
             tracing::warn!(
                 "no LLM provider API key found — set SCORPIO_OPENAI_API_KEY, \
-                 SCORPIO_ANTHROPIC_API_KEY, or SCORPIO_GEMINI_API_KEY"
+                 SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, or SCORPIO_OPENROUTER_API_KEY"
             );
         }
         Ok(())
+    }
+
+    fn has_any_llm_key(&self) -> bool {
+        self.api.openai_api_key.is_some()
+            || self.api.anthropic_api_key.is_some()
+            || self.api.gemini_api_key.is_some()
+            || self.api.openrouter_api_key.is_some()
     }
 }
 
@@ -282,6 +300,31 @@ fn secret_from_env(key: &str) -> Option<SecretString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
+
+    fn sample_config_with_api(api: ApiConfig) -> Config {
+        Config {
+            llm: LlmConfig {
+                quick_thinking_provider: "openai".to_owned(),
+                deep_thinking_provider: "openai".to_owned(),
+                quick_thinking_model: "gpt-4o-mini".to_owned(),
+                deep_thinking_model: "o3".to_owned(),
+                max_debate_rounds: 3,
+                max_risk_rounds: 2,
+                analyst_timeout_secs: 30,
+                retry_max_retries: 3,
+                retry_base_delay_ms: 500,
+            },
+            trading: TradingConfig {
+                asset_symbol: "AAPL".to_owned(),
+                backtest_start: None,
+                backtest_end: None,
+            },
+            api,
+            storage: StorageConfig::default(),
+            rate_limits: RateLimitConfig::default(),
+        }
+    }
 
     /// Serializes tests that mutate environment variables.
     /// `std::env::set_var` is not thread-safe; all tests touching env vars must
@@ -313,6 +356,7 @@ mod tests {
             anthropic_api_key: None,
             gemini_api_key: None,
             finnhub_api_key: None,
+            openrouter_api_key: Some(SecretString::from("or-super-secret")),
         };
         let debug_output = format!("{api:?}");
         assert!(
@@ -324,8 +368,16 @@ mod tests {
             "must not leak secret value"
         );
         assert!(
+            !debug_output.contains("or-super-secret"),
+            "must not leak openrouter secret value"
+        );
+        assert!(
             debug_output.contains("<not set>"),
             "should mark absent keys"
+        );
+        assert!(
+            debug_output.contains("openrouter_api_key"),
+            "debug output should include openrouter_api_key field"
         );
     }
 
@@ -345,6 +397,10 @@ mod tests {
         assert_eq!(cfg.rate_limits.anthropic_rpm, 500);
         assert_eq!(cfg.rate_limits.gemini_rpm, 500);
         assert_eq!(cfg.rate_limits.copilot_rpm, 0);
+        assert_eq!(
+            cfg.rate_limits.openrouter_rpm, 20,
+            "openrouter_rpm default should be 20"
+        );
     }
 
     #[test]
@@ -361,11 +417,15 @@ mod tests {
             msg.contains("badprovider"),
             "error message should include the offending value: {msg}"
         );
+        assert!(
+            msg.contains("openrouter"),
+            "error message should list openrouter among supported providers: {msg}"
+        );
     }
 
     #[test]
     fn deserialize_provider_name_accepts_valid() {
-        for name in &["openai", "anthropic", "gemini", "copilot"] {
+        for name in &["openai", "anthropic", "gemini", "copilot", "openrouter"] {
             let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
                 serde::de::value::Error,
             >::new(name));
@@ -382,6 +442,72 @@ mod tests {
             serde::de::value::Error,
         >::new("  OpenAI  "));
         assert_eq!(result.unwrap(), "openai");
+    }
+
+    #[test]
+    fn deserialize_provider_name_normalises_openrouter_case() {
+        let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
+            serde::de::value::Error,
+        >::new("  OpenRouter  "));
+        assert_eq!(result.unwrap(), "openrouter");
+    }
+
+    #[test]
+    fn load_from_reads_openrouter_api_key_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("SCORPIO_OPENROUTER_API_KEY").ok();
+        unsafe {
+            std::env::set_var("SCORPIO_OPENROUTER_API_KEY", "test-openrouter-key-from-env");
+        }
+
+        let result = Config::load_from("config.toml");
+
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("SCORPIO_OPENROUTER_API_KEY", value),
+                None => std::env::remove_var("SCORPIO_OPENROUTER_API_KEY"),
+            }
+        }
+
+        let cfg = result.expect("config should load with openrouter key from env");
+        assert_eq!(
+            cfg.api
+                .openrouter_api_key
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+            Some("test-openrouter-key-from-env")
+        );
+    }
+
+    #[test]
+    fn has_any_llm_key_counts_openrouter_key() {
+        let cfg = sample_config_with_api(ApiConfig {
+            openrouter_api_key: Some(SecretString::from("test-openrouter-key")),
+            ..ApiConfig::default()
+        });
+
+        assert!(cfg.has_any_llm_key());
+    }
+
+    #[test]
+    fn env_override_supports_openrouter_rate_limit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM").ok();
+        unsafe {
+            std::env::set_var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM", "40");
+        }
+
+        let result = Config::load_from("config.toml");
+
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM", value),
+                None => std::env::remove_var("SCORPIO__RATE_LIMITS__OPENROUTER_RPM"),
+            }
+        }
+
+        let cfg = result.expect("config should load with openrouter rpm override");
+        assert_eq!(cfg.rate_limits.openrouter_rpm, 40);
     }
 
     #[test]

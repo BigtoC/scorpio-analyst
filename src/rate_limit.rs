@@ -113,6 +113,7 @@ impl ProviderRateLimiters {
             (ProviderId::Anthropic, cfg.anthropic_rpm, "anthropic"),
             (ProviderId::Gemini, cfg.gemini_rpm, "gemini"),
             (ProviderId::Copilot, cfg.copilot_rpm, "copilot"),
+            (ProviderId::OpenRouter, cfg.openrouter_rpm, "openrouter"),
         ];
 
         for (provider, rpm, label) in provider_rpms {
@@ -170,6 +171,7 @@ mod tests {
             anthropic_rpm: 0, // disabled
             gemini_rpm: 60,
             copilot_rpm: 0, // disabled
+            openrouter_rpm: 20,
             finnhub_rps: 30,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
@@ -182,6 +184,10 @@ mod tests {
         assert!(
             registry.get(ProviderId::Gemini).is_some(),
             "gemini should be enabled"
+        );
+        assert!(
+            registry.get(ProviderId::OpenRouter).is_some(),
+            "openrouter should be enabled"
         );
 
         // Disabled providers are absent
@@ -202,10 +208,25 @@ mod tests {
             anthropic_rpm: 0,
             gemini_rpm: 0,
             copilot_rpm: 0,
+            openrouter_rpm: 0,
             finnhub_rps: 0,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenAI).is_some());
+    }
+
+    #[test]
+    fn provider_rate_limiters_get_returns_some_for_custom_openrouter_rate() {
+        let cfg = RateLimitConfig {
+            openai_rpm: 0,
+            anthropic_rpm: 0,
+            gemini_rpm: 0,
+            copilot_rpm: 0,
+            openrouter_rpm: 100,
+            finnhub_rps: 0,
+        };
+        let registry = ProviderRateLimiters::from_config(&cfg);
+        assert!(registry.get(ProviderId::OpenRouter).is_some());
     }
 
     #[test]
@@ -215,6 +236,7 @@ mod tests {
             anthropic_rpm: 0,
             gemini_rpm: 0,
             copilot_rpm: 0,
+            openrouter_rpm: 0,
             finnhub_rps: 0,
         };
         let registry = ProviderRateLimiters::from_config(&cfg);
@@ -222,6 +244,10 @@ mod tests {
         assert!(registry.get(ProviderId::Anthropic).is_none());
         assert!(registry.get(ProviderId::Gemini).is_none());
         assert!(registry.get(ProviderId::Copilot).is_none());
+        assert!(
+            registry.get(ProviderId::OpenRouter).is_none(),
+            "openrouter (rpm=0) should be absent"
+        );
     }
 
     #[test]
@@ -231,6 +257,7 @@ mod tests {
             anthropic_rpm: 0,
             gemini_rpm: 0,
             copilot_rpm: 0,
+            openrouter_rpm: 0,
             finnhub_rps: 30,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
@@ -245,6 +272,7 @@ mod tests {
             anthropic_rpm: 0,
             gemini_rpm: 0,
             copilot_rpm: 0,
+            openrouter_rpm: 0,
             finnhub_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);

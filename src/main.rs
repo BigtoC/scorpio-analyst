@@ -4,7 +4,7 @@ use scorpio_analyst::data::{FinnhubClient, YFinanceClient};
 use scorpio_analyst::observability::init_tracing;
 use scorpio_analyst::providers::ModelTier;
 use scorpio_analyst::providers::factory::{
-    create_completion_model, preflight_configured_providers,
+    create_completion_model, preflight_copilot_if_configured,
 };
 use scorpio_analyst::rate_limit::{ProviderRateLimiters, SharedRateLimiter};
 use scorpio_analyst::state::TradingState;
@@ -26,12 +26,12 @@ fn main() {
                 }
             };
 
-            if let Err(e) = runtime.block_on(preflight_configured_providers(
+            if let Err(e) = runtime.block_on(preflight_copilot_if_configured(
                 &cfg.llm,
                 &cfg.api,
                 &ProviderRateLimiters::from_config(&cfg.rate_limits),
             )) {
-                eprintln!("failed to preflight configured providers: {e:#}");
+                eprintln!("failed to preflight configured Copilot provider: {e:#}");
                 std::process::exit(1);
             }
 

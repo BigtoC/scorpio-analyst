@@ -2,13 +2,13 @@
 # Override with .env or environment variables (prefix: SCORPIO__, e.g. SCORPIO__LLM__MAX_DEBATE_ROUNDS=5)
 
 [llm]
-quick_thinking_provider = "anthropic"
-quick_thinking_model = "claude-haiku-4-5"
-deep_thinking_provider = "anthropic"
-deep_thinking_model = "claude-sonnet-4-6"
+quick_thinking_provider = "openrouter"
+quick_thinking_model = "openrouter/free"
+deep_thinking_provider = "openrouter"
+deep_thinking_model = "qwen/qwen3.6-plus-preview:free"
 max_debate_rounds = 3
 max_risk_rounds = 2
-agent_timeout_secs = 30
+agent_timeout_secs = 300
 
 [trading]
 asset_symbol = "AAPL"
@@ -24,6 +24,7 @@ openai_rpm = 500
 anthropic_rpm = 500
 gemini_rpm = 500
 copilot_rpm = 0  # No documented rate limit for Copilot ACP
+openrouter_rpm = 20  # Free-tier limit; paid accounts can increase this
 
 # Finnhub data API rate limit (requests per second).
 finnhub_rps = 30

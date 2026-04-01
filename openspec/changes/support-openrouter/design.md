@@ -45,6 +45,12 @@ rig-core 0.32 (our current dependency) already ships `rig::providers::openrouter
 
 **Rationale**: Matches the established pattern exactly. The rig openrouter module exposes `completion::CompletionModel` at the same path convention as other providers.
 
+### Decision 5: Reuse the existing shared token-usage path
+
+**Choice**: Do not introduce any OpenRouter-specific token tracking abstraction. OpenRouter completions continue to flow through the existing `rig::completion::Usage` handling already consumed by the analyst, researcher, trader, risk, and fund-manager usage helpers.
+
+**Rationale**: Token accounting is a shared cross-capability behavior owned by existing agent/state code, not by the provider factory itself. Because rig-core's OpenRouter module returns the same usage shape already handled by the system, the provider change only needs to preserve that path rather than add new state types or tracking logic.
+
 ## Risks / Trade-offs
 
 **[Risk] Free-tier models may have lower quality or inconsistent structured output compliance** → Mitigation: This is a user configuration choice, not a system risk. The existing `SchemaViolation` error handling and retry logic apply identically. Users can switch to paid OpenRouter models or other providers at any time via config.
@@ -58,7 +64,7 @@ rig-core 0.32 (our current dependency) already ships `rig::providers::openrouter
 ## Migration Plan
 
 - Obtain approval for the cross-owner file edits listed in `proposal.md` before implementation begins.
-- Implement the change as additive registration only: add the provider enum/client/match arms, add the API key and RPM config surfaces, then wire the shared rate limiter registry.
+- Implement the change as additive registration only: add the provider enum/client/match arms, add the API key and RPM config surfaces, wire the shared rate limiter registry, and update any shared test fixtures that manually construct `ApiConfig` literals.
 - Verify that existing provider selections remain unchanged when `openrouter` is not configured.
 - Rollback is trivial: revert the additive OpenRouter registration changes and remove any `openrouter_*` configuration entries. No state or data migration is involved.
 

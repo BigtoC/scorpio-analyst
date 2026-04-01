@@ -17,11 +17,13 @@ use crate::{
     config::LlmConfig,
     data::{FinnhubClient, GetCachedNews, GetNews},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, build_agent_with_tools, prompt_typed_with_retry},
+    providers::factory::{CompletionModelHandle, build_agent_with_tools},
     state::{AgentTokenUsage, NewsData, SentimentData},
 };
 
-use super::common::{analyst_runtime_config, usage_from_response, validate_summary_content};
+use super::common::{
+    analyst_runtime_config, run_analyst_inference, usage_from_response, validate_summary_content,
+};
 
 const MAX_TOOL_TURNS: usize = 6;
 
@@ -35,6 +37,7 @@ Important MVP constraint:
 - Do not assume direct Reddit, X/Twitter, StockTwits, or other social-platform access unless those tools are explicitly \
   bound.
 - In the current system, sentiment is usually inferred from company news and any runtime-provided sentiment proxies.
+- The news tool argument shape is: get_news requires {\"symbol\":\"<ticker>\"}
 
 Populate only these schema fields:
 - `overall_score`
@@ -52,7 +55,7 @@ Instructions:
 5. If no meaningful sentiment signal is available, return `overall_score: 0.0`, empty arrays where appropriate, and a \
    `summary` explaining that the signal is weak or unavailable.
 6. Distinguish sentiment from facts: explain how the market appears to be interpreting events, not only what happened.
-7. Return ONLY the single JSON object required by `SentimentData`.
+7. Return exactly one JSON object required by `SentimentData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.";
 
@@ -141,26 +144,26 @@ impl SentimentAnalyst {
             self.symbol, self.target_date
         );
 
-        let outcome = prompt_typed_with_retry::<SentimentData>(
+        let outcome = run_analyst_inference(
             &agent,
             &prompt,
             self.timeout,
             &self.retry_policy,
             MAX_TOOL_TURNS,
+            parse_sentiment,
+            validate_sentiment,
         )
         .await?;
-
-        validate_sentiment(&outcome.result.output)?;
 
         let usage = usage_from_response(
             "Sentiment Analyst",
             self.handle.model_id(),
-            outcome.result.usage,
+            outcome.usage,
             started_at,
             outcome.rate_limit_wait_ms,
         );
 
-        Ok((outcome.result.output, usage))
+        Ok((outcome.output, usage))
     }
 }
 
@@ -192,6 +195,16 @@ fn validate_sentiment(data: &SentimentData) -> Result<(), TradingError> {
     Ok(())
 }
 
+/// Deserialize a JSON string into [`SentimentData`], mapping errors to
+/// [`TradingError::SchemaViolation`].
+///
+/// Exposed for use as the `parse` hook in `run_analyst_inference`.
+pub(crate) fn parse_sentiment(json_str: &str) -> Result<SentimentData, TradingError> {
+    serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
+        message: format!("SentimentAnalyst: failed to parse LLM output: {e}"),
+    })
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -199,12 +212,11 @@ mod tests {
     use super::*;
     use crate::state::{EngagementPeak, SentimentData, SentimentSource};
 
-    fn parse_sentiment(json: &str) -> Result<SentimentData, TradingError> {
-        serde_json::from_str(json)
-            .map_err(|e| TradingError::SchemaViolation {
-                message: format!("SentimentAnalyst: failed to parse LLM output: {e}"),
-            })
-            .and_then(|data| validate_sentiment(&data).map(|()| data))
+    /// Parse and validate a JSON string — combines `parse_sentiment` + `validate_sentiment`
+    /// for test convenience. Tests that need only structural parsing can call `parse_sentiment`
+    /// directly; tests that also exercise the semantic validation layer call this helper.
+    fn parse_and_validate(json: &str) -> Result<SentimentData, TradingError> {
+        parse_sentiment(json).and_then(|data| validate_sentiment(&data).map(|()| data))
     }
 
     // ── Task 2.4: Correct SentimentData extraction from news inputs ───────
@@ -224,7 +236,7 @@ mod tests {
             "summary": "Recent news skews bullish with positive earnings coverage."
         }"#;
 
-        let data = parse_sentiment(json).expect("should parse valid JSON");
+        let data = parse_and_validate(json).expect("should parse valid JSON");
         assert!((data.overall_score - 0.6).abs() < 1e-9);
         assert_eq!(data.source_breakdown.len(), 1);
         assert_eq!(data.source_breakdown[0].source_name, "Finnhub News");
@@ -242,7 +254,7 @@ mod tests {
             "summary": "Sentiment signal is weak or unavailable."
         }"#;
 
-        let data = parse_sentiment(json).expect("should parse neutral");
+        let data = parse_and_validate(json).expect("should parse neutral");
         assert_eq!(data.overall_score, 0.0);
         assert!(data.source_breakdown.is_empty());
         assert!(data.engagement_peaks.is_empty());
@@ -285,7 +297,7 @@ mod tests {
             "summary": "No news articles available for sentiment analysis."
         }"#;
 
-        let data = parse_sentiment(neutral_json).expect("neutral output should parse");
+        let data = parse_and_validate(neutral_json).expect("neutral output should parse");
         assert_eq!(data.overall_score, 0.0);
         assert!(data.source_breakdown.is_empty());
         assert!(data.engagement_peaks.is_empty());
@@ -354,7 +366,7 @@ mod tests {
     #[test]
     fn overall_score_out_of_range_returns_schema_violation() {
         let json = r#"{"overall_score": 2.5, "source_breakdown": [], "engagement_peaks": [], "summary": "x"}"#;
-        let result = parse_sentiment(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -370,7 +382,7 @@ mod tests {
             "engagement_peaks": [],
             "summary": "x"
         }"#;
-        let result = parse_sentiment(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -381,7 +393,7 @@ mod tests {
     #[test]
     fn whitespace_only_summary_returns_schema_violation() {
         let json = r#"{"overall_score": 0.0, "source_breakdown": [], "engagement_peaks": [], "summary": "   "}"#;
-        let result = parse_sentiment(json);
+        let result = parse_and_validate(json);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -418,7 +430,7 @@ mod tests {
     fn overall_score_at_positive_boundary_is_valid() {
         let json = r#"{"overall_score": 1.0, "source_breakdown": [], "engagement_peaks": [], "summary": "boundary"}"#;
         assert!(
-            parse_sentiment(json).is_ok(),
+            parse_and_validate(json).is_ok(),
             "overall_score = 1.0 must be accepted (inclusive upper bound)"
         );
     }
@@ -428,7 +440,7 @@ mod tests {
     fn overall_score_at_negative_boundary_is_valid() {
         let json = r#"{"overall_score": -1.0, "source_breakdown": [], "engagement_peaks": [], "summary": "boundary"}"#;
         assert!(
-            parse_sentiment(json).is_ok(),
+            parse_and_validate(json).is_ok(),
             "overall_score = -1.0 must be accepted (inclusive lower bound)"
         );
     }
@@ -443,7 +455,7 @@ mod tests {
             "summary": "boundary"
         }"#;
         assert!(
-            parse_sentiment(json).is_ok(),
+            parse_and_validate(json).is_ok(),
             "source score = 1.0 must be accepted (inclusive upper bound)"
         );
     }
@@ -458,7 +470,7 @@ mod tests {
             "summary": "boundary"
         }"#;
         assert!(
-            parse_sentiment(json).is_ok(),
+            parse_and_validate(json).is_ok(),
             "source score = -1.0 must be accepted (inclusive lower bound)"
         );
     }
@@ -501,5 +513,95 @@ mod tests {
             result.unwrap_err(),
             TradingError::SchemaViolation { .. }
         ));
+    }
+
+    // ── Task 5: Migrate to shared inference helper ────────────────────────
+
+    #[test]
+    fn sentiment_prompt_states_get_news_argument_shape() {
+        assert!(
+            SENTIMENT_SYSTEM_PROMPT.contains(r#"get_news requires {"symbol":"<ticker>"}"#),
+            "SENTIMENT_SYSTEM_PROMPT must contain 'get_news requires {{\"symbol\":\"<ticker>\"}}'"
+        );
+    }
+
+    #[test]
+    fn sentiment_prompt_requires_exactly_one_json_object_response() {
+        assert!(
+            SENTIMENT_SYSTEM_PROMPT.contains("exactly one JSON object"),
+            "SENTIMENT_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+        );
+        assert!(
+            SENTIMENT_SYSTEM_PROMPT.contains("no prose"),
+            "SENTIMENT_SYSTEM_PROMPT must contain 'no prose'"
+        );
+        assert!(
+            SENTIMENT_SYSTEM_PROMPT.contains("no markdown fences"),
+            "SENTIMENT_SYSTEM_PROMPT must contain 'no markdown fences'"
+        );
+    }
+
+    #[test]
+    fn parse_sentiment_rejects_unknown_fields() {
+        let result = parse_sentiment(r#"{"unknown_field": 1}"#);
+        assert!(
+            matches!(result, Err(TradingError::SchemaViolation { .. })),
+            "parse_sentiment should return SchemaViolation for unknown fields"
+        );
+    }
+
+    #[tokio::test]
+    async fn sentiment_run_uses_shared_inference_helper_for_openrouter() {
+        use super::super::common::run_analyst_inference;
+        use crate::providers::ProviderId;
+        use crate::providers::factory::agent_test_support;
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let valid_json = r#"{
+            "overall_score": 0.5,
+            "source_breakdown": [
+                {"source_name": "Finnhub News", "score": 0.5, "sample_size": 5}
+            ],
+            "engagement_peaks": [],
+            "summary": "Moderately bullish based on recent news."
+        }"#;
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::OpenRouter,
+            "openrouter-model",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new(
+            valid_json,
+            Usage {
+                input_tokens: 10,
+                output_tokens: 20,
+                total_tokens: 30,
+                cached_input_tokens: 0,
+            },
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "analyse AAPL sentiment",
+            std::time::Duration::from_millis(100),
+            &crate::error::RetryPolicy {
+                max_retries: 0,
+                base_delay: std::time::Duration::from_millis(1),
+            },
+            1,
+            parse_sentiment,
+            validate_sentiment,
+        )
+        .await
+        .expect("inference should succeed");
+
+        let _ = outcome.output;
+
+        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
     }
 }
