@@ -47,7 +47,7 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
-    data::{FinnhubClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, YFinanceClient},
     error::TradingError,
     providers::factory::{CompletionModelHandle, sanitize_error_summary},
     state::TradingState,
@@ -234,6 +234,13 @@ impl TradingPipeline {
     ) -> Arc<Graph> {
         let graph = Arc::new(Graph::new("trading_pipeline"));
 
+        // ── Construct FredClient for news analyst ─────────────────────────
+        let fred_limiter =
+            crate::rate_limit::SharedRateLimiter::fred_from_config(&config.rate_limits)
+                .unwrap_or_else(|| crate::rate_limit::SharedRateLimiter::disabled("fred"));
+        let fred = FredClient::new(&config.api, fred_limiter)
+            .expect("FredClient construction failed — is SCORPIO_FRED_API_KEY set?");
+
         // ── Phase 1: analyst fan-out (QUICK handle) ───────────────────────
         let fan_out = FanOutTask::new(
             TASK_ANALYST_FAN_OUT,
@@ -248,7 +255,7 @@ impl TradingPipeline {
                     finnhub.clone(),
                     config.llm.clone(),
                 ),
-                NewsAnalystTask::new(quick_handle.clone(), finnhub.clone(), config.llm.clone()),
+                NewsAnalystTask::new(quick_handle.clone(), finnhub.clone(), fred.clone(), config.llm.clone()),
                 TechnicalAnalystTask::new(
                     quick_handle.clone(),
                     yfinance.clone(),
