@@ -17,16 +17,31 @@ backtest_end = "2024-11-30"
 
 [api]
 
-[rate_limits]
-# LLM provider rate limits (requests per minute). Set to 0 to disable.
+# Per-provider LLM settings: base_url (optional) and rpm (requests per minute).
+# Set rpm to 0 to disable rate limiting. Omit base_url to use the provider's default endpoint.
 # Check your provider dashboard for your tier's actual limits and adjust accordingly.
-openai_rpm = 500
-anthropic_rpm = 500
-gemini_rpm = 500
-copilot_rpm = 0  # No documented rate limit for Copilot ACP
-openrouter_rpm = 20  # Free-tier limit; paid accounts can increase this
 
-# Finnhub data API rate limit (requests per second).
+[providers.openai]
+#base_url = "https://my-proxy.example.com/v1"
+rpm = 500
+
+[providers.anthropic]
+#base_url = "https://my-anthropic-proxy.example.com"
+rpm = 500
+
+[providers.gemini]
+#base_url = "https://my-gemini-proxy.example.com"
+rpm = 500
+
+[providers.copilot]
+rpm = 0  # No documented rate limit for Copilot ACP
+
+[providers.openrouter]
+#base_url = "https://my-openrouter-proxy.example.com/api/v1"
+rpm = 20  # Free-tier limit; paid accounts can increase this
+
+[rate_limits]
+# Data API rate limits (requests per second).
 finnhub_rps = 30
 fred_rps = 2
 
