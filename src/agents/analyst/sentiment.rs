@@ -542,6 +542,23 @@ mod tests {
     }
 
     #[test]
+    fn source_alias_accepted_in_sentiment_source() {
+        // LLMs sometimes return "source" instead of "source_name".
+        // The alias should allow either field name.
+        let json = r#"{
+            "overall_score": 0.3,
+            "source_breakdown": [
+                {"source": "Finnhub News", "score": 0.3, "sample_size": 5}
+            ],
+            "engagement_peaks": [],
+            "summary": "Mildly bullish."
+        }"#;
+
+        let data = parse_and_validate(json).expect("'source' alias should be accepted");
+        assert_eq!(data.source_breakdown[0].source_name, "Finnhub News");
+    }
+
+    #[test]
     fn parse_sentiment_rejects_unknown_fields() {
         let result = parse_sentiment(r#"{"unknown_field": 1}"#);
         assert!(

@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 use crate::{
     agents::analyst::{FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst},
     config::LlmConfig,
-    data::{FinnhubClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     state::{
         AgentTokenUsage, FundamentalData, NewsData, PhaseTokenUsage, SentimentData, TechnicalData,
@@ -224,6 +224,7 @@ impl Task for SentimentAnalystTask {
 pub struct NewsAnalystTask {
     handle: CompletionModelHandle,
     finnhub: FinnhubClient,
+    fred: FredClient,
     llm_config: LlmConfig,
 }
 
@@ -232,11 +233,13 @@ impl NewsAnalystTask {
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
+        fred: FredClient,
         llm_config: LlmConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
             handle,
             finnhub,
+            fred,
             llm_config,
         })
     }
@@ -264,6 +267,7 @@ impl Task for NewsAnalystTask {
         let analyst = NewsAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
+            self.fred.clone(),
             state.asset_symbol.clone(),
             state.target_date.clone(),
             &self.llm_config,
@@ -488,12 +492,9 @@ impl Task for AnalystSyncTask {
                 failures = ?failures,
                 "AnalystSyncTask: {failure_count}/4 analysts failed — aborting pipeline"
             );
-            return Ok(TaskResult::new(
-                Some(format!(
-                    "{failure_count}/4 analysts failed — pipeline aborted"
-                )),
-                NextAction::End,
-            ));
+            return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                "AnalystSyncTask: {failure_count}/4 analysts failed — pipeline aborted"
+            )));
         }
 
         let token_usages = vec![

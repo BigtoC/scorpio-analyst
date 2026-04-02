@@ -12,7 +12,9 @@ use rig::tool::ToolDyn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews},
+    data::{
+        FinnhubClient, FredClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews,
+    },
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
     state::{AgentTokenUsage, NewsData},
@@ -63,6 +65,7 @@ Do not include any trade recommendation, target price, or final transaction prop
 pub struct NewsAnalyst {
     handle: CompletionModelHandle,
     finnhub: FinnhubClient,
+    fred: FredClient,
     symbol: String,
     target_date: String,
     timeout: std::time::Duration,
@@ -87,6 +90,7 @@ impl NewsAnalyst {
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
+        fred: FredClient,
         symbol: impl Into<String>,
         target_date: impl Into<String>,
         llm_config: &LlmConfig,
@@ -97,6 +101,7 @@ impl NewsAnalyst {
         Self {
             handle,
             finnhub,
+            fred,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
             timeout: runtime.timeout,
@@ -121,7 +126,7 @@ impl NewsAnalyst {
         let tools: Vec<Box<dyn ToolDyn>> = vec![
             news_tool,
             Box::new(GetMarketNews::new(self.finnhub.clone())),
-            Box::new(GetEconomicIndicators::new(self.finnhub.clone())),
+            Box::new(GetEconomicIndicators::new(self.fred.clone())),
         ];
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────

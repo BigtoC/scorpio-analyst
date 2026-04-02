@@ -22,8 +22,8 @@ use crate::{
     error::TradingError,
     rate_limit::SharedRateLimiter,
     state::{
-        FundamentalData, ImpactDirection, InsiderTransaction as OurInsiderTransaction, MacroEvent,
-        NewsArticle, NewsData, TransactionType,
+        FundamentalData, ImpactDirection, InsiderTransaction as OurInsiderTransaction, NewsArticle,
+        NewsData, TransactionType,
     },
 };
 
@@ -220,79 +220,6 @@ impl FinnhubClient {
                 "general market news: {article_count} articles and {macro_count} derived macro events"
             ),
         })
-    }
-
-    /// Fetch a small, fixed macro-economic snapshot from Finnhub economic endpoints.
-    pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
-        const INTEREST_RATE_CODE: &str = "MA-USA-656880";
-        const INFLATION_CODE: &str = "MA-USA-CPALTT01-USM657N";
-
-        // Fetch both indicators concurrently — previously serial, now parallel.
-        let interest_fut = {
-            let client = self.inner.clone();
-            let limiter = self.limiter.clone();
-            async move {
-                limiter.acquire().await;
-                client
-                    .economic()
-                    .data(INTEREST_RATE_CODE)
-                    .await
-                    .map_err(map_finnhub_err)
-            }
-        };
-        let inflation_fut = {
-            let client = self.inner.clone();
-            let limiter = self.limiter.clone();
-            async move {
-                limiter.acquire().await;
-                client
-                    .economic()
-                    .data(INFLATION_CODE)
-                    .await
-                    .map_err(map_finnhub_err)
-            }
-        };
-
-        let (interest_data, inflation_data) = tokio::join!(interest_fut, inflation_fut);
-        // Propagate the first error encountered, if any.
-        let interest_data = interest_data?;
-        let inflation_data = inflation_data?;
-
-        let mut events = Vec::new();
-
-        if let Some(latest) = interest_data.data.last() {
-            let impact_direction = if latest.value > 3.0 {
-                ImpactDirection::Negative
-            } else {
-                ImpactDirection::Positive
-            };
-            push_macro_event(
-                &mut events,
-                MacroEvent {
-                    event: "Interest-rate policy shift".to_owned(),
-                    impact_direction,
-                    confidence: 0.7,
-                },
-            );
-        }
-
-        if let Some(latest) = inflation_data.data.last() {
-            let impact_direction = if latest.value > 3.0 {
-                ImpactDirection::Negative
-            } else {
-                ImpactDirection::Positive
-            };
-            push_macro_event(
-                &mut events,
-                MacroEvent {
-                    event: "Inflation signal".to_owned(),
-                    impact_direction,
-                    confidence: 0.7,
-                },
-            );
-        }
-
-        Ok(events)
     }
 }
 
@@ -916,51 +843,6 @@ impl Tool for GetMarketNews {
     }
 }
 
-/// `rig` tool: fetch a fixed macro-economic indicator snapshot from Finnhub.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GetEconomicIndicators {
-    #[serde(skip)]
-    client: Option<FinnhubClient>,
-}
-
-impl GetEconomicIndicators {
-    #[must_use]
-    pub fn new(client: FinnhubClient) -> Self {
-        Self {
-            client: Some(client),
-        }
-    }
-}
-
-impl Tool for GetEconomicIndicators {
-    const NAME: &'static str = "get_economic_indicators";
-
-    type Error = TradingError;
-    type Args = EmptyObjectArgs;
-    type Output = Vec<MacroEvent>;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Fetch a fixed set of macro-economic indicators from Finnhub and summarize them as macro events.".to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let client = self.client.as_ref().ok_or_else(|| {
-            TradingError::Config(anyhow::anyhow!(
-                "FinnhubClient not set on GetEconomicIndicators tool"
-            ))
-        })?;
-        client.get_economic_indicators().await
-    }
-}
-
 // ── GetCachedNews ──
 
 /// `rig` tool: serve pre-fetched company news from an in-memory cache.
@@ -1322,34 +1204,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_economic_indicators_accepts_empty_object_args_at_tool_boundary() {
-        let tool = GetEconomicIndicators { client: None };
-        let result = tool.call(EmptyObjectArgs {}).await;
-        assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
-    }
-
-    #[tokio::test]
     async fn get_market_news_definition_advertises_empty_object_schema() {
         let tool = GetMarketNews { client: None };
         let def = tool.definition(String::new()).await;
         assert_eq!(def.name, "get_market_news");
-        assert_eq!(def.parameters["type"], "object");
-        let props = &def.parameters["properties"];
-        assert!(
-            props.as_object().map(|o| o.is_empty()).unwrap_or(false),
-            "properties must be an empty object, got: {props}"
-        );
-        assert_eq!(
-            def.parameters["additionalProperties"], false,
-            "additionalProperties must be false"
-        );
-    }
-
-    #[tokio::test]
-    async fn get_economic_indicators_definition_advertises_empty_object_schema() {
-        let tool = GetEconomicIndicators { client: None };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_economic_indicators");
         assert_eq!(def.parameters["type"], "object");
         let props = &def.parameters["properties"];
         assert!(

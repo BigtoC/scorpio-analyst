@@ -138,40 +138,87 @@ where
     Validate: Fn(&T) -> Result<(), TradingError>,
 {
     if agent.provider_id() == ProviderId::OpenRouter {
-        // OpenRouter fallback: raw text prompt, then parse + validate
-        let outcome =
-            prompt_text_with_retry(agent, prompt, timeout, retry_policy, max_turns).await?;
-        let raw = &outcome.result.output;
-        if raw.trim().is_empty() {
-            return Err(TradingError::SchemaViolation {
-                message: format!(
-                    "{}: LLM returned empty response (model: {})",
-                    std::any::type_name::<T>()
-                        .rsplit("::")
-                        .next()
-                        .unwrap_or("unknown"),
-                    agent.model_id(),
-                ),
-            });
-        }
-        let output = parse(raw)?;
-        validate(&output)?;
-        Ok(AnalystInferenceOutcome {
-            output,
-            usage: outcome.result.usage,
-            rate_limit_wait_ms: outcome.rate_limit_wait_ms,
-        })
-    } else {
-        // Native typed-output path (OpenAI, Anthropic, Gemini, Copilot)
-        let outcome =
-            prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns).await?;
-        validate(&outcome.result.output)?;
-        Ok(AnalystInferenceOutcome {
-            output: outcome.result.output,
-            usage: outcome.result.usage,
-            rate_limit_wait_ms: outcome.rate_limit_wait_ms,
-        })
+        return run_text_fallback_inference(
+            agent,
+            prompt,
+            timeout,
+            retry_policy,
+            max_turns,
+            &parse,
+            &validate,
+        )
+        .await;
     }
+
+    // Native typed-output path (OpenAI, Anthropic, Gemini, Copilot)
+    let outcome =
+        match prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns).await {
+            Ok(outcome) => outcome,
+            Err(err @ TradingError::SchemaViolation { .. })
+                if agent.provider_id() == ProviderId::Gemini =>
+            {
+                return run_text_fallback_inference(
+                    agent,
+                    prompt,
+                    timeout,
+                    retry_policy,
+                    max_turns,
+                    &parse,
+                    &validate,
+                )
+                .await
+                .map_err(|fallback_err| match fallback_err {
+                    fallback_err @ TradingError::SchemaViolation { .. } => fallback_err,
+                    _ => err,
+                });
+            }
+            Err(err) => return Err(err),
+        };
+
+    validate(&outcome.result.output)?;
+    Ok(AnalystInferenceOutcome {
+        output: outcome.result.output,
+        usage: outcome.result.usage,
+        rate_limit_wait_ms: outcome.rate_limit_wait_ms,
+    })
+}
+
+async fn run_text_fallback_inference<T, Parse, Validate>(
+    agent: &LlmAgent,
+    prompt: &str,
+    timeout: Duration,
+    retry_policy: &RetryPolicy,
+    max_turns: usize,
+    parse: &Parse,
+    validate: &Validate,
+) -> Result<AnalystInferenceOutcome<T>, TradingError>
+where
+    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    Parse: Fn(&str) -> Result<T, TradingError>,
+    Validate: Fn(&T) -> Result<(), TradingError>,
+{
+    let outcome = prompt_text_with_retry(agent, prompt, timeout, retry_policy, max_turns).await?;
+    let raw = &outcome.result.output;
+    if raw.trim().is_empty() {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "{}: LLM returned empty response (model: {})",
+                std::any::type_name::<T>()
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or("unknown"),
+                agent.model_id(),
+            ),
+        });
+    }
+
+    let output = parse(raw)?;
+    validate(&output)?;
+    Ok(AnalystInferenceOutcome {
+        output,
+        usage: outcome.result.usage,
+        rate_limit_wait_ms: outcome.rate_limit_wait_ms,
+    })
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -437,6 +484,55 @@ mod tests {
             crate::error::TradingError::SchemaViolation { .. }
         ));
         // Terminal — no retry
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_falls_back_to_text_for_gemini_after_typed_schema_violation() {
+        use rig::agent::{PromptResponse, TypedPromptResponse};
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::Gemini,
+            "gemini-test-model",
+            vec![],
+            vec![],
+        );
+        agent.push_typed_error(crate::error::TradingError::SchemaViolation {
+            message:
+                "provider=gemini model=gemini-test-model: structured output could not be parsed"
+                    .to_owned(),
+        });
+        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 7}"#, sample_usage(9)));
+        // If the implementation retries typed again instead of falling back, this would be used.
+        agent.push_typed_ok(TypedPromptResponse::new(
+            Output { value: 99 },
+            sample_usage(10),
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .expect("Gemini should recover via text fallback after a typed schema violation");
+
+        assert_eq!(outcome.output, Output { value: 7 });
+        assert_eq!(agent_test_support::typed_attempts(&agent), 1);
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
     }
 

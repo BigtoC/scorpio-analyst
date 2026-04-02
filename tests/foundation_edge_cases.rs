@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use scorpio_analyst::config::{ApiConfig, Config};
+use scorpio_analyst::config::{ApiConfig, Config, ProviderSettings, ProvidersConfig};
 use scorpio_analyst::error::{RetryPolicy, TradingError, check_analyst_degradation};
 use secrecy::SecretString;
 
@@ -11,22 +11,46 @@ use secrecy::SecretString;
 #[test]
 fn api_config_debug_never_leaks_secrets() {
     let api = ApiConfig {
-        openai_api_key: Some(SecretString::from("sk-live-abc123")),
-        anthropic_api_key: Some(SecretString::from("sk-ant-secret")),
-        gemini_api_key: None,
         finnhub_api_key: Some(SecretString::from("ct_finnhub_key")),
-        openrouter_api_key: Some(SecretString::from("or-live-secret")),
+        fred_api_key: None,
     };
     let debug = format!("{api:?}");
 
     // No secret value should appear anywhere in the debug output
+    assert!(!debug.contains("ct_finnhub_key"));
+    // The one present key should show [REDACTED]
+    assert_eq!(debug.matches("[REDACTED]").count(), 1);
+    // The absent key should show <not set>
+    assert_eq!(debug.matches("<not set>").count(), 1);
+}
+
+#[test]
+fn providers_config_debug_never_leaks_secrets() {
+    let providers = ProvidersConfig {
+        openai: ProviderSettings {
+            api_key: Some(SecretString::from("sk-live-abc123")),
+            ..Default::default()
+        },
+        anthropic: ProviderSettings {
+            api_key: Some(SecretString::from("sk-ant-secret")),
+            ..Default::default()
+        },
+        openrouter: ProviderSettings {
+            api_key: Some(SecretString::from("or-live-secret")),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let debug = format!("{providers:?}");
+
+    // No secret value should appear anywhere in the debug output
     assert!(!debug.contains("sk-live-abc123"));
     assert!(!debug.contains("sk-ant-secret"));
-    assert!(!debug.contains("ct_finnhub_key"));
     assert!(!debug.contains("or-live-secret"));
-    // All present keys should show [REDACTED]
-    assert_eq!(debug.matches("[REDACTED]").count(), 4);
-    // Absent key should show <not set>
+    // All set provider keys should show [REDACTED]
+    assert!(debug.contains("[REDACTED]"));
+    assert_eq!(debug.matches("[REDACTED]").count(), 3);
+    // Providers without keys should show <not set>
     assert!(debug.contains("<not set>"));
 }
 

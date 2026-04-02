@@ -33,7 +33,7 @@ use tracing::warn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, YFinanceClient},
     error::{RetryPolicy, TradingError, check_analyst_degradation},
     providers::factory::CompletionModelHandle,
     state::{
@@ -76,6 +76,7 @@ pub async fn prefetch_analyst_news(finnhub: &FinnhubClient, symbol: &str) -> Opt
 pub async fn run_analyst_team(
     handle: &CompletionModelHandle,
     finnhub: &FinnhubClient,
+    fred: &FredClient,
     yfinance: &YFinanceClient,
     state: &mut TradingState,
     llm_config: &LlmConfig,
@@ -127,6 +128,7 @@ pub async fn run_analyst_team(
         let analyst = NewsAnalyst::new(
             handle.clone(),
             finnhub.clone(),
+            fred.clone(),
             symbol.clone(),
             target_date.clone(),
             llm_config,

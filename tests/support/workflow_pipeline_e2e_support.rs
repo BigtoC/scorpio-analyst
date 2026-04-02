@@ -3,6 +3,7 @@
 #[path = "workflow_pipeline_stubbed_support.rs"]
 mod workflow_pipeline_stubbed_support;
 
+#[allow(clippy::duplicate_mod)]
 #[path = "workflow_pipeline_make_pipeline.rs"]
 mod workflow_pipeline_make_pipeline;
 

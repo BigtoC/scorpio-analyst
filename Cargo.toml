@@ -43,8 +43,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Utilities
+figlet-rs = "1.0.0"
 nonzero_ext = "0.3"
 futures = "0.3"
+reqwest = { version = "0.13", features = ["json", "query"] }
 finnhub = "0.2.2"
 yfinance-rs = "0.7.2"
 kand = "0.2.2"

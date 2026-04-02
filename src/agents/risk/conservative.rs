@@ -212,7 +212,7 @@ fn build_conservative_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApiConfig, LlmConfig};
+    use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
     use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::{AgentTokenUsage, TokenUsageTracker, TradeAction, TradeProposal};
@@ -233,10 +233,13 @@ mod tests {
         }
     }
 
-    fn api_config_with_openai() -> ApiConfig {
-        ApiConfig {
-            openai_api_key: Some(SecretString::from("test-key")),
-            ..ApiConfig::default()
+    fn providers_config_with_openai() -> ProvidersConfig {
+        ProvidersConfig {
+            openai: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -436,7 +439,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openai(),
+            &providers_config_with_openai(),
             &crate::rate_limit::ProviderRateLimiters::default(),
         )
         .unwrap();

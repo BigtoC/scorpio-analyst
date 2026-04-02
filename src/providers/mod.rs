@@ -20,7 +20,7 @@
 //!
 //! # async fn example() -> Result<(), scorpio_analyst::error::TradingError> {
 //! let cfg = Config::load().expect("config");
-//! let handle = factory::create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.api, &ProviderRateLimiters::default())?;
+//! let handle = factory::create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.providers, &ProviderRateLimiters::default())?;
 //! let agent = factory::build_agent(&handle, "You are a fast analyst.");
 //! let _model_id = agent.model_id();
 //! # Ok(())
