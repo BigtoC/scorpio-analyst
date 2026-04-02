@@ -208,16 +208,12 @@ fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
 ///
 /// Exposed for use as the `parse` hook in `run_analyst_inference`.
 pub(crate) fn parse_technical(json_str: &str) -> Result<TechnicalData, TradingError> {
-    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
-        TradingError::SchemaViolation {
+    let value: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
             message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-        }
-    })?;
+        })?;
 
-    if value
-        .get("macd")
-        .is_some_and(|macd| macd.is_number())
-    {
+    if value.get("macd").is_some_and(|macd| macd.is_number()) {
         return Err(TradingError::SchemaViolation {
             message: "TechnicalAnalyst: failed to parse LLM output: field `macd` must be an object with `macd_line`, `signal_line`, and `histogram`, or null".to_owned(),
         });
