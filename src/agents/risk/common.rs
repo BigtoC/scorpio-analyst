@@ -183,7 +183,7 @@ pub(super) fn validate_raw_model_output_size(
 }
 
 // ─── JSON extraction ─────────────────────────────────────────────────────────
-
+// TODO: Move to agents crate level codes
 /// Extract a JSON object from a raw LLM response that may contain markdown
 /// code fences or explanatory prose around the JSON.
 ///
@@ -191,7 +191,7 @@ pub(super) fn validate_raw_model_output_size(
 /// 1. **Fast path** – the trimmed string already starts with `{` and ends with `}`.
 /// 2. **Code fence** – the JSON is wrapped in `` ```json … ``` `` or `` ``` … ``` ``.
 /// 3. **Brace fallback** – extract from the first `{` to the last `}`.
-pub(super) fn extract_json_object(context: &str, raw: &str) -> Result<String, TradingError> {
+pub(crate) fn extract_json_object(context: &str, raw: &str) -> Result<String, TradingError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(TradingError::SchemaViolation {
