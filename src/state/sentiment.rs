@@ -15,6 +15,7 @@ pub struct SentimentData {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SentimentSource {
+    #[serde(alias = "source")]
     pub source_name: String,
     pub score: f64,
     pub sample_size: u64,
