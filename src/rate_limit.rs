@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use governor::{Quota, RateLimiter};
 
-use crate::config::RateLimitConfig;
+use crate::config::{ProvidersConfig, RateLimitConfig};
 use crate::providers::ProviderId;
 
 /// A shared, async-aware rate limiter backed by `governor`.
@@ -101,7 +101,7 @@ impl SharedRateLimiter {
 
 /// Per-provider LLM rate limiters keyed by [`ProviderId`].
 ///
-/// Constructed from [`RateLimitConfig`] via [`ProviderRateLimiters::from_config`].
+/// Constructed from [`ProvidersConfig`] via [`ProviderRateLimiters::from_config`].
 /// Providers with an RPM of `0` are absent from the internal map — callers
 /// receive `None` from [`get`][Self::get] and skip the acquire step.
 #[derive(Debug, Clone, Default)]
@@ -110,20 +110,20 @@ pub struct ProviderRateLimiters {
 }
 
 impl ProviderRateLimiters {
-    /// Build a registry from `RateLimitConfig`.
+    /// Build a registry from `ProvidersConfig`.
     ///
     /// For each provider where `rpm > 0`, a `SharedRateLimiter` is created using
     /// `Quota::with_period(Duration::from_secs(60) / rpm)` for exact per-request
     /// spacing. Providers with `rpm == 0` are omitted.
-    pub fn from_config(cfg: &RateLimitConfig) -> Self {
+    pub fn from_config(cfg: &ProvidersConfig) -> Self {
         let mut limiters = HashMap::new();
 
         let provider_rpms = [
-            (ProviderId::OpenAI, cfg.openai_rpm, "openai"),
-            (ProviderId::Anthropic, cfg.anthropic_rpm, "anthropic"),
-            (ProviderId::Gemini, cfg.gemini_rpm, "gemini"),
-            (ProviderId::Copilot, cfg.copilot_rpm, "copilot"),
-            (ProviderId::OpenRouter, cfg.openrouter_rpm, "openrouter"),
+            (ProviderId::OpenAI, cfg.openai.rpm, "openai"),
+            (ProviderId::Anthropic, cfg.anthropic.rpm, "anthropic"),
+            (ProviderId::Gemini, cfg.gemini.rpm, "gemini"),
+            (ProviderId::Copilot, cfg.copilot.rpm, "copilot"),
+            (ProviderId::OpenRouter, cfg.openrouter.rpm, "openrouter"),
         ];
 
         for (provider, rpm, label) in provider_rpms {
@@ -174,17 +174,58 @@ mod tests {
         assert_eq!(limiter.label(), "test-quota");
     }
 
+    use crate::config::ProviderSettings;
+
+    fn providers_config_with(overrides: &[(ProviderId, u32)]) -> ProvidersConfig {
+        let mut cfg = ProvidersConfig::default();
+        for &(provider, rpm) in overrides {
+            match provider {
+                ProviderId::OpenAI => cfg.openai.rpm = rpm,
+                ProviderId::Anthropic => cfg.anthropic.rpm = rpm,
+                ProviderId::Gemini => cfg.gemini.rpm = rpm,
+                ProviderId::Copilot => cfg.copilot.rpm = rpm,
+                ProviderId::OpenRouter => cfg.openrouter.rpm = rpm,
+            }
+        }
+        cfg
+    }
+
+    fn all_disabled_providers_config() -> ProvidersConfig {
+        ProvidersConfig {
+            openai: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            anthropic: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            gemini: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            copilot: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            openrouter: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+        }
+    }
+
     #[test]
     fn provider_rate_limiters_construction_mixed_rpms() {
-        let cfg = RateLimitConfig {
-            openai_rpm: 500,
-            anthropic_rpm: 0, // disabled
-            gemini_rpm: 60,
-            copilot_rpm: 0, // disabled
-            openrouter_rpm: 20,
-            finnhub_rps: 30,
-            fred_rps: 2,
-        };
+        let mut cfg = all_disabled_providers_config();
+        cfg.openai.rpm = 500;
+        cfg.gemini.rpm = 60;
+        cfg.openrouter.rpm = 20;
         let registry = ProviderRateLimiters::from_config(&cfg);
 
         // Enabled providers are present
@@ -214,45 +255,22 @@ mod tests {
 
     #[test]
     fn provider_rate_limiters_get_returns_some_for_enabled() {
-        let cfg = RateLimitConfig {
-            openai_rpm: 100,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 0,
-            finnhub_rps: 0,
-            fred_rps: 0,
-        };
+        let cfg = providers_config_with(&[(ProviderId::OpenAI, 100)]);
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenAI).is_some());
     }
 
     #[test]
     fn provider_rate_limiters_get_returns_some_for_custom_openrouter_rate() {
-        let cfg = RateLimitConfig {
-            openai_rpm: 0,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 100,
-            finnhub_rps: 0,
-            fred_rps: 0,
-        };
+        let mut cfg = all_disabled_providers_config();
+        cfg.openrouter.rpm = 100;
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenRouter).is_some());
     }
 
     #[test]
     fn provider_rate_limiters_get_returns_none_for_disabled() {
-        let cfg = RateLimitConfig {
-            openai_rpm: 0,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 0,
-            finnhub_rps: 0,
-            fred_rps: 0,
-        };
+        let cfg = all_disabled_providers_config();
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::OpenAI).is_none());
         assert!(registry.get(ProviderId::Anthropic).is_none());
@@ -267,11 +285,6 @@ mod tests {
     #[test]
     fn finnhub_from_config_returns_some_when_rps_nonzero() {
         let cfg = RateLimitConfig {
-            openai_rpm: 0,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 0,
             finnhub_rps: 30,
             fred_rps: 0,
         };
@@ -283,11 +296,6 @@ mod tests {
     #[test]
     fn finnhub_from_config_returns_none_when_rps_zero() {
         let cfg = RateLimitConfig {
-            openai_rpm: 0,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 0,
             finnhub_rps: 0,
             fred_rps: 0,
         };
