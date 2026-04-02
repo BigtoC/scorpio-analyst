@@ -151,28 +151,29 @@ where
     }
 
     // Native typed-output path (OpenAI, Anthropic, Gemini, Copilot)
-    let outcome = match prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns)
-        .await
-    {
-        Ok(outcome) => outcome,
-        Err(err @ TradingError::SchemaViolation { .. }) if agent.provider_id() == ProviderId::Gemini => {
-            return run_text_fallback_inference(
-                agent,
-                prompt,
-                timeout,
-                retry_policy,
-                max_turns,
-                &parse,
-                &validate,
-            )
-            .await
-            .map_err(|fallback_err| match fallback_err {
-                fallback_err @ TradingError::SchemaViolation { .. } => fallback_err,
-                _ => err,
-            });
-        }
-        Err(err) => return Err(err),
-    };
+    let outcome =
+        match prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns).await {
+            Ok(outcome) => outcome,
+            Err(err @ TradingError::SchemaViolation { .. })
+                if agent.provider_id() == ProviderId::Gemini =>
+            {
+                return run_text_fallback_inference(
+                    agent,
+                    prompt,
+                    timeout,
+                    retry_policy,
+                    max_turns,
+                    &parse,
+                    &validate,
+                )
+                .await
+                .map_err(|fallback_err| match fallback_err {
+                    fallback_err @ TradingError::SchemaViolation { .. } => fallback_err,
+                    _ => err,
+                });
+            }
+            Err(err) => return Err(err),
+        };
 
     validate(&outcome.result.output)?;
     Ok(AnalystInferenceOutcome {
@@ -503,12 +504,16 @@ mod tests {
             vec![],
         );
         agent.push_typed_error(crate::error::TradingError::SchemaViolation {
-            message: "provider=gemini model=gemini-test-model: structured output could not be parsed"
-                .to_owned(),
+            message:
+                "provider=gemini model=gemini-test-model: structured output could not be parsed"
+                    .to_owned(),
         });
         agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 7}"#, sample_usage(9)));
         // If the implementation retries typed again instead of falling back, this would be used.
-        agent.push_typed_ok(TypedPromptResponse::new(Output { value: 99 }, sample_usage(10)));
+        agent.push_typed_ok(TypedPromptResponse::new(
+            Output { value: 99 },
+            sample_usage(10),
+        ));
 
         let outcome = run_analyst_inference(
             &agent,
