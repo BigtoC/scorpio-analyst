@@ -50,6 +50,7 @@ pub async fn make_pipeline(
             ..ApiConfig::default()
         },
         storage: Default::default(),
+        providers: Default::default(),
         rate_limits: Default::default(),
     };
 

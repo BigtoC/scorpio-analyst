@@ -38,6 +38,7 @@ fn obs_test_config() -> Config {
             ..ApiConfig::default()
         },
         storage: Default::default(),
+        providers: Default::default(),
         rate_limits: Default::default(),
     }
 }
