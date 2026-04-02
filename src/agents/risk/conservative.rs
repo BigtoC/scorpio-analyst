@@ -18,9 +18,9 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, format_risk_history, initial_untrusted_history,
-    redact_risk_report_for_storage, sanitize_prompt_context, usage_from_response,
-    validate_raw_model_output_size, validate_risk_text,
+    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, extract_json_object, format_risk_history,
+    initial_untrusted_history, redact_risk_report_for_storage, sanitize_prompt_context,
+    usage_from_response, validate_raw_model_output_size, validate_risk_text,
 };
 
 /// System prompt for the Conservative Risk Analyst, from `docs/prompts.md` §4.
@@ -174,8 +174,9 @@ fn build_conservative_result(
     rate_limit_wait_ms: u64,
 ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
     validate_raw_model_output_size("ConservativeRiskAgent", &output)?;
+    let cleaned = extract_json_object("ConservativeRiskAgent", &output)?;
     let report: RiskReport =
-        serde_json::from_str(&output).map_err(|e| TradingError::SchemaViolation {
+        serde_json::from_str(&cleaned).map_err(|e| TradingError::SchemaViolation {
             message: format!("ConservativeRiskAgent: failed to parse RiskReport JSON: {e}"),
         })?;
 
