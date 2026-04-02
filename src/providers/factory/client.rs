@@ -10,7 +10,7 @@ use std::path::Path;
 use tracing::info;
 
 use crate::{
-    config::{ApiConfig, LlmConfig},
+    config::{LlmConfig, ProviderSettings, ProvidersConfig},
     error::TradingError,
     providers::{ModelTier, ProviderId, copilot::CopilotProviderClient},
     rate_limit::{ProviderRateLimiters, SharedRateLimiter},
@@ -107,17 +107,22 @@ pub(crate) enum ProviderClient {
 /// corresponding API key from `api_config`. Returns `TradingError::Config` for unknown
 /// providers, invalid model IDs, or missing keys.
 ///
+/// Per-provider `base_url` overrides are read from `providers_config`. When a provider
+/// has a custom base URL configured, the client is constructed via the builder pattern
+/// (`Client::builder().api_key(key).base_url(url).build()`) instead of `Client::new(key)`.
+///
 /// The `rate_limiters` registry is used to attach a per-provider rate limiter to the
 /// handle. Pass `&ProviderRateLimiters::default()` to disable rate limiting.
 pub fn create_completion_model(
     tier: ModelTier,
     llm_config: &LlmConfig,
-    api_config: &ApiConfig,
+    providers_config: &ProvidersConfig,
     rate_limiters: &ProviderRateLimiters,
 ) -> Result<CompletionModelHandle, TradingError> {
     let provider = validate_provider_id(tier.provider_id(llm_config))?;
     let model_id = validate_model_id(tier.model_id(llm_config))?;
-    let client = create_provider_client_for(provider, api_config, &model_id)?;
+    let settings = providers_config.settings_for(provider);
+    let client = create_provider_client_for(provider, settings, &model_id)?;
     let rate_limiter = rate_limiters.get(provider).cloned();
     info!(provider = provider.as_str(), model = model_id.as_str(), tier = %tier, "LLM completion model handle created");
     Ok(CompletionModelHandle {
@@ -130,7 +135,7 @@ pub fn create_completion_model(
 
 pub async fn preflight_copilot_if_configured(
     llm_config: &LlmConfig,
-    api_config: &ApiConfig,
+    providers_config: &ProvidersConfig,
     rate_limiters: &ProviderRateLimiters,
 ) -> Result<(), TradingError> {
     for tier in [ModelTier::QuickThinking, ModelTier::DeepThinking] {
@@ -141,7 +146,7 @@ pub async fn preflight_copilot_if_configured(
             continue;
         }
 
-        let handle = create_completion_model(tier, llm_config, api_config, rate_limiters)?;
+        let handle = create_completion_model(tier, llm_config, providers_config, rate_limiters)?;
         if let ProviderClient::Copilot(client) = &handle.client {
             client.preflight().await.map_err(|err| {
                 TradingError::Rig(format!(
@@ -158,35 +163,70 @@ pub async fn preflight_copilot_if_configured(
 
 fn create_provider_client_for(
     provider: ProviderId,
-    api_config: &ApiConfig,
+    settings: &ProviderSettings,
     model_id: &str,
 ) -> Result<ProviderClient, TradingError> {
+    let base_url = settings.base_url.as_deref();
     match provider {
         ProviderId::OpenAI => {
-            let key = api_config
-                .openai_api_key
+            let key = settings
+                .api_key
                 .as_ref()
                 .ok_or_else(|| missing_key_error(provider))?;
-            let client = openai::Client::new(key.expose_secret())
-                .map_err(|e| config_error(&format!("failed to create OpenAI client: {e}")))?;
+            let client = match base_url {
+                Some(url) => openai::Client::builder()
+                    .api_key(key.expose_secret())
+                    .base_url(url)
+                    .build()
+                    .map_err(|e| {
+                        config_error(&format!(
+                            "failed to create OpenAI client with base_url \"{url}\": {e}"
+                        ))
+                    })?,
+                None => openai::Client::new(key.expose_secret())
+                    .map_err(|e| config_error(&format!("failed to create OpenAI client: {e}")))?,
+            };
             Ok(ProviderClient::OpenAI(client))
         }
         ProviderId::Anthropic => {
-            let key = api_config
-                .anthropic_api_key
+            let key = settings
+                .api_key
                 .as_ref()
                 .ok_or_else(|| missing_key_error(provider))?;
-            let client = anthropic::Client::new(key.expose_secret())
-                .map_err(|e| config_error(&format!("failed to create Anthropic client: {e}")))?;
+            let client = match base_url {
+                Some(url) => anthropic::Client::builder()
+                    .api_key(key.expose_secret())
+                    .base_url(url)
+                    .build()
+                    .map_err(|e| {
+                        config_error(&format!(
+                            "failed to create Anthropic client with base_url \"{url}\": {e}"
+                        ))
+                    })?,
+                None => anthropic::Client::new(key.expose_secret()).map_err(|e| {
+                    config_error(&format!("failed to create Anthropic client: {e}"))
+                })?,
+            };
             Ok(ProviderClient::Anthropic(client))
         }
         ProviderId::Gemini => {
-            let key = api_config
-                .gemini_api_key
+            let key = settings
+                .api_key
                 .as_ref()
                 .ok_or_else(|| missing_key_error(provider))?;
-            let client = gemini::Client::new(key.expose_secret())
-                .map_err(|e| config_error(&format!("failed to create Gemini client: {e}")))?;
+            let client = match base_url {
+                Some(url) => gemini::Client::builder()
+                    .api_key(key.expose_secret())
+                    .base_url(url)
+                    .build()
+                    .map_err(|e| {
+                        config_error(&format!(
+                            "failed to create Gemini client with base_url \"{url}\": {e}"
+                        ))
+                    })?,
+                None => gemini::Client::new(key.expose_secret())
+                    .map_err(|e| config_error(&format!("failed to create Gemini client: {e}")))?,
+            };
             Ok(ProviderClient::Gemini(client))
         }
         ProviderId::Copilot => {
@@ -197,12 +237,24 @@ fn create_provider_client_for(
             )))
         }
         ProviderId::OpenRouter => {
-            let key = api_config
-                .openrouter_api_key
+            let key = settings
+                .api_key
                 .as_ref()
                 .ok_or_else(|| missing_key_error(provider))?;
-            let client = openrouter::Client::new(key.expose_secret())
-                .map_err(|e| config_error(&format!("failed to create OpenRouter client: {e}")))?;
+            let client = match base_url {
+                Some(url) => openrouter::Client::builder()
+                    .api_key(key.expose_secret())
+                    .base_url(url)
+                    .build()
+                    .map_err(|e| {
+                        config_error(&format!(
+                            "failed to create OpenRouter client with base_url \"{url}\": {e}"
+                        ))
+                    })?,
+                None => openrouter::Client::new(key.expose_secret()).map_err(|e| {
+                    config_error(&format!("failed to create OpenRouter client: {e}"))
+                })?,
+            };
             Ok(ProviderClient::OpenRouter(client))
         }
     }
@@ -338,7 +390,7 @@ fn missing_key_error(provider: ProviderId) -> TradingError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApiConfig, LlmConfig};
+    use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
     use secrecy::SecretString;
     use std::{
         env,
@@ -417,39 +469,43 @@ mod tests {
         }
     }
 
-    fn empty_api_config() -> ApiConfig {
-        ApiConfig::default()
-    }
-
-    fn api_config_with_openai() -> ApiConfig {
-        ApiConfig {
-            openai_api_key: Some(SecretString::from("test-key")),
-            ..empty_api_config()
+    fn providers_config_with_openai() -> ProvidersConfig {
+        ProvidersConfig {
+            openai: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
-    fn api_config_with_anthropic() -> ApiConfig {
-        ApiConfig {
-            anthropic_api_key: Some(SecretString::from("test-key")),
-            ..empty_api_config()
+    fn providers_config_with_anthropic() -> ProvidersConfig {
+        ProvidersConfig {
+            anthropic: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
-    fn api_config_with_gemini() -> ApiConfig {
-        ApiConfig {
-            gemini_api_key: Some(SecretString::from("test-key")),
-            ..empty_api_config()
+    fn providers_config_with_gemini() -> ProvidersConfig {
+        ProvidersConfig {
+            gemini: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
-    fn api_config_for_copilot() -> ApiConfig {
-        empty_api_config()
-    }
-
-    fn api_config_with_openrouter() -> ApiConfig {
-        ApiConfig {
-            openrouter_api_key: Some(SecretString::from("test-openrouter-key")),
-            ..empty_api_config()
+    fn providers_config_with_openrouter() -> ProvidersConfig {
+        ProvidersConfig {
+            openrouter: ProviderSettings {
+                api_key: Some(SecretString::from("test-openrouter-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -463,7 +519,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &empty_api_config(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
         assert!(result.is_err());
@@ -481,7 +537,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &empty_api_config(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
         assert!(result.is_err());
@@ -500,7 +556,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &empty_api_config(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
         assert!(result.is_err());
@@ -519,7 +575,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &empty_api_config(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
         assert!(result.is_err());
@@ -538,7 +594,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openai(),
+            &providers_config_with_openai(),
             &ProviderRateLimiters::default(),
         );
         assert!(handle.is_ok());
@@ -556,7 +612,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_with_anthropic(),
+            &providers_config_with_anthropic(),
             &ProviderRateLimiters::default(),
         );
         assert!(handle.is_ok());
@@ -574,7 +630,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_with_gemini(),
+            &providers_config_with_gemini(),
             &ProviderRateLimiters::default(),
         );
         assert!(handle.is_ok());
@@ -592,7 +648,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openai(),
+            &providers_config_with_openai(),
             &ProviderRateLimiters::default(),
         );
         assert!(result.is_err());
@@ -614,7 +670,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_for_copilot(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
         assert!(handle.is_ok());
@@ -627,23 +683,19 @@ mod tests {
     #[test]
     fn create_completion_model_attaches_provider_rate_limiter() {
         let cfg = sample_llm_config();
-        let limiters = ProviderRateLimiters::from_config(&crate::config::RateLimitConfig {
-            openai_rpm: 60,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 0,
-            finnhub_rps: 0,
-            fred_rps: 0,
-        });
+        let providers_cfg = ProvidersConfig {
+            openai: crate::config::ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                base_url: None,
+                rpm: 60,
+            },
+            ..ProvidersConfig::default()
+        };
+        let limiters = ProviderRateLimiters::from_config(&providers_cfg);
 
-        let handle = create_completion_model(
-            ModelTier::QuickThinking,
-            &cfg,
-            &api_config_with_openai(),
-            &limiters,
-        )
-        .unwrap();
+        let handle =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &providers_cfg, &limiters)
+                .unwrap();
 
         assert_eq!(handle.rate_limiter().map(|l| l.label()), Some("openai"));
     }
@@ -682,7 +734,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &empty_api_config(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
         assert!(result.is_err());
@@ -702,7 +754,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openrouter(),
+            &providers_config_with_openrouter(),
             &ProviderRateLimiters::default(),
         );
         assert!(handle.is_ok(), "OpenRouter client creation should succeed");
@@ -721,7 +773,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_with_openrouter(),
+            &providers_config_with_openrouter(),
             &ProviderRateLimiters::default(),
         )
         .unwrap();
@@ -747,7 +799,7 @@ mod tests {
             let handle = create_completion_model(
                 ModelTier::QuickThinking,
                 &cfg,
-                &api_config_with_openrouter(),
+                &providers_config_with_openrouter(),
                 &ProviderRateLimiters::default(),
             );
             assert!(
@@ -771,7 +823,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openrouter(),
+            &providers_config_with_openrouter(),
             &ProviderRateLimiters::default(),
         );
 
@@ -796,7 +848,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_for_copilot(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
 
@@ -819,7 +871,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_for_copilot(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
 
@@ -845,7 +897,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_for_copilot(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
 
@@ -876,7 +928,7 @@ mod tests {
         let result = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_for_copilot(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
 
@@ -907,7 +959,7 @@ mod tests {
         let handle = create_completion_model(
             ModelTier::DeepThinking,
             &cfg,
-            &api_config_for_copilot(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         );
 
@@ -921,7 +973,7 @@ mod tests {
     async fn preflight_copilot_if_configured_ignores_non_copilot_providers() {
         let result = preflight_copilot_if_configured(
             &sample_llm_config(),
-            &empty_api_config(),
+            &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
         )
         .await;

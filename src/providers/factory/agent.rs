@@ -706,10 +706,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApiConfig, LlmConfig};
+    use crate::config::{LlmConfig, ProviderSettings};
     use crate::rate_limit::ProviderRateLimiters;
     use crate::state::TradeProposal;
-    use crate::{config::RateLimitConfig, providers::ProviderId};
+    use crate::{config::ProvidersConfig, providers::ProviderId};
     use rig::tool::Tool;
     use secrecy::SecretString;
     use serde::{Deserialize, Serialize};
@@ -728,31 +728,43 @@ mod tests {
         }
     }
 
-    fn api_config_with_openai() -> ApiConfig {
-        ApiConfig {
-            openai_api_key: Some(SecretString::from("test-key")),
-            ..ApiConfig::default()
+    fn providers_config_with_openai() -> ProvidersConfig {
+        ProvidersConfig {
+            openai: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
-    fn api_config_with_anthropic() -> ApiConfig {
-        ApiConfig {
-            anthropic_api_key: Some(SecretString::from("test-key")),
-            ..ApiConfig::default()
+    fn providers_config_with_anthropic() -> ProvidersConfig {
+        ProvidersConfig {
+            anthropic: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
-    fn api_config_with_gemini() -> ApiConfig {
-        ApiConfig {
-            gemini_api_key: Some(SecretString::from("test-key")),
-            ..ApiConfig::default()
+    fn providers_config_with_gemini() -> ProvidersConfig {
+        ProvidersConfig {
+            gemini: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
-    fn api_config_with_openrouter() -> ApiConfig {
-        ApiConfig {
-            openrouter_api_key: Some(SecretString::from("test-openrouter-key")),
-            ..ApiConfig::default()
+    fn providers_config_with_openrouter() -> ProvidersConfig {
+        ProvidersConfig {
+            openrouter: ProviderSettings {
+                api_key: Some(SecretString::from("test-openrouter-key")),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -793,7 +805,7 @@ mod tests {
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openai(),
+            &providers_config_with_openai(),
             &ProviderRateLimiters::default(),
         )
         .unwrap();
@@ -810,7 +822,7 @@ mod tests {
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::DeepThinking,
             &cfg,
-            &api_config_with_anthropic(),
+            &providers_config_with_anthropic(),
             &ProviderRateLimiters::default(),
         )
         .unwrap();
@@ -827,7 +839,7 @@ mod tests {
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::DeepThinking,
             &cfg,
-            &api_config_with_gemini(),
+            &providers_config_with_gemini(),
             &ProviderRateLimiters::default(),
         )
         .unwrap();
@@ -846,7 +858,7 @@ mod tests {
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openrouter(),
+            &providers_config_with_openrouter(),
             &ProviderRateLimiters::default(),
         )
         .unwrap();
@@ -865,7 +877,7 @@ mod tests {
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::DeepThinking,
             &cfg,
-            &api_config_with_openrouter(),
+            &providers_config_with_openrouter(),
             &ProviderRateLimiters::default(),
         )
         .unwrap();
@@ -879,20 +891,20 @@ mod tests {
     #[tokio::test]
     async fn build_agent_propagates_openai_rate_limiter_from_handle() {
         let cfg = sample_llm_config();
-        let limiters = ProviderRateLimiters::from_config(&RateLimitConfig {
-            openai_rpm: 60,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 0,
-            finnhub_rps: 0,
-            fred_rps: 0,
-        });
+        let providers_cfg = ProvidersConfig {
+            openai: ProviderSettings {
+                api_key: Some(SecretString::from("test-key")),
+                base_url: None,
+                rpm: 60,
+            },
+            ..ProvidersConfig::default()
+        };
+        let limiters = ProviderRateLimiters::from_config(&providers_cfg);
 
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openai(),
+            &providers_cfg,
             &limiters,
         )
         .unwrap();
@@ -912,20 +924,20 @@ mod tests {
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "openrouter".to_owned();
         cfg.quick_thinking_model = "qwen/qwen3.6-plus-preview:free".to_owned();
-        let limiters = ProviderRateLimiters::from_config(&RateLimitConfig {
-            openai_rpm: 0,
-            anthropic_rpm: 0,
-            gemini_rpm: 0,
-            copilot_rpm: 0,
-            openrouter_rpm: 20,
-            finnhub_rps: 0,
-            fred_rps: 0,
-        });
+        let providers_cfg = ProvidersConfig {
+            openrouter: ProviderSettings {
+                api_key: Some(SecretString::from("test-openrouter-key")),
+                base_url: None,
+                rpm: 20,
+            },
+            ..ProvidersConfig::default()
+        };
+        let limiters = ProviderRateLimiters::from_config(&providers_cfg);
 
         let handle = super::super::client::create_completion_model(
             crate::providers::ModelTier::QuickThinking,
             &cfg,
-            &api_config_with_openrouter(),
+            &providers_cfg,
             &limiters,
         )
         .unwrap();
