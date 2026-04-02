@@ -341,27 +341,45 @@ impl Tool for GetOhlcv {
     type Output = Vec<Candle>;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
+        let mut desc = "Fetch historical daily OHLCV (open/high/low/close/volume) bars for a \
+                        stock symbol between start and end dates (YYYY-MM-DD, inclusive) from \
+                        Yahoo Finance."
+            .to_owned();
+
+        // Surface the scoped constraints so the LLM uses the exact values.
+        if let Some(sym) = &self.allowed_symbol {
+            desc.push_str(&format!(" The symbol MUST be exactly \"{sym}\"."));
+        }
+        if let Some(start) = &self.allowed_start {
+            desc.push_str(&format!(" The start date MUST be exactly \"{start}\"."));
+        }
+        if let Some(end) = &self.allowed_end {
+            desc.push_str(&format!(" The end date MUST be exactly \"{end}\"."));
+        }
+
+        // Build per-property schema, pinning enum when a scope value is set.
+        let symbol_schema = match &self.allowed_symbol {
+            Some(s) => json!({ "type": "string", "description": format!("Ticker symbol — must be \"{s}\""), "enum": [s] }),
+            None => json!({ "type": "string", "description": "The stock ticker symbol, e.g. \"AAPL\"" }),
+        };
+        let start_schema = match &self.allowed_start {
+            Some(s) => json!({ "type": "string", "description": format!("Start date — must be \"{s}\""), "enum": [s] }),
+            None => json!({ "type": "string", "description": "Start date in YYYY-MM-DD format (inclusive)" }),
+        };
+        let end_schema = match &self.allowed_end {
+            Some(e) => json!({ "type": "string", "description": format!("End date — must be \"{e}\""), "enum": [e] }),
+            None => json!({ "type": "string", "description": "End date in YYYY-MM-DD format (inclusive)" }),
+        };
+
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Fetch historical daily OHLCV (open/high/low/close/volume) bars for a \
-                           stock symbol between start and end dates (YYYY-MM-DD, inclusive) from \
-                           Yahoo Finance."
-                .to_owned(),
+            description: desc,
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "symbol": {
-                        "type": "string",
-                        "description": "The stock ticker symbol, e.g. \"AAPL\""
-                    },
-                    "start": {
-                        "type": "string",
-                        "description": "Start date in YYYY-MM-DD format (inclusive)"
-                    },
-                    "end": {
-                        "type": "string",
-                        "description": "End date in YYYY-MM-DD format (inclusive)"
-                    }
+                    "symbol": symbol_schema,
+                    "start": start_schema,
+                    "end": end_schema
                 },
                 "required": ["symbol", "start", "end"]
             }),
