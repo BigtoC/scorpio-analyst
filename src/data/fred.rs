@@ -31,7 +31,7 @@ const FRED_USER_AGENT: &str = "curl/8.7.1";
 
 /// FRED series ID for the Federal Funds Effective Rate.
 const SERIES_FEDFUNDS: &str = "FEDFUNDS";
-/// FRED series ID for the CPI: Total All Items for the US.
+/// Consumer Price Index: All Items: Total for United States
 const SERIES_CPALTT01: &str = "CPALTT01USM657N";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -221,10 +221,10 @@ impl FredClient {
             .map(Option::flatten)
     }
 
-    /// Fetch a small, fixed macro-economic snapshot from FRED.
+    /// Fetch a small, fixed macroeconomic snapshot from FRED.
     ///
     /// Replaces the former Finnhub `economic().data()` calls. Fetches the
-    /// Federal Funds Rate (`FEDFUNDS`) and CPI Total All Items for the US
+    /// Federal Funds Rate (`FEDFUNDS`) and the monthly CPI growth-rate series
     /// (`CPALTT01USM657N`) concurrently, then classifies each into a
     /// [`MacroEvent`] with an impact direction and confidence score.
     pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
@@ -255,17 +255,17 @@ fn collect_macro_events_from_series_results(
 
     if let Some(direction) = classify_interest_rate(interest_value) {
         events.push(MacroEvent {
-            event: "Interest-rate policy shift".to_owned(),
+            event: "Interest-rate backdrop".to_owned(),
             impact_direction: direction,
-            confidence: 0.7,
+            confidence: 0.6,
         });
     }
 
     if let Some(direction) = classify_inflation(inflation_value) {
         events.push(MacroEvent {
-            event: "Inflation signal".to_owned(),
+            event: "Monthly inflation momentum".to_owned(),
             impact_direction: direction,
-            confidence: 0.7,
+            confidence: 0.6,
         });
     }
 
@@ -576,21 +576,25 @@ fn decode_series_observations_response(
 /// Classify the latest interest rate value into an impact direction.
 fn classify_interest_rate(value: Option<f64>) -> Option<ImpactDirection> {
     value.map(|v| {
-        if v > 3.0 {
+        if v >= 4.0 {
             ImpactDirection::Negative
-        } else {
+        } else if v <= 2.0 {
             ImpactDirection::Positive
+        } else {
+            ImpactDirection::Neutral
         }
     })
 }
 
-/// Classify the latest inflation (CPI) value into an impact direction.
+/// Classify the latest monthly CPI growth-rate value into an impact direction.
 fn classify_inflation(value: Option<f64>) -> Option<ImpactDirection> {
     value.map(|v| {
-        if v > 3.0 {
+        if v >= 0.3 {
             ImpactDirection::Negative
-        } else {
+        } else if v <= 0.1 {
             ImpactDirection::Positive
+        } else {
+            ImpactDirection::Neutral
         }
     })
 }
@@ -742,14 +746,29 @@ mod tests {
     }
 
     #[test]
-    fn interest_rate_above_3_is_negative() {
+    fn interest_rate_at_or_above_4_is_negative() {
         let direction = classify_interest_rate(Some(4.5));
         assert_eq!(direction, Some(ImpactDirection::Negative));
     }
 
     #[test]
-    fn interest_rate_at_or_below_3_is_positive() {
+    fn interest_rate_at_exactly_4_is_negative() {
+        let direction = classify_interest_rate(Some(4.0));
+
+        assert_eq!(direction, Some(ImpactDirection::Negative));
+    }
+
+    #[test]
+    fn interest_rate_between_2_and_4_is_neutral() {
         let direction = classify_interest_rate(Some(2.5));
+
+        assert_eq!(direction, Some(ImpactDirection::Neutral));
+    }
+
+    #[test]
+    fn interest_rate_at_or_below_2_is_positive() {
+        let direction = classify_interest_rate(Some(2.0));
+
         assert_eq!(direction, Some(ImpactDirection::Positive));
     }
 
@@ -760,14 +779,23 @@ mod tests {
     }
 
     #[test]
-    fn inflation_above_3_is_negative() {
-        let direction = classify_inflation(Some(5.0));
+    fn monthly_inflation_momentum_at_or_above_point_3_is_negative() {
+        let direction = classify_inflation(Some(0.3));
+
         assert_eq!(direction, Some(ImpactDirection::Negative));
     }
 
     #[test]
-    fn inflation_at_or_below_3_is_positive() {
-        let direction = classify_inflation(Some(2.0));
+    fn monthly_inflation_momentum_between_point_1_and_point_3_is_neutral() {
+        let direction = classify_inflation(Some(0.2));
+
+        assert_eq!(direction, Some(ImpactDirection::Neutral));
+    }
+
+    #[test]
+    fn monthly_inflation_momentum_at_or_below_point_1_is_positive() {
+        let direction = classify_inflation(Some(0.1));
+
         assert_eq!(direction, Some(ImpactDirection::Positive));
     }
 
@@ -908,13 +936,16 @@ mod tests {
 
     #[test]
     fn economic_indicator_collection_degrades_when_series_fetches_fail() {
-        let result =
-            collect_macro_events_from_series_results(Err(FredRequestError::Timeout), Ok(Some(2.5)))
-                .expect("transient FRED failures should degrade, not abort macro collection");
+        let result = collect_macro_events_from_series_results(
+            Err(FredRequestError::Timeout),
+            Ok(Some(0.05)),
+        )
+        .expect("transient FRED failures should degrade, not abort macro collection");
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].event, "Inflation signal");
+        assert_eq!(result[0].event, "Monthly inflation momentum");
         assert_eq!(result[0].impact_direction, ImpactDirection::Positive);
+        assert_eq!(result[0].confidence, 0.6);
     }
 
     #[test]
@@ -923,13 +954,27 @@ mod tests {
             Err(FredRequestError::TransientServer {
                 status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
             }),
-            Ok(Some(2.5)),
+            Ok(Some(0.05)),
         )
         .expect("transient server failures should degrade, not abort macro collection");
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].event, "Inflation signal");
+        assert_eq!(result[0].event, "Monthly inflation momentum");
         assert_eq!(result[0].impact_direction, ImpactDirection::Positive);
+    }
+
+    #[test]
+    fn economic_indicator_collection_uses_calibrated_event_labels_and_confidence() {
+        let result = collect_macro_events_from_series_results(Ok(Some(4.5)), Ok(Some(0.05)))
+            .expect("valid FRED values should produce macro events");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].event, "Interest-rate backdrop");
+        assert_eq!(result[0].impact_direction, ImpactDirection::Negative);
+        assert_eq!(result[0].confidence, 0.6);
+        assert_eq!(result[1].event, "Monthly inflation momentum");
+        assert_eq!(result[1].impact_direction, ImpactDirection::Positive);
+        assert_eq!(result[1].confidence, 0.6);
     }
 
     #[test]

@@ -219,9 +219,18 @@ async fn integration_two_analyst_failures_abort_pipeline() {
     write_analyst_data(&ctx, "technical", technical_data()).await;
 
     let task = AnalystSyncTask::new(store);
-    let result = task.run(ctx).await.expect("task should signal abort");
+    let error = task
+        .run(ctx)
+        .await
+        .expect_err("task should fail when two analysts fail");
 
-    assert_eq!(result.next_action, NextAction::End);
+    match error {
+        graph_flow::GraphError::TaskExecutionFailed(message) => {
+            assert!(message.contains("AnalystSyncTask"));
+            assert!(message.contains("2/4 analysts failed"));
+        }
+        other => panic!("expected TaskExecutionFailed, got: {other:?}"),
+    }
 }
 
 #[tokio::test]
