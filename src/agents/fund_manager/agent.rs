@@ -185,8 +185,8 @@ pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
     let handle = create_completion_model(
         ModelTier::DeepThinking,
         &config.llm,
-        &config.api,
-        &ProviderRateLimiters::from_config(&config.rate_limits),
+        &config.providers,
+        &ProviderRateLimiters::from_config(&config.providers),
     )?;
     let agent =
         FundManagerAgent::new(handle, &state.asset_symbol, &state.target_date, &config.llm)?;

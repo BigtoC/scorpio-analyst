@@ -12,7 +12,7 @@ use super::{
     agent::{FundManagerInference, run_fund_manager_with_inference},
 };
 use crate::{
-    config::{ApiConfig, Config, LlmConfig, TradingConfig},
+    config::{Config, LlmConfig, ProviderSettings, ProvidersConfig, TradingConfig},
     error::{RetryPolicy, TradingError},
     providers::{
         ModelTier,
@@ -41,10 +41,13 @@ fn sample_llm_config() -> LlmConfig {
     }
 }
 
-fn sample_api_config() -> ApiConfig {
-    ApiConfig {
-        openai_api_key: Some(SecretString::from("test-key")),
-        ..ApiConfig::default()
+fn sample_providers_config() -> ProvidersConfig {
+    ProvidersConfig {
+        openai: ProviderSettings {
+            api_key: Some(SecretString::from("test-key")),
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
@@ -56,8 +59,9 @@ fn sample_config() -> Config {
             backtest_start: None,
             backtest_end: None,
         },
-        api: sample_api_config(),
+        api: Default::default(),
         storage: Default::default(),
+        providers: sample_providers_config(),
         rate_limits: Default::default(),
     }
 }
@@ -245,7 +249,7 @@ fn fund_manager_for_test() -> FundManagerAgent {
     let handle = create_completion_model(
         ModelTier::DeepThinking,
         &sample_llm_config(),
-        &sample_api_config(),
+        &sample_providers_config(),
         &crate::rate_limit::ProviderRateLimiters::default(),
     )
     .unwrap();
@@ -700,7 +704,7 @@ fn constructor_rejects_wrong_model_id() {
     let handle = create_completion_model(
         ModelTier::QuickThinking,
         &cfg,
-        &sample_api_config(),
+        &sample_providers_config(),
         &crate::rate_limit::ProviderRateLimiters::default(),
     )
     .unwrap();

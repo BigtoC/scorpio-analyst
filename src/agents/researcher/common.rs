@@ -67,9 +67,11 @@ pub(super) fn validate_debate_content(context: &str, content: &str) -> Result<()
 pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingError> {
     validate_debate_content("DebateModerator", content)?;
 
-    let has_stance = content
+    // Case-insensitive tokenisation for stance detection.
+    let lower = content.to_lowercase();
+    let has_stance = lower
         .split(|c: char| !c.is_ascii_alphabetic())
-        .any(|token| matches!(token, "Buy" | "Sell" | "Hold"));
+        .any(|token| matches!(token, "buy" | "sell" | "hold"));
 
     if !has_stance {
         return Err(TradingError::SchemaViolation {
@@ -79,9 +81,10 @@ pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingErr
         });
     }
 
-    let has_bullish_evidence = content.contains("bull") || content.contains("Bull");
-    let has_bearish_evidence = content.contains("bear") || content.contains("Bear");
-    let has_uncertainty = content.contains("uncertainty") || content.contains("uncertain");
+    // Case-insensitive evidence / uncertainty checks (the LLM may capitalise freely).
+    let has_bullish_evidence = lower.contains("bull");
+    let has_bearish_evidence = lower.contains("bear");
+    let has_uncertainty = lower.contains("uncertain");
 
     if !(has_bullish_evidence && has_bearish_evidence && has_uncertainty) {
         return Err(TradingError::SchemaViolation {
@@ -440,6 +443,36 @@ mod tests {
         assert!(
             validate_consensus_summary(
                 "Hold - bullish evidence is revenue growth, bearish evidence is rates, and uncertainty remains around demand durability."
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_consensus_summary_accepts_all_caps_keywords() {
+        assert!(
+            validate_consensus_summary(
+                "BUY - BULLISH momentum is strong, BEARISH headwinds are limited, and UNCERTAINTY around tariffs is the main risk."
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_consensus_summary_accepts_title_case_uncertainty() {
+        assert!(
+            validate_consensus_summary(
+                "Sell - Bullish evidence is brand strength, Bearish evidence is slowing growth, Uncertainty remains around the pace of deterioration."
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_consensus_summary_accepts_lowercase_stance() {
+        assert!(
+            validate_consensus_summary(
+                "The recommendation is hold given the balance of bullish and bearish signals, with key uncertainty around guidance."
             )
             .is_ok()
         );
