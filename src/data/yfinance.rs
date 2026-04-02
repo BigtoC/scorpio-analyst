@@ -359,16 +359,28 @@ impl Tool for GetOhlcv {
 
         // Build per-property schema, pinning enum when a scope value is set.
         let symbol_schema = match &self.allowed_symbol {
-            Some(s) => json!({ "type": "string", "description": format!("Ticker symbol — must be \"{s}\""), "enum": [s] }),
-            None => json!({ "type": "string", "description": "The stock ticker symbol, e.g. \"AAPL\"" }),
+            Some(s) => {
+                json!({ "type": "string", "description": format!("Ticker symbol — must be \"{s}\""), "enum": [s] })
+            }
+            None => {
+                json!({ "type": "string", "description": "The stock ticker symbol, e.g. \"AAPL\"" })
+            }
         };
         let start_schema = match &self.allowed_start {
-            Some(s) => json!({ "type": "string", "description": format!("Start date — must be \"{s}\""), "enum": [s] }),
-            None => json!({ "type": "string", "description": "Start date in YYYY-MM-DD format (inclusive)" }),
+            Some(s) => {
+                json!({ "type": "string", "description": format!("Start date — must be \"{s}\""), "enum": [s] })
+            }
+            None => {
+                json!({ "type": "string", "description": "Start date in YYYY-MM-DD format (inclusive)" })
+            }
         };
         let end_schema = match &self.allowed_end {
-            Some(e) => json!({ "type": "string", "description": format!("End date — must be \"{e}\""), "enum": [e] }),
-            None => json!({ "type": "string", "description": "End date in YYYY-MM-DD format (inclusive)" }),
+            Some(e) => {
+                json!({ "type": "string", "description": format!("End date — must be \"{e}\""), "enum": [e] })
+            }
+            None => {
+                json!({ "type": "string", "description": "End date in YYYY-MM-DD format (inclusive)" })
+            }
         };
 
         ToolDefinition {
