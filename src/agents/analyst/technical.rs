@@ -50,7 +50,7 @@ Important constraints:
 
 Populate only these schema fields:
 - `rsi`
-- `macd`
+- `macd` — either `null` or an object with `macd_line`, `signal_line`, and `histogram`
 - `atr`
 - `sma_20`
 - `sma_50`
@@ -68,11 +68,13 @@ Instructions:
 2. If an indicator cannot be computed because of limited history, preserve that absence with `null` rather than \
    guessing.
 3. Interpret tool output; do not claim you calculated indicators manually.
-4. Some named indicators may exist for reasoning but not as dedicated output fields. For example, if `close_200_sma` or \
-   `close_10_ema` is available, use it for reasoning only and fold the insight into `summary` rather than inventing new \
-   JSON keys.
-5. Keep `summary` short and useful for the Trader and risk agents.
-6. Return exactly one JSON object required by `TechnicalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
+4. The `macd` output field is not a scalar named-indicator value. When present, set it to an object with \
+   `macd_line`, `signal_line`, and `histogram`. If you cannot provide all three, use `null`.
+5. Some named indicators may exist for reasoning but not as dedicated output fields. For example, if `close_200_sma`, \
+   `close_10_ema`, or a scalar named-indicator value like `macd` is available, use it for reasoning only unless you can \
+   populate the full `macd` object without inventing values.
+6. Keep `summary` short and useful for the Trader and risk agents.
+7. Return exactly one JSON object required by `TechnicalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.";
 
@@ -206,7 +208,22 @@ fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
 ///
 /// Exposed for use as the `parse` hook in `run_analyst_inference`.
 pub(crate) fn parse_technical(json_str: &str) -> Result<TechnicalData, TradingError> {
-    serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
+    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        TradingError::SchemaViolation {
+            message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+        }
+    })?;
+
+    if value
+        .get("macd")
+        .is_some_and(|macd| macd.is_number())
+    {
+        return Err(TradingError::SchemaViolation {
+            message: "TechnicalAnalyst: failed to parse LLM output: field `macd` must be an object with `macd_line`, `signal_line`, and `histogram`, or null".to_owned(),
+        });
+    }
+
+    serde_json::from_value(value).map_err(|e| TradingError::SchemaViolation {
         message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
     })
 }
@@ -556,6 +573,16 @@ mod tests {
     }
 
     #[test]
+    fn technical_prompt_describes_macd_object_shape() {
+        for field in ["macd_line", "signal_line", "histogram"] {
+            assert!(
+                TECHNICAL_SYSTEM_PROMPT.contains(field),
+                "TECHNICAL_SYSTEM_PROMPT must describe MACD field: {field}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_technical_rejects_unknown_fields() {
         let result = super::parse_technical(r#"{"unknown_field": 1}"#);
         assert!(
@@ -646,5 +673,40 @@ mod tests {
             result.unwrap_err(),
             TradingError::SchemaViolation { .. }
         ));
+    }
+
+    #[test]
+    fn scalar_macd_value_returns_schema_violation_with_macd_shape_hint() {
+        let json = r#"{
+            "rsi": 43.2,
+            "macd": -2.87,
+            "atr": 4.12,
+            "sma_20": 191.4,
+            "sma_50": 198.2,
+            "ema_12": 193.1,
+            "ema_26": 195.97,
+            "bollinger_upper": 205.0,
+            "bollinger_lower": 188.0,
+            "support_level": 190.0,
+            "resistance_level": 201.0,
+            "volume_avg": 64000000.0,
+            "summary": "Momentum is weakening and MACD is negative."
+        }"#;
+
+        let err = parse_technical(json).expect_err("scalar MACD should not silently parse");
+
+        match err {
+            TradingError::SchemaViolation { message } => {
+                assert!(message.contains("TechnicalAnalyst: failed to parse LLM output"));
+                assert!(message.contains("macd"));
+                assert!(
+                    message.contains("macd_line")
+                        && message.contains("signal_line")
+                        && message.contains("histogram"),
+                    "error should explain the required MACD object shape: {message}"
+                );
+            }
+            other => panic!("expected SchemaViolation, got: {other:?}"),
+        }
     }
 }
