@@ -404,6 +404,10 @@ mod tests {
         );
         let cfg = cfg.unwrap();
         assert_eq!(cfg.llm.max_debate_rounds, 3);
+        assert_eq!(
+            cfg.llm.analyst_timeout_secs, 3000,
+            "analyst_timeout_secs should load from config.toml"
+        );
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
         assert_eq!(cfg.rate_limits.fred_rps, 2, "fred_rps default should be 2");
         assert_eq!(cfg.rate_limits.openai_rpm, 500);
@@ -463,6 +467,60 @@ mod tests {
             serde::de::value::Error,
         >::new("  OpenRouter  "));
         assert_eq!(result.unwrap(), "openrouter");
+    }
+
+    #[test]
+    fn load_from_supports_legacy_agent_timeout_secs_alias() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let config_path = tempdir.path().join("legacy-config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+agent_timeout_secs = 45
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+        )
+        .expect("legacy config file should be written");
+
+        let cfg = Config::load_from(&config_path).expect("legacy timeout alias should load");
+
+        assert_eq!(cfg.llm.analyst_timeout_secs, 45);
+    }
+
+    #[test]
+    fn load_from_supports_canonical_analyst_timeout_secs_key() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let config_path = tempdir.path().join("canonical-config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+analyst_timeout_secs = 60
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+        )
+        .expect("canonical config file should be written");
+
+        let cfg = Config::load_from(&config_path).expect("canonical timeout key should load");
+
+        assert_eq!(cfg.llm.analyst_timeout_secs, 60);
     }
 
     #[test]
