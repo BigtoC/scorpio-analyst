@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::{
+    agents::risk::extract_json_object,
     constants::{MAX_RATIONALE_CHARS, MAX_RAW_RESPONSE_CHARS},
     error::TradingError,
     state::{Decision, ExecutionStatus, TradingState},
@@ -33,8 +34,9 @@ pub(super) fn parse_and_validate_execution_status(
         });
     }
 
+    let cleaned = extract_json_object("FundManager", raw_output)?;
     let parsed: ExecutionStatusResponse =
-        serde_json::from_str(raw_output).map_err(|_| TradingError::SchemaViolation {
+        serde_json::from_str(&cleaned).map_err(|_| TradingError::SchemaViolation {
             message: "FundManager: response could not be parsed as ExecutionStatus".to_owned(),
         })?;
 
