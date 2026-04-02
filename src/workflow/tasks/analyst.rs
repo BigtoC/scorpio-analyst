@@ -492,12 +492,9 @@ impl Task for AnalystSyncTask {
                 failures = ?failures,
                 "AnalystSyncTask: {failure_count}/4 analysts failed — aborting pipeline"
             );
-            return Ok(TaskResult::new(
-                Some(format!(
-                    "{failure_count}/4 analysts failed — pipeline aborted"
-                )),
-                NextAction::End,
-            ));
+            return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                "AnalystSyncTask: {failure_count}/4 analysts failed — pipeline aborted"
+            )));
         }
 
         let token_usages = vec![

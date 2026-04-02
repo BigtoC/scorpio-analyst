@@ -211,6 +211,105 @@ async fn analyst_sync_all_succeed_returns_continue() {
 }
 
 #[tokio::test]
+async fn analyst_sync_two_failures_returns_error_instead_of_end() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+
+    // Two analysts fail.
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_FUNDAMENTAL,
+            common::OK_SUFFIX
+        ),
+        false,
+    )
+    .await;
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_TECHNICAL,
+            common::OK_SUFFIX
+        ),
+        false,
+    )
+    .await;
+
+    // Remaining analysts succeed.
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_SENTIMENT,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_NEWS,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let task = AnalystSyncTask::new(store);
+    let error = task
+        .run(ctx)
+        .await
+        .expect_err("two analyst failures should abort the workflow");
+
+    match error {
+        graph_flow::GraphError::TaskExecutionFailed(message) => {
+            assert!(message.contains("AnalystSyncTask"));
+            assert!(message.contains("2/4 analysts failed"));
+        }
+        other => panic!("expected TaskExecutionFailed, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure() {
     use tempfile::tempdir;
 
