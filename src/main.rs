@@ -35,8 +35,8 @@ fn main() {
 
             if let Err(e) = runtime.block_on(preflight_copilot_if_configured(
                 &cfg.llm,
-                &cfg.api,
-                &ProviderRateLimiters::from_config(&cfg.rate_limits),
+                &cfg.providers,
+                &ProviderRateLimiters::from_config(&cfg.providers),
             )) {
                 eprintln!("failed to preflight configured Copilot provider: {e:#}");
                 std::process::exit(1);
@@ -52,12 +52,12 @@ fn main() {
 
             tracing::info!(snapshot_store = ?snapshot_store, "storage configured");
 
-            let rate_limiters = ProviderRateLimiters::from_config(&cfg.rate_limits);
+            let rate_limiters = ProviderRateLimiters::from_config(&cfg.providers);
 
             let quick_handle = match create_completion_model(
                 ModelTier::QuickThinking,
                 &cfg.llm,
-                &cfg.api,
+                &cfg.providers,
                 &rate_limiters,
             ) {
                 Ok(h) => h,
@@ -70,7 +70,7 @@ fn main() {
             let deep_handle = match create_completion_model(
                 ModelTier::DeepThinking,
                 &cfg.llm,
-                &cfg.api,
+                &cfg.providers,
                 &rate_limiters,
             ) {
                 Ok(h) => h,
