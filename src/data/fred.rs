@@ -1,7 +1,8 @@
 //! FRED (Federal Reserve Economic Data) API client.
 //!
 //! Provides typed async methods for fetching macro-economic time-series
-//! observations from the free FRED API.  Replaces the paid Finnhub
+//! observations from the FRED v2 API.  Uses the `fred/v2/series/observations`
+//! endpoint with header-based authentication.  Replaces the paid Finnhub
 //! `economic().data()` endpoint for interest-rate and inflation indicators.
 
 use std::time::Duration;
@@ -22,8 +23,8 @@ use crate::{
 
 use super::finnhub::EmptyObjectArgs;
 
-/// Base URL for the FRED API series observations endpoint.
-const FRED_BASE_URL: &str = "https://api.stlouisfed.org/fred/series/observations";
+/// Base URL for the FRED v2 API series observations endpoint.
+const FRED_BASE_URL: &str = "https://api.stlouisfed.org/fred/v2/series/observations";
 
 /// FRED series ID for the Federal Funds Effective Rate.
 const SERIES_FEDFUNDS: &str = "FEDFUNDS";
@@ -78,20 +79,50 @@ impl FredClient {
         }
     }
 
+    /// Maximum number of attempts for transient network errors.
+    const MAX_ATTEMPTS: u32 = 3;
+    /// Base delay between retries (multiplied by attempt number).
+    const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+
     /// Fetch the most recent observation for a given FRED series.
     ///
     /// Returns `Ok(None)` when the series exists but the latest value is
     /// missing (reported as `"."`).  Returns `Err` on network/parse failures.
+    ///
+    /// Retries up to [`Self::MAX_ATTEMPTS`] times on transient connection or
+    /// timeout errors with linear backoff.
     pub async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
         self.limiter.acquire().await;
 
+        let mut last_err = None;
+        for attempt in 0..Self::MAX_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(Self::RETRY_BASE_DELAY * attempt).await;
+                tracing::debug!(attempt, series_id, "retrying FRED request");
+            }
+            match self.send_series_request(series_id).await {
+                Ok(val) => return Ok(val),
+                Err(e) if is_retryable_fred_err(&e) => {
+                    tracing::warn!(attempt, series_id, error = %e, "transient FRED error, will retry");
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.expect("loop executed at least once"))
+    }
+
+    /// Inner HTTP send + parse logic, extracted for retry.
+    ///
+    /// Uses the FRED v2 API with header-based authentication.
+    async fn send_series_request(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
         let resp = self
             .http
             .get(FRED_BASE_URL)
+            .header("X-Api-Key", self.api_key.expose_secret())
             .query(&[
                 ("series_id", series_id),
-                ("api_key", self.api_key.expose_secret()),
-                ("file_type", "json"),
+                ("format", "json"),
                 ("sort_order", "desc"),
                 ("limit", "1"),
             ])
@@ -100,7 +131,7 @@ impl FredClient {
             .map_err(map_fred_err)?
             .error_for_status()
             .map_err(map_fred_err)?
-            .json::<FredObservationsResponse>()
+            .json::<FredV2SeriesResponse>()
             .await
             .map_err(map_fred_err)?;
 
@@ -193,13 +224,23 @@ impl Tool for GetEconomicIndicators {
     }
 }
 
-/// Raw JSON response from the FRED `series/observations` endpoint.
+/// Raw JSON response from the FRED v2 `series/observations` endpoint.
 ///
-/// We only deserialize the `observations` array; other metadata fields are
-/// ignored via `#[serde(deny_unknown_fields)]` being intentionally absent.
+/// The v2 response wraps observations with series-level metadata and
+/// cursor-based pagination fields (`has_more`, `next_cursor`).
 #[derive(Debug, Deserialize)]
-pub(crate) struct FredObservationsResponse {
+pub(crate) struct FredV2SeriesResponse {
+    #[allow(dead_code)]
+    pub series_id: String,
     pub observations: Vec<FredObservation>,
+    /// Whether more pages of data exist beyond this response.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub has_more: bool,
+    /// Cursor token for fetching the next page (format: `"SERIES_ID,DATE"`).
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub next_cursor: Option<String>,
 }
 
 /// A single FRED observation (date + string-encoded value).
@@ -242,6 +283,19 @@ fn map_fred_err(err: reqwest::Error) -> TradingError {
         agent: "fred".to_owned(),
         message: format!("FRED request failed: {err}"),
     }
+}
+
+/// Returns `true` for transient errors worth retrying (connection failures,
+/// timeouts).  HTTP 4xx/5xx status errors are *not* retried.
+fn is_retryable_fred_err(err: &TradingError) -> bool {
+    matches!(
+        err,
+        TradingError::NetworkTimeout { .. }
+            | TradingError::AnalystError {
+                agent: _,
+                message: _,
+            }
+    ) && !matches!(err, TradingError::RateLimitExceeded { .. })
 }
 
 /// Classify the latest interest rate value into an impact direction.
@@ -310,33 +364,54 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_fred_observations_response() {
+    fn deserialize_fred_v2_series_response() {
         let json = r#"{
-            "realtime_start": "2026-04-01",
-            "realtime_end": "2026-04-01",
-            "observation_start": "1776-07-04",
-            "observation_end": "9999-12-31",
-            "units": "lin",
-            "output_type": 1,
-            "file_type": "json",
-            "order_by": "observation_date",
-            "sort_order": "desc",
-            "count": 1,
-            "offset": 0,
-            "limit": 1,
+            "series_id": "FEDFUNDS",
             "observations": [
                 {
-                    "realtime_start": "2026-04-01",
-                    "realtime_end": "2026-04-01",
                     "date": "2026-03-01",
                     "value": "4.33"
                 }
-            ]
+            ],
+            "has_more": false,
+            "next_cursor": null
         }"#;
-        let resp: FredObservationsResponse = serde_json::from_str(json).expect("should parse");
+        let resp: FredV2SeriesResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(resp.series_id, "FEDFUNDS");
         assert_eq!(resp.observations.len(), 1);
         assert_eq!(resp.observations[0].date, "2026-03-01");
         assert_eq!(resp.observations[0].value, "4.33");
+        assert!(!resp.has_more);
+        assert!(resp.next_cursor.is_none());
+    }
+
+    #[test]
+    fn deserialize_fred_v2_response_with_pagination() {
+        let json = r#"{
+            "series_id": "FEDFUNDS",
+            "observations": [
+                { "date": "2026-03-01", "value": "4.33" }
+            ],
+            "has_more": true,
+            "next_cursor": "FEDFUNDS,2026-02-01"
+        }"#;
+        let resp: FredV2SeriesResponse = serde_json::from_str(json).expect("should parse");
+        assert!(resp.has_more);
+        assert_eq!(resp.next_cursor.as_deref(), Some("FEDFUNDS,2026-02-01"));
+    }
+
+    #[test]
+    fn deserialize_fred_v2_response_minimal() {
+        let json = r#"{
+            "series_id": "CPALTT01USM657N",
+            "observations": [
+                { "date": "2026-02-01", "value": "3.12" }
+            ]
+        }"#;
+        let resp: FredV2SeriesResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(resp.series_id, "CPALTT01USM657N");
+        assert!(!resp.has_more);
+        assert!(resp.next_cursor.is_none());
     }
 
     #[test]
