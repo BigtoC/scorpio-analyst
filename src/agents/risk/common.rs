@@ -182,6 +182,78 @@ pub(super) fn validate_raw_model_output_size(
     Ok(())
 }
 
+// ─── JSON extraction ─────────────────────────────────────────────────────────
+
+/// Extract a JSON object from a raw LLM response that may contain markdown
+/// code fences or explanatory prose around the JSON.
+///
+/// Tries three strategies in order:
+/// 1. **Fast path** – the trimmed string already starts with `{` and ends with `}`.
+/// 2. **Code fence** – the JSON is wrapped in `` ```json … ``` `` or `` ``` … ``` ``.
+/// 3. **Brace fallback** – extract from the first `{` to the last `}`.
+pub(super) fn extract_json_object(context: &str, raw: &str) -> Result<String, TradingError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(TradingError::SchemaViolation {
+            message: format!("{context}: LLM returned empty response"),
+        });
+    }
+
+    // Fast path: already clean JSON object.
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        return Ok(trimmed.to_owned());
+    }
+
+    // Try markdown code fence extraction.
+    if let Some(extracted) = extract_from_code_fence(trimmed) {
+        return Ok(extracted);
+    }
+
+    // Brace-matching fallback: first `{` to last `}`.
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
+        && start < end
+    {
+        return Ok(trimmed[start..=end].to_owned());
+    }
+
+    Err(TradingError::SchemaViolation {
+        message: format!("{context}: no JSON object found in LLM response"),
+    })
+}
+
+/// Extract content from a markdown code fence (`` ```json `` or plain `` ``` ``).
+pub fn extract_from_code_fence(text: &str) -> Option<String> {
+    let mut inside_fence = false;
+    let mut content_lines = Vec::new();
+
+    for line in text.lines() {
+        let stripped = line.trim();
+        if !inside_fence {
+            if let Some(after_ticks) = stripped.strip_prefix("```") {
+                // Opening fence: ```json, ```JSON, or plain ```
+                let after_ticks = after_ticks.trim();
+                if after_ticks.is_empty() || after_ticks.eq_ignore_ascii_case("json") {
+                    inside_fence = true;
+                }
+            }
+        } else if stripped == "```" {
+            // Closing fence
+            let joined = content_lines.join("\n");
+            let candidate = joined.trim();
+            if candidate.starts_with('{') && candidate.ends_with('}') {
+                return Some(candidate.to_owned());
+            }
+            // Not a JSON object – reset and keep scanning for another fence.
+            inside_fence = false;
+            content_lines.clear();
+        } else {
+            content_lines.push(line);
+        }
+    }
+
+    None
+}
+
 // ─── Token usage ──────────────────────────────────────────────────────────────
 
 /// Build an [`AgentTokenUsage`] from a `rig` usage response.
@@ -677,5 +749,74 @@ mod tests {
             }
             other => panic!("unexpected seed history message: {other:?}"),
         }
+    }
+
+    // ── extract_json_object ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_json_object_returns_clean_json_unchanged() {
+        let json = r#"{"risk_level":"Aggressive","assessment":"ok"}"#;
+        let result = extract_json_object("test", json).unwrap();
+        assert_eq!(result, json);
+    }
+
+    #[test]
+    fn extract_json_object_strips_json_code_fence() {
+        let raw = "```json\n{\"key\":\"value\"}\n```";
+        let result = extract_json_object("test", raw).unwrap();
+        assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn extract_json_object_strips_plain_code_fence() {
+        let raw = "```\n{\"key\":\"value\"}\n```";
+        let result = extract_json_object("test", raw).unwrap();
+        assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn extract_json_object_strips_fence_with_uppercase_json_label() {
+        let raw = "```JSON\n{\"key\":\"value\"}\n```";
+        let result = extract_json_object("test", raw).unwrap();
+        assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn extract_json_object_extracts_json_from_prose() {
+        let raw = "Here is the result:\n\n{\"key\":\"value\"}\n\nHope that helps!";
+        let result = extract_json_object("test", raw).unwrap();
+        assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn extract_json_object_rejects_empty() {
+        let result = extract_json_object("test", "");
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn extract_json_object_rejects_whitespace_only() {
+        let result = extract_json_object("test", "   \n\t  ");
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn extract_json_object_rejects_no_json() {
+        let result = extract_json_object("test", "No JSON here at all.");
+        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[test]
+    fn extract_json_object_handles_leading_trailing_whitespace() {
+        let raw = "\n  {\"key\":\"value\"}  \n";
+        let result = extract_json_object("test", raw).unwrap();
+        assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn extract_json_object_handles_nested_braces_in_fence() {
+        let raw = "```json\n{\"outer\":{\"inner\":true}}\n```";
+        let result = extract_json_object("test", raw).unwrap();
+        assert_eq!(result, r#"{"outer":{"inner":true}}"#);
     }
 }
