@@ -50,9 +50,9 @@ flag a material violation (`flags_violation == true`), reject the proposal.
 calibrate confidence conservatively.
 7. Return ONLY the single JSON object required by `ExecutionStatus`.
 8. Set `action` to the trade direction you endorse. This may match the trader's proposed \
-action or differ if your review warrants a change. If rejecting, `Hold` is the expected \
-default unless the rejection is specifically about direction (e.g., the trader said Buy \
-but evidence supports Sell).
+action or differ if your review warrants a change. If your decision is `Rejected`, \
+`Hold` is the expected default unless the rejection is specifically about direction \
+(e.g., the trader said Buy but evidence supports Sell).
 
 Do not restate the entire pipeline.";
 
