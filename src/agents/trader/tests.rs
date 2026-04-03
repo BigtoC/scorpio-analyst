@@ -689,7 +689,7 @@ fn usage_from_typed_response_agent_name_and_model_id() {
         total_tokens: 150,
         cached_input_tokens: 0,
     };
-    let result = usage_from_typed_response("Trader Agent", "o3", usage, Instant::now(), 0);
+    let result = agent_token_usage_from_completion("Trader Agent", "o3", usage, Instant::now(), 0);
     assert_eq!(result.agent_name, "Trader Agent");
     assert_eq!(result.model_id, "o3");
     assert!(result.token_counts_available);
@@ -706,7 +706,7 @@ fn usage_from_typed_response_unavailable_when_all_zero() {
         total_tokens: 0,
         cached_input_tokens: 0,
     };
-    let result = usage_from_typed_response("Trader Agent", "o3", usage, Instant::now(), 0);
+    let result = agent_token_usage_from_completion("Trader Agent", "o3", usage, Instant::now(), 0);
     assert!(!result.token_counts_available);
 }
 
