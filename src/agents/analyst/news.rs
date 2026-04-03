@@ -13,6 +13,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
+    constants::NEWS_ANALYST_MAX_TOOL_TURNS,
     data::{
         FinnhubClient, FredClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews,
     },
@@ -22,8 +23,6 @@ use crate::{
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-
-const MAX_TOOL_TURNS: usize = 8;
 
 /// System prompt for the News Analyst, adapted from `docs/prompts.md`.
 const NEWS_SYSTEM_PROMPT: &str = "\
@@ -145,7 +144,7 @@ impl NewsAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            MAX_TOOL_TURNS,
+            NEWS_ANALYST_MAX_TOOL_TURNS,
             parse_news,
             validate_news,
         )

@@ -12,6 +12,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
+    constants::TECHNICAL_ANALYST_MAX_TOOL_TURNS,
     data::{GetOhlcv, OhlcvToolContext, YFinanceClient},
     error::{RetryPolicy, TradingError},
     indicators::{
@@ -23,8 +24,6 @@ use crate::{
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-
-const MAX_TOOL_TURNS: usize = 10;
 
 /// System prompt for the Technical Analyst, adapted from `docs/prompts.md`.
 const TECHNICAL_SYSTEM_PROMPT: &str = "\
@@ -167,7 +166,7 @@ impl TechnicalAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            MAX_TOOL_TURNS,
+            TECHNICAL_ANALYST_MAX_TOOL_TURNS,
             parse_technical,
             validate_technical,
         )

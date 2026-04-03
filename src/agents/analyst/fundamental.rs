@@ -16,6 +16,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
+    constants::FUNDAMENTAL_ANALYST_MAX_TOOL_TURNS,
     data::{FinnhubClient, GetEarnings, GetFundamentals},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
@@ -23,8 +24,6 @@ use crate::{
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-
-const MAX_TOOL_TURNS: usize = 8;
 
 /// System prompt for the Fundamental Analyst, adapted from `docs/prompts.md`.
 const FUNDAMENTAL_SYSTEM_PROMPT: &str = "\
@@ -137,7 +136,7 @@ impl FundamentalAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            MAX_TOOL_TURNS,
+            FUNDAMENTAL_ANALYST_MAX_TOOL_TURNS,
             parse_fundamental,
             validate_fundamental,
         )

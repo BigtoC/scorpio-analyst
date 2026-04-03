@@ -17,7 +17,7 @@ use crate::{
         sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     config::{Config, LlmConfig},
-    constants::MAX_RATIONALE_CHARS,
+    constants::{MAX_RATIONALE_CHARS, TRADER_MAX_TOOL_TURNS},
     error::{RetryPolicy, TradingError},
     providers::{
         ModelTier,
@@ -32,7 +32,6 @@ use crate::{
 
 #[cfg(test)]
 mod tests;
-const MAX_TOOL_TURNS: usize = 1;
 const MISSING_CONSENSUS_NOTE: &str =
     "(no debate consensus available - base the proposal on analyst data alone)";
 
@@ -105,7 +104,7 @@ impl TraderInference for RigTraderInference {
             user_prompt,
             timeout,
             retry_policy,
-            MAX_TOOL_TURNS,
+            TRADER_MAX_TOOL_TURNS,
         )
         .await
     }
