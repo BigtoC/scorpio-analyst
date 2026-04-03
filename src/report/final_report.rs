@@ -199,10 +199,7 @@ fn write_analyst_snapshot(out: &mut String, state: &TradingState) {
         ),
         (
             "Sentiment",
-            state
-                .market_sentiment
-                .as_ref()
-                .map(|d| d.summary.as_str()),
+            state.market_sentiment.as_ref().map(|d| d.summary.as_str()),
             state.market_sentiment.is_some(),
         ),
         (
@@ -496,7 +493,10 @@ mod tests {
 
     #[test]
     fn first_sentence_extracts_up_to_period() {
-        assert_eq!(first_sentence("Hello world. More text here."), "Hello world.");
+        assert_eq!(
+            first_sentence("Hello world. More text here."),
+            "Hello world."
+        );
     }
 
     #[test]
@@ -507,7 +507,10 @@ mod tests {
     #[test]
     fn first_sentence_handles_abbreviation_like_patterns() {
         // "e.g." has periods not followed by whitespace, so it continues
-        assert_eq!(first_sentence("Use e.g. this. Then more."), "Use e.g. this.");
+        assert_eq!(
+            first_sentence("Use e.g. this. Then more."),
+            "Use e.g. this."
+        );
     }
 
     #[test]
