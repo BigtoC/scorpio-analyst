@@ -1024,6 +1024,7 @@ mod tests {
                 stop_loss: 140.0,
                 confidence: 0.7,
                 rationale: "Recovered after transient timeout".to_owned(),
+                valuation_assessment: None,
             },
             rig::completion::Usage {
                 input_tokens: 12,
@@ -1063,6 +1064,7 @@ mod tests {
                 stop_loss: 140.0,
                 confidence: 0.7,
                 rationale: "Should not be reached".to_owned(),
+                valuation_assessment: None,
             },
             rig::completion::Usage {
                 input_tokens: 1,

@@ -239,6 +239,7 @@ fn arb_trade_proposal() -> impl Strategy<Value = TradeProposal> {
                 stop_loss,
                 confidence,
                 rationale,
+                valuation_assessment: None,
             },
         )
 }
@@ -273,13 +274,22 @@ fn arb_decision() -> impl Strategy<Value = Decision> {
 }
 
 fn arb_execution_status() -> impl Strategy<Value = ExecutionStatus> {
-    (arb_decision(), "[a-z ]{5,30}", "2024-0[1-9]-[0-2][0-9]").prop_map(
-        |(decision, rationale, decided_at)| ExecutionStatus {
-            decision,
-            rationale,
-            decided_at,
-        },
+    (
+        arb_decision(),
+        arb_trade_action(),
+        "[a-z ]{5,30}",
+        "2024-0[1-9]-[0-2][0-9]",
     )
+        .prop_map(
+            |(decision, action, rationale, decided_at)| ExecutionStatus {
+                decision,
+                action,
+                rationale,
+                decided_at,
+                entry_guidance: None,
+                suggested_position: None,
+            },
+        )
 }
 
 fn arb_debate_message() -> impl Strategy<Value = DebateMessage> {
@@ -415,6 +425,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     execution_id: uuid::Uuid::new_v4(),
                     asset_symbol,
                     target_date,
+                    current_price: None,
                     fundamental_metrics,
                     technical_indicators,
                     market_sentiment,

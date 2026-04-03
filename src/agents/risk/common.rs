@@ -320,6 +320,7 @@ mod tests {
             execution_id: uuid::Uuid::new_v4(),
             asset_symbol: "AAPL".to_owned(),
             target_date: "2026-03-15".to_owned(),
+            current_price: None,
             fundamental_metrics: None,
             technical_indicators: None,
             market_sentiment: None,

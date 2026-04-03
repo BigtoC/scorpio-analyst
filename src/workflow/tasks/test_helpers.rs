@@ -439,6 +439,7 @@ impl graph_flow::Task for StubTraderTask {
             stop_loss: 180.0,
             confidence: 0.75,
             rationale: "stub: buy on strong fundamentals and positive sentiment".to_owned(),
+            valuation_assessment: None,
         });
 
         let usage = stub_usage("Trader");
@@ -721,8 +722,11 @@ impl graph_flow::Task for StubFundManagerTask {
 
         state.final_execution_status = Some(ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: "stub: approved — risk within tolerances".to_owned(),
             decided_at: "2026-03-20T00:00:00Z".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         });
 
         let usage = stub_usage("Fund Manager");

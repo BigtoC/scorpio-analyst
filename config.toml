@@ -11,7 +11,8 @@ max_risk_rounds = 2
 analyst_timeout_secs = 3000
 
 [trading]
-asset_symbol = "AAPL"
+asset_symbol = "NVDA"
+# Not implemented yet
 backtest_start = "2024-06-01"
 backtest_end = "2024-11-30"
 

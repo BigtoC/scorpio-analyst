@@ -14,4 +14,5 @@ pub mod cli;
 pub mod data;
 pub mod indicators;
 pub mod providers;
+pub mod report;
 pub mod workflow;

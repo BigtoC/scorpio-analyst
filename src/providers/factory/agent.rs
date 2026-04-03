@@ -963,6 +963,7 @@ mod tests {
                 stop_loss: 111.0,
                 confidence: 0.6,
                 rationale: "typed mock".to_owned(),
+                valuation_assessment: None,
             },
             rig::completion::Usage {
                 input_tokens: 4,

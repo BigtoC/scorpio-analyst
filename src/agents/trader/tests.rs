@@ -60,6 +60,7 @@ fn valid_proposal() -> TradeProposal {
         confidence: 0.82,
         rationale: "Despite the moderator consensus leaning Hold, stronger fundamental growth and technical confirmation outweigh that stance, so this proposal is Buy. Main risk is macro headwinds compressing multiples."
             .to_owned(),
+        valuation_assessment: None,
     }
 }
 
@@ -464,6 +465,7 @@ fn valid_sell_proposal_passes_validation() {
         stop_loss: 172.0,
         confidence: 0.7,
         rationale: "Deteriorating fundamentals and bearish technicals warrant a Sell.".to_owned(),
+        valuation_assessment: None,
     };
     assert!(validate_trade_proposal(&proposal).is_ok());
 }
@@ -477,6 +479,7 @@ fn hold_proposal_with_monitoring_levels_passes_validation() {
         confidence: 0.55,
         rationale: "Mixed signals. Hold pending clearer macro direction. Re-enter above 190, thesis breaks below 175."
             .to_owned(),
+        valuation_assessment: None,
     };
     assert!(validate_trade_proposal(&proposal).is_ok());
 }
@@ -510,11 +513,13 @@ fn invalid_action_string_fails_deserialization() {
 }
 
 #[test]
-fn extra_fields_are_rejected() {
+fn extra_fields_are_ignored() {
+    // deny_unknown_fields was removed from TradeProposal to support optional
+    // fields like `valuation_assessment` with `#[serde(default)]`.
     let result = serde_json::from_str::<TradeProposal>(
         r#"{"action":"Buy","target_price":185.5,"stop_loss":178.0,"confidence":0.82,"rationale":"ok","extra":true}"#,
     );
-    assert!(result.is_err());
+    assert!(result.is_ok());
 }
 
 #[test]

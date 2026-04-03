@@ -1,6 +1,6 @@
-//! Global size-cap constants.
+//! Shared global constants.
 //!
-//! All values are set to [`usize::MAX`] — no truncation of LLM output or input.
+//! Includes both size-cap constants and per-agent tool-turn ceilings.
 
 pub const MAX_RATIONALE_CHARS: usize = usize::MAX;
 pub const MAX_PROMPT_CONTEXT_CHARS: usize = usize::MAX;
@@ -16,3 +16,11 @@ pub const NEWS_SNIPPET_MAX_CHARS: usize = usize::MAX;
 pub const MACRO_KEYWORD_SCAN_CHARS: usize = usize::MAX;
 pub const MAX_ERROR_SUMMARY_CHARS: usize = usize::MAX;
 pub const MAX_INDICATOR_NAME_LEN: usize = usize::MAX;
+
+/// Maximum depth for multi-turn conversations (0 means no multi-turn).
+/// A "smarter" model requires fewer turns
+pub const FUNDAMENTAL_ANALYST_MAX_TURNS: usize = 100;
+pub const NEWS_ANALYST_MAX_TURNS: usize = 100;
+pub const SENTIMENT_ANALYST_MAX_TURNS: usize = 100;
+pub const TECHNICAL_ANALYST_MAX_TURNS: usize = 100;
+pub const TRADER_MAX_TURNS: usize = 100;

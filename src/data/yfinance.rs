@@ -5,6 +5,7 @@
 //! type uses `paft_money::Money` for prices; this module defines its own
 //! [`Candle`] struct with plain `f64` fields and converts on the boundary.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{NaiveDate, TimeZone, Utc};
@@ -57,17 +58,33 @@ impl Candle {
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 
+/// Cache key: normalized (uppercase) symbol + start date + end date.
+type OhlcvCacheKey = (String, String, String);
+
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
+///
+/// Results of [`get_ohlcv`](YFinanceClient::get_ohlcv) are cached in memory by
+/// `(symbol, start, end)` so that repeated calls with the same parameters —
+/// whether from the LLM's tool loop or from different agents in the same session
+/// — return the cached `Vec<Candle>` without hitting the Yahoo Finance API more
+/// than once.
 #[derive(Clone)]
 pub struct YFinanceClient {
     inner: YfClient,
     limiter: SharedRateLimiter,
+    /// Shared across all `Clone`s of this client; keyed by the normalized
+    /// (uppercase) symbol + ISO-8601 start/end dates.
+    cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
 }
 
 impl std::fmt::Debug for YFinanceClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid blocking inside `fmt` — use `try_read` so that holding a write
+        // lock elsewhere at the same time doesn't deadlock the debug path.
+        let cache_len = self.cache.try_read().map(|g| g.len()).unwrap_or(0);
         f.debug_struct("YFinanceClient")
             .field("limiter", &self.limiter.label())
+            .field("cached_entries", &cache_len)
             .finish()
     }
 }
@@ -79,6 +96,7 @@ impl YFinanceClient {
         Self {
             inner: YfClient::default(),
             limiter,
+            cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -106,6 +124,21 @@ impl YFinanceClient {
                 message: format!("invalid date range: end ({end}) is before start ({start})"),
             });
         }
+
+        // --- In-memory cache lookup -------------------------------------------
+        // Normalize symbol to uppercase so "aapl" and "AAPL" share the same entry.
+        let cache_key: OhlcvCacheKey = (
+            symbol.to_ascii_uppercase(),
+            start.to_owned(),
+            end.to_owned(),
+        );
+        {
+            let cache = self.cache.read().await;
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok((**cached).clone());
+            }
+        }
+        // ----------------------------------------------------------------------
 
         let start_dt = Utc
             .from_local_datetime(&start_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
@@ -140,7 +173,29 @@ impl YFinanceClient {
         // Ensure chronological order (the API usually returns them sorted, but
         // the spec requires it).
         result.sort_by(|a, b| a.date.cmp(&b.date));
+
+        // Store in session cache so subsequent calls with the same key skip the network.
+        self.cache
+            .write()
+            .await
+            .insert(cache_key, Arc::new(result.clone()));
+
         Ok(result)
+    }
+
+    /// Fetch the most recent closing price for `symbol` by looking back up to
+    /// 7 calendar days from `as_of_date` (YYYY-MM-DD).
+    ///
+    /// Returns `None` if no candles are available in that window (e.g. on
+    /// weekends/holidays with no recent trading).
+    pub async fn get_latest_close(&self, symbol: &str, as_of_date: &str) -> Option<f64> {
+        let end_date = parse_date(as_of_date).ok()?;
+        let start_date = end_date - chrono::Duration::days(7);
+        let candles = self
+            .get_ohlcv(symbol, &start_date.to_string(), &end_date.to_string())
+            .await
+            .ok()?;
+        candles.last().map(|c| c.close)
     }
 }
 
@@ -684,6 +739,75 @@ mod tests {
             matches!(result.unwrap_err(), TradingError::SchemaViolation { ref message } if message.contains("2024-01-31")),
             "expected SchemaViolation mentioning the scoped end date"
         );
+    }
+
+    // ── In-memory client cache ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_ohlcv_returns_cached_result_on_second_call_with_same_params() {
+        // Pre-populate the cache directly so we don't need a real network call.
+        let client = YFinanceClient::default();
+        let candles = vec![Candle {
+            date: "2024-01-02".to_owned(),
+            open: 180.0,
+            high: 182.0,
+            low: 179.0,
+            close: 181.0,
+            volume: Some(30_000_000),
+        }];
+        // Insert directly into the cache to simulate a prior successful fetch.
+        client.cache.write().await.insert(
+            (
+                "AAPL".to_owned(),
+                "2024-01-01".to_owned(),
+                "2024-01-31".to_owned(),
+            ),
+            Arc::new(candles.clone()),
+        );
+
+        // Both calls with the same params should return the cached data.
+        let first = client
+            .get_ohlcv("AAPL", "2024-01-01", "2024-01-31")
+            .await
+            .expect("cache hit must succeed");
+        let second = client
+            .get_ohlcv("AAPL", "2024-01-01", "2024-01-31")
+            .await
+            .expect("cache hit must succeed");
+
+        assert_eq!(first, candles);
+        assert_eq!(second, candles);
+        // Only one entry in the cache (no duplication).
+        assert_eq!(client.cache.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_ohlcv_cache_is_case_insensitive_for_symbol() {
+        let client = YFinanceClient::default();
+        let candles = vec![Candle {
+            date: "2024-03-01".to_owned(),
+            open: 170.0,
+            high: 172.0,
+            low: 169.0,
+            close: 171.0,
+            volume: None,
+        }];
+        // Pre-populate with uppercase key (as would happen after a real fetch).
+        client.cache.write().await.insert(
+            (
+                "MSFT".to_owned(),
+                "2024-03-01".to_owned(),
+                "2024-03-31".to_owned(),
+            ),
+            Arc::new(candles.clone()),
+        );
+
+        // Call with lowercase — should still hit the cache.
+        let result = client
+            .get_ohlcv("msft", "2024-03-01", "2024-03-31")
+            .await
+            .expect("case-insensitive cache hit must succeed");
+        assert_eq!(result, candles);
     }
 
     // ── Chronological ordering ────────────────────────────────────────────

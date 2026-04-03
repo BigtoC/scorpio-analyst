@@ -125,24 +125,11 @@ fn main() {
 
             match runtime.block_on(pipeline.run_analysis_cycle(initial_state)) {
                 Ok(state) => {
-                    match &state.final_execution_status {
-                        Some(execution) => {
-                            println!(
-                                "\n=== DECISION: {:?} ===\n{}\n",
-                                execution.decision, execution.rationale
-                            );
-                        }
-                        None => {
-                            eprintln!("pipeline completed without a final execution status");
-                            std::process::exit(1);
-                        }
+                    if state.final_execution_status.is_none() {
+                        eprintln!("pipeline completed without a final execution status");
+                        std::process::exit(1);
                     }
-                    println!(
-                        "Token usage: {} total ({} prompt / {} completion)",
-                        state.token_usage.total_tokens,
-                        state.token_usage.total_prompt_tokens,
-                        state.token_usage.total_completion_tokens,
-                    );
+                    println!("{}", scorpio_analyst::report::format_final_report(&state));
                 }
                 Err(e) => {
                     eprintln!("analysis cycle failed: {e:#}");

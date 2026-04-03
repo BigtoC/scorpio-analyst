@@ -33,21 +33,39 @@ Available inputs:
 - News data: {news_report}
 - Past learnings: {past_memory_str}
 
+Current market price: {current_price}
+
 Return ONLY a JSON object matching `ExecutionStatus`:
 - `decision`: `Approved` or `Rejected`
+- `action`: one of `Buy`, `Sell`, `Hold`
 - `rationale`: concise audit-ready explanation
 - `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
+- `entry_guidance`: (required when action is Hold or Sell) a specific tactical entry condition, \
+e.g. \"tactical BUY on any dip below $570-$575\" or \"accumulate below $145 on weakness\". \
+Reference concrete price levels derived from support/resistance, valuation floor, or technical signals.
+- `suggested_position`: recommended portfolio allocation with scaling guidance, \
+e.g. \"5-12% of portfolio (add 2-4% on weakness) - maintain conservative sizing while volatility premium persists\". \
+Calibrate size to conviction level, volatility, and risk tolerance.
 
 Instructions:
 1. Review the trader proposal and all risk inputs carefully.
 2. Apply the deterministic safety rule: if BOTH the Conservative and Neutral risk reports clearly \
 flag a material violation (`flags_violation == true`), reject the proposal.
 3. Otherwise, make an evidence-based decision using the full input set.
-4. Approve only if the proposal's action, target, stop, and confidence are defensible.
-5. If rejecting, make the blocking reason explicit in `rationale`.
-6. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and \
+4. Ground the decision in the trader's valuation assessment - use it to anchor price levels \
+in `entry_guidance` and calibrate `suggested_position`.
+5. Approve only if the proposal's action, target, stop, and confidence are defensible.
+6. If rejecting, make the blocking reason explicit in `rationale`.
+7. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and \
 calibrate confidence conservatively.
-7. Return ONLY the single JSON object required by `ExecutionStatus`.
+8. If the final `action` is Hold or Sell, you MUST provide `entry_guidance` with a specific \
+price level or condition at which the asset becomes a buy.
+9. Always provide `suggested_position` with concrete portfolio percentage ranges.
+10. Return ONLY the single JSON object required by `ExecutionStatus`.
+11. Set `action` to the trade direction you endorse. This may match the trader's proposed \
+action or differ if your review warrants a change. If your decision is `Rejected`, \
+`Hold` is the expected default unless the rejection is specifically about direction \
+(e.g., the trader said Buy but evidence supports Sell).
 
 Do not restate the entire pipeline.";
 
@@ -82,7 +100,13 @@ pub(super) fn build_prompt_context(
         .replace("{sentiment_report}", "see user context")
         .replace("{news_report}", "see user context")
         .replace("{past_memory_str}", "")
-        .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE);
+        .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE)
+        .replace(
+            "{current_price}",
+            &state
+                .current_price
+                .map_or_else(|| "unavailable".to_owned(), |p| format!("{p:.2}")),
+        );
 
     let user_prompt = build_user_prompt(state, &symbol, &target_date, data_quality_note);
 
@@ -274,6 +298,7 @@ mod tests {
             stop_loss: 178.00,
             confidence: 0.82,
             rationale: "Strong fundamentals and momentum support this Buy.".to_owned(),
+            valuation_assessment: None,
         }
     }
 
@@ -359,6 +384,10 @@ mod tests {
         assert!(
             FUND_MANAGER_SYSTEM_PROMPT.contains("Rejected"),
             "system prompt must mention Rejected decision"
+        );
+        assert!(
+            FUND_MANAGER_SYSTEM_PROMPT.contains("action"),
+            "system prompt must mention action field"
         );
     }
 
