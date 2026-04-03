@@ -12,6 +12,7 @@ pub mod agents;
 pub mod backtest;
 pub mod cli;
 pub mod data;
+pub mod report;
 pub mod indicators;
 pub mod providers;
 pub mod workflow;
