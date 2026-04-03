@@ -598,6 +598,7 @@ Return plain text only.
 **Required keys:**
 
 - `decision`
+- `action`
 - `rationale`
 - `decided_at`
 
@@ -624,6 +625,7 @@ Available inputs:
 
 Return ONLY a JSON object matching `ExecutionStatus`:
 - `decision`: `Approved` or `Rejected`
+- `action`: one of `Buy`, `Sell`, `Hold`
 - `rationale`: concise audit-ready explanation
 - `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
 
@@ -637,6 +639,9 @@ Instructions:
 6. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and calibrate confidence
    conservatively.
 7. Return ONLY the single JSON object required by `ExecutionStatus`.
+8. Set `action` to the trade direction you endorse. This may match the trader's proposed action or differ if your
+   review warrants a change. If rejecting, `Hold` is the expected default unless the rejection is specifically about
+   direction (e.g., the trader said Buy but evidence supports Sell).
 
 Do not restate the entire pipeline.
 ```
@@ -856,6 +861,7 @@ Practical implications:
 **`ExecutionStatus`**
 
 - `decision: Decision`
+- `action: TradeAction`
 - `rationale: String`
 - `decided_at: String`
 
