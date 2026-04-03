@@ -81,11 +81,7 @@ impl std::fmt::Debug for YFinanceClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Avoid blocking inside `fmt` — use `try_read` so that holding a write
         // lock elsewhere at the same time doesn't deadlock the debug path.
-        let cache_len = self
-            .cache
-            .try_read()
-            .map(|g| g.len())
-            .unwrap_or(0);
+        let cache_len = self.cache.try_read().map(|g| g.len()).unwrap_or(0);
         f.debug_struct("YFinanceClient")
             .field("limiter", &self.limiter.label())
             .field("cached_entries", &cache_len)
@@ -751,25 +747,23 @@ mod tests {
     async fn get_ohlcv_returns_cached_result_on_second_call_with_same_params() {
         // Pre-populate the cache directly so we don't need a real network call.
         let client = YFinanceClient::default();
-        let candles = vec![
-            Candle {
-                date: "2024-01-02".to_owned(),
-                open: 180.0,
-                high: 182.0,
-                low: 179.0,
-                close: 181.0,
-                volume: Some(30_000_000),
-            },
-        ];
+        let candles = vec![Candle {
+            date: "2024-01-02".to_owned(),
+            open: 180.0,
+            high: 182.0,
+            low: 179.0,
+            close: 181.0,
+            volume: Some(30_000_000),
+        }];
         // Insert directly into the cache to simulate a prior successful fetch.
-        client
-            .cache
-            .write()
-            .await
-            .insert(
-                ("AAPL".to_owned(), "2024-01-01".to_owned(), "2024-01-31".to_owned()),
-                Arc::new(candles.clone()),
-            );
+        client.cache.write().await.insert(
+            (
+                "AAPL".to_owned(),
+                "2024-01-01".to_owned(),
+                "2024-01-31".to_owned(),
+            ),
+            Arc::new(candles.clone()),
+        );
 
         // Both calls with the same params should return the cached data.
         let first = client
@@ -799,14 +793,14 @@ mod tests {
             volume: None,
         }];
         // Pre-populate with uppercase key (as would happen after a real fetch).
-        client
-            .cache
-            .write()
-            .await
-            .insert(
-                ("MSFT".to_owned(), "2024-03-01".to_owned(), "2024-03-31".to_owned()),
-                Arc::new(candles.clone()),
-            );
+        client.cache.write().await.insert(
+            (
+                "MSFT".to_owned(),
+                "2024-03-01".to_owned(),
+                "2024-03-31".to_owned(),
+            ),
+            Arc::new(candles.clone()),
+        );
 
         // Call with lowercase — should still hit the cache.
         let result = client
