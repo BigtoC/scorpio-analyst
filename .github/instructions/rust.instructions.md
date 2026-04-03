@@ -141,6 +141,7 @@ Before publishing or reviewing Rust code, ensure:
 - [ ] **API Design**: Functions are predictable, flexible, and type-safe
 - [ ] **Future Proofing**: Private fields in structs, sealed traits where appropriate
 - [ ] **Duplicated codes**: Identify duplicated codes and refactored into reusable functions or modules
+- [ ] **Unnecessary Wrapped Function Call**: If a function is only calling another function without adding any additional logic, consider removing the wrapper function and calling the inner function directly to reduce unnecessary indirection.
 - [ ] **Design Patterns**: Apply proper design patterns (e.g., Builder, Strategy, Factory, Newtype, Facade) to write clean, maintainable code
 - [ ] **Module Cohesion**: Each file has a single, focused responsibility; split files exceeding ~300 lines or mixing multiple concerns into separate modules. Use the Facade pattern in `mod.rs` to shield consumers from internal refactoring and prevent downstream API breakage.
 - [ ] **Tooling**: Code passes `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo nextest run --all-features`
