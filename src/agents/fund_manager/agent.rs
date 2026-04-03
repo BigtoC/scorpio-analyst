@@ -21,7 +21,7 @@ use crate::{
         },
     },
     rate_limit::ProviderRateLimiters,
-    state::{AgentTokenUsage, Decision, ExecutionStatus, TradingState},
+    state::{AgentTokenUsage, Decision, ExecutionStatus, TradeAction, TradingState},
 };
 
 pub(super) trait FundManagerInference {
@@ -124,6 +124,7 @@ impl FundManagerAgent {
             let decided_at = runtime_timestamp(&state.target_date);
             let status = ExecutionStatus {
                 decision: Decision::Rejected,
+                action: TradeAction::Hold,
                 rationale: DETERMINISTIC_REJECT_RATIONALE.to_owned(),
                 decided_at,
             };
