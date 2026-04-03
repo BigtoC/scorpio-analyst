@@ -606,6 +606,7 @@ mod tests {
                 stop_loss: 180.0,
                 confidence: 0.75,
                 rationale: "Growth outlook".to_owned(),
+                valuation_assessment: None,
             }),
             risk_discussion_history: Vec::new(),
             aggressive_risk_report: None,
