@@ -127,6 +127,8 @@ impl FundManagerAgent {
                 action: TradeAction::Hold,
                 rationale: DETERMINISTIC_REJECT_RATIONALE.to_owned(),
                 decided_at,
+                entry_guidance: None,
+                suggested_position: None,
             };
             state.final_execution_status = Some(status);
             return Ok(AgentTokenUsage::unavailable(

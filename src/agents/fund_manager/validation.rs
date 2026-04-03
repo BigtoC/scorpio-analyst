@@ -12,12 +12,13 @@ pub(super) const DETERMINISTIC_REJECT_RATIONALE: &str = "Both the Conservative a
      without LLM consultation.";
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ExecutionStatusResponse {
     decision: Decision,
     action: TradeAction,
     rationale: String,
     decided_at: Option<String>,
+    entry_guidance: Option<String>,
+    suggested_position: Option<String>,
 }
 
 pub(super) fn parse_and_validate_execution_status(
@@ -46,6 +47,8 @@ pub(super) fn parse_and_validate_execution_status(
         action: parsed.action,
         rationale: parsed.rationale,
         decided_at: parsed.decided_at.unwrap_or_else(|| target_date.to_owned()),
+        entry_guidance: parsed.entry_guidance,
+        suggested_position: parsed.suggested_position,
     };
 
     validate_execution_status(&status)?;
@@ -153,6 +156,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: String::new(),
             decided_at: "2026-03-15".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(matches!(
             validate_execution_status(&status),
@@ -167,6 +172,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "   ".to_owned(),
             decided_at: "2026-03-15".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(matches!(
             validate_execution_status(&status),
@@ -181,6 +188,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "bad\x00content".to_owned(),
             decided_at: "2026-03-15".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(matches!(
             validate_execution_status(&status),
@@ -195,6 +204,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "bad\x1bcontent".to_owned(),
             decided_at: "2026-03-15".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(matches!(
             validate_execution_status(&status),
@@ -209,6 +220,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "Approved.\nRisk:\tWithin bounds.".to_owned(),
             decided_at: "2026-03-15".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
     }
@@ -220,6 +233,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "The proposal is well-supported by all available evidence.".to_owned(),
             decided_at: "2026-03-15T00:00:00Z".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
     }
@@ -231,6 +246,8 @@ mod tests {
             action: TradeAction::Hold,
             rationale: "The stop-loss is too wide relative to the evidence quality.".to_owned(),
             decided_at: "2026-03-15T00:00:00Z".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
     }
