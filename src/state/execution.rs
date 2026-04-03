@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::TradeAction;
+
 /// Final decision issued by the Fund Manager.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Decision {
@@ -11,6 +13,7 @@ pub enum Decision {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionStatus {
     pub decision: Decision,
+    pub action: TradeAction,
     pub rationale: String,
     pub decided_at: String,
 }
