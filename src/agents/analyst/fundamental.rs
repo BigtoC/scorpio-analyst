@@ -16,7 +16,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
-    constants::FUNDAMENTAL_ANALYST_MAX_TOOL_TURNS,
+    constants::FUNDAMENTAL_ANALYST_MAX_TURNS,
     data::{FinnhubClient, GetEarnings, GetFundamentals},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
@@ -136,7 +136,7 @@ impl FundamentalAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            FUNDAMENTAL_ANALYST_MAX_TOOL_TURNS,
+            FUNDAMENTAL_ANALYST_MAX_TURNS,
             parse_fundamental,
             validate_fundamental,
         )

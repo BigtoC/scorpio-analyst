@@ -16,7 +16,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
-    constants::SENTIMENT_ANALYST_MAX_TOOL_TURNS,
+    constants::SENTIMENT_ANALYST_MAX_TURNS,
     data::{FinnhubClient, GetCachedNews, GetNews},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
@@ -147,7 +147,7 @@ impl SentimentAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            SENTIMENT_ANALYST_MAX_TOOL_TURNS,
+            SENTIMENT_ANALYST_MAX_TURNS,
             parse_sentiment,
             validate_sentiment,
         )

@@ -13,7 +13,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
-    constants::NEWS_ANALYST_MAX_TOOL_TURNS,
+    constants::NEWS_ANALYST_MAX_TURNS,
     data::{
         FinnhubClient, FredClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews,
     },
@@ -144,7 +144,7 @@ impl NewsAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            NEWS_ANALYST_MAX_TOOL_TURNS,
+            NEWS_ANALYST_MAX_TURNS,
             parse_news,
             validate_news,
         )

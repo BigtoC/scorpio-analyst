@@ -12,7 +12,7 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
-    constants::TECHNICAL_ANALYST_MAX_TOOL_TURNS,
+    constants::TECHNICAL_ANALYST_MAX_TURNS,
     data::{GetOhlcv, OhlcvToolContext, YFinanceClient},
     error::{RetryPolicy, TradingError},
     indicators::{
@@ -166,7 +166,7 @@ impl TechnicalAnalyst {
             &prompt,
             self.timeout,
             &self.retry_policy,
-            TECHNICAL_ANALYST_MAX_TOOL_TURNS,
+            TECHNICAL_ANALYST_MAX_TURNS,
             parse_technical,
             validate_technical,
         )

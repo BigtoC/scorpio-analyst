@@ -17,7 +17,7 @@ use crate::{
         sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     config::{Config, LlmConfig},
-    constants::{MAX_RATIONALE_CHARS, TRADER_MAX_TOOL_TURNS},
+    constants::{MAX_RATIONALE_CHARS, TRADER_MAX_TURNS},
     error::{RetryPolicy, TradingError},
     providers::{
         ModelTier,
@@ -104,7 +104,7 @@ impl TraderInference for RigTraderInference {
             user_prompt,
             timeout,
             retry_policy,
-            TRADER_MAX_TOOL_TURNS,
+            TRADER_MAX_TURNS,
         )
         .await
     }
