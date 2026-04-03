@@ -183,12 +183,7 @@ fn write_executive_summary(out: &mut String, state: &TradingState) {
             }
 
             if let Some(position) = &exec.suggested_position {
-                let _ = writeln!(
-                    out,
-                    "{} {}",
-                    "Suggested Position:".bold().cyan(),
-                    position
-                );
+                let _ = writeln!(out, "{} {}", "Suggested Position:".bold().cyan(), position);
             }
         }
         None => {
@@ -488,7 +483,15 @@ fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
         Cell::new(tracker.total_tokens)
             .add_attribute(Attribute::Bold)
             .set_alignment(CellAlignment::Right),
-        Cell::new(""),
+        Cell::new(format_duration_ms(
+            tracker
+                .phase_usage
+                .iter()
+                .map(|phase| phase.phase_duration_ms)
+                .sum(),
+        ))
+        .add_attribute(Attribute::Bold)
+        .set_alignment(CellAlignment::Right),
     ]);
 
     let _ = writeln!(out, "{table}");
