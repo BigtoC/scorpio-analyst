@@ -120,7 +120,7 @@ fn write_header(out: &mut String, state: &TradingState) {
     let _ = writeln!(
         out,
         "{}",
-        format!("Trading Decision: {}", state.asset_symbol)
+        format!("Final Report: {}", state.asset_symbol)
             .bold()
             .on_bright_black()
     );
@@ -130,14 +130,28 @@ fn write_header(out: &mut String, state: &TradingState) {
         state.target_date, state.execution_id
     );
 
-    if let Some(exec) = &state.final_execution_status {
+    if let Some(proposal) = &state.trader_proposal {
+        if let Some(exec) = &state.final_execution_status {
+            let _ = write!(
+                out,
+                "Trader Proposal: {}  |  Fund Manager Decision: {}  |  Final Recommendation: {}",
+                action_colored(&proposal.action),
+                decision_colored(&exec.decision),
+                action_colored(&exec.action),
+            );
+        }
+        let _ = writeln!(out);
+    } else if let Some(exec) = &state.final_execution_status {
         let _ = writeln!(
             out,
-            "Decision: {}  |  Action: {} \nTimestamp: {}",
+            "Fund Manager Decision: {}  |  Final Recommendation: {}",
             decision_colored(&exec.decision),
             action_colored(&exec.action),
-            exec.decided_at,
         );
+    }
+
+    if let Some(exec) = &state.final_execution_status {
+        let _ = writeln!(out, "Timestamp: {}", exec.decided_at);
     }
 }
 
@@ -164,6 +178,11 @@ fn write_trader_proposal(out: &mut String, state: &TradingState) {
                 Cell::new("Value").add_attribute(Attribute::Bold),
             ]);
             table.add_row(vec!["Action".to_owned(), action_colored(&proposal.action)]);
+            let price_str = match state.current_price {
+                Some(p) => format!("{p:.2}"),
+                None => "Unavailable".dimmed().to_string(),
+            };
+            table.add_row(vec!["Current Price".to_owned(), price_str]);
             table.add_row(vec![
                 "Confidence".to_owned(),
                 confidence_colored(proposal.confidence),
@@ -419,7 +438,7 @@ fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
 
 fn write_disclaimer(out: &mut String) {
     let _ = writeln!(out);
-    let _ = writeln!(out, "{}", "Disclaimers".bold().dimmed());
+    let _ = writeln!(out, "{}", "⚠️Disclaimers".bold().dimmed());
     let disclaimer = "\
 - This is AI-generated analysis for educational and research purposes only.
 - Not financial advice. Market data may be incomplete or delayed.
