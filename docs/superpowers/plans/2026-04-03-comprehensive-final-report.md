@@ -1007,7 +1007,7 @@ git commit -m "feat: wire format_final_report into CLI output"
 
 - [ ] **Step 1: Run full test suite**
 
-Run: `cargo test`
+Run: `cargo nextest run --all-features `
 
 Expected: All tests pass.
 
