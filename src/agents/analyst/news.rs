@@ -11,6 +11,7 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
+    agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
     data::{
         FinnhubClient, FredClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews,
@@ -20,9 +21,7 @@ use crate::{
     state::{AgentTokenUsage, NewsData},
 };
 
-use super::common::{
-    analyst_runtime_config, run_analyst_inference, usage_from_response, validate_summary_content,
-};
+use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
 
 const MAX_TOOL_TURNS: usize = 8;
 
@@ -152,7 +151,7 @@ impl NewsAnalyst {
         )
         .await?;
 
-        let usage = usage_from_response(
+        let usage = agent_token_usage_from_completion(
             "News Analyst",
             self.handle.model_id(),
             outcome.usage,
