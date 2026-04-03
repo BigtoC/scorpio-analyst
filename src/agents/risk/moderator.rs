@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use crate::{
+    agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
     error::TradingError,
     providers::factory::{CompletionModelHandle, prompt_with_retry_details},
@@ -20,7 +21,7 @@ use super::common::{
     RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context,
     expected_moderator_violation_sentence, format_risk_history, redact_text_for_storage,
     sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
-    usage_from_response, validate_moderator_output,
+    validate_moderator_output,
 };
 
 /// System prompt for the Risk Moderator, from `docs/prompts.md` §4.
@@ -192,7 +193,7 @@ fn build_moderator_result(
             .is_some_and(|r| r.flags_violation);
     validate_moderator_output(&output, expect_both_violation)?;
     let output = redact_text_for_storage(&output);
-    let token_usage = usage_from_response(
+    let token_usage = agent_token_usage_from_completion(
         "Risk Moderator",
         model_id,
         usage,

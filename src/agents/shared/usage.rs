@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use crate::state::AgentTokenUsage;
 
-pub(super) fn usage_from_response(
+/// Build an [`AgentTokenUsage`] from a provider completion usage payload.
+pub(crate) fn agent_token_usage_from_completion(
     agent_name: &str,
     model_id: &str,
     usage: rig::completion::Usage,

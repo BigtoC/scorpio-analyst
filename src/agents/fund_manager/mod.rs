@@ -10,7 +10,6 @@
 
 mod agent;
 mod prompt;
-mod usage;
 mod validation;
 
 #[cfg(test)]

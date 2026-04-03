@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use crate::{
+    agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
     error::TradingError,
     providers::factory::{CompletionModelHandle, prompt_with_retry_details},
@@ -18,7 +19,7 @@ use crate::providers::factory::LlmAgent;
 
 use super::common::{
     DebaterCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, format_debate_history,
-    usage_from_response, validate_consensus_summary,
+    validate_consensus_summary,
 };
 
 /// System prompt for the Debate Moderator, adapted from `docs/prompts.md` §2.
@@ -151,7 +152,7 @@ fn build_moderator_result(
 ) -> Result<(String, AgentTokenUsage), TradingError> {
     validate_consensus_summary(&output)?;
 
-    let usage = usage_from_response(
+    let usage = agent_token_usage_from_completion(
         "Debate Moderator",
         model_id,
         usage,

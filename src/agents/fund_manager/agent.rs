@@ -2,6 +2,14 @@ use std::time::{Duration, Instant};
 
 use rig::agent::PromptResponse;
 
+use super::{
+    prompt::build_prompt_context,
+    validation::{
+        DETERMINISTIC_REJECT_RATIONALE, deterministic_reject, parse_and_validate_execution_status,
+        runtime_timestamp, state_has_missing_inputs,
+    },
+};
+use crate::agents::shared::agent_token_usage_from_completion;
 use crate::{
     config::{Config, LlmConfig},
     error::{RetryPolicy, TradingError},
@@ -14,15 +22,6 @@ use crate::{
     },
     rate_limit::ProviderRateLimiters,
     state::{AgentTokenUsage, Decision, ExecutionStatus, TradingState},
-};
-
-use super::{
-    prompt::build_prompt_context,
-    usage::usage_from_response,
-    validation::{
-        DETERMINISTIC_REJECT_RATIONALE, deterministic_reject, parse_and_validate_execution_status,
-        runtime_timestamp, state_has_missing_inputs,
-    },
 };
 
 pub(super) trait FundManagerInference {
@@ -157,7 +156,7 @@ impl FundManagerAgent {
 
         status.decided_at = runtime_timestamp(&state.target_date);
 
-        let usage = usage_from_response(
+        let usage = agent_token_usage_from_completion(
             "Fund Manager",
             self.handle.model_id(),
             outcome.result.usage,

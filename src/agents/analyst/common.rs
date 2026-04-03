@@ -4,10 +4,11 @@
 //! modules (`fundamental`, `sentiment`, `news`, `technical`).
 
 use std::time::Duration;
-use std::time::Instant;
 
 use serde::de::DeserializeOwned;
 
+#[cfg(test)]
+use crate::agents::shared::agent_token_usage_from_completion;
 use crate::{
     config::LlmConfig,
     constants::MAX_SUMMARY_CHARS,
@@ -16,7 +17,6 @@ use crate::{
         ProviderId,
         factory::{LlmAgent, prompt_text_with_retry, prompt_typed_with_retry},
     },
-    state::AgentTokenUsage,
 };
 
 /// Shared runtime fields derived from the analyst request context.
@@ -62,34 +62,12 @@ pub(super) fn validate_summary_content(context: &str, summary: &str) -> Result<(
     Ok(())
 }
 
-/// Build an [`AgentTokenUsage`] from a `rig` usage response.
-pub(super) fn usage_from_response(
-    agent_name: &str,
-    model_id: &str,
-    usage: rig::completion::Usage,
-    started_at: Instant,
-    rate_limit_wait_ms: u64,
-) -> AgentTokenUsage {
-    AgentTokenUsage {
-        agent_name: agent_name.to_owned(),
-        model_id: model_id.to_owned(),
-        token_counts_available: usage.total_tokens > 0
-            || usage.input_tokens > 0
-            || usage.output_tokens > 0,
-        prompt_tokens: usage.input_tokens,
-        completion_tokens: usage.output_tokens,
-        total_tokens: usage.total_tokens,
-        latency_ms: started_at.elapsed().as_millis() as u64,
-        rate_limit_wait_ms,
-    }
-}
-
 // ─── run_analyst_inference ────────────────────────────────────────────────────
 
 /// Result of a single analyst LLM inference call.
 ///
 /// Bundles the parsed/validated output with usage metadata so callers can
-/// forward both pieces to `usage_from_response` without re-querying the agent.
+/// forward both pieces to the shared token-usage helper without re-querying the agent.
 pub(super) struct AnalystInferenceOutcome<T> {
     /// The successfully parsed and validated output from the LLM.
     pub output: T,
@@ -600,7 +578,8 @@ mod tests {
             total_tokens: 150,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("Agent", "model-x", usage, Instant::now(), 0);
+        let result =
+            agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
         assert!(
             result.token_counts_available,
             "should be available when total_tokens > 0"
@@ -617,7 +596,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("Agent", "model-x", usage, Instant::now(), 0);
+        let result =
+            agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
         assert!(
             result.token_counts_available,
             "should be available when input_tokens > 0"
@@ -634,7 +614,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("Agent", "model-x", usage, Instant::now(), 0);
+        let result =
+            agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
         assert!(
             !result.token_counts_available,
             "should be unavailable when all token counts are zero"
@@ -650,7 +631,8 @@ mod tests {
             total_tokens: 150,
             cached_input_tokens: 0,
         };
-        let result = usage_from_response("MyAgent", "my-model", usage, Instant::now(), 0);
+        let result =
+            agent_token_usage_from_completion("MyAgent", "my-model", usage, Instant::now(), 0);
         assert_eq!(result.agent_name, "MyAgent");
         assert_eq!(result.model_id, "my-model");
         assert_eq!(result.prompt_tokens, 100);

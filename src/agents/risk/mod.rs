@@ -28,7 +28,6 @@ mod moderator;
 mod neutral;
 
 pub use aggressive::AggressiveRiskAgent;
-pub(crate) use common::extract_json_object;
 pub use conservative::ConservativeRiskAgent;
 pub use moderator::RiskModerator;
 pub use neutral::NeutralRiskAgent;
