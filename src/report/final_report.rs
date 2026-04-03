@@ -3,7 +3,9 @@ use std::fmt::Write;
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
 
-use crate::state::{Decision, RiskReport, TokenUsageTracker, TradeAction, TradingState};
+use crate::state::{
+    AgentTokenUsage, Decision, RiskReport, TokenUsageTracker, TradeAction, TradingState,
+};
 
 /// Render a comprehensive terminal report from the completed trading state.
 pub fn format_final_report(state: &TradingState) -> String {
@@ -106,6 +108,21 @@ fn format_duration_ms(ms: u64) -> String {
         format!("{:.1}s", ms as f64 / 1_000.0)
     } else {
         format!("{ms}ms")
+    }
+}
+
+fn summarize_model_ids<'a>(agent_usage: impl Iterator<Item = &'a AgentTokenUsage>) -> String {
+    let mut model_ids: Vec<&str> = agent_usage
+        .map(|usage| usage.model_id.trim())
+        .filter(|model_id| !model_id.is_empty() && *model_id != "unknown")
+        .collect();
+    model_ids.sort_unstable();
+    model_ids.dedup();
+
+    match model_ids.as_slice() {
+        [] => "unknown".dimmed().to_string(),
+        [model_id] => (*model_id).to_owned(),
+        many => format!("mixed ({})", many.join(", ")),
     }
 }
 
@@ -389,6 +406,29 @@ fn write_safety_check(out: &mut String, state: &TradingState) {
 fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
     section_header(out, "Token Usage Summary");
 
+    let _ = writeln!(
+        out,
+        "Quick-thinking model: {}",
+        summarize_model_ids(
+            tracker
+                .phase_usage
+                .iter()
+                .filter(|phase| phase.phase_name == "Analyst Fan-Out")
+                .flat_map(|phase| phase.agent_usage.iter()),
+        )
+    );
+    let _ = writeln!(
+        out,
+        "Deep-thinking model: {}",
+        summarize_model_ids(
+            tracker
+                .phase_usage
+                .iter()
+                .filter(|phase| phase.phase_name != "Analyst Fan-Out")
+                .flat_map(|phase| phase.agent_usage.iter()),
+        )
+    );
+
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec![
@@ -450,7 +490,8 @@ fn write_disclaimer(out: &mut String) {
 mod tests {
     use super::*;
     use crate::state::{
-        Decision, ExecutionStatus, PhaseTokenUsage, TradeAction, TradeProposal, TradingState,
+        AgentTokenUsage, Decision, ExecutionStatus, PhaseTokenUsage, TradeAction, TradeProposal,
+        TradingState,
     };
 
     fn minimal_state() -> TradingState {
@@ -501,6 +542,49 @@ mod tests {
         let report = format_final_report(&state);
         assert!(report.contains("Test Phase"));
         assert!(report.contains("150"));
+    }
+
+    #[test]
+    fn format_final_report_shows_quick_and_deep_model_labels() {
+        let mut state = minimal_state();
+        state.token_usage.push_phase_usage(PhaseTokenUsage {
+            phase_name: "Analyst Fan-Out".to_owned(),
+            agent_usage: vec![AgentTokenUsage {
+                agent_name: "Fundamental Analyst".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+                latency_ms: 100,
+                rate_limit_wait_ms: 0,
+            }],
+            phase_prompt_tokens: 10,
+            phase_completion_tokens: 5,
+            phase_total_tokens: 15,
+            phase_duration_ms: 100,
+        });
+        state.token_usage.push_phase_usage(PhaseTokenUsage {
+            phase_name: "Trader Synthesis".to_owned(),
+            agent_usage: vec![AgentTokenUsage {
+                agent_name: "Trader Agent".to_owned(),
+                model_id: "o3".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 20,
+                completion_tokens: 10,
+                total_tokens: 30,
+                latency_ms: 200,
+                rate_limit_wait_ms: 0,
+            }],
+            phase_prompt_tokens: 20,
+            phase_completion_tokens: 10,
+            phase_total_tokens: 30,
+            phase_duration_ms: 200,
+        });
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Quick-thinking model: gpt-4o-mini"));
+        assert!(report.contains("Deep-thinking model: o3"));
     }
 
     #[test]
