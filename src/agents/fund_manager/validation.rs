@@ -4,7 +4,7 @@ use crate::{
     agents::shared::extract_json_object,
     constants::{MAX_RATIONALE_CHARS, MAX_RAW_RESPONSE_CHARS},
     error::TradingError,
-    state::{Decision, ExecutionStatus, TradingState},
+    state::{Decision, ExecutionStatus, TradeAction, TradingState},
 };
 
 pub(super) const DETERMINISTIC_REJECT_RATIONALE: &str = "Both the Conservative and Neutral risk reports flag a material violation \
@@ -15,6 +15,7 @@ pub(super) const DETERMINISTIC_REJECT_RATIONALE: &str = "Both the Conservative a
 #[serde(deny_unknown_fields)]
 struct ExecutionStatusResponse {
     decision: Decision,
+    action: TradeAction,
     rationale: String,
     decided_at: Option<String>,
 }
@@ -42,6 +43,7 @@ pub(super) fn parse_and_validate_execution_status(
 
     let mut status = ExecutionStatus {
         decision: parsed.decision,
+        action: parsed.action,
         rationale: parsed.rationale,
         decided_at: parsed.decided_at.unwrap_or_else(|| target_date.to_owned()),
     };
@@ -141,13 +143,14 @@ mod tests {
     use super::validate_execution_status;
     use crate::{
         error::TradingError,
-        state::{Decision, ExecutionStatus},
+        state::{Decision, ExecutionStatus, TradeAction},
     };
 
     #[test]
     fn validate_rejects_empty_rationale() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: String::new(),
             decided_at: "2026-03-15".to_owned(),
         };
@@ -161,6 +164,7 @@ mod tests {
     fn validate_rejects_whitespace_only_rationale() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: "   ".to_owned(),
             decided_at: "2026-03-15".to_owned(),
         };
@@ -174,6 +178,7 @@ mod tests {
     fn validate_rejects_control_char_in_rationale() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: "bad\x00content".to_owned(),
             decided_at: "2026-03-15".to_owned(),
         };
@@ -187,6 +192,7 @@ mod tests {
     fn validate_rejects_escape_char_in_rationale() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: "bad\x1bcontent".to_owned(),
             decided_at: "2026-03-15".to_owned(),
         };
@@ -200,6 +206,7 @@ mod tests {
     fn validate_allows_newline_and_tab_in_rationale() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: "Approved.\nRisk:\tWithin bounds.".to_owned(),
             decided_at: "2026-03-15".to_owned(),
         };
@@ -210,6 +217,7 @@ mod tests {
     fn valid_approved_status_passes_validation() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
+            action: TradeAction::Buy,
             rationale: "The proposal is well-supported by all available evidence.".to_owned(),
             decided_at: "2026-03-15T00:00:00Z".to_owned(),
         };
@@ -220,6 +228,7 @@ mod tests {
     fn valid_rejected_status_passes_validation() {
         let status = ExecutionStatus {
             decision: Decision::Rejected,
+            action: TradeAction::Hold,
             rationale: "The stop-loss is too wide relative to the evidence quality.".to_owned(),
             decided_at: "2026-03-15T00:00:00Z".to_owned(),
         };
