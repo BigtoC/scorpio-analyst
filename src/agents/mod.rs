@@ -1,5 +1,7 @@
 // Analyst agents — populated by add-analyst-team
 pub mod analyst;
+// Shared internal helpers reused across agent modules
+pub(crate) mod shared;
 // Researcher debate — populated by add-researcher-debate
 pub mod researcher;
 // Risk management — populated by add-risk-management
