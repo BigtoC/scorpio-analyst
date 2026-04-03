@@ -27,6 +27,9 @@ pub struct TradingState {
     pub asset_symbol: String,
     pub target_date: String,
 
+    // Market price at the time of analysis
+    pub current_price: Option<f64>,
+
     // Phase 1: Aggregated analyst data
     pub fundamental_metrics: Option<FundamentalData>,
     pub technical_indicators: Option<TechnicalData>,
@@ -67,6 +70,7 @@ impl TradingState {
             execution_id: Uuid::new_v4(),
             asset_symbol: asset_symbol.into(),
             target_date: target_date.into(),
+            current_price: None,
             fundamental_metrics: None,
             technical_indicators: None,
             market_sentiment: None,

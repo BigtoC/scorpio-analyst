@@ -422,6 +422,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     execution_id: uuid::Uuid::new_v4(),
                     asset_symbol,
                     target_date,
+                    current_price: None,
                     fundamental_metrics,
                     technical_indicators,
                     market_sentiment,
