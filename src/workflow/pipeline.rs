@@ -396,6 +396,19 @@ impl TradingPipeline {
         let execution_id = initial_state.execution_id.to_string();
         info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle started");
 
+        // Fetch current market price from yfinance (best-effort — non-fatal if unavailable).
+        if initial_state.current_price.is_none() {
+            match self.yfinance.get_latest_close(&symbol, &date).await {
+                Some(price) => {
+                    info!(symbol = %symbol, price, "fetched current price from yfinance");
+                    initial_state.current_price = Some(price);
+                }
+                None => {
+                    info!(symbol = %symbol, "current price unavailable from yfinance");
+                }
+            }
+        }
+
         // Pre-fetch shared news for Sentiment and News analysts (avoids duplicate Finnhub calls).
         let cached_news_json: Option<String> = {
             use crate::agents::analyst::prefetch_analyst_news;
