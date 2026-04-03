@@ -133,7 +133,7 @@ fn write_header(out: &mut String, state: &TradingState) {
     if let Some(exec) = &state.final_execution_status {
         let _ = writeln!(
             out,
-            "Decision: {}  |  Action: {}  |  Timestamp: {}",
+            "Decision: {}  |  Action: {} \nTimestamp: {}",
             decision_colored(&exec.decision),
             action_colored(&exec.action),
             exec.decided_at,
