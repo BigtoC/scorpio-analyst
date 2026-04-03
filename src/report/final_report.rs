@@ -177,6 +177,19 @@ fn write_executive_summary(out: &mut String, state: &TradingState) {
     match &state.final_execution_status {
         Some(exec) => {
             let _ = writeln!(out, "{}", exec.rationale);
+
+            if let Some(entry) = &exec.entry_guidance {
+                let _ = writeln!(out, "\n{} {}", "Entry Guidance:".bold().cyan(), entry);
+            }
+
+            if let Some(position) = &exec.suggested_position {
+                let _ = writeln!(
+                    out,
+                    "{} {}",
+                    "Suggested Position:".bold().cyan(),
+                    position
+                );
+            }
         }
         None => {
             let _ = writeln!(out, "{}", "No execution status available.".dimmed());
@@ -212,6 +225,11 @@ fn write_trader_proposal(out: &mut String, state: &TradingState) {
                 "Stop Loss".to_owned(),
                 format!("{:.2}", proposal.stop_loss),
             ]);
+            let valuation_str = proposal
+                .valuation_assessment
+                .as_deref()
+                .unwrap_or("Not assessed");
+            table.add_row(vec!["Valuation".to_owned(), valuation_str.to_owned()]);
             let _ = writeln!(out, "{table}");
             let _ = writeln!(out, "\n{} {}", "Rationale:".bold(), proposal.rationale);
         }
@@ -501,6 +519,8 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "Approved based on strong fundamentals.".to_owned(),
             decided_at: "2026-04-03T12:00:00Z".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
         });
         state.trader_proposal = Some(TradeProposal {
             action: TradeAction::Buy,
@@ -508,6 +528,7 @@ mod tests {
             stop_loss: 175.0,
             confidence: 0.8,
             rationale: "Strong growth and momentum.".to_owned(),
+            valuation_assessment: None,
         });
         state
     }
