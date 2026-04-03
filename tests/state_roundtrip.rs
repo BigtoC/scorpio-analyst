@@ -273,13 +273,20 @@ fn arb_decision() -> impl Strategy<Value = Decision> {
 }
 
 fn arb_execution_status() -> impl Strategy<Value = ExecutionStatus> {
-    (arb_decision(), "[a-z ]{5,30}", "2024-0[1-9]-[0-2][0-9]").prop_map(
-        |(decision, rationale, decided_at)| ExecutionStatus {
-            decision,
-            rationale,
-            decided_at,
-        },
+    (
+        arb_decision(),
+        arb_trade_action(),
+        "[a-z ]{5,30}",
+        "2024-0[1-9]-[0-2][0-9]",
     )
+        .prop_map(
+            |(decision, action, rationale, decided_at)| ExecutionStatus {
+                decision,
+                action,
+                rationale,
+                decided_at,
+            },
+        )
 }
 
 fn arb_debate_message() -> impl Strategy<Value = DebateMessage> {
