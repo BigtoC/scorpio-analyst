@@ -142,6 +142,21 @@ impl YFinanceClient {
         result.sort_by(|a, b| a.date.cmp(&b.date));
         Ok(result)
     }
+
+    /// Fetch the most recent closing price for `symbol` by looking back up to
+    /// 7 calendar days from `as_of_date` (YYYY-MM-DD).
+    ///
+    /// Returns `None` if no candles are available in that window (e.g. on
+    /// weekends/holidays with no recent trading).
+    pub async fn get_latest_close(&self, symbol: &str, as_of_date: &str) -> Option<f64> {
+        let end_date = parse_date(as_of_date).ok()?;
+        let start_date = end_date - chrono::Duration::days(7);
+        let candles = self
+            .get_ohlcv(symbol, &start_date.to_string(), &end_date.to_string())
+            .await
+            .ok()?;
+        candles.last().map(|c| c.close)
+    }
 }
 
 impl Default for YFinanceClient {
