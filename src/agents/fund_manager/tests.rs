@@ -155,19 +155,19 @@ fn populated_state() -> TradingState {
 }
 
 fn approved_json() -> String {
-    r#"{"decision":"Approved","rationale":"All risk checks passed. Proposal is well-supported by analyst data.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Buy","rationale":"All risk checks passed. Proposal is well-supported by analyst data.","decided_at":"2026-03-15"}"#.to_owned()
 }
 
 fn approved_json_without_decided_at() -> String {
-    r#"{"decision":"Approved","rationale":"All risk checks passed. Proposal is well-supported by analyst data."}"#.to_owned()
+    r#"{"decision":"Approved","action":"Buy","rationale":"All risk checks passed. Proposal is well-supported by analyst data."}"#.to_owned()
 }
 
 fn approved_json_with_missing_data_ack() -> String {
-    r#"{"decision":"Approved","rationale":"Approved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Hold","rationale":"Approved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
 }
 
 fn rejected_json() -> String {
-    r#"{"decision":"Rejected","rationale":"Insufficient supporting evidence for the proposed position size.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Rejected","action":"Hold","rationale":"Insufficient supporting evidence for the proposed position size.","decided_at":"2026-03-15"}"#.to_owned()
 }
 
 fn make_prompt_response(json: &str, usage: Usage) -> PromptResponse {
@@ -280,6 +280,7 @@ async fn deterministic_rejection_when_both_conservative_and_neutral_flag_violati
     // Decision must be Rejected.
     let status = state.final_execution_status.unwrap();
     assert_eq!(status.decision, Decision::Rejected);
+    assert_eq!(status.action, TradeAction::Hold);
     assert!(
         status.rationale.contains("deterministic") || status.rationale.contains("safety-net"),
         "rationale should mention deterministic rejection: {}",
@@ -437,7 +438,7 @@ async fn rejected_execution_status_written_to_state() {
 #[tokio::test]
 async fn schema_violation_on_invalid_decision_value_from_llm() {
     let mut state = populated_state();
-    let bad_json = r#"{"decision":"Maybe","rationale":"Seems fine.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Maybe","action":"Buy","rationale":"Seems fine.","decided_at":"2026-03-15"}"#;
     let inference = StubInference::new(vec![Ok(make_prompt_response(bad_json, nonzero_usage()))]);
     let agent = fund_manager_for_test();
     let result = agent.run_with_inference(&mut state, &inference).await;
@@ -472,8 +473,7 @@ async fn schema_violation_on_unparseable_json_from_llm() {
 async fn decided_at_is_overwritten_with_runtime_timestamp() {
     let mut state = populated_state();
     // LLM returns a far-past decided_at.
-    let stale_json =
-        r#"{"decision":"Approved","rationale":"Looks good.","decided_at":"1900-01-01T00:00:00Z"}"#;
+    let stale_json = r#"{"decision":"Approved","action":"Buy","rationale":"Looks good.","decided_at":"1900-01-01T00:00:00Z"}"#;
     let inference = StubInference::new(vec![Ok(make_prompt_response(stale_json, nonzero_usage()))]);
     let agent = fund_manager_for_test();
     agent
