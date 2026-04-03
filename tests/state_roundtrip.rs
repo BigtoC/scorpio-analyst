@@ -239,6 +239,7 @@ fn arb_trade_proposal() -> impl Strategy<Value = TradeProposal> {
                 stop_loss,
                 confidence,
                 rationale,
+                valuation_assessment: None,
             },
         )
 }
@@ -285,6 +286,8 @@ fn arb_execution_status() -> impl Strategy<Value = ExecutionStatus> {
                 action,
                 rationale,
                 decided_at,
+                entry_guidance: None,
+                suggested_position: None,
             },
         )
 }
