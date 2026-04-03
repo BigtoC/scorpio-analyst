@@ -11,21 +11,21 @@ currently stores plain strings instead of typed handoff structs, the prompts bel
 
 ## Prompt Index
 
-| Agent                               | Link                                                         |
-|:------------------------------------|:-------------------------------------------------------------|
-| Fundamentals Analyst                | [§1 -> Fundamentals Analyst](#fundamentals-analyst)          |
-| News Analyst                        | [§1 -> News Analyst](#news-analyst)                          |
-| Sentiment Analyst                   | [§1 -> Sentiment Analyst](#sentiment-analyst)                |
-| Technical Analyst                   | [§1 -> Technical Analyst](#technical-analyst)                |
-| Bull Researcher                     | [§2 -> Bull Researcher](#bull-researcher)                    |
-| Bear Researcher                     | [§2 -> Bear Researcher](#bear-researcher)                    |
-| Debate Moderator (Research Manager) | [§2 -> Debate Moderator](#debate-moderator-research-manager) |
-| Trader                              | [§3 -> Trader](#trader)                                      |
-| Aggressive Risk Analyst             | [§4 -> Aggressive Risk Analyst](#aggressive-risk-analyst)    |
+| Agent                               | Link                                                          |
+|:------------------------------------|:--------------------------------------------------------------|
+| Fundamentals Analyst                | [§1 -> Fundamentals Analyst](#fundamentals-analyst)           |
+| News Analyst                        | [§1 -> News Analyst](#news-analyst)                           |
+| Sentiment Analyst                   | [§1 -> Sentiment Analyst](#sentiment-analyst)                 |
+| Technical Analyst                   | [§1 -> Technical Analyst](#technical-analyst)                 |
+| Bull Researcher                     | [§2 -> Bull Researcher](#bull-researcher)                     |
+| Bear Researcher                     | [§2 -> Bear Researcher](#bear-researcher)                     |
+| Debate Moderator (Research Manager) | [§2 -> Debate Moderator](#debate-moderator-research-manager)  |
+| Trader                              | [§3 -> Trader](#trader)                                       |
+| Aggressive Risk Analyst             | [§4 -> Aggressive Risk Analyst](#aggressive-risk-analyst)     |
 | Conservative Risk Analyst           | [§4 -> Conservative Risk Analyst](#conservative-risk-analyst) |
-| Neutral Risk Analyst                | [§4 -> Neutral Risk Analyst](#neutral-risk-analyst)          |
-| Risk Moderator                      | [§4 -> Risk Moderator](#risk-moderator)                      |
-| Fund Manager                        | [§5 -> Fund Manager](#fund-manager)                          |
+| Neutral Risk Analyst                | [§4 -> Neutral Risk Analyst](#neutral-risk-analyst)           |
+| Risk Moderator                      | [§4 -> Risk Moderator](#risk-moderator)                       |
+| Fund Manager                        | [§5 -> Fund Manager](#fund-manager)                           |
 
 ---
 
@@ -639,6 +639,80 @@ Instructions:
 7. Return ONLY the single JSON object required by `ExecutionStatus`.
 
 Do not restate the entire pipeline.
+```
+
+## Final Report format
+
+This report template is intentionally aligned to the **current runtime state and schemas**. It avoids unsupported fields
+such as portfolio sizing, liquidity grades, or invented risk labels, and instead mirrors what can be rendered directly
+from `TradingState`, `TradeProposal`, `RiskReport`, and `ExecutionStatus`.
+
+```markdown
+## 📊 Trading Decision: [SYMBOL]
+
+### 🎯 Final Recommendation
+**As of:** [YYYY-MM-DD]  
+**Execution ID:** [UUID if available]   
+**Decision Timestamp:** [decided_at]
+**Action**: [BUY/SELL/HOLD]
+**Confidence**: [High/Medium/Low]
+**Suggested Position**: [% of portfolio or share quantity]
+**Target Price**: [If applicable]
+**Stop Loss**: [Suggested level]
+
+### Executive Summary
+[2-4 sentence audit-ready summary of the final decision, the core thesis, and the main blocking or supporting risk
+factor. This should closely reflect `ExecutionStatus.rationale` and the trader proposal context.]
+
+### Trader Proposal
+| Field            | Value                                           |
+|------------------|-------------------------------------------------|
+| Action           | [Buy/Sell/Hold]                                 |
+| Confidence       | 🟢/🟡/🔴[0.00-1.00]                             |
+| Target Price     | [numeric value]                                 |
+| Stop Loss        | [numeric value]                                 |
+| Trader Rationale | [Concise thesis from `TradeProposal.rationale`] |
+
+### Analyst Evidence Snapshot
+| Analyst      | Structured Signal                     | Key Evidence                                                                                                                  | Data Status                |
+|--------------|---------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|----------------------------|
+| Fundamentals | [Bullish/Bearish/Mixed/Unavailable]   | [Short summary from `FundamentalData.summary`; optionally mention revenue growth / P-E / EPS / insider activity if available] | [Complete/Partial/Missing] |
+| Sentiment    | [Bullish/Bearish/Neutral/Unavailable] | [Short summary from `SentimentData.summary`; optionally mention `overall_score`]                                              | [Complete/Partial/Missing] |
+| News         | [Positive/Negative/Mixed/Unavailable] | [Short summary from `NewsData.summary`; optionally mention top article or macro event]                                        | [Complete/Partial/Missing] |
+| Technical    | [Bullish/Bearish/Mixed/Unavailable]   | [Short summary from `TechnicalData.summary`; optionally mention RSI / MACD / support / resistance if available]               | [Complete/Partial/Missing] |
+
+### Research Debate Summary
+- **Consensus Summary:** [Directly reflect `consensus_summary` when available]
+- **Strongest Bullish Evidence:** [Best pro-trade point from debate history or analyst outputs]
+- **Strongest Bearish Evidence:** [Best cautionary point from debate history or analyst outputs]
+- **Key Uncertainty:** [Most important unresolved question still affecting confidence]
+
+### Risk Review
+| Risk Persona | Flags Violation      | Assessment                                                | Recommended Adjustments           |
+|--------------|----------------------|-----------------------------------------------------------|-----------------------------------|
+| Aggressive   | [true/false/unknown] | [Short summary from aggressive `RiskReport.assessment`]   | [Comma-separated items or `None`] |
+| Neutral      | [true/false/unknown] | [Short summary from neutral `RiskReport.assessment`]      | [Comma-separated items or `None`] |
+| Conservative | [true/false/unknown] | [Short summary from conservative `RiskReport.assessment`] | [Comma-separated items or `None`] |
+
+### Deterministic Safety Check
+- **Neutral flags violation:** [true/false/unknown]
+- **Conservative flags violation:** [true/false/unknown]
+- **Auto-reject rule triggered:** [Yes/No]
+
+### Data Quality And Missing Inputs
+- **Missing analyst inputs:** [List missing `fundamental_metrics`, `technical_indicators`, `market_sentiment`, `macro_news`, or `None`]
+- **Missing risk inputs:** [List missing risk reports or `None`]
+- **Other caveats:** [Prompt truncation, sparse news coverage, weak sentiment signal, etc.]
+
+### Optional Token Usage Summary
+| Scope    | Prompt Tokens | Completion Tokens | Total Tokens |
+|----------|---------------|-------------------|--------------|
+| Full Run | [number]      | [number]          | [number]     |
+
+### ⚠️ Disclaimers
+- This is AI-generated analysis for educational and research purposes only.
+- It is not financial advice and should not be the sole basis for an investment decision.
+- Market data may be incomplete, delayed, or unavailable for parts of the pipeline.
 ```
 
 ---
