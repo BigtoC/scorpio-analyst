@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::{
-    agents::risk::extract_json_object,
+    agents::shared::extract_json_object,
     constants::{MAX_RATIONALE_CHARS, MAX_RAW_RESPONSE_CHARS},
     error::TradingError,
     state::{Decision, ExecutionStatus, TradingState},
