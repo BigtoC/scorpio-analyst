@@ -442,7 +442,6 @@ impl Task for AnalystSyncTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         info!(task = "analyst_sync", phase = 1, "task started");
-        let phase_start = std::time::Instant::now();
         let mut state = deserialize_state_from_context(&context)
             .await
             .map_err(|error| {
@@ -503,6 +502,11 @@ impl Task for AnalystSyncTask {
             read_analyst_usage(&context, ANALYST_NEWS, "News Analyst").await,
             read_analyst_usage(&context, ANALYST_TECHNICAL, "Technical Analyst").await,
         ];
+        let phase_duration_ms = token_usages
+            .iter()
+            .map(|usage| usage.latency_ms)
+            .max()
+            .unwrap_or(0);
 
         state.token_usage.push_phase_usage(PhaseTokenUsage {
             phase_name: "Analyst Fan-Out".to_owned(),
@@ -512,7 +516,7 @@ impl Task for AnalystSyncTask {
                 .map(|usage| usage.completion_tokens)
                 .sum(),
             phase_total_tokens: token_usages.iter().map(|usage| usage.total_tokens).sum(),
-            phase_duration_ms: phase_start.elapsed().as_millis() as u64,
+            phase_duration_ms,
             agent_usage: token_usages.clone(),
         });
 

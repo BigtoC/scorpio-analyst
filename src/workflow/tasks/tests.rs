@@ -6,7 +6,9 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LlmConfig,
-    state::{FundamentalData, NewsData, SentimentData, TechnicalData, TradingState},
+    state::{
+        AgentTokenUsage, FundamentalData, NewsData, SentimentData, TechnicalData, TradingState,
+    },
     workflow::context_bridge::{
         deserialize_state_from_context, serialize_state_to_context, write_prefixed_result,
     },
@@ -435,6 +437,179 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
     assert!(recovered.market_sentiment.is_some());
     assert!(recovered.macro_news.is_some());
     assert!(recovered.technical_indicators.is_some());
+}
+
+#[tokio::test]
+async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+
+    for analyst_key in [
+        common::ANALYST_FUNDAMENTAL,
+        common::ANALYST_SENTIMENT,
+        common::ANALYST_NEWS,
+        common::ANALYST_TECHNICAL,
+    ] {
+        ctx.set(
+            format!(
+                "{}.{}.{}",
+                common::ANALYST_PREFIX,
+                analyst_key,
+                common::OK_SUFFIX
+            ),
+            true,
+        )
+        .await;
+    }
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let usages = [
+        (
+            common::ANALYST_FUNDAMENTAL,
+            AgentTokenUsage {
+                agent_name: "Fundamental Analyst".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+                latency_ms: 150,
+                rate_limit_wait_ms: 0,
+            },
+        ),
+        (
+            common::ANALYST_SENTIMENT,
+            AgentTokenUsage {
+                agent_name: "Sentiment Analyst".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 11,
+                completion_tokens: 6,
+                total_tokens: 17,
+                latency_ms: 320,
+                rate_limit_wait_ms: 0,
+            },
+        ),
+        (
+            common::ANALYST_NEWS,
+            AgentTokenUsage {
+                agent_name: "News Analyst".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 12,
+                completion_tokens: 7,
+                total_tokens: 19,
+                latency_ms: 240,
+                rate_limit_wait_ms: 0,
+            },
+        ),
+        (
+            common::ANALYST_TECHNICAL,
+            AgentTokenUsage {
+                agent_name: "Technical Analyst".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 13,
+                completion_tokens: 8,
+                total_tokens: 21,
+                latency_ms: 90,
+                rate_limit_wait_ms: 0,
+            },
+        ),
+    ];
+
+    for (analyst_key, usage) in usages {
+        common::write_analyst_usage(&ctx, analyst_key, &usage)
+            .await
+            .expect("usage write should succeed");
+    }
+
+    let task = AnalystSyncTask::new(store);
+    task.run(ctx.clone()).await.expect("task should succeed");
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    let phase = recovered
+        .token_usage
+        .phase_usage
+        .iter()
+        .find(|phase| phase.phase_name == "Analyst Fan-Out")
+        .expect("analyst phase should exist");
+
+    assert_eq!(phase.phase_duration_ms, 320);
 }
 
 #[test]
