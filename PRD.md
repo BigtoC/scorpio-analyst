@@ -178,6 +178,15 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    builder pattern and supports parallel fetching, allowing the Technical Analyst to retrieve massive datasets for
    technical indicator calculation with minimal network latency.
 
+3. **Macroeconomic Indicators**: The FRED (Federal Reserve Economic Data) API provides authoritative macroeconomic
+   time-series data, replacing the paid Finnhub `economic().data()` endpoint for interest-rate and inflation indicators.
+   The custom `FredClient` implementation fetches the latest observations from two key series: the Federal Funds
+   Effective Rate (`FEDFUNDS`) and the Consumer Price Index growth rate (`CPALTT01USM657N`). Both series are fetched
+   concurrently and classified into `MacroEvent` structs with impact direction and confidence scores. The client is
+   rate-limited (2 requests per second, configurable via `rate_limits.fred_rps`) and implements linear-backoff retry
+   logic (max 3 attempts, 45-second total budget). An API key is required via the `SCORPIO_FRED_API_KEY` environment
+   variable.
+
 ### Technical Analysis and Quantitative Mathematics
 
 Deep learning models and LLMs lack the inherent architectural capacity to perform precise mathematical calculations on
@@ -433,12 +442,17 @@ social-platform ingestion in the MVP.
 
 The News Analyst contextualizes the asset within the broader global macroeconomic environment.
 
-* **Tool Bindings**: Accesses `finnhub` market news and economic indicator endpoints as the primary source. Yahoo
-  Finance news data may also be used when it provides relevant company-specific coverage. If direct API access is
-  unavailable for certain sources, the Gemini CLI can be used as an alternative for web-search-based news analysis.
-* **Execution Logic**: The agent processes breaking news articles to extract causal relationships. For example, if
-  analyzing a semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff
-  implementations, or federal reserve interest rate commentary that directly impacts the supply chain or discount rates.
+* **Tool Bindings**: Accesses `finnhub` market news endpoints (`GetNews`, `GetCachedNews`, `GetMarketNews`) for
+  breaking news and company-specific coverage. Macroeconomic indicators are sourced from the FRED API via the
+  `GetEconomicIndicators` tool, which returns the latest Federal Funds Rate and CPI inflation data classified into
+  `MacroEvent` structs with impact direction and confidence scores. Yahoo Finance news data may also be used when it
+  provides relevant company-specific coverage. If direct API access is unavailable for certain sources, the Gemini CLI
+  can be used as an alternative for web-search-based news analysis.
+* **Execution Logic**: The agent processes breaking news articles to extract causal relationships and interprets
+  macroeconomic indicators from FRED to contextualize broader monetary policy impacts. For example, if analyzing a
+  semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff implementations, or
+  federal reserve interest rate changes (sourced from the FEDFUNDS series) that directly impact the supply chain or
+  discount rates.
 * **Prompt specification**: [News Analyst](docs/prompts.md#news-analyst)
 
 #### 4. Technical Analyst Task
@@ -808,7 +822,8 @@ let result = finnhub_client.fetch(...).await?;
 ```
 
 This ensures that the four concurrent Analyst agents cannot collectively exceed the Finnhub free-tier limit of 30
-requests per second, preventing 429 errors that would trigger costly retries.
+requests per second, preventing 429 errors that would trigger costly retries. A separate FRED rate limiter (default 2
+requests per second, configurable via `rate_limits.fred_rps`) gates the News Analyst's macroeconomic indicator fetches.
 
 ### Observability and Explainable AI
 
