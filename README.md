@@ -76,6 +76,71 @@ Scorpio-Analyst is designed with a phased user interface approach to provide bot
 *   **Phase 2**: An interactive Terminal User Interface (TUI) for a rich, conversational experience.
 *   **Phase 3**: A high-performance, GPU-accelerated native desktop application.
 
+## Getting Started (MVP)
+
+### Prerequisites
+
+- Rust 1.93+ (`rustup update stable`)
+- API keys for at least one LLM provider
+- Register a free account and get the financial data APIs key :
+  - [Finnhub](https://finnhub.io/) for market data and news
+  - [FRED](https://fred.stlouisfed.org/) for economic indicators
+
+### 1. Configure secrets
+
+Copy `.env.example` to `.env` and fill in your keys:
+
+```bash
+cp .env.example .env
+```
+
+```env
+# Pick the provider(s) you intend to use in config.toml
+SCORPIO_OPENAI_API_KEY=sk-your-key-here
+SCORPIO_ANTHROPIC_API_KEY=sk-ant-your-key-here
+SCORPIO_GEMINI_API_KEY=your-gemini-key-here
+SCORPIO_OPENROUTER_API_KEY=your-openrouter-key-here
+
+# Financial data APIs
+SCORPIO_FINNHUB_API_KEY=your-finnhub-key-here
+SCORPIO_FRED_API_KEY=your-fred-api-key-here
+```
+
+Only the keys for providers referenced in `config.toml` are required at runtime.
+
+### 2. Edit `config.toml` (optional)
+
+The defaults in `config.toml` use OpenRouter free models and analyze **NVDA**. Adjust as needed:
+
+```toml
+[llm]
+quick_thinking_provider = "openrouter"   # openai | anthropic | gemini | openrouter
+quick_thinking_model    = "openrouter/free"
+deep_thinking_provider  = "openrouter"
+deep_thinking_model     = "qwen/qwen3.6-plus-preview:free"
+
+[trading]
+asset_symbol = "NVDA"   # ticker to analyze
+```
+
+> **Note:** GitHub Copilot does not yet support tool calling — use OpenAI, Anthropic, or Gemini for the `quick_thinking_provider`. See [Known Limitations](#known-limitations) for details.
+
+### 3. Run
+
+```bash
+cargo run
+```
+
+The pipeline executes all five phases and prints a structured report to the terminal. Configuration can be overridden at runtime with environment variables (prefix `SCORPIO__`, e.g. `SCORPIO__TRADING__ASSET_SYMBOL=AAPL`).
+
+### Example report
+
+![Final report — page 1](docs/images/report-example/final_report_1.png)
+![Final report — page 2](docs/images/report-example/final_report_2.png)
+![Final report — page 3](docs/images/report-example/final_report_3.png)
+
+> Full CLI usage and a TUI interface are planned for subsequent phases.
+
 ## Project Status
 
 This project is in the early stages of development. The architecture and core components are being actively built.
