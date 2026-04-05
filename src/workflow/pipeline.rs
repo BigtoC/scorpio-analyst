@@ -396,43 +396,50 @@ impl TradingPipeline {
         let execution_id = initial_state.execution_id.to_string();
         info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle started");
 
-        // Fetch current market price and VIX volatility context from yfinance (best-effort).
-        if initial_state.current_price.is_none() {
-            match self.yfinance.get_latest_close(&symbol, &date).await {
-                Some(price) => {
-                    info!(symbol = %symbol, price, "fetched current price from yfinance");
-                    initial_state.current_price = Some(price);
-                }
-                None => {
-                    info!(symbol = %symbol, "current price unavailable from yfinance");
-                }
-            }
-        }
-        if initial_state.market_volatility.is_none() {
-            match crate::data::fetch_vix_data(&self.yfinance, &date).await {
-                Some(vix) => {
-                    info!(
-                        vix_level = vix.vix_level,
-                        regime = %vix.vix_regime,
-                        trend = %vix.vix_trend,
-                        "fetched VIX market volatility context"
-                    );
-                    initial_state.market_volatility = Some(vix);
-                }
-                None => {
-                    info!("VIX data unavailable; continuing without volatility context");
-                }
-            }
-        }
-
-        // Pre-fetch shared news for Sentiment and News analysts (avoids duplicate Finnhub calls).
-        let cached_news_json: Option<String> = {
+        // Fetch price, VIX and news concurrently — all are best-effort, independent,
+        // and hit different APIs (YFinance × 2, Finnhub × 1).
+        let need_price = initial_state.current_price.is_none();
+        let need_vix = initial_state.market_volatility.is_none();
+        let (price_result, vix_result, news_result) = {
             use crate::agents::analyst::prefetch_analyst_news;
-            match prefetch_analyst_news(&self.finnhub, &initial_state.asset_symbol).await {
-                Some(news_arc) => serde_json::to_string(news_arc.as_ref()).ok(),
-                None => None,
-            }
+            tokio::join!(
+                async {
+                    if need_price {
+                        self.yfinance.get_latest_close(&symbol, &date).await
+                    } else {
+                        None
+                    }
+                },
+                async {
+                    if need_vix {
+                        crate::data::fetch_vix_data(&self.yfinance, &date).await
+                    } else {
+                        None
+                    }
+                },
+                prefetch_analyst_news(&self.finnhub, &initial_state.asset_symbol),
+            )
         };
+
+        if let Some(price) = price_result {
+            info!(symbol = %symbol, price, "fetched current price from yfinance");
+            initial_state.current_price = Some(price);
+        } else if need_price {
+            info!(symbol = %symbol, "current price unavailable from yfinance");
+        }
+        if let Some(vix) = vix_result {
+            info!(
+                vix_level = vix.vix_level,
+                regime = %vix.vix_regime,
+                trend = %vix.vix_trend,
+                "fetched VIX market volatility context"
+            );
+            initial_state.market_volatility = Some(vix);
+        } else if need_vix {
+            info!("VIX data unavailable; continuing without volatility context");
+        }
+        let cached_news_json: Option<String> =
+            news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
 
         // ── Graph + storage ───────────────────────────────────────────────
         let graph = Arc::clone(&self.graph);
