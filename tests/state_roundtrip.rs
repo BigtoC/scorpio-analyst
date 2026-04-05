@@ -426,6 +426,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     asset_symbol,
                     target_date,
                     current_price: None,
+                    market_volatility: None,
                     fundamental_metrics,
                     technical_indicators,
                     market_sentiment,
