@@ -54,14 +54,12 @@ pub async fn prompt_text_with_retry(
             attempt_budget.timeout,
             agent.prompt_text_details(prompt, max_turns),
         )
-            .await
+        .await
         {
-            Ok(Ok(response)) => {
-                Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                })
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
                 if should_retry_text_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient text prompt error, will retry");
@@ -82,7 +80,7 @@ pub async fn prompt_text_with_retry(
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
