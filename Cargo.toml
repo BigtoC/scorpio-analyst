@@ -27,7 +27,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 # Rate limiting
-governor = "0.8"
+governor = "0.10.4"
 
 # Configuration
 config = "0.15"
