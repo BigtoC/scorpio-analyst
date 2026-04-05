@@ -1,5 +1,6 @@
 mod execution;
 mod fundamental;
+mod market_volatility;
 mod news;
 mod proposal;
 mod risk;
@@ -10,6 +11,7 @@ mod trading_state;
 
 pub use execution::*;
 pub use fundamental::*;
+pub use market_volatility::*;
 pub use news::*;
 pub use proposal::*;
 pub use risk::*;

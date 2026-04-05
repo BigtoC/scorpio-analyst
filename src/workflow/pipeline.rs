@@ -396,7 +396,7 @@ impl TradingPipeline {
         let execution_id = initial_state.execution_id.to_string();
         info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle started");
 
-        // Fetch current market price from yfinance (best-effort — non-fatal if unavailable).
+        // Fetch current market price and VIX volatility context from yfinance (best-effort).
         if initial_state.current_price.is_none() {
             match self.yfinance.get_latest_close(&symbol, &date).await {
                 Some(price) => {
@@ -405,6 +405,22 @@ impl TradingPipeline {
                 }
                 None => {
                     info!(symbol = %symbol, "current price unavailable from yfinance");
+                }
+            }
+        }
+        if initial_state.market_volatility.is_none() {
+            match crate::data::fetch_vix_data(&self.yfinance, &date).await {
+                Some(vix) => {
+                    info!(
+                        vix_level = vix.vix_level,
+                        regime = %vix.vix_regime,
+                        trend = %vix.vix_trend,
+                        "fetched VIX market volatility context"
+                    );
+                    initial_state.market_volatility = Some(vix);
+                }
+                None => {
+                    info!("VIX data unavailable; continuing without volatility context");
                 }
             }
         }

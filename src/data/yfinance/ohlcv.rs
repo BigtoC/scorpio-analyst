@@ -20,7 +20,7 @@ use yfinance_rs::{HistoryBuilder, Interval, YfClient, YfError};
 
 use crate::{error::TradingError, rate_limit::SharedRateLimiter};
 
-use super::symbol::validate_symbol;
+use crate::data::symbol::validate_symbol;
 
 // ─── Our Candle type ─────────────────────────────────────────────────────────
 

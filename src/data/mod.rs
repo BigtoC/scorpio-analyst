@@ -20,6 +20,7 @@
 //! | [`Candle`] | Plain-`f64` OHLCV bar |
 //! | [`GetOhlcv`] | `rig` tool: fetch historical OHLCV bars |
 //! | [`OhlcvToolContext`] | Shared analysis-scoped OHLCV cache for technical tools |
+//! | [`fetch_vix_data`] | Fetch and compute VIX market volatility snapshot |
 
 pub mod finnhub;
 pub mod fred;
@@ -31,4 +32,4 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
-pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
+pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient, fetch_vix_data};

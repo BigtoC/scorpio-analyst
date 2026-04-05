@@ -48,6 +48,7 @@ Available inputs:
 - Technical data: {technical_report}
 - Sentiment data: {sentiment_report}
 - News data: {news_report}
+- Market volatility (VIX): {market_volatility_report}
 - Past learnings: {past_memory_str}
 - Data quality note: {data_quality_note}
 
@@ -282,6 +283,10 @@ fn build_prompt_context(state: &TradingState, symbol: &str, target_date: &str) -
             &serialize_prompt_value(&state.market_sentiment),
         )
         .replace("{news_report}", &serialize_prompt_value(&state.macro_news))
+        .replace(
+            "{market_volatility_report}",
+            &serialize_prompt_value(&state.market_volatility),
+        )
         .replace("{past_memory_str}", "")
         .replace("{data_quality_note}", data_quality_note)
         .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE);
