@@ -1,41 +1,50 @@
 ## Context
 
-The system's five-phase pipeline currently enforces structured JSON outputs via serde but does not enforce evidence discipline at the prompt layer. Analysts receive tool bindings and are expected to return data drawn from tool output, but nothing in the system prompt explicitly:
+The system's five-phase pipeline already enforces structured JSON outputs via serde, but it does not yet enforce evidence discipline at the analyst prompt layer. Analysts receive tool bindings and are expected to return data drawn from tool output, but nothing in the runtime prompt contract explicitly:
 
-1. Prohibits inferring estimates, quarter labels, or transcript commentary not present in tool output.
-2. Requires sparse or missing evidence to lower confidence explicitly.
-3. Requires separation of observed facts from model interpretation.
-4. Provides a shared Rust API for building prompt fragments programmatically.
+1. prohibits inferring estimates, quarter labels, or transcript commentary not present in tool output
+2. requires sparse or missing evidence to lower confidence explicitly in `summary`
+3. requires separation of observed facts from model interpretation
+4. provides a shared Rust API for reusable evidence-discipline prompt fragments
 
-The `src/agents/shared/prompt.rs` module already provides sanitization helpers (`sanitize_symbol_for_prompt`, `sanitize_prompt_context`, `serialize_prompt_value`) but has no rule-building or context-building functions.
+The `src/agents/shared/prompt.rs` module already provides sanitization helpers (`sanitize_symbol_for_prompt`, `sanitize_prompt_context`, `serialize_prompt_value`) but has no shared evidence-discipline rule helpers.
 
-`docs/prompts.md` already has a `## Global Prompt Rules` section with seven rules. Five new rules covering evidence discipline need to be added there.
+`docs/prompts.md` already contains a `## Global Prompt Rules` section with eight rules. Two of the desired evidence-discipline directives already exist in partial form:
 
-`README.md` has no mention of the Anthropic financial-services-plugins inspiration that motivates this evidence discipline posture.
+- preserve missing data honestly
+- distinguish observed facts from interpretation
 
-Constraints:
+This chunk therefore needs to tighten and extend that section, not blindly append duplicated bullets with slightly different wording.
+
+`README.md` currently mentions TradingAgents but not Anthropic's financial-services-plugins, even though the architect plan and Stage 1 design explicitly cite it as an inspiration.
+
+The current analyst modules build their final system prompts at runtime by taking a `const &str` template and calling `.replace("{ticker}", ...)` / `.replace("{current_date}", ...)` inside `run()`. There is no existing rendered-prompt helper. This matters because the earlier draft suggested `concat!`-style composition with function-returned strings, but `concat!` only accepts string literals and cannot call helper functions.
+
+## Constraints
+
 - No new crate dependencies.
 - No `TradingState` schema changes.
 - No config changes.
-- Prompt helpers must not panic when optional `TradingState` fields are absent — all `Option<T>` fields must yield graceful fallback text.
-- New functions follow the existing `pub(crate)` visibility convention in `prompt.rs`.
-- Analyst system prompts are `const &str` values; the shared rule helpers return `&'static str` and are appended at compile time or concatenated via `format!` / `concat!` in the calling module.
+- New shared helper functions follow the existing `pub(crate)` visibility convention in `src/agents/shared/prompt.rs`.
+- Chunk 1 must not introduce state-dependent `build_evidence_context(...)` or `build_data_quality_context(...)` helpers; those belong to `chunk3-evidence-state-sync`, which introduces the typed evidence and coverage fields they should render.
+- Cross-owner edits are limited to `src/agents/shared/prompt.rs` and the four analyst modules. If the work needs config, state, workflow, provider, or report changes, that is scope drift into later chunks.
 
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Credit Anthropic's financial-services-plugins inspiration in `README.md`.
-- Add five evidence-discipline rules to `docs/prompts.md` under `## Global Prompt Rules`.
+- Update `docs/prompts.md` so the `## Global Prompt Rules` section explicitly covers the five evidence-discipline directives without duplicating existing rules unnecessarily.
 - Add three static rule helpers to `src/agents/shared/prompt.rs` that return `&'static str` rule text.
-- Add two dynamic context builders to `src/agents/shared/prompt.rs` that accept `&TradingState` and return a `String`.
-- Extend the four analyst system prompts to include the three shared rule helpers.
-- Add unit tests for all five new functions and string-contains tests in each analyst file.
+- Extend the four analyst prompts to include the three shared rule helpers.
+- Add unit tests for the three new helpers and rendered-prompt string-contains tests in each analyst file.
 
 **Non-Goals:**
-- Changing `TradingState` fields or adding provenance metadata fields (deferred to a later chunk).
-- Introducing a typed `EvidenceContext` or `PromptContext` struct (deferred).
-- Injecting `build_evidence_context` / `build_data_quality_context` output into analyst prompts at this stage — those helpers are written and tested now but wired into downstream agents in a later chunk.
-- Changing researcher, trader, risk, or fund-manager prompts (scope limited to analyst tier in this chunk).
+
+- Changing `TradingState` fields or adding provenance metadata fields.
+- Introducing state-dependent `build_evidence_context(...)` or `build_data_quality_context(...)` helpers.
+- Injecting evidence/data-quality context into researcher, trader, risk, or fund-manager prompts.
+- Config, workflow, provider, report, or `TradingState` changes.
 
 ## Decisions
 
@@ -43,56 +52,58 @@ Constraints:
 
 **Decision**: The three rule helpers (`build_authoritative_source_prompt_rule`, `build_missing_data_prompt_rule`, `build_data_quality_prompt_rule`) return `&'static str` pointing to compile-time constant strings.
 
-**Rationale**: The rules are invariant — they do not depend on runtime state or configuration. `&'static str` avoids allocation, is zero-cost to concatenate into analyst `const` prompts at compile time using `concat!`, and is consistent with how the existing `UNTRUSTED_CONTEXT_NOTICE` constant works in the same module.
+**Rationale**: The rules are invariant and do not depend on runtime state or configuration. `&'static str` avoids allocation and matches the existing style of `UNTRUSTED_CONTEXT_NOTICE` in the same module.
 
 **Alternatives considered**:
-- *Return `String`*: Requires allocation on every call. No benefit when content is invariant.
-- *Return `Cow<'static, str>`*: Adds complexity with no payoff for purely static content.
 
-### 2. Dynamic context builders return `String` and never panic
+- *Return `String`*: requires allocation with no benefit for invariant text.
+- *Return `Cow<'static, str>`*: adds complexity with no payoff for purely static content.
 
-**Decision**: `build_evidence_context(state: &TradingState) -> String` and `build_data_quality_context(state: &TradingState) -> String` return `String` and handle every `Option<T>` field with a `None` fallback (serialize as `null` or the string `"unavailable"`).
+### 2. `docs/prompts.md` is tightened, not duplicated
 
-**Rationale**: `TradingState` fields are populated incrementally. When a builder is called early in the pipeline or in a test with partial state, absent fields must not panic or return an error. Returning `String` is consistent with `sanitize_prompt_context`, which already returns `String`.
+**Decision**: The `## Global Prompt Rules` section is updated so it explicitly covers all five evidence-discipline directives, but existing bullets are edited or strengthened where that is cleaner than adding duplicate bullets.
 
-**Implementation**: Use `serialize_prompt_value` (already in `prompt.rs`) for each `Option<T>` field, which calls `serde_json::to_string(&value).unwrap_or_else(|_| "null".to_owned())` and sanitizes the result. The two context builders produce multi-line compact JSON-like blocks (not raw JSON) bounded by `MAX_PROMPT_CONTEXT_CHARS` via `sanitize_prompt_context`.
+**Rationale**: The file already contains missing-data and facts-vs-interpretation guidance. Repeating those lines with slightly different wording would make the docs noisier and could create drift about which bullet is authoritative.
 
-### 3. Analyst prompts append rule helpers via `concat!` or const composition
+### 3. Analyst prompts are hardened at runtime prompt assembly
 
-**Decision**: Each analyst `const SYSTEM_PROMPT: &str` is extended by appending the three rule helper outputs as additional instruction lines at the end of the prompt. Where the prompt is a `const &str`, the helpers (which return `&'static str`) can be concatenated at compile time with `concat!`. Where the prompt uses `format!` for runtime substitution, the helper text is inserted before the `format!` call or embedded as a constant-suffix pattern.
+**Decision**: Each analyst file appends the shared rule-helper strings at the runtime prompt-rendering site used in `run()`. If helpful for testability, the file may extract the existing `.replace(...)` chain into a small `build_*_system_prompt(...) -> String` helper reused by both `run()` and tests.
 
-**Rationale**: Keeps the rule text single-source (in `prompt.rs`) while preserving the existing `const &str` pattern in each analyst file. No runtime allocation for the rule text itself.
+**Rationale**: This matches the real code shape in `src/agents/analyst/*.rs`. It avoids the invalid `concat!`-with-function-call approach and keeps the change minimal: prompt construction still happens where it already happens.
 
 **Alternatives considered**:
-- *Inline the rule text directly in each analyst prompt*: Creates four copies of identical text that drift independently. Rejected (see proposal).
 
-### 4. Five new global prompt rules are added to `docs/prompts.md` — not copied from `context`/`rules`
+- *Inline everything into the raw `const &str` template*: duplicates shared rule text four times.
+- *Introduce a large cross-agent prompt builder abstraction now*: too much scope for a docs-and-prompts slice.
 
-**Decision**: The five rules are written once in `docs/prompts.md` as the authoritative human-readable reference. The Rust helpers in `prompt.rs` contain their own terse, model-facing phrasing of the same rules (not a copy of the doc text).
+### 4. Chunk 1 does not add state-dependent prompt-context builders
 
-**Rationale**: The doc is for human reviewers and future prompt engineers. The Rust helpers are for the model. The phrasing can differ in register and length — the doc explains intent; the helper is compact and imperative.
+**Decision**: `build_evidence_context(state)` and `build_data_quality_context(state)` are not part of Chunk 1. They remain owned by `chunk3-evidence-state-sync`.
 
-### 5. `build_data_quality_context` computes `missing_inputs` by inspecting `Option<T>` fields
+**Rationale**: Those helpers are only useful once the typed evidence and coverage fields exist. Adding them now would either force premature `TradingState` changes or bind them to the wrong legacy fields and then rewrite them again in Chunk 3.
 
-**Decision**: The function checks `state.fundamental_metrics.is_none()`, `state.technical_indicators.is_none()`, `state.market_sentiment.is_none()`, `state.macro_news.is_none()` and builds a `missing_inputs` list accordingly. `providers_used` is a placeholder `"runtime"` string at this stage (detailed provenance tracking is deferred to a later chunk).
+### 5. Prompt tests assert on the rendered prompt, not only the raw template
 
-**Rationale**: The missing-inputs list gives the model clear signal about which evidence buckets are absent without requiring any new state fields. The placeholder `providers_used` value is honest and avoids inventing provenance data before the infrastructure exists.
+**Decision**: Each analyst file adds or updates tests so they assert against the final rendered system prompt string used by the agent, including the shared helper text and the analyst-specific unsupported-inference lines.
+
+**Rationale**: If hardening is appended during runtime prompt assembly, tests that only inspect the raw `const &str` template can miss regressions.
 
 ## Risks / Trade-offs
 
-- **[Prompt length increase]** Each analyst prompt grows by ~3–5 lines of rule text. At typical gpt-4o-mini token costs this adds ~60–80 tokens per analyst call (4 calls per run), a negligible cost given the benefit of reduced hallucination. Mitigation: rule helper text is intentionally terse.
-- **[Rule phrasing may need tuning]** Initial phrasing is a best-effort starting point; specific models may respond better to different wording. Mitigation: rules are in one place (`prompt.rs`) so a single edit propagates to all analysts. Tuning is a future task.
-- **[Test brittleness]** String-contains tests for analyst prompts will fail if someone rewrites the system prompt and forgets to include the rules. This is the intended behavior — the test is a regression guard. Mitigation: keep the test assertion strings short (a few words) rather than matching the full rule text.
-- **[Context builder output may be large]** `build_evidence_context` serializes up to four fully-populated analyst structs. Mitigation: `sanitize_prompt_context` already applies `MAX_PROMPT_CONTEXT_CHARS` truncation, which is the existing guard for all prompt context in the system.
+- **[Prompt length increase]** Each analyst prompt grows by a few lines of rule text. The token cost is small relative to the benefit of reducing unsupported claims.
+- **[Rule phrasing may need tuning]** Initial phrasing is a best-effort starting point; specific models may respond better to different wording. Mitigation: keep the rules centralized in `src/agents/shared/prompt.rs`.
+- **[Test brittleness]** Rendered-prompt string-contains tests will fail if someone rewrites prompt assembly and forgets to include the rules. This is the intended regression guard. Mitigation: assert on short, stable phrases instead of entire prompts.
+- **[Scope drift into later chunks]** It is easy to start adding state-dependent prompt context, config, or workflow changes while working in these files. Mitigation: this chunk explicitly forbids those changes and records them as deferred work in Chunks 2-4.
 
 ## Migration Plan
 
 No migration required. This change is purely additive:
-1. Add documentation (no compilation dependency).
-2. Add functions to `src/agents/shared/prompt.rs` (new exports, no changed signatures).
-3. Extend analyst system prompt constants (appended text; existing tests that assert on prompt content may need to be updated if they do exact-match, but the project currently has no such tests).
-4. Rollback: revert additions in all touched files. No database, config, or state migration needed.
+
+1. Update documentation in `README.md` and `docs/prompts.md`.
+2. Add three static helper functions to `src/agents/shared/prompt.rs`.
+3. Extend analyst prompt rendering with append-only hardening text and rendered-prompt tests.
+4. Roll back by reverting the touched docs and prompt files. No config, state, workflow, or storage migration is involved.
 
 ## Open Questions
 
-None at proposal stage. Phrasing of individual rule helper strings may be refined during implementation based on model-specific testing.
+None at proposal stage. The remaining deferred question is sequencing, not behavior: dynamic evidence/data-quality context helpers are intentionally left to `chunk3-evidence-state-sync`.
