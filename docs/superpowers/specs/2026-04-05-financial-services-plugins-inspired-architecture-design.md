@@ -102,6 +102,13 @@ New file:
 
 `PreflightTask` does **not** load thesis memory in the first implementation slice.
 
+Stage 1 symbol-authority rule:
+
+- keep `TradingState.asset_symbol` unchanged so user input and snapshots preserve the original requested symbol
+- treat `ResolvedInstrument.canonical_symbol` from `KEY_RESOLVED_INSTRUMENT` as the authoritative symbol for all Stage 1
+  data fetches after preflight
+- reports may continue to display `state.asset_symbol` in headers while fetches use the canonical symbol
+
 ### Shared Context Contracts
 
 New keys live in `src/workflow/tasks/common.rs`.
@@ -132,6 +139,13 @@ Stage 1 empty-placeholder semantics:
 - the empty value is the literal JSON string `null`
 - consumers must interpret `null` as "no fetched enrichment payload yet"
 - missing `KEY_CACHED_*` after `PreflightTask` is orchestration corruption, not normal absence
+
+Required-key corruption rule for Stage 1:
+
+- missing or malformed `KEY_RESOLVED_INSTRUMENT` after preflight is orchestration corruption
+- missing or malformed `KEY_PROVIDER_CAPABILITIES` after preflight is orchestration corruption
+- missing or malformed `KEY_REQUIRED_COVERAGE_INPUTS` after preflight is orchestration corruption
+- missing or malformed `KEY_CACHED_*` values after preflight is orchestration corruption
 
 ### Stage 1 Coverage Policy
 
@@ -401,6 +415,13 @@ pub struct EvidenceRecord<T> {
 }
 ```
 
+Serialization contract for new Stage 1 types:
+
+- every new Stage 1 type stored in `TradingState` or workflow context must derive `Serialize` and `Deserialize`
+- every new Stage 1 type rendered through agent schemas must derive `JsonSchema` where the surrounding file already uses
+  schema-derived types
+- Stage 1 tests must include serde round trips for each new persisted or context-serialized type
+
 ### Stage 1 Coverage and Reporting Types
 
 Required Stage 1 types:
@@ -495,9 +516,18 @@ Provenance construction ownership for Stage 1:
   - technical -> provider `yfinance`, dataset `ohlcv`
 - `effective_at`, `url`, and `citation` are `None` in the first slice unless an existing adapter already provides the
   value without extra design work
+- `fetched_at` is the UTC RFC3339 timestamp captured inside `AnalystSyncTask` when the evidence record is assembled from
+  completed analyst outputs; Stage 1 does not attempt to preserve lower-level provider fetch timestamps
 - `providers_used` is sorted ascending and deduplicated for stable reporting and tests
 - `required_inputs` and `missing_inputs` keep the fixed coverage-id order: `fundamentals`, `sentiment`, `news`,
   `technical`
+
+Stage 1 boundary between existing `news` analysis and future `event_news` enrichment:
+
+- Stage 1 `news` means the current combined company-news and macro-news analyst output already represented by `macro_news`
+  and `evidence_news`
+- future `event_news` enrichment is a separate optional feed category represented only by `EventNewsEvidence` cache keys
+  and is not consumed by Stage 1 report or prompt logic
 
 ## Prompt and Agent Contract Changes
 

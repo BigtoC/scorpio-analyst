@@ -163,19 +163,35 @@ Add tests named:
 
 ```rust
 #[test]
-fn authority_rule_mentions_runtime_evidence() { ... }
+fn authority_rule_mentions_runtime_evidence() {
+    assert!(build_authoritative_source_prompt_rule().contains("authoritative runtime evidence"));
+}
 
 #[test]
-fn missing_data_rule_mentions_null_or_empty() { ... }
+fn missing_data_rule_mentions_null_or_empty() {
+    let rule = build_missing_data_prompt_rule();
+    assert!(rule.contains("null") || rule.contains("empty"));
+}
 
 #[test]
-fn quality_rule_mentions_missing_or_sparse_evidence() { ... }
+fn quality_rule_mentions_missing_or_sparse_evidence() {
+    let rule = build_data_quality_prompt_rule();
+    assert!(rule.contains("missing") || rule.contains("sparse"));
+}
 
 #[test]
-fn evidence_context_handles_empty_state() { ... }
+fn evidence_context_handles_empty_state() {
+    let state = TradingState::new("AAPL", "2026-04-03");
+    let rendered = build_evidence_context(&state);
+    assert!(rendered.contains("Typed evidence snapshot"));
+}
 
 #[test]
-fn data_quality_context_handles_empty_state() { ... }
+fn data_quality_context_handles_empty_state() {
+    let state = TradingState::new("AAPL", "2026-04-03");
+    let rendered = build_data_quality_context(&state);
+    assert!(rendered.contains("Data quality snapshot") || rendered.contains("no data quality"));
+}
 ```
 
 - [ ] **Step 4: Run the prompt helper tests**
@@ -218,7 +234,7 @@ Separate observed facts from interpretation.
 Add focused string-contains tests in each modified analyst file asserting the new rule text is present, including:
 
 - authoritative runtime evidence
-- do not infer unsupported data
+- `Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.`
 - separate observed facts from interpretation
 
 - [ ] **Step 4: Run analyst tests**
@@ -530,7 +546,13 @@ Create `src/workflow/tasks/preflight.rs` with a task that:
 3. writes serialized `ResolvedInstrument` to `KEY_RESOLVED_INSTRUMENT`
 4. builds `ProviderCapabilities` from `config.enrichment`
 5. writes serialized `ProviderCapabilities` to `KEY_PROVIDER_CAPABILITIES`
-6. writes serialized `Vec<String>` baseline coverage ids to `KEY_REQUIRED_COVERAGE_INPUTS`
+6. writes serialized `Vec<String>` baseline coverage ids to `KEY_REQUIRED_COVERAGE_INPUTS` with the exact payload
+   `[
+     "fundamentals",
+     "sentiment",
+     "news",
+     "technical"
+   ]`
 7. writes serialized `Option::<TranscriptEvidence>::None` to `KEY_CACHED_TRANSCRIPT`
 8. writes serialized `Option::<ConsensusEvidence>::None` to `KEY_CACHED_CONSENSUS`
 9. writes serialized `Option::<Vec<EventNewsEvidence>>::None` to `KEY_CACHED_EVENT_FEED`
@@ -576,22 +598,34 @@ Add tests named:
 
 ```rust
 #[tokio::test]
-async fn preflight_writes_resolved_instrument() { ... }
+async fn preflight_writes_resolved_instrument() {
+    // Assert KEY_RESOLVED_INSTRUMENT deserializes and canonical_symbol is uppercased.
+}
 
 #[tokio::test]
-async fn preflight_writes_provider_capabilities() { ... }
+async fn preflight_writes_provider_capabilities() {
+    // Assert KEY_PROVIDER_CAPABILITIES matches config.enrichment exactly.
+}
 
 #[tokio::test]
-async fn preflight_writes_required_coverage_inputs() { ... }
+async fn preflight_writes_required_coverage_inputs() {
+    // Assert the exact ordered payload ["fundamentals", "sentiment", "news", "technical"].
+}
 
 #[tokio::test]
-async fn preflight_seeds_cached_enrichment_keys_with_null() { ... }
+async fn preflight_seeds_cached_enrichment_keys_with_null() {
+    // Assert each KEY_CACHED_* exists and equals the literal string "null".
+}
 
 #[tokio::test]
-async fn preflight_rejects_invalid_symbol() { ... }
+async fn preflight_rejects_invalid_symbol() {
+    // Assert an invalid symbol produces a hard failure.
+}
 
 #[tokio::test]
-async fn pipeline_orders_preflight_before_analyst_fanout() { ... }
+async fn pipeline_orders_preflight_before_analyst_fanout() {
+    // Assert graph start task and session seed both point at preflight.
+}
 ```
 
 If the task test seam stubs every workflow task, add a simple preflight stub in `src/workflow/tasks/test_helpers.rs`.
@@ -787,7 +821,7 @@ Add small helpers or constants for the exact first-slice mapping:
 
 - fundamentals -> `EvidenceKind::Fundamental`, source `("finnhub", "fundamentals")`
 - sentiment -> `EvidenceKind::Sentiment`, source `("finnhub", "company_news_sentiment_inputs")`
-- news -> sources `("finnhub", "company_news")` and `("fred", "macro_indicators")`
+- news -> source `("finnhub+fred", "company_news_plus_macro")`
 - technical -> `EvidenceKind::Technical`, source `("yfinance", "ohlcv")`
 
 Use RFC3339 UTC for `fetched_at` and an empty `quality_flags` vector in the first slice.
@@ -809,7 +843,7 @@ Use this exact first-slice logic:
   - `evidence_technical` -> `technical`
 - `stale_inputs`: `[]`
 - `partial_inputs`: `[]`
-- `providers_used`: dedupe provider names from the configured evidence-source mappings above
+- `providers_used`: dedupe then ascending-sort provider names from the configured evidence-source mappings above
 - `generated_at`: current UTC RFC3339 timestamp
 - `caveats`: `[]` in the first slice
 
@@ -822,7 +856,11 @@ Add:
 
 ```rust
 #[tokio::test]
-async fn analyst_sync_marks_missing_inputs_in_coverage_report() { ... }
+async fn analyst_sync_marks_missing_inputs_in_coverage_report() {
+    // Assert required_inputs keeps the exact order ["fundamentals", "sentiment", "news", "technical"].
+    // Assert missing_inputs follows that same stable order for absent evidence fields.
+    // Assert providers_used is sorted ascending and deduplicated.
+}
 ```
 
 - [ ] **Step 5: Run analyst-sync tests**
@@ -958,6 +996,8 @@ Add tests that assert:
 
 1. the two new headings are present when data exists
 2. the exact fallback string `Unavailable` appears when the backing fields are `None`
+3. `Data Quality and Coverage` appears after `Analyst Evidence Snapshot`
+4. `Evidence Provenance` appears before the research and risk sections
 
 - [ ] **Step 5: Run report tests**
 
