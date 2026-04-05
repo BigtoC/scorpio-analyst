@@ -4,8 +4,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::{
-    ExecutionStatus, FundamentalData, NewsData, RiskReport, SentimentData, TechnicalData,
-    TokenUsageTracker, TradeProposal,
+    ExecutionStatus, FundamentalData, MarketVolatilityData, NewsData, RiskReport, SentimentData,
+    TechnicalData, TokenUsageTracker, TradeProposal,
 };
 
 /// A single message entry in a debate or risk discussion history.
@@ -27,8 +27,9 @@ pub struct TradingState {
     pub asset_symbol: String,
     pub target_date: String,
 
-    // Market price at the time of analysis
+    // Market price and volatility context at the time of analysis
     pub current_price: Option<f64>,
+    pub market_volatility: Option<MarketVolatilityData>,
 
     // Phase 1: Aggregated analyst data
     pub fundamental_metrics: Option<FundamentalData>,
@@ -71,6 +72,7 @@ impl TradingState {
             asset_symbol: asset_symbol.into(),
             target_date: target_date.into(),
             current_price: None,
+            market_volatility: None,
             fundamental_metrics: None,
             technical_indicators: None,
             market_sentiment: None,
