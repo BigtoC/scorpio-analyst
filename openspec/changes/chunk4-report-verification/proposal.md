@@ -1,30 +1,38 @@
 ## Why
 
-The evidence discipline and provenance tracking introduced in Chunks 1–3 collects rich metadata throughout the pipeline — data coverage assessments in `DataCoverageReport` and provenance summaries in `ProvenanceSummary` — but that metadata is never surfaced to the human reader. The final report currently shows analyst evidence snapshots and debate summaries but gives no indication of which data sources were consulted, what was missing, or how confident the pipeline is in its evidence base. This makes it impossible for operators to audit the analysis or identify when a trading decision was made with incomplete market data.
+The evidence discipline and provenance tracking introduced in Chunks 1–3 collects rich metadata throughout the pipeline — data coverage assessments in `DataCoverageReport` and provenance summaries in `ProvenanceSummary` — but that metadata is never surfaced to the human reader. The PRD's CLI output contract explicitly calls for `Data Quality and Coverage` and `Evidence Provenance` sections after the analyst snapshot. Without them, operators cannot audit which analyst inputs were missing or degraded, which providers contributed evidence, or what caveats applied to a recommendation.
 
-Chunk 4 is the final delivery slice for Stage 1. It adds two new terminal-rendered sections — `Data Quality and Coverage` and `Evidence Provenance` — to `format_final_report`, and performs full system verification (fmt, clippy, tests, smoke run). These sections make the evidence discipline visible: an operator glancing at the report can immediately see which data inputs were present, what was unavailable, which providers contributed evidence, and any associated caveats. The `Unavailable` fallback ensures the report never panics even if upstream phases did not produce coverage or provenance data.
+Chunk 4 is the terminal delivery slice for the Stage 1 `evidence-provenance` capability. It adds those two terminal-rendered sections to `format_final_report` and closes the Stage 1 verification loop (`cargo fmt`, `cargo clippy`, `cargo nextest`, `cargo run`, and strict `openspec validate`). The report must degrade gracefully: if upstream phases leave `data_coverage` or `provenance_summary` unset, the sections still appear and render `Unavailable` rather than disappearing or panicking.
+
+The architect plan models this work as one `evidence-provenance` capability owned by a single broader change. The repository is currently executing that capability in reviewable chunked changes (`chunk1` through `chunk4`), so this chunk intentionally modifies the existing `evidence-provenance` capability rather than introducing a new report-only capability.
 
 ## What Changes
 
-- **`src/report/coverage.rs`** (new file): `write_data_quality_and_coverage(out, state)` — renders a `Data Quality and Coverage` section from `state.data_coverage: Option<DataCoverageReport>`. Lists required inputs and missing inputs when data is present; prints `Unavailable` when `None`.
-- **`src/report/provenance.rs`** (new file): `write_evidence_provenance(out, state)` — renders an `Evidence Provenance` section from `state.provenance_summary: Option<ProvenanceSummary>`. Lists providers used and any caveats when data is present; prints `Unavailable` when `None`.
-- **`src/report/final_report.rs`** (modify): Call both new helper functions from `format_final_report`, inserted after the `Analyst Evidence Snapshot` section and before the `Research Debate Summary` and risk sections.
-- **`src/report/mod.rs`** (modify): Export the two new sub-modules cleanly (`mod coverage; mod provenance;` using `pub(crate)` visibility on the functions).
+- **`src/report/coverage.rs`** (new file): `write_data_quality_and_coverage(out, state)` — renders a `Data Quality and Coverage` section from `state.data_coverage: Option<DataCoverageReport>`. When present it lists required inputs explicitly and surfaces any missing, stale, or partial inputs; when absent it prints `Unavailable`.
+- **`src/report/provenance.rs`** (new file): `write_evidence_provenance(out, state)` — renders an `Evidence Provenance` section from `state.provenance_summary: Option<ProvenanceSummary>`. When present it lists providers used and caveats; when absent it prints `Unavailable`.
+- **`src/report/final_report.rs`** (modify): Call both new helper functions from `format_final_report`, inserted after the `Analyst Evidence Snapshot` section and before `Research Debate Summary`. Widen `section_header` to `pub(super)` so sibling section modules can reuse the existing heading style without duplicating formatting logic.
+- **`src/report/mod.rs`** (modify): Add `mod coverage; mod provenance;`. The public API remains `format_final_report`.
+- **`openspec/changes/chunk4-report-verification/specs/evidence-provenance/spec.md`** (new file): Add the missing OpenSpec delta for the Stage 1 report-rendering slice of the `evidence-provenance` capability.
 
 ## Capabilities
 
-### New Capabilities
-- `report-coverage-section`: Human-readable `Data Quality and Coverage` section in the final report, sourced from `DataCoverageReport`. Includes required inputs, missing inputs, and an `Unavailable` fallback when the field is absent.
-- `report-provenance-section`: Human-readable `Evidence Provenance` section in the final report, sourced from `ProvenanceSummary`. Includes providers used, associated caveats, and an `Unavailable` fallback when the field is absent.
-
 ### Modified Capabilities
-- `final-report`: The `format_final_report` function is extended with two additional section calls, placed between `Analyst Evidence Snapshot` and `Research Debate Summary`.
+- `evidence-provenance`: Completes the Stage 1 terminal-report slice by surfacing `DataCoverageReport` and `ProvenanceSummary` in the human-readable final report.
+
+## Cross-Owner Changes
+
+This change requires approved cross-owner edits before implementation begins.
+
+- **`src/report/mod.rs`** (owner: `add-cli`): add `mod coverage; mod provenance;` so the new evidence-provenance section writers are compiled into the report module.
+- **`src/report/final_report.rs`** (owner: `add-cli`): insert the two new section calls in `format_final_report` and widen `section_header` to `pub(super)` so sibling report modules can reuse the existing heading formatting.
+- **Dependency only, no cross-owner edit in this chunk**: `src/state/reporting.rs`, `src/state/trading_state.rs`, and `src/state/mod.rs` must already expose `DataCoverageReport`, `ProvenanceSummary`, `TradingState.data_coverage`, and `TradingState.provenance_summary` from `chunk3-evidence-state-sync`.
 
 ## Impact
 
-- **Code**: Two new `src/report/*.rs` files; `src/report/final_report.rs` gains two function calls and two imports; `src/report/mod.rs` gains two `mod` declarations. No state schema changes, no new crate dependencies, no config changes.
-- **Tests**: Unit tests added asserting exact heading strings (`Data Quality and Coverage`, `Evidence Provenance`) are present when data exists, and exact string `Unavailable` appears for each section when the corresponding state field is `None`.
-- **Rollback**: Revert the two new files, the two function calls in `format_final_report`, and the two `mod` declarations in `mod.rs`. No state migration, no DB changes, no config changes required. The `DataCoverageReport` and `ProvenanceSummary` types introduced in Chunk 3 remain in `TradingState` and are not affected.
+- **Code**: Two new `src/report/*.rs` files; additive edits to CLI-owned `src/report/final_report.rs` and `src/report/mod.rs`. No new state schema, config, or provider API changes in this chunk.
+- **Upstream dependency**: `chunk3-evidence-state-sync` must land first because this chunk consumes `DataCoverageReport` and `ProvenanceSummary` without redefining them.
+- **Tests**: Unit tests for exact heading rendering, required-input rendering, provider/caveat rendering, and the exact `Unavailable` fallback; one integration assertion that `format_final_report` places the new sections between analyst snapshot and research debate.
+- **Rollback**: Revert the two new files and the additive report-module edits. No migration or config rollback is required. The `DataCoverageReport` and `ProvenanceSummary` types introduced in Chunk 3 remain in `TradingState` and are not affected.
 
 ## Alternatives Considered
 
@@ -33,7 +41,7 @@ Add the coverage and provenance content directly inside `write_analyst_snapshot`
 
 Pros: Zero new files. The evidence snapshot section already deals with analyst data completeness, so adding coverage/provenance inline feels thematically cohesive. Fewer imports.
 
-Cons: `write_analyst_snapshot` already spans ~60 lines and handles a separate concern (LLM-produced summaries per analyst). Inlining would make it responsible for three distinct data shapes: analyst summaries, coverage metadata, and provenance metadata. Testing becomes harder because a single large function can only be tested end-to-end rather than in isolation. Section headings would need to be embedded inside an existing function, making reordering difficult.
+Cons: `write_analyst_snapshot` already spans a separate concern (LLM-produced summaries per analyst). Inlining would make it responsible for three distinct data shapes: analyst summaries, coverage metadata, and provenance metadata. Testing becomes harder because a single large function can only be tested end-to-end rather than in isolation. Section headings would need to be embedded inside an existing function, making reordering difficult.
 
 Why rejected: The existing section-per-function pattern in `final_report.rs` (one `write_*` function per logical section) is consistent and scales well. Creating dedicated `coverage.rs` and `provenance.rs` modules follows the same convention, keeps each function under 50 lines, and allows the tests to target each section independently. The small overhead of two extra files is well justified.
 
