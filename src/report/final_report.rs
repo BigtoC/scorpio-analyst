@@ -237,6 +237,10 @@ fn write_trader_proposal(out: &mut String, state: &TradingState) {
 fn write_analyst_snapshot(out: &mut String, state: &TradingState) {
     section_header(out, "Analyst Evidence Snapshot");
 
+    // `MarketVolatilityData::summary()` returns an owned `String`, so bind it
+    // here to extend its lifetime to match the borrow in `analysts`.
+    let vix_summary = state.market_volatility.as_ref().map(|v| v.summary());
+
     let analysts: Vec<(&str, Option<&str>, bool)> = vec![
         (
             "Fundamentals",
@@ -263,6 +267,11 @@ fn write_analyst_snapshot(out: &mut String, state: &TradingState) {
                 .as_ref()
                 .map(|d| d.summary.as_str()),
             state.technical_indicators.is_some(),
+        ),
+        (
+            "VIX",
+            vix_summary.as_deref(),
+            state.market_volatility.is_some(),
         ),
     ];
 
