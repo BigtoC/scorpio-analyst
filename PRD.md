@@ -28,7 +28,10 @@ dozens of concurrent analysts aggregating disparate financial application progra
 model becomes a critical limiting factor.
 
 This document mandates the comprehensive engineering architecture for a Rust-native reimplementation of the
-TradingAgents framework. Transitioning this complex multi-agent system to Rust addresses the fundamental limitations of
+TradingAgents framework. The architecture is also informed by reusable financial analysis and reporting patterns from
+Anthropic's [financial-services-plugins](https://github.com/anthropics/financial-services-plugins) repository,
+particularly around evidence handling, provenance tracking, source attribution discipline, and modular financial
+workflows. Transitioning this complex multi-agent system to Rust addresses the fundamental limitations of
 the Python ecosystem by introducing fearless concurrency, sub-millisecond technical indicator calculations,
 deterministic memory management without garbage collection pauses, and absolute compile-time type safety. By leveraging
 Rust's `tokio`asynchronous runtime, the system will execute data ingestion and agent inferences in true parallel
@@ -187,6 +190,23 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    logic (max 3 attempts, 45-second total budget). An API key is required via the `SCORPIO_FRED_API_KEY` environment
    variable.
 
+4. **Entity Resolution**: Before any data ingestion begins, the `PreflightTask` canonicalizes the user-supplied ticker
+   symbol via the entity resolution module (`src/data/entity.rs`). This module delegates ticker-format validation to the
+   existing `src/data/symbol.rs` logic and produces a `ResolvedInstrument` containing the original input, the
+   canonicalized uppercase symbol, and optional metadata fields (issuer name, exchange, instrument type, aliases). In
+   the initial implementation, metadata fields default to `None`; future milestones may enrich them via API lookups.
+   Invalid or empty symbols cause an immediate hard failure at preflight, preventing wasted LLM calls downstream.
+
+5. **Enrichment Adapter Contracts**: The system defines provider-agnostic trait contracts for optional enrichment data
+   sources in `src/data/adapters/`: `TranscriptProvider` (earnings call transcripts), `EstimatesProvider` (consensus
+   revenue/EPS estimates), and `EventNewsProvider` (event-driven news feeds). Each trait returns a normalized evidence
+   struct (`TranscriptEvidence`, `ConsensusEvidence`, `EventNewsEvidence`) that can be consumed uniformly by downstream
+   agents regardless of the upstream provider. In the initial implementation, no concrete providers are wired — the
+   `PreflightTask` seeds the workflow context with `null` placeholders for each enrichment cache key, and
+   `ProviderCapabilities` flags (derived from `DataEnrichmentConfig`) indicate which enrichment categories are enabled.
+   This seam allows future milestones to plug in real providers behind the existing contracts without modifying agent or
+   orchestration code.
+
 ### Technical Analysis and Quantitative Mathematics
 
 Deep learning models and LLMs lack the inherent architectural capacity to perform precise mathematical calculations on
@@ -225,7 +245,13 @@ parameter.
 ```mermaid
 graph TD
 %% Core State
-    Start((Trade Trigger)) --> FanOutAnalysts
+    Start((Trade Trigger)) --> Preflight[PreflightTask]
+
+    subgraph Preflight_Phase [Phase 0: Preflight]
+        Preflight
+    end
+
+    Preflight --> FanOutAnalysts
 
     subgraph Analyst_Team
         FanOutAnalysts
@@ -302,8 +328,74 @@ pub struct TradingState {
     // Phase 5: Final Execution
     pub final_execution_status: Option<ExecutionStatus>,
 
+    // Evidence and Provenance (Stage 1 — dual-write alongside legacy fields above)
+    pub evidence_fundamental: Option<EvidenceRecord<FundamentalData>>,
+    pub evidence_technical: Option<EvidenceRecord<TechnicalData>>,
+    pub evidence_sentiment: Option<EvidenceRecord<SentimentData>>,
+    pub evidence_news: Option<EvidenceRecord<NewsData>>,
+    pub data_coverage: Option<DataCoverageReport>,
+    pub provenance_summary: Option<ProvenanceSummary>,
+
     // Token Usage Tracking
     pub token_usage: TokenUsageTracker,
+}
+
+/// Classifies the type of evidence attached to an `EvidenceRecord`.
+pub enum EvidenceKind {
+    Fundamental,
+    Technical,
+    Sentiment,
+    News,
+    Macro,
+    Transcript,
+    Estimates,
+    Peers,
+    Volatility,
+}
+
+/// Wraps analyst output `T` with provenance metadata and quality flags.
+pub struct EvidenceRecord<T> {
+    pub kind: EvidenceKind,
+    pub payload: T,
+    pub sources: Vec<EvidenceSource>,
+    pub quality_flags: Vec<DataQualityFlag>,
+}
+
+/// Identifies a single data source used to produce evidence.
+pub struct EvidenceSource {
+    pub provider: String,        // e.g. "finnhub", "yfinance", "fred"
+    pub dataset: String,         // e.g. "fundamentals", "ohlcv", "macro_indicators"
+    pub fetched_at: String,      // RFC 3339 UTC
+    pub effective_at: Option<String>,
+    pub symbol: Option<String>,
+    pub url: Option<String>,
+    pub citation: Option<String>,
+    pub freshness_hours: Option<u64>,
+}
+
+/// Quality flags attached to evidence records or coverage reports.
+pub enum DataQualityFlag {
+    Missing,
+    Stale,
+    Partial,
+    Estimated,
+    Conflicted,
+    LowConfidence,
+}
+
+/// Summarizes which required analyst inputs were received vs. missing.
+pub struct DataCoverageReport {
+    pub required_inputs: Vec<String>,
+    pub missing_inputs: Vec<String>,
+    pub stale_inputs: Vec<String>,
+    pub partial_inputs: Vec<String>,
+}
+
+/// Summarizes the provenance of all evidence used in the current run.
+pub struct ProvenanceSummary {
+    pub providers_used: Vec<String>,
+    pub generated_at: String,     // RFC 3339 UTC
+    pub caveats: Vec<String>,
 }
 
 /// Tracks token consumption per agent, per phase, and for the entire run.
@@ -337,29 +429,46 @@ By enforcing this structural schema, the Trader Agent does not need to parse a m
 Margin; it directly accesses `context.fundamental_metrics.gross_margin`, radically reducing token consumption and
 hallucination probabilities.
 
+#### Evidence Provenance and Dual-Write Transition
+
+The `evidence_*` fields wrap the same analyst payload types (`FundamentalData`, `TechnicalData`, etc.) inside
+`EvidenceRecord<T>`, adding provenance metadata (which provider, which dataset, when fetched) and quality flags. During
+the initial rollout, both the legacy fields (e.g., `fundamental_metrics`) and the new evidence fields (e.g.,
+`evidence_fundamental`) are populated — a "dual-write" strategy. Legacy fields remain for backward compatibility; newly
+added readers (report sections, prompt context builders, downstream agents) consume the typed evidence fields as the
+authoritative source. If legacy and new fields disagree, the typed evidence is authoritative and the discrepancy is
+treated as a bug. The `DataCoverageReport` and `ProvenanceSummary` are derived deterministically by the
+`AnalystSyncTask` from the presence or absence of evidence fields, not from legacy mirrors.
+
 ### Execution Workflow Topology Detailed
 
 The execution topology dictates the chronological flow of the artificial intelligence firm. The `GraphBuilder` initiates
 execution at the entry point and routes the `TradingState` through the necessary nodes.
 
-1. **Parallel Data Ingestion (The Fan-Out Pattern)**: The workflow begins by utilizing a `FanOutTask`, a composite task
+1. **Preflight Validation (The PreflightTask)**: Before any analyst work begins, a `PreflightTask` validates and
+   canonicalizes the input symbol via entity resolution (`src/data/entity.rs`), writes the canonical
+   `ResolvedInstrument` to the workflow context, derives `ProviderCapabilities` from the `DataEnrichmentConfig`, writes
+   baseline coverage expectations, and seeds enrichment cache keys with explicit `null` placeholders. If the symbol is
+   invalid, the pipeline fails immediately rather than wasting LLM calls on a bad input. This step also establishes the
+   data-quality contract that downstream agents can reference.
+2. **Parallel Data Ingestion (The Fan-Out Pattern)**: The workflow proceeds by utilizing a `FanOutTask`, a composite task
    provided by `graph-flow `that executes multiple child tasks simultaneously. The Fundamental, Sentiment, News, and
    Technical tasks are executed concurrently using `tokio::spawn`. Each task invokes the respective external application
    programming interface, performs its isolated reasoning using a quick-thinking LLM, and writes its specific data
    structure back to the `TradingState`.
-2. **Dialectical Evaluation (The Cyclic Pattern)**: Following the synchronization of the Fan-Out task, the graph
+3. **Dialectical Evaluation (The Cyclic Pattern)**: Following the synchronization of the Fan-Out task, the graph
    transitions to the Researcher Team. Here, `graph-flow`'s conditional edges are utilized to construct a loop. The
    graph alternates execution between the `BullishResearcher` and `BearishResearcher` tasks. A discrete
    `DebateModerator` task evaluates the number of completed iterations against a `max_debate_rounds` parameter (
    typically set to 2 or 3). Crucially, the Moderator acts as a "Reflective Agent" for the team: once the threshold is
    met, it explicitly reviews the debate history, selects the prevailing perspective, and records it as a structured
    `consensus_summary` before updating the `NextAction` to exit the loop, moving the state to the Trader Agent.
-3. **Synthesis and Proposal**: The Trader Agent task operates sequentially, utilizing the complete `TradingState` to
+4. **Synthesis and Proposal**: The Trader Agent task operates sequentially, utilizing the complete `TradingState` to
    generate a formalized TradeProposal.
-4. **Risk Fan-Out**: Similar to the initial data ingestion, the risk assessment phase utilizes a parallel Fan-Out
+5. **Risk Fan-Out**: Similar to the initial data ingestion, the risk assessment phase utilizes a parallel Fan-Out
    pattern. The Aggressive, Neutral, and Conservative risk agents simultaneously evaluate the `TradeProposal` against
    the technical and fundamental data, appending their distinct `RiskReport` objects to the state.
-5. **Managerial Arbitration**: The graph terminates at the Fund Manager node, which executes a deterministic logic check
+6. **Managerial Arbitration**: The graph terminates at the Fund Manager node, which executes a deterministic logic check
    across the three risk reports to approve or reject the trade.
 
 ## Agent Role Specifications and Implementation Directives
@@ -609,9 +718,13 @@ The CLI supports multiple output formats to accommodate both human operators and
 
 * **Human-readable** (default): Richly formatted terminal output using the `colored` or `comfy-table` crate, displaying
   agent phase transitions, debate summaries, final trade proposals with color-coded risk indicators, and a post-run
-  statistics summary showing per-phase and per-agent token usage and latency.
+  statistics summary showing per-phase and per-agent token usage and latency. The final report includes two additional
+  sections after the analyst evidence snapshot: **Data Quality and Coverage** (listing required and missing analyst
+  inputs) and **Evidence Provenance** (listing the data providers used and any caveats). If the backing state fields
+  are absent, these sections render the fallback string "Unavailable" rather than omitting the section.
 * **JSON** (`--output json`): Machine-readable structured output mirroring the serialized `TradingState` (including the
-  full `TokenUsageTracker`), enabling piping into `jq`, logging infrastructure, or external dashboards.
+  full `TokenUsageTracker`, `DataCoverageReport`, and `ProvenanceSummary`), enabling piping into `jq`, logging
+  infrastructure, or external dashboards.
 * **Quiet mode** (`--quiet`): Suppresses intermediate agent output, emitting only the final `TradeProposal`,
   `ExecutionStatus`, and the run statistics summary — designed for cron jobs and scripted pipelines.
 
@@ -786,6 +899,8 @@ pub struct Config {
     pub llm: LLMConfig,
     pub trading: TradingConfig,
     pub apis: ApiConfig,
+    #[serde(default)]
+    pub enrichment: DataEnrichmentConfig,
 }
 
 #[derive(serde::Deserialize)]
@@ -795,6 +910,17 @@ pub struct LLMConfig {
     pub max_debate_rounds: u8,       // default: 3
     pub max_risk_rounds: u8,         // default: 2
     pub analyst_timeout_secs: u64,   // default: 30
+}
+
+/// Controls optional enrichment data sources. All flags default to `false`,
+/// so the system operates with only the four baseline analyst inputs until
+/// concrete enrichment providers are implemented.
+#[derive(serde::Deserialize)]
+pub struct DataEnrichmentConfig {
+    pub enable_transcripts: bool,           // default: false
+    pub enable_consensus_estimates: bool,   // default: false
+    pub enable_event_news: bool,            // default: false
+    pub max_evidence_age_hours: u64,        // default: 48
 }
 ```
 
@@ -806,6 +932,11 @@ Loading strategy (highest priority last):
 
 API keys must be wrapped in `secrecy::SecretString` to ensure they are zeroed from memory on drop and never appear in
 `Debug` output or log traces.
+
+Enrichment configuration follows the same layered strategy. The `config.toml` provides safe defaults (all enrichment
+disabled), and environment variables use the `SCORPIO__ENRICHMENT__` prefix (e.g.,
+`SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS=true`). The `PreflightTask` derives `ProviderCapabilities` from these config
+fields at runtime.
 
 ### Rate Limiting
 
@@ -956,3 +1087,4 @@ quantitative trading infrastructure.
 
 - TradingAgents: Multi-Agents LLM Financial Trading Framework (https://arxiv.org/pdf/2412.20138)
 - TauricResearch/TradingAgents (https://github.com/TauricResearch/TradingAgents/)
+- Anthropic Financial Services Plugins (https://github.com/anthropics/financial-services-plugins) — evidence discipline, provenance reporting, and modular financial workflow patterns
