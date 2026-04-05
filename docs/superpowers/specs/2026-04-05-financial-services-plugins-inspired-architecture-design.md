@@ -146,12 +146,12 @@ These identifiers are fixed snake_case strings and are the only valid coverage i
 
 Exact Stage 1 coverage-id mapping:
 
-| Coverage ID | Legacy Field | New Evidence Field | Report Label |
-|-------------|--------------|--------------------|--------------|
-| `fundamentals` | `fundamental_metrics` | `evidence_fundamental` | Fundamentals |
-| `sentiment` | `market_sentiment` | `evidence_sentiment` | Sentiment |
-| `news` | `macro_news` | `evidence_news` | News |
-| `technical` | `technical_indicators` | `evidence_technical` | Technical |
+| Coverage ID    | Legacy Field           | New Evidence Field     | Report Label |
+|----------------|------------------------|------------------------|--------------|
+| `fundamentals` | `fundamental_metrics`  | `evidence_fundamental` | Fundamentals |
+| `sentiment`    | `market_sentiment`     | `evidence_sentiment`   | Sentiment    |
+| `news`         | `macro_news`           | `evidence_news`        | News         |
+| `technical`    | `technical_indicators` | `evidence_technical`   | Technical    |
 
 Stage 1 fail-open vs fail-closed policy:
 
@@ -491,7 +491,7 @@ Provenance construction ownership for Stage 1:
 - fixed Stage 1 mappings are:
   - fundamentals -> provider `finnhub`, dataset `fundamentals`
   - sentiment -> provider `finnhub`, dataset `company_news_sentiment_inputs`
-  - news -> provider `finnhub+fred`, dataset `company_news_plus_macro`
+  - news -> two sources: provider `finnhub`, dataset `company_news` and provider `fred`, dataset `macro_indicators`
   - technical -> provider `yfinance`, dataset `ohlcv`
 - `effective_at`, `url`, and `citation` are `None` in the first slice unless an existing adapter already provides the
   value without extra design work

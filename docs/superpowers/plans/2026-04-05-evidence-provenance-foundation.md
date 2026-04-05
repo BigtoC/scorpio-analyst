@@ -12,46 +12,46 @@
 
 ## File Map
 
-| File | Action | Responsibility |
-|------|--------|----------------|
-| `README.md` | Modify | Mention `financial-services-plugins` as an additional inspiration |
-| `docs/prompts.md` | Modify | Add source hierarchy and missing-data prompt rules |
-| `config.toml` | Modify | Add default `[enrichment]` section |
-| `src/agents/shared/prompt.rs` | Modify | Shared rule helpers plus `build_evidence_context` and `build_data_quality_context` |
-| `src/agents/analyst/fundamental.rs` | Modify | Apply stronger analyst prompt rules |
-| `src/agents/analyst/news.rs` | Modify | Apply stronger analyst prompt rules |
-| `src/agents/analyst/sentiment.rs` | Modify | Apply stronger analyst prompt rules |
-| `src/agents/analyst/technical.rs` | Modify | Apply stronger analyst prompt rules |
-| `src/agents/researcher/common.rs` | Modify | Inject evidence and data-quality context |
-| `src/agents/risk/common.rs` | Modify | Inject evidence and data-quality context |
-| `src/agents/trader/mod.rs` | Modify | Inject evidence and data-quality context |
-| `src/agents/fund_manager/prompt.rs` | Modify | Inject evidence and data-quality context |
-| `src/config.rs` | Modify | Add `DataEnrichmentConfig` with defaults |
-| `src/data/entity.rs` | Create | Canonical instrument resolution on top of `src/data/symbol.rs` |
-| `src/data/adapters/mod.rs` | Create | `ProviderCapabilities` and adapter exports |
-| `src/data/adapters/transcripts.rs` | Create | `TranscriptEvidence` and `TranscriptProvider` |
-| `src/data/adapters/estimates.rs` | Create | `ConsensusEvidence` and `EstimatesProvider` |
-| `src/data/adapters/events.rs` | Create | `EventNewsEvidence` and `EventNewsProvider` |
-| `src/data/mod.rs` | Modify | Re-export entity and adapters modules |
-| `src/state/evidence.rs` | Create | `EvidenceKind` and `EvidenceRecord<T>` |
-| `src/state/provenance.rs` | Create | `EvidenceSource` and `DataQualityFlag` |
-| `src/state/reporting.rs` | Create | `DataCoverageReport` and `ProvenanceSummary` |
-| `src/state/mod.rs` | Modify | Export new state modules |
-| `src/state/trading_state.rs` | Modify | Add evidence and reporting fields |
-| `src/workflow/tasks/common.rs` | Modify | Add preflight context keys |
-| `src/workflow/tasks/preflight.rs` | Create | Validate symbol, write resolved instrument, capabilities, coverage, cache placeholders |
-| `src/workflow/tasks/mod.rs` | Modify | Export `PreflightTask`, context keys, and `preflight_tests` |
-| `src/workflow/pipeline.rs` | Modify | Insert `PreflightTask` before analyst fan-out |
-| `src/workflow/context_bridge.rs` | Modify | Add explicit round-trip test for expanded `TradingState` |
-| `src/workflow/snapshot.rs` | Modify | Persist expanded `TradingState` |
-| `src/workflow/tasks/preflight_tests.rs` | Create | Focused tests for preflight and pipeline ordering |
-| `src/workflow/tasks/tests.rs` | Modify | Focused tests for `AnalystSyncTask` dual-write and coverage |
-| `src/workflow/tasks/analyst.rs` | Modify | Read canonical symbol from context and dual-write evidence/provenance/coverage |
-| `src/workflow/tasks/test_helpers.rs` | Modify | Add a preflight stub if the test seam requires it |
-| `src/report/coverage.rs` | Create | Render `Data Quality and Coverage` section |
-| `src/report/provenance.rs` | Create | Render `Evidence Provenance` section |
-| `src/report/final_report.rs` | Modify | Call the new report helpers |
-| `src/report/mod.rs` | Modify | Export the report module shape cleanly |
+| File                                    | Action | Responsibility                                                                         |
+|-----------------------------------------|--------|----------------------------------------------------------------------------------------|
+| `README.md`                             | Modify | Mention `financial-services-plugins` as an additional inspiration                      |
+| `docs/prompts.md`                       | Modify | Add source hierarchy and missing-data prompt rules                                     |
+| `config.toml`                           | Modify | Add default `[enrichment]` section                                                     |
+| `src/agents/shared/prompt.rs`           | Modify | Shared rule helpers plus `build_evidence_context` and `build_data_quality_context`     |
+| `src/agents/analyst/fundamental.rs`     | Modify | Apply stronger analyst prompt rules                                                    |
+| `src/agents/analyst/news.rs`            | Modify | Apply stronger analyst prompt rules                                                    |
+| `src/agents/analyst/sentiment.rs`       | Modify | Apply stronger analyst prompt rules                                                    |
+| `src/agents/analyst/technical.rs`       | Modify | Apply stronger analyst prompt rules                                                    |
+| `src/agents/researcher/common.rs`       | Modify | Inject evidence and data-quality context                                               |
+| `src/agents/risk/common.rs`             | Modify | Inject evidence and data-quality context                                               |
+| `src/agents/trader/mod.rs`              | Modify | Inject evidence and data-quality context                                               |
+| `src/agents/fund_manager/prompt.rs`     | Modify | Inject evidence and data-quality context                                               |
+| `src/config.rs`                         | Modify | Add `DataEnrichmentConfig` with defaults                                               |
+| `src/data/entity.rs`                    | Create | Canonical instrument resolution on top of `src/data/symbol.rs`                         |
+| `src/data/adapters/mod.rs`              | Create | `ProviderCapabilities` and adapter exports                                             |
+| `src/data/adapters/transcripts.rs`      | Create | `TranscriptEvidence` and `TranscriptProvider`                                          |
+| `src/data/adapters/estimates.rs`        | Create | `ConsensusEvidence` and `EstimatesProvider`                                            |
+| `src/data/adapters/events.rs`           | Create | `EventNewsEvidence` and `EventNewsProvider`                                            |
+| `src/data/mod.rs`                       | Modify | Re-export entity and adapters modules                                                  |
+| `src/state/evidence.rs`                 | Create | `EvidenceKind` and `EvidenceRecord<T>`                                                 |
+| `src/state/provenance.rs`               | Create | `EvidenceSource` and `DataQualityFlag`                                                 |
+| `src/state/reporting.rs`                | Create | `DataCoverageReport` and `ProvenanceSummary`                                           |
+| `src/state/mod.rs`                      | Modify | Export new state modules                                                               |
+| `src/state/trading_state.rs`            | Modify | Add evidence and reporting fields                                                      |
+| `src/workflow/tasks/common.rs`          | Modify | Add preflight context keys                                                             |
+| `src/workflow/tasks/preflight.rs`       | Create | Validate symbol, write resolved instrument, capabilities, coverage, cache placeholders |
+| `src/workflow/tasks/mod.rs`             | Modify | Export `PreflightTask`, context keys, and `preflight_tests`                            |
+| `src/workflow/pipeline.rs`              | Modify | Insert `PreflightTask` before analyst fan-out                                          |
+| `src/workflow/context_bridge.rs`        | Modify | Add explicit round-trip test for expanded `TradingState`                               |
+| `src/workflow/snapshot.rs`              | Modify | Persist expanded `TradingState`                                                        |
+| `src/workflow/tasks/preflight_tests.rs` | Create | Focused tests for preflight and pipeline ordering                                      |
+| `src/workflow/tasks/tests.rs`           | Modify | Focused tests for `AnalystSyncTask` dual-write and coverage                            |
+| `src/workflow/tasks/analyst.rs`         | Modify | Read canonical symbol from context and dual-write evidence/provenance/coverage         |
+| `src/workflow/tasks/test_helpers.rs`    | Modify | Add a preflight stub if the test seam requires it                                      |
+| `src/report/coverage.rs`                | Create | Render `Data Quality and Coverage` section                                             |
+| `src/report/provenance.rs`              | Create | Render `Evidence Provenance` section                                                   |
+| `src/report/final_report.rs`            | Modify | Call the new report helpers                                                            |
+| `src/report/mod.rs`                     | Modify | Export the report module shape cleanly                                                 |
 
 ---
 
