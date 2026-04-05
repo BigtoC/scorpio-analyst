@@ -199,9 +199,12 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
     let news_report = sanitize_prompt_context(
         &serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned()),
     );
+    let vix_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
+    );
 
     format!(
-        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}"
+        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}"
     )
 }
 
@@ -321,6 +324,7 @@ mod tests {
             asset_symbol: "AAPL".to_owned(),
             target_date: "2026-03-15".to_owned(),
             current_price: None,
+            market_volatility: None,
             fundamental_metrics: None,
             technical_indicators: None,
             market_sentiment: None,

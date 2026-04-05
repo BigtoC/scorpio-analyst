@@ -343,6 +343,7 @@ mod tests {
             asset_symbol: "AAPL".to_owned(),
             target_date: "2026-03-15".to_owned(),
             current_price: None,
+            market_volatility: None,
             fundamental_metrics: None,
             technical_indicators: None,
             market_sentiment: None,
