@@ -50,24 +50,22 @@ pub async fn prompt_text_with_retry(
             prepare_attempt_text(agent, started_at, timeout, total_budget, policy, attempt).await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.prompt_text_details(prompt, max_turns),
         )
         .await
         {
-            Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                });
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
                 if should_retry_text_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient text prompt error, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
             Err(_elapsed) => {
                 let err = text_timeout_error(started_at, agent, attempt);
@@ -80,9 +78,9 @@ pub async fn prompt_text_with_retry(
                     );
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
