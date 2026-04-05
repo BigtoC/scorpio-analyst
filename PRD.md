@@ -242,57 +242,104 @@ and sequentially throughout the system. Note: while the primary data flow is acy
 controlled cycle via the Moderator node's `NextAction::GoBack`; termination is guaranteed by the `max_debate_rounds`
 parameter.
 
-```mermaid
-graph TD
-%% Core State
-    Start((Trade Trigger)) --> Preflight[PreflightTask]
-
-    subgraph Preflight_Phase [Phase 0: Preflight]
-        Preflight
-    end
-
-    Preflight --> FanOutAnalysts
-
-    subgraph Analyst_Team
-        FanOutAnalysts
-        FanOutAnalysts --> Fund[Fundamental Analyst]
-        FanOutAnalysts --> Sent[Sentiment Analysts]
-        FanOutAnalysts --> News[News Analyst]
-        FanOutAnalysts --> Tech[Technical Analysts]
-    end
-
-    Fund --> SyncAnalysts
-    Sent --> SyncAnalysts
-    News --> SyncAnalysts
-    Tech --> SyncAnalysts
-
-    subgraph Researcher_Team
-        SyncAnalysts --> Bull
-        SyncAnalysts --> Bear
-        Bear --> Moderator{Debate Moderator}
-        Bull --> Moderator{Debate Moderator}
-        Moderator -- Max Rounds Not Reached --> Moderator
-    end
-
-    subgraph Synthesis_Execution
-        Moderator -- Max Rounds Reached --> Trader
-    end
-
-    subgraph Risk_Team [Phase 4: Risk Discussion]
-        Trader --> RiskSeeking
-        Trader --> RiskConservative
-        Trader --> RiskNeutral
-        RiskSeeking --> RiskModerator{Risk Moderator}
-        RiskConservative --> RiskModerator
-        RiskNeutral --> RiskModerator
-        RiskModerator -- Max Rounds Not Reached --> RiskModerator
-    end
-
-    subgraph Final_Decision [Phase 5: Managerial Arbitration]
-        RiskModerator -- Max Rounds Reached --> Manager{Fund Manager}
-        Manager -- Approve --> Execute((Execute Trade))
-        Manager -- Reject --> Abort((Terminate))
-    end
+```
+       Input: asset_symbol (e.g. "NVDA" or "nvda")
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  PreflightTask                                          │
+│  • Validates & canonicalizes symbol ("nvda" → "NVDA")   │
+│  • Writes ResolvedInstrument to context                 │
+│  • Derives ProviderCapabilities from config             │
+│  • Seeds cache keys with null placeholders              │
+│  • Hard-fails on invalid symbol                         │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐─────────────────┐
+         ▼                 ▼                 ▼                 ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│  Fundamental │  │   Sentiment  │  │     News     │  │  Technical   │
+│   Analyst    │  │   Analyst    │  │   Analyst    │  │   Analyst    │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       └─────────────────┼─────────────────┘─────────────────┘
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  AnalystSyncTask                                        │
+│                                                         │
+│  Dual-write (legacy + new typed fields):                │
+│  • fundamental_metrics  +  evidence_fundamental         │
+│  • market_sentiment     +  evidence_sentiment           │
+│  • macro_news           +  evidence_news                │
+│  • technical_indicators +  evidence_technical           │
+│                                                         │
+│  Computes:                                              │
+│  • DataCoverageReport  → data_coverage                  │
+│    (required/missing inputs from evidence_* presence)   │
+│  • ProvenanceSummary   → provenance_summary             │
+│    (providers: finnhub, fred, yfinance; timestamp)      │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+         ┌─────────────────┼──────────────┐
+         ▼                                ▼
+┌──────────────┐                 ┌───────────────┐
+│  Bullish     │ ◄──── debate ── │  Bearish      │
+│  Researcher  │ ──────────────► │  Researcher   │
+└────────┬─────┘                 └────────┬──────┘
+         └────────────────┬───────────────┘
+                          ▼
+                ┌──────────────────┐
+                │ Debate Moderator │
+                └────────┬─────────┘
+                         │
+                         ▼
+          ┌─────────────────────────────────┐
+          │      Trader → TradeProposal     │
+          └────────────────┬────────────────┘
+                           │
+      ┌────────────────────┼────────────────────┐
+      ▼                    ▼                    ▼
+┌──────────┐        ┌──────────┐        ┌────────────┐
+│Aggressive│◄─debate│ Neutral  │debate─►│Conservative│
+│   Risk   │────────│   Risk   │────────│   Risk     │
+└────┬─────┘        └─────┬────┘        └────┬───────┘
+     └────────────────────┼──────────────────┘
+                          ▼
+                ┌──────────────────┐
+                │  Risk Moderator  │
+                └─────────┬────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Fund Manager  [Chunk 3: evidence context injected]     │
+│  → Approve / Reject  (deterministic fallback if         │
+│    Conservative + Neutral both flag violation)          │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  Final Report  [EXTENDED — Chunk 4]                     │
+│                                                         │
+│  Existing sections:                                     │
+│  • Analyst Evidence Snapshot                            │
+│                                                         │
+│  New sections (inserted after analyst snapshot):        │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ Data Quality and Coverage        [NEW]           │   │
+│  │  required_inputs: [fundamentals, sentiment, ...] │   │
+│  │  missing_inputs:  [...]  or  Unavailable         │   │
+│  └──────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ Evidence Provenance              [NEW]           │   │
+│  │  providers_used: [finnhub, fred, yfinance]       │   │
+│  │  generated_at: 2026-04-05T...                    │   │
+│  │  caveats: []  or  Unavailable                    │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  Existing sections:                                     │
+│  • Research Debate Summary                              │
+│  • Risk Assessment                                      │
+│  • Trade Decision                                       │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### Strongly Typed State Management
