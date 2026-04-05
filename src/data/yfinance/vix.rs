@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::state::{MarketVolatilityData, VixRegime, VixTrend};
 
-use super::yfinance::YFinanceClient;
+use super::ohlcv::YFinanceClient;
 
 /// VIX ticker symbol on Yahoo Finance.
 const VIX_SYMBOL: &str = "^VIX";

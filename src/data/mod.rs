@@ -25,7 +25,6 @@
 pub mod finnhub;
 pub mod fred;
 mod symbol;
-pub mod vix;
 pub mod yfinance;
 
 pub use finnhub::{
@@ -33,5 +32,4 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
-pub use vix::fetch_vix_data;
-pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
+pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient, fetch_vix_data};
