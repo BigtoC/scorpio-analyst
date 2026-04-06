@@ -623,14 +623,9 @@ mod tests {
     fn build_analyst_context_includes_evidence_and_data_quality_sections() {
         let state = make_state();
         let ctx = build_analyst_context(&state);
-        // Empty state — both helpers return their fallback strings.
-        assert!(
-            ctx.contains("no typed evidence") || ctx.contains("Typed evidence"),
-            "risk context must include evidence section; got: {ctx}"
-        );
-        assert!(
-            ctx.contains("Data quality"),
-            "risk context must include data quality section; got: {ctx}"
-        );
+        assert!(ctx.contains("Typed evidence snapshot:"));
+        assert!(ctx.contains("- fundamentals: null"));
+        assert!(ctx.contains("Data quality snapshot:"));
+        assert!(ctx.contains("- required_inputs: unavailable"));
     }
 }

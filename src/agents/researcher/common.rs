@@ -438,15 +438,10 @@ mod tests {
     fn build_analyst_context_includes_evidence_and_data_quality_sections() {
         let state = TradingState::new("TSLA", "2026-01-15");
         let context = build_analyst_context(&state);
-        // Empty state — both helpers return their fallback strings.
-        assert!(
-            context.contains("no typed evidence") || context.contains("Typed evidence"),
-            "researcher context must include evidence section; got: {context}"
-        );
-        assert!(
-            context.contains("Data quality"),
-            "researcher context must include data quality section; got: {context}"
-        );
+        assert!(context.contains("Typed evidence snapshot:"));
+        assert!(context.contains("- fundamentals: null"));
+        assert!(context.contains("Data quality snapshot:"));
+        assert!(context.contains("- required_inputs: unavailable"));
     }
 
     #[test]
