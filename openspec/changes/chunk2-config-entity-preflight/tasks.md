@@ -37,6 +37,6 @@
 
 - [x] 5.1 Run `cargo fmt -- --check`
 - [x] 5.2 Run `cargo clippy --all-targets -- -D warnings`
-- [x] 5.3 Run `cargo test`
+- [x] 5.3 Run `cargo nextest run --all-features --locked`
 - [x] 5.4 Run `cargo build`
-- [ ] 5.5 Run `openspec validate chunk2-config-entity-preflight --strict`
+- [x] 5.5 Run `openspec validate chunk2-config-entity-preflight --strict`
