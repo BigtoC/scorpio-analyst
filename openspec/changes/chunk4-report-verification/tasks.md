@@ -1,6 +1,6 @@
 ## 12. Add Report Coverage and Provenance Sections
 
-- [ ] 12.0 Confirm the Chunk 3 prerequisite is present.
+- [x] 12.0 Confirm the Chunk 3 prerequisite is present.
 
   Before starting implementation, confirm all three prerequisites from `chunk3-evidence-state-sync` exist:
 
@@ -10,7 +10,7 @@
 
   If any prerequisite is missing, stop and land `chunk3-evidence-state-sync` first.
 
-- [ ] 12.1 Create `src/report/coverage.rs`.
+- [x] 12.1 Create `src/report/coverage.rs`.
 
 Create `src/report/coverage.rs` with a single `pub(crate)` function:
 
@@ -29,7 +29,7 @@ pub(crate) fn write_data_quality_and_coverage(out: &mut String, state: &TradingS
   - If all three issue lists are empty, write a line indicating all required inputs are present.
 - Never call `.unwrap()` or `.expect()` — all access is via pattern matching or `.as_ref()`.
 
-- [ ] 12.2 Create `src/report/provenance.rs`.
+- [x] 12.2 Create `src/report/provenance.rs`.
 
 Create `src/report/provenance.rs` with a single `pub(crate)` function:
 
@@ -45,7 +45,7 @@ pub(crate) fn write_evidence_provenance(out: &mut String, state: &TradingState)
   - Do not render `generated_at` separately in Stage 1; the report header already carries the run timestamp.
 - Never call `.unwrap()` or `.expect()` — all access is via pattern matching or `.as_ref()`.
 
-- [ ] 12.3 Update `src/report/mod.rs`.
+- [x] 12.3 Update `src/report/mod.rs`.
 
 Add the two new sub-module declarations and make their functions accessible:
 
@@ -56,7 +56,7 @@ mod provenance;
 
 The helper functions are `pub(crate)` within their modules; they will be called from `final_report.rs` via `coverage::write_data_quality_and_coverage` and `provenance::write_evidence_provenance`. No additional `pub use` re-exports are needed unless the public `format_final_report` API changes (it does not).
 
-- [ ] 12.4 Update `src/report/final_report.rs`.
+- [x] 12.4 Update `src/report/final_report.rs`.
 
 In `format_final_report`, insert the two new section calls between `write_analyst_snapshot` and `write_research_debate`:
 
@@ -69,7 +69,7 @@ write_research_debate(&mut out, state);
 
 Add the necessary `use` imports at the top of `final_report.rs` (or use the `super::` path if the module structure requires it). Widen `section_header` from private to `pub(super)` so the two new sibling modules can reuse it. Confirm that the existing `format_final_report_handles_missing_analysts_gracefully` test still compiles and passes after this change.
 
-- [ ] 12.5 Add tests for the new sections.
+- [x] 12.5 Add tests for the new sections.
 
 Add a `#[cfg(test)]` block in each new file (or extend the existing test module in `final_report.rs` if re-using `minimal_state`):
 
@@ -91,7 +91,7 @@ Also add one integration assertion on `format_final_report` verifying section or
 
 Use the existing `minimal_state()` helper from `final_report.rs` as a base if available after Chunk 3 lands, or add focused local helpers in the new test modules.
 
-- [ ] 12.6 Record cross-owner approval and owner awareness.
+- [x] 12.6 Record cross-owner approval and owner awareness.
 
 Before implementation begins, obtain maintainer or owner approval for the CLI-owned edits listed in `proposal.md`:
 
@@ -112,7 +112,7 @@ git commit -m "feat: add report coverage and provenance sections"
 
 This is a process task. No code changes are expected. All commands must pass without modification.
 
-- [ ] 13.1 Formatting check.
+- [x] 13.1 Formatting check.
 
 ```bash
 cargo fmt -- --check
@@ -120,7 +120,7 @@ cargo fmt -- --check
 
 Expected: exits 0, no diff output. If any formatting issues are reported, run `cargo fmt` and re-commit before proceeding.
 
-- [ ] 13.2 Lint check.
+- [x] 13.2 Lint check.
 
 ```bash
 cargo clippy --all-targets -- -D warnings
@@ -128,7 +128,7 @@ cargo clippy --all-targets -- -D warnings
 
 Expected: exits 0, no warnings. Address any clippy diagnostics before proceeding to the test step. Common issues to watch for: unused imports in the new `coverage.rs` / `provenance.rs` files, redundant `.as_ref()` calls, or `writeln!` result unused warnings (use `let _ = writeln!(...)` to silence).
 
-- [ ] 13.3 Test suite.
+- [x] 13.3 Test suite.
 
 ```bash
 cargo nextest run --all-features --locked
