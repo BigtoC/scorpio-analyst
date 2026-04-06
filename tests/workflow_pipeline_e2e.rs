@@ -8,7 +8,7 @@ use std::sync::Arc;
 use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_analyst::{
     error::TradingError,
-    state::{Decision, TradingState},
+    state::{Decision, ExecutionStatus, TradingState},
 };
 use workflow_pipeline_e2e_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
 
@@ -265,4 +265,58 @@ async fn step_ceiling_prevents_runaway_loop() {
         }
         other => panic!("expected TradingError::GraphFlow, got: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
+    let (pipeline, _store, _dir) = make_pipeline("reused-state.db", "reused-state", 1, 1).await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let mut initial_state = TradingState::new("AAPL", "2026-03-20");
+    initial_state
+        .debate_history
+        .push(scorpio_analyst::state::DebateMessage {
+            role: "stale".to_owned(),
+            content: "stale debate".to_owned(),
+        });
+    initial_state
+        .risk_discussion_history
+        .push(scorpio_analyst::state::DebateMessage {
+            role: "stale".to_owned(),
+            content: "stale risk".to_owned(),
+        });
+    initial_state.consensus_summary = Some("stale consensus".to_owned());
+    initial_state.final_execution_status = Some(ExecutionStatus {
+        decision: Decision::Rejected,
+        action: scorpio_analyst::state::TradeAction::Hold,
+        rationale: "stale".to_owned(),
+        decided_at: "2026-01-01T00:00:00Z".to_owned(),
+        entry_guidance: None,
+        suggested_position: None,
+    });
+
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must succeed with reused state");
+
+    assert_ne!(
+        final_state.consensus_summary.as_deref(),
+        Some("stale consensus")
+    );
+    assert!(final_state.final_execution_status.is_some());
+    assert!(
+        final_state
+            .debate_history
+            .iter()
+            .all(|msg| msg.role != "stale")
+    );
+    assert!(
+        final_state
+            .risk_discussion_history
+            .iter()
+            .all(|msg| msg.role != "stale")
+    );
 }
