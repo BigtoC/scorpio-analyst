@@ -317,7 +317,11 @@ fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf, TradingError> {
 mod tests {
     use super::*;
     use crate::error::TradingError;
-    use crate::state::TradingState;
+    use crate::state::{
+        DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource, FundamentalData,
+        ProvenanceSummary, TradingState,
+    };
+    use chrono::Utc;
 
     /// Open an in-memory SQLite snapshot store for tests.
     async fn in_memory_store() -> SnapshotStore {
@@ -669,5 +673,93 @@ mod tests {
             .expect("store should be created with auto-mkdir");
 
         assert!(nested.parent().unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn evidence_fields_survive_snapshot_round_trip() {
+        let store = in_memory_store().await;
+        let mut state = TradingState::new("TSLA", "2026-01-15");
+        let exec_id = state.execution_id.to_string();
+
+        // Populate typed evidence fields.
+        state.evidence_fundamental = Some(EvidenceRecord {
+            kind: EvidenceKind::Fundamental,
+            payload: FundamentalData {
+                revenue_growth_pct: None,
+                pe_ratio: Some(42.0),
+                eps: None,
+                current_ratio: None,
+                debt_to_equity: None,
+                gross_margin: None,
+                net_income: None,
+                insider_transactions: vec![],
+                summary: "snapshot test".to_owned(),
+            },
+            sources: vec![EvidenceSource {
+                provider: "finnhub".to_owned(),
+                datasets: vec!["fundamentals".to_owned()],
+                fetched_at: Utc::now(),
+                effective_at: None,
+                url: None,
+                citation: None,
+            }],
+            quality_flags: vec![],
+        });
+        state.data_coverage = Some(DataCoverageReport {
+            required_inputs: vec![
+                "fundamentals".to_owned(),
+                "sentiment".to_owned(),
+                "news".to_owned(),
+                "technical".to_owned(),
+            ],
+            missing_inputs: vec!["technical".to_owned()],
+        });
+        state.provenance_summary = Some(ProvenanceSummary {
+            providers_used: vec!["finnhub".to_owned()],
+        });
+
+        store
+            .save_snapshot(&exec_id, SnapshotPhase::AnalystTeam, &state, None)
+            .await
+            .expect("save should succeed");
+
+        let loaded = store
+            .load_snapshot(&exec_id, SnapshotPhase::AnalystTeam)
+            .await
+            .expect("load should succeed")
+            .expect("snapshot should exist");
+
+        assert!(
+            loaded.state.evidence_fundamental.is_some(),
+            "evidence_fundamental must survive snapshot"
+        );
+        assert_eq!(
+            loaded
+                .state
+                .evidence_fundamental
+                .as_ref()
+                .unwrap()
+                .payload
+                .pe_ratio,
+            Some(42.0)
+        );
+        assert_eq!(
+            loaded
+                .state
+                .data_coverage
+                .as_ref()
+                .unwrap()
+                .missing_inputs,
+            vec!["technical"]
+        );
+        assert_eq!(
+            loaded
+                .state
+                .provenance_summary
+                .as_ref()
+                .unwrap()
+                .providers_used,
+            vec!["finnhub"]
+        );
     }
 }

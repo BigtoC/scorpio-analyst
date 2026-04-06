@@ -4,8 +4,9 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::{
-    ExecutionStatus, FundamentalData, MarketVolatilityData, NewsData, RiskReport, SentimentData,
-    TechnicalData, TokenUsageTracker, TradeProposal,
+    DataCoverageReport, EvidenceRecord, ExecutionStatus, FundamentalData, MarketVolatilityData,
+    NewsData, ProvenanceSummary, RiskReport, SentimentData, TechnicalData, TokenUsageTracker,
+    TradeProposal,
 };
 
 /// A single message entry in a debate or risk discussion history.
@@ -31,11 +32,21 @@ pub struct TradingState {
     pub current_price: Option<f64>,
     pub market_volatility: Option<MarketVolatilityData>,
 
-    // Phase 1: Aggregated analyst data
+    // Phase 1: Aggregated analyst data (legacy mirrors — stay for Stage 1 dual-write)
     pub fundamental_metrics: Option<FundamentalData>,
     pub technical_indicators: Option<TechnicalData>,
     pub market_sentiment: Option<SentimentData>,
     pub macro_news: Option<NewsData>,
+
+    // Phase 1: Typed evidence records (authoritative for new evidence-aware readers)
+    pub evidence_fundamental: Option<EvidenceRecord<FundamentalData>>,
+    pub evidence_technical: Option<EvidenceRecord<TechnicalData>>,
+    pub evidence_sentiment: Option<EvidenceRecord<SentimentData>>,
+    pub evidence_news: Option<EvidenceRecord<NewsData>>,
+
+    // Phase 1: Run-level coverage and provenance reporting
+    pub data_coverage: Option<DataCoverageReport>,
+    pub provenance_summary: Option<ProvenanceSummary>,
 
     // Phase 2: Dialectical debate
     pub debate_history: Vec<DebateMessage>,
@@ -77,6 +88,12 @@ impl TradingState {
             technical_indicators: None,
             market_sentiment: None,
             macro_news: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             debate_history: Vec::new(),
             consensus_summary: None,
             trader_proposal: None,

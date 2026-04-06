@@ -157,11 +157,42 @@ pub async fn read_prefixed_result<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
-    use crate::state::TradingState;
+    use crate::state::{
+        DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource, FundamentalData,
+        ProvenanceSummary, TradingState,
+    };
 
     fn sample_state() -> TradingState {
         TradingState::new("AAPL", "2026-01-15")
+    }
+
+    fn sample_evidence_fundamental() -> EvidenceRecord<FundamentalData> {
+        EvidenceRecord {
+            kind: EvidenceKind::Fundamental,
+            payload: FundamentalData {
+                revenue_growth_pct: None,
+                pe_ratio: Some(25.0),
+                eps: None,
+                current_ratio: None,
+                debt_to_equity: None,
+                gross_margin: None,
+                net_income: None,
+                insider_transactions: vec![],
+                summary: "test".to_owned(),
+            },
+            sources: vec![EvidenceSource {
+                provider: "finnhub".to_owned(),
+                datasets: vec!["fundamentals".to_owned()],
+                fetched_at: Utc::now(),
+                effective_at: None,
+                url: None,
+                citation: None,
+            }],
+            quality_flags: vec![],
+        }
     }
 
     #[tokio::test]
@@ -181,6 +212,60 @@ mod tests {
         assert_eq!(original.target_date, recovered.target_date);
         assert_eq!(original.fundamental_metrics, recovered.fundamental_metrics);
         assert_eq!(original.debate_history, recovered.debate_history);
+    }
+
+    #[tokio::test]
+    async fn evidence_fields_survive_context_round_trip() {
+        let ctx = Context::new();
+        let mut original = sample_state();
+
+        original.evidence_fundamental = Some(sample_evidence_fundamental());
+        original.data_coverage = Some(DataCoverageReport {
+            required_inputs: vec![
+                "fundamentals".to_owned(),
+                "sentiment".to_owned(),
+                "news".to_owned(),
+                "technical".to_owned(),
+            ],
+            missing_inputs: vec!["technical".to_owned()],
+        });
+        original.provenance_summary = Some(ProvenanceSummary {
+            providers_used: vec!["finnhub".to_owned()],
+        });
+
+        serialize_state_to_context(&original, &ctx)
+            .await
+            .expect("serialization should succeed");
+
+        let recovered = deserialize_state_from_context(&ctx)
+            .await
+            .expect("deserialization should succeed");
+
+        assert!(
+            recovered.evidence_fundamental.is_some(),
+            "evidence_fundamental must survive context round-trip"
+        );
+        assert_eq!(
+            recovered
+                .evidence_fundamental
+                .as_ref()
+                .unwrap()
+                .payload
+                .pe_ratio,
+            Some(25.0)
+        );
+        assert_eq!(
+            recovered.data_coverage.as_ref().unwrap().missing_inputs,
+            vec!["technical"]
+        );
+        assert_eq!(
+            recovered
+                .provenance_summary
+                .as_ref()
+                .unwrap()
+                .providers_used,
+            vec!["finnhub"]
+        );
     }
 
     #[tokio::test]

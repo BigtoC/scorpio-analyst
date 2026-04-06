@@ -216,6 +216,12 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         }
     }
@@ -325,6 +331,12 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         };
 
@@ -395,6 +407,12 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         };
 
@@ -436,6 +454,12 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         };
 

@@ -1,17 +1,17 @@
 ## 1. Typed State Modules
 
-- [ ] 1.1 Create `src/state/provenance.rs` with `EvidenceSource` and `DataQualityFlag`, both deriving serde and
+- [x] 1.1 Create `src/state/provenance.rs` with `EvidenceSource` and `DataQualityFlag`, both deriving serde and
   `JsonSchema`.
-- [ ] 1.2 Create `src/state/evidence.rs` with `EvidenceKind` and generic `EvidenceRecord<T>`.
+- [x] 1.2 Create `src/state/evidence.rs` with `EvidenceKind` and generic `EvidenceRecord<T>`.
 
   Important: the docs intentionally do not force one exact generic-bound syntax for derive macros. Use the smallest
   compiling serde/schemars-compatible form so `EvidenceRecord<FundamentalData>`, `EvidenceRecord<TechnicalData>`,
   `EvidenceRecord<SentimentData>`, `EvidenceRecord<NewsData>`, and `EvidenceRecord<serde_json::Value>` all work.
 
-- [ ] 1.3 Create `src/state/reporting.rs` with `DataCoverageReport` and `ProvenanceSummary`.
-- [ ] 1.4 Export the three modules and their public types from `src/state/mod.rs`.
-- [ ] 1.5 Add serde round-trip tests for each new state module.
-- [ ] 1.6 Run `cargo test --lib state -- --nocapture`.
+- [x] 1.3 Create `src/state/reporting.rs` with `DataCoverageReport` and `ProvenanceSummary`.
+- [x] 1.4 Export the three modules and their public types from `src/state/mod.rs`.
+- [x] 1.5 Add serde round-trip tests for each new state module.
+- [x] 1.6 Run `cargo test --lib state -- --nocapture`.
 - [ ] 1.7 Commit: `feat: add evidence provenance and reporting state modules`.
 
 ## 2. TradingState Extension And Persistence Coverage

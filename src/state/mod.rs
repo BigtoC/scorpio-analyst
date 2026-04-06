@@ -1,19 +1,25 @@
+mod evidence;
 mod execution;
 mod fundamental;
 mod market_volatility;
 mod news;
 mod proposal;
+mod provenance;
+mod reporting;
 mod risk;
 mod sentiment;
 mod technical;
 mod token_usage;
 mod trading_state;
 
+pub use evidence::*;
 pub use execution::*;
 pub use fundamental::*;
 pub use market_volatility::*;
 pub use news::*;
 pub use proposal::*;
+pub use provenance::*;
+pub use reporting::*;
 pub use risk::*;
 pub use sentiment::*;
 pub use technical::*;
