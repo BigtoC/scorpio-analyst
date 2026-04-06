@@ -17,7 +17,7 @@ Find the OpenSpec proposal for `<SpecName>` under `openspec/changes/`. Read the 
 
 ## Step 2: Code Review
 
-Run `/ce:review` with the plan document for this spec if one exists (e.g. `plan:docs/plans/<plan-file>.md`). This covers security, performance, code quality, maintainability, and test coverage.
+Run `/ce:review <SpecName>`. The spec tasks from Step 1 serve as the requirements — pass them via `plan:` only if a plan document also exists under `docs/plans/`. This covers security, performance, code quality, maintainability, and test coverage.
 
 ## Return
 
