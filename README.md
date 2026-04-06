@@ -23,15 +23,20 @@ The system operates as a stateful workflow, orchestrating the collaboration betw
 
 ```mermaid
 graph TD
-%% Core State
-    Start((Trade Trigger)) --> FanOutAnalysts
+    Start((Trade Trigger)) --> Preflight
 
-    subgraph Analyst_Team
-        FanOutAnalysts
+    subgraph Phase_0 [Phase 0: Preflight]
+        Preflight[PreflightTask\nValidate & canonicalize symbol\nDerive provider capabilities\nSeed enrichment cache keys]
+    end
+
+    Preflight --> FanOutAnalysts
+
+    subgraph Analyst_Team [Phase 1: Analyst Team]
+        FanOutAnalysts[ ]
         FanOutAnalysts --> Fund[Fundamental Analyst]
-        FanOutAnalysts --> Sent[Sentiment Analysts]
+        FanOutAnalysts --> Sent[Sentiment Analyst]
         FanOutAnalysts --> News[News Analyst]
-        FanOutAnalysts --> Tech[Technical Analysts]
+        FanOutAnalysts --> Tech[Technical Analyst]
     end
 
     Fund --> SyncAnalysts
@@ -39,22 +44,24 @@ graph TD
     News --> SyncAnalysts
     Tech --> SyncAnalysts
 
-    subgraph Researcher_Team
-        SyncAnalysts --> Bull
-        SyncAnalysts --> Bear
+    SyncAnalysts[AnalystSyncTask\nDual-write evidence fields\nCompute DataCoverageReport\nCompute ProvenanceSummary]
+
+    subgraph Researcher_Team [Phase 2: Research Debate]
+        SyncAnalysts --> Bull[Bullish Researcher]
+        SyncAnalysts --> Bear[Bearish Researcher]
         Bear --> Moderator{Debate Moderator}
-        Bull --> Moderator{Debate Moderator}
+        Bull --> Moderator
         Moderator -- Max Rounds Not Reached --> Moderator
     end
 
-    subgraph Synthesis_Execution
-        Moderator -- Max Rounds Reached --> Trader
+    subgraph Synthesis_Execution [Phase 3: Trade Synthesis]
+        Moderator -- Max Rounds Reached --> Trader[Trader]
     end
 
     subgraph Risk_Team [Phase 4: Risk Discussion]
-        Trader --> RiskSeeking
-        Trader --> RiskConservative
-        Trader --> RiskNeutral
+        Trader --> RiskSeeking[Aggressive Risk]
+        Trader --> RiskConservative[Conservative Risk]
+        Trader --> RiskNeutral[Neutral Risk]
         RiskSeeking --> RiskModerator{Risk Moderator}
         RiskConservative --> RiskModerator
         RiskNeutral --> RiskModerator
@@ -66,6 +73,9 @@ graph TD
         Manager -- Approve --> Execute((Execute Trade))
         Manager -- Reject --> Abort((Terminate))
     end
+
+    Execute --> Report[Final Report\nData Quality and Coverage\nEvidence Provenance]
+    Abort --> Report
 ```
 
 ## User Interaction

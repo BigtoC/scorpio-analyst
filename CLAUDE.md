@@ -152,6 +152,37 @@ src/
 
 **Dev dependencies:** `proptest` 1, `mockall` 0.13, `pretty_assertions` 1, `tempfile` 3, `paft-money` 0.7, `rust_decimal` 1.
 
+## Work Mode
+> Based on the complexity of the tasks, choose the appropriate work mode
+
+### Direct Execution Model (Default)
+
+Trigger: bug fixes, small features, <30 line changes
+Behavior: write code directly, do not invoke any skills
+
+### Full Development Mode
+
+Trigger: user explicitly says "full flow" or uses one of the `/full`, `/opsx:apply`, `/spec-code-developer` commands.
+Behavior: follow this sequence strictly:
+1. `/superpowers:brainstorming` — requirements exploration
+2. `/ce:plan` — technical plan, auto-search `docs/solutions/`
+3. `/superpowers:test-driven-development` — TDD implementation
+4. `/ce:review` — multi-agent code review
+5. `/ce:compound` — knowledge consolidation
+
+## Knowledge Consolidation
+
+After resolving a non-trivial problem, run `/ce:compound` to persist the solution for future reference.
+
+- `docs/solutions/` — documented solved problems (bug fixes, best practices, workflow patterns), organized by category
+- `/ce:plan` auto-searches `docs/solutions/` at planning time to surface relevant prior solutions before implementation begins
+- Each solution document includes: problem description, root cause, fix applied, and tags for search
+
+When to invoke `/ce:compound`:
+- After a tricky bug is fixed (especially build/CI failures, async issues, borrow-checker patterns)
+- After establishing a new architectural pattern or workflow convention
+- After integrating a new dependency or provider that required non-obvious configuration
+
 ### Configuration Loading Order
 
 1. `config.toml` — non-sensitive defaults (checked in)

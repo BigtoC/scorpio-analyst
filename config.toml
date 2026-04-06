@@ -2,10 +2,14 @@
 # Override with .env or environment variables (prefix: SCORPIO__, e.g. SCORPIO__LLM__MAX_DEBATE_ROUNDS=5)
 
 [llm]
-quick_thinking_provider = "openrouter"
-quick_thinking_model = "openrouter/free"
-deep_thinking_provider = "openrouter"
-deep_thinking_model = "qwen/qwen3.6-plus-preview:free"
+#quick_thinking_provider = "openrouter"
+#quick_thinking_model = "openrouter/free"
+#deep_thinking_provider = "openrouter"
+#deep_thinking_model = "qwen/qwen3.6-plus-preview:free"
+quick_thinking_provider = "gemini"
+quick_thinking_model = "gemini-3-flash-preview"
+deep_thinking_provider = "gemini"
+deep_thinking_model = "gemini-3.1-pro-preview"
 max_debate_rounds = 3
 max_risk_rounds = 2
 analyst_timeout_secs = 3000

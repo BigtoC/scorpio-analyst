@@ -58,6 +58,67 @@ These instructions are based on [The Rust Book](https://doc.rust-lang.org/book/)
 - Avoid premature `collect()`, keep iterators lazy until you actually need the collection.
 - Avoid unnecessary allocations—prefer borrowing and zero-copy operations.
 
+## Performance Optimization
+
+Apply these techniques only after profiling identifies a real bottleneck. Optimize algorithms (O-complexity) before micro-optimizing memory or CPU usage.
+
+### Profiling and Benchmarking First
+
+- Use **Criterion** for micro-benchmarks with statistical analysis — never rely on intuition alone.
+- Add structured `tracing` spans around hot paths to identify production bottlenecks.
+- Track throughput and latency percentiles (p50, p95, p99) for I/O-heavy paths.
+- Always measure before *and* after an optimization to confirm improvement.
+
+### Allocation Patterns
+
+- Use `Vec::with_capacity(n)` (and `HashMap::with_capacity(n)`) whenever the final size is known or estimable — eliminates repeated reallocations.
+- For hot loops that allocate repeatedly, consider an **object pool**: reuse allocations rather than freeing and re-creating them.
+- For tree/graph structures with a single logical lifetime, consider an **arena allocator** (e.g. `bumpalo`) — one bulk deallocation instead of N individual frees.
+- **Adaptive pre-allocation**: track the previous allocation size and use a rolling average to seed future `with_capacity` calls in recurring workloads.
+
+### Memory Layout Optimization
+
+- **Hot/cold field separation**: group frequently accessed fields at the top of a struct so they share a cache line; move rarely used fields toward the end or into a separate heap allocation.
+- **Structure of Arrays (SoA)** over **Array of Structures (AoS)** when only one field is accessed in tight loops — reduces cache pollution significantly.
+- Use `#[repr(C)]` when a predictable, C-compatible memory layout is required (FFI, SIMD, memory-mapped I/O).
+- Add `#[repr(align(64))]` padding to hot concurrent data to prevent **false sharing** between CPU cores.
+
+### Compile-Time Optimizations
+
+- Use **const generics** to encode array sizes as type parameters — the compiler eliminates bounds checks that would otherwise occur at runtime.
+- Prefer **`const fn`** for pure computations (lookup tables, bitmasks, hash seeds) so they execute at compile time rather than every call.
+- Use **phantom-type state machines** (`PhantomData<State>`) to enforce valid operation sequences at compile time, removing the need for runtime state checks and impossible-state panics.
+
+### Lazy Evaluation and Streaming
+
+- Use `std::cell::OnceCell` / `once_cell::sync::OnceCell` for fields whose computation is expensive and may not always be needed — compute once, cache forever.
+- Process large datasets as **streams** or **iterators** rather than loading them fully into memory. Keep iterator chains lazy; only `.collect()` when the full collection is required by the caller.
+- Apply **backpressure** (bounded channels, semaphores) when feeding async pipelines to prevent unbounded memory growth.
+
+### I/O and Database Optimization
+
+- Wrap `File` / `TcpStream` in `BufReader` / `BufWriter` (64 KB buffer is a reasonable default) to reduce the number of system calls.
+- **Batch** database writes — accumulate records in a buffer and commit in bulk rather than one row at a time.
+- Use **memory-mapped files** (`memmap2`) for zero-copy reads of large, read-heavy datasets.
+- Pool database connections (`sqlx::Pool`) rather than opening a new connection per request.
+
+### Lock-Free Concurrency
+
+- Prefer `DashMap` over `Mutex<HashMap>` for high-read, moderate-write concurrent maps — eliminates global locking.
+- Use `crossbeam::queue::SegQueue` or `std::sync::mpsc` for producer-consumer patterns instead of `Mutex<VecDeque>`.
+- Use atomic types (`AtomicUsize`, `AtomicBool`) for simple counters and flags — they are cheaper than a mutex for single-value state.
+- When parallelizing with Rayon, size chunks as `(total_items / rayon::current_num_threads()).max(1).min(1000)` to balance overhead against distribution.
+
+### Optimization Priority Order
+
+| Impact | Effort | Techniques                                                             |
+|--------|--------|------------------------------------------------------------------------|
+| High   | Low    | Zero-copy patterns, `with_capacity`, iterator chains                   |
+| High   | Medium | Rayon parallelism, streaming, memory layout redesign, lazy evaluation  |
+| High   | High   | Cache-friendly restructuring, lock-free concurrency, custom allocators |
+
+---
+
 ## Code Style and Formatting
 
 - Follow the Rust Style Guide and use `rustfmt` for automatic formatting.
@@ -137,7 +198,7 @@ Before publishing or reviewing Rust code, ensure:
 
 ### Safety and Quality
 - [ ] **Safety**: No unnecessary `unsafe` code, proper error handling
-- [ ] **Performance**: Efficient use of iterators, minimal allocations
+- [ ] **Performance**: Efficient use of iterators, minimal allocations; hot paths use `with_capacity`, lazy evaluation, or streaming where applicable; profiled before and after any non-trivial optimization
 - [ ] **API Design**: Functions are predictable, flexible, and type-safe
 - [ ] **Future Proofing**: Private fields in structs, sealed traits where appropriate
 - [ ] **Duplicated codes**: Identify duplicated codes and refactored into reusable functions or modules
