@@ -58,7 +58,7 @@ use crate::{
             AggressiveRiskTask, AnalystSyncTask, BearishResearcherTask, BullishResearcherTask,
             ConservativeRiskTask, DebateModeratorTask, FundManagerTask, FundamentalAnalystTask,
             KEY_CACHED_NEWS, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
-            KEY_RISK_ROUND, NeutralRiskTask, NewsAnalystTask, RiskModeratorTask,
+            KEY_RISK_ROUND, NeutralRiskTask, NewsAnalystTask, PreflightTask, RiskModeratorTask,
             SentimentAnalystTask, TechnicalAnalystTask,
         },
     },
@@ -66,6 +66,7 @@ use crate::{
 
 // ── Graph task-ID constants ──────────────────────────────────────────────────
 
+const TASK_PREFLIGHT: &str = "preflight";
 const TASK_ANALYST_FAN_OUT: &str = "analyst_fanout";
 const TASK_ANALYST_SYNC: &str = "analyst_sync";
 const TASK_BULLISH_RESEARCHER: &str = "bullish_researcher";
@@ -79,7 +80,8 @@ const TASK_RISK_MODERATOR: &str = "risk_moderator";
 const TASK_FUND_MANAGER: &str = "fund_manager";
 
 #[cfg(any(test, feature = "test-helpers"))]
-const REPLACEABLE_TASK_IDS: [&str; 11] = [
+const REPLACEABLE_TASK_IDS: [&str; 12] = [
+    TASK_PREFLIGHT,
     TASK_ANALYST_FAN_OUT,
     TASK_ANALYST_SYNC,
     TASK_BULLISH_RESEARCHER,
@@ -241,6 +243,10 @@ impl TradingPipeline {
     ) -> Arc<Graph> {
         let graph = Arc::new(Graph::new("trading_pipeline"));
 
+        // ── Phase 0: preflight (symbol canonicalisation + context seeding) ─
+        let preflight = PreflightTask::new(config.enrichment.clone());
+        graph.add_task(Arc::new(preflight));
+
         // ── Phase 1: analyst fan-out (QUICK handle) ───────────────────────
         let fan_out = FanOutTask::new(
             TASK_ANALYST_FAN_OUT,
@@ -269,6 +275,9 @@ impl TradingPipeline {
             ],
         );
         graph.add_task(fan_out);
+
+        // Edge: preflight → analyst fan-out
+        graph.add_edge(TASK_PREFLIGHT, TASK_ANALYST_FAN_OUT);
 
         // ── Phase 1 sync: aggregation + degradation ───────────────────────
         let analyst_sync = AnalystSyncTask::new(Arc::clone(&snapshot_store));
@@ -366,8 +375,8 @@ impl TradingPipeline {
         let fund_manager = FundManagerTask::new(Arc::clone(&config), Arc::clone(&snapshot_store));
         graph.add_task(fund_manager);
 
-        // Set explicit start task (fan-out is first, but belt-and-suspenders).
-        graph.set_start_task(TASK_ANALYST_FAN_OUT);
+        // Set explicit start task (preflight is first).
+        graph.set_start_task(TASK_PREFLIGHT);
 
         graph
     }
@@ -447,7 +456,7 @@ impl TradingPipeline {
 
         // ── Create session and seed context ───────────────────────────────
         let session_id = Uuid::new_v4().to_string();
-        let session = Session::new_from_task(session_id.clone(), TASK_ANALYST_FAN_OUT);
+        let session = Session::new_from_task(session_id.clone(), TASK_PREFLIGHT);
 
         // Serialize trading state into context.
         serialize_state_to_context(&initial_state, &session.context)
@@ -658,6 +667,7 @@ fn extract_task_identity(msg: &str) -> (String, String) {
 /// Map a graph task id to its pipeline phase name.
 fn phase_for_task(task_id: &str) -> String {
     match task_id {
+        "preflight" => "preflight".into(),
         "analyst_fanout"
         | "fundamental_analyst"
         | "sentiment_analyst"
@@ -692,6 +702,7 @@ mod tests {
         // These are the string literals used in add_edge / add_conditional_edge.
         // If any task's id() implementation changes, the graph wiring will silently
         // break.  This test catches that mismatch at compile-time.
+        assert_eq!(TASK_PREFLIGHT, "preflight");
         assert_eq!(TASK_ANALYST_FAN_OUT, "analyst_fanout");
         assert_eq!(TASK_ANALYST_SYNC, "analyst_sync");
         assert_eq!(TASK_BULLISH_RESEARCHER, "bullish_researcher");
