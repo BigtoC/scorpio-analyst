@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use rig::completion::Message;
-use rig::{message::UserContent, OneOrMany};
+use rig::{OneOrMany, message::UserContent};
 
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
@@ -14,14 +14,14 @@ use crate::{
     config::LlmConfig,
     constants::{MAX_RAW_MODEL_OUTPUT_CHARS, MAX_RISK_CHARS, MAX_RISK_HISTORY_CHARS},
     error::{RetryPolicy, TradingError},
-    providers::factory::{build_agent, CompletionModelHandle, LlmAgent},
+    providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
     state::{DebateMessage, RiskReport, TradingState},
 };
 
 pub(super) use crate::agents::shared::{
-    build_data_quality_context, build_evidence_context, extract_json_object,
-    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
-    UNTRUSTED_CONTEXT_NOTICE,
+    UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
+    extract_json_object, sanitize_date_for_prompt, sanitize_prompt_context,
+    sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -422,11 +422,13 @@ mod tests {
 
     #[test]
     fn validate_moderator_output_accepts_valid() {
-        assert!(validate_moderator_output(
-            "Violation status: Conservative and Neutral both flag a material violation.",
-            true,
-        )
-        .is_ok());
+        assert!(
+            validate_moderator_output(
+                "Violation status: Conservative and Neutral both flag a material violation.",
+                true,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

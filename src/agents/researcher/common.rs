@@ -13,7 +13,7 @@ use crate::{
     config::LlmConfig,
     constants::MAX_DEBATE_CHARS,
     error::{RetryPolicy, TradingError},
-    providers::factory::{build_agent, CompletionModelHandle, LlmAgent},
+    providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
     state::{AgentTokenUsage, DebateMessage, TradingState},
 };
 

@@ -744,12 +744,7 @@ mod tests {
             Some(42.0)
         );
         assert_eq!(
-            loaded
-                .state
-                .data_coverage
-                .as_ref()
-                .unwrap()
-                .missing_inputs,
+            loaded.state.data_coverage.as_ref().unwrap().missing_inputs,
             vec!["technical"]
         );
         assert_eq!(

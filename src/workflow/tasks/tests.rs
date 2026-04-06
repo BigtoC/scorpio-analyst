@@ -229,7 +229,10 @@ async fn analyst_sync_all_succeed_returns_continue() {
         "evidence_technical must be populated"
     );
     // Coverage: no missing inputs.
-    let coverage = recovered.data_coverage.as_ref().expect("data_coverage must be Some");
+    let coverage = recovered
+        .data_coverage
+        .as_ref()
+        .expect("data_coverage must be Some");
     assert!(
         coverage.missing_inputs.is_empty(),
         "missing_inputs must be empty when all analysts succeed"
@@ -433,7 +436,10 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
     .unwrap();
 
     let task = AnalystSyncTask::new(store);
-    let result = task.run(ctx.clone()).await.expect("one failure should continue");
+    let result = task
+        .run(ctx.clone())
+        .await
+        .expect("one failure should continue");
 
     assert_eq!(result.next_action, NextAction::Continue);
 
@@ -447,7 +453,10 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
         "evidence_technical must remain None when technical analyst failed"
     );
 
-    let coverage = recovered.data_coverage.as_ref().expect("data_coverage must be Some");
+    let coverage = recovered
+        .data_coverage
+        .as_ref()
+        .expect("data_coverage must be Some");
     assert_eq!(
         coverage.missing_inputs,
         vec!["technical"],

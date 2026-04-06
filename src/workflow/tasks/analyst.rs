@@ -534,14 +534,8 @@ impl Task for AnalystSyncTask {
                     kind: EvidenceKind::News,
                     payload: data,
                     sources: vec![
-                        stage1_source(
-                            PROVIDER_FINNHUB,
-                            vec!["company_news".to_owned()],
-                        ),
-                        stage1_source(
-                            PROVIDER_FRED,
-                            vec!["macro_indicators".to_owned()],
-                        ),
+                        stage1_source(PROVIDER_FINNHUB, vec!["company_news".to_owned()]),
+                        stage1_source(PROVIDER_FRED, vec!["macro_indicators".to_owned()]),
                     ],
                     quality_flags: vec![],
                 });
@@ -558,10 +552,7 @@ impl Task for AnalystSyncTask {
                 state.evidence_technical = Some(EvidenceRecord {
                     kind: EvidenceKind::Technical,
                     payload: data,
-                    sources: vec![stage1_source(
-                        PROVIDER_YFINANCE,
-                        vec!["ohlcv".to_owned()],
-                    )],
+                    sources: vec![stage1_source(PROVIDER_YFINANCE, vec!["ohlcv".to_owned()])],
                     quality_flags: vec![],
                 });
             },
@@ -587,7 +578,8 @@ impl Task for AnalystSyncTask {
             (REQUIRED_INPUTS[3], state.evidence_technical.is_none()),
         ]
         .into_iter()
-        .filter_map(|(label, missing)| missing.then(|| label.to_owned()))
+        .filter(|&(_, missing)| missing)
+        .map(|(label, _)| label.to_owned())
         .collect();
 
         state.data_coverage = Some(DataCoverageReport {

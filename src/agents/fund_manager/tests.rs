@@ -735,8 +735,8 @@ async fn run_fund_manager_public_entrypoint_works_with_injected_inference() {
 // Task 4.8 — fund-manager user prompt includes typed evidence and data quality sections.
 #[test]
 fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
-    use crate::state::TradingState;
     use super::prompt::build_prompt_context;
+    use crate::state::TradingState;
 
     let state = TradingState::new("AAPL", "2026-01-15");
     let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
