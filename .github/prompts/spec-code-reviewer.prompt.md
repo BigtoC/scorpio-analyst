@@ -8,7 +8,7 @@ Review the implementation for the requested spec.
 
 ## Step 1: OpenSpec Requirements Fulfillment
 
-Read `@PRD.md`, `@docs/architect-plan.md`, and `.github/instructions/rust.instructions.md`.
+Read `@PRD.md`, `@docs/architect-plan.md`, and `@.github/instructions/rust.instructions.md`.
 
 Find the OpenSpec proposal for `<SpecName>` under `openspec/changes/`. Read the proposal and its tasks. For each requirement and task, check whether the implementation addresses it and report:
 - met
