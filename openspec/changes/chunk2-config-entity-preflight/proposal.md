@@ -21,9 +21,9 @@ categories described in the architecture spec (`enable_transcripts`, `enable_con
 
 Chunk 2 closes these gaps with a focused, additive scope: add `DataEnrichmentConfig` to `src/config.rs`, add
 `src/data/entity.rs` with `ResolvedInstrument` and `resolve_symbol`, upgrade `Config::validate()` to enforce symbol
-format, add the provider-capabilities stub (`src/data/adapters/mod.rs`), and wire in a new `PreflightTask` as the
-first graph node in `src/workflow/pipeline.rs`. Chunks 3 and 4 (evidence/provenance state and report sections) build
-directly on the `ResolvedInstrument` and context keys established here.
+format, add the Stage 1 enrichment adapter contracts under `src/data/adapters/`, and wire in a new `PreflightTask`
+as the first graph node in `src/workflow/pipeline.rs`. Chunks 3 and 4 (evidence/provenance state and report
+sections) build directly on the `ResolvedInstrument`, adapter contracts, and context keys established here.
 
 ## What Changes
 
@@ -37,52 +37,85 @@ directly on the `ResolvedInstrument` and context keys established here.
   Result<ResolvedInstrument, TradingError>` function. Delegates format validation to `validate_symbol` in
   `src/data/symbol.rs`; canonicalizes to uppercase; leaves `issuer_name`, `exchange`, `instrument_type`, `aliases`
   as `None`/empty in Stage 1.
-- **`src/data/adapters/mod.rs`** (new file): `ProviderCapabilities` struct with three `bool` fields; a
-  `from_config(cfg: &DataEnrichmentConfig) -> ProviderCapabilities` constructor.
-- **`src/data/mod.rs`**: Export the new `entity` and `adapters` modules.
+- **`src/data/adapters/mod.rs`**, **`transcripts.rs`**, **`estimates.rs`**, **`events.rs`** (new files):
+  `ProviderCapabilities` plus Stage 1 trait contracts and evidence payload structs for transcripts, consensus
+  estimates, and event news. In this slice they are type/trait seams only; no concrete providers are wired.
+- **`src/data/mod.rs`**: Export the new `entity` and `adapters` modules, and widen `symbol` module visibility just
+  enough for `Config::validate()` to reuse the shared validator.
 - **`src/workflow/tasks/preflight.rs`** (new file): `PreflightTask` implementing `graph_flow::Task`. Responsibilities:
-  validate and canonicalize the input symbol via `resolve_symbol`, write `KEY_RESOLVED_INSTRUMENT` and
+  validate and canonicalize the runtime symbol from `TradingState`, write the canonical symbol back into
+  `TradingState.asset_symbol`, write `KEY_RESOLVED_INSTRUMENT` and
   `KEY_PROVIDER_CAPABILITIES` to workflow context, write `KEY_REQUIRED_COVERAGE_INPUTS` as
   `["fundamentals", "sentiment", "news", "technical"]`, seed `KEY_CACHED_TRANSCRIPT`, `KEY_CACHED_CONSENSUS`,
-  `KEY_CACHED_EVENT_FEED` with JSON `null` placeholders. Hard-fails on invalid symbol or context corruption.
-- **`src/workflow/tasks/common.rs`** (new file): Define all Stage 1 context key constants (`KEY_RESOLVED_INSTRUMENT`,
-  `KEY_PROVIDER_CAPABILITIES`, `KEY_REQUIRED_COVERAGE_INPUTS`, `KEY_CACHED_TRANSCRIPT`, `KEY_CACHED_CONSENSUS`,
-  `KEY_CACHED_EVENT_FEED`).
-- **`src/workflow/tasks/mod.rs`**: Export `preflight` and `common` sub-modules.
+  `KEY_CACHED_EVENT_FEED` with typed JSON `null` placeholders. Hard-fails on invalid symbol or context corruption.
+- **`src/workflow/tasks/common.rs`** (modify existing file): Add all Stage 1 preflight context key constants
+  (`KEY_RESOLVED_INSTRUMENT`, `KEY_PROVIDER_CAPABILITIES`, `KEY_REQUIRED_COVERAGE_INPUTS`, `KEY_CACHED_TRANSCRIPT`,
+  `KEY_CACHED_CONSENSUS`, `KEY_CACHED_EVENT_FEED`) alongside the existing task constants.
+- **`src/workflow/tasks/mod.rs`** (modify existing file): Export `preflight` and the new preflight-related constants
+  from `common`.
 - **`src/workflow/pipeline.rs`**: Insert `PreflightTask` as the first node in the graph, with an edge to the existing
-  `analyst_fanout` node.
+  `analyst_fanout` node. Update the start task and session bootstrap to begin at `preflight` instead of
+  `analyst_fanout`.
+- **`openspec/changes/chunk2-config-entity-preflight/specs/evidence-provenance/spec.md`** (new file): Add the
+  missing OpenSpec delta for Chunk 2's runtime preflight/entity-resolution slice of the `evidence-provenance`
+  capability.
+- **`openspec/changes/chunk2-config-entity-preflight/specs/graph-orchestration/spec.md`** (new file): Add the
+  missing OpenSpec delta updating the pipeline topology and start task to account for `PreflightTask`.
 
 ## Capabilities
 
-### New Capabilities
-- `enrichment-config`: `DataEnrichmentConfig` section in `config.toml` + `Config.enrichment` field, with full
-  `SCORPIO__ENRICHMENT__*` env-override support.
-- `entity-resolution`: `resolve_symbol` in `src/data/entity.rs` canonicalizes any accepted ticker format to uppercase
-  and returns a `ResolvedInstrument`, delegating format validation to the existing `validate_symbol` function.
-- `provider-capabilities`: `ProviderCapabilities` in `src/data/adapters/mod.rs` derived from enrichment config flags —
-  config-derived only in Stage 1.
-- `preflight-task`: New `PreflightTask` graph node runs before the analyst fan-out; writes resolved instrument,
-  capabilities, required coverage inputs, and enrichment cache placeholders to workflow context.
-
 ### Modified Capabilities
-- `config-validation`: `Config::validate()` now enforces symbol format using `validate_symbol`, failing fast on
-  invalid tickers at startup.
+- `evidence-provenance`: This chunk delivers the runtime preflight/entity-resolution slice of the architected
+  cross-cutting capability: config-driven enrichment flags, canonical instrument resolution, Stage 1 adapter
+  contracts, and preflight-seeded evidence context keys.
+- `graph-orchestration`: The pipeline gains a `PreflightTask` start node before the analyst fan-out; the graph start
+  task and entry sequencing change accordingly.
 
 ## Impact
 
 - **Config**: `src/config.rs` gains `DataEnrichmentConfig` and one new `Config` field; `config.toml` gains an
   `[enrichment]` section. No existing config field names change.
-- **Code**: Two new files under `src/data/` (`entity.rs`, `adapters/mod.rs`); one new file under
-  `src/workflow/tasks/` (`preflight.rs`); one new file `src/workflow/tasks/common.rs`; modifications to
-  `src/data/mod.rs`, `src/workflow/tasks/mod.rs`, and `src/workflow/pipeline.rs`. No changes to `TradingState`
-  fields, no new crate dependencies, no changes to agent system prompts.
+- **Code**: New files under `src/data/` (`entity.rs`, `adapters/mod.rs`, `adapters/transcripts.rs`,
+  `adapters/estimates.rs`, `adapters/events.rs`); one new file under `src/workflow/tasks/` (`preflight.rs`);
+  additive modifications to `src/config.rs`, `src/data/mod.rs`, `src/workflow/tasks/common.rs`,
+  `src/workflow/tasks/mod.rs`, `src/workflow/pipeline.rs`, and selected shared test/support files that construct
+  `Config` literals or assert the pipeline start task. No new `TradingState` fields, no new crate dependencies, and
+  no agent prompt changes in this chunk.
 - **Tests**: Unit tests added for `DataEnrichmentConfig` deserialization and env overrides; unit tests for
   `resolve_symbol` (valid tickers, invalid tickers, case normalization); unit tests for `ProviderCapabilities`
-  construction; integration tests for `PreflightTask` writing all six context keys.
+  plus the Stage 1 adapter contract structs; integration tests for `PreflightTask` writing all six context keys;
+  pipeline-structure tests updated for the new `preflight` start node; shared `Config { ... }` test fixtures updated
+  for the new `enrichment` field.
 - **Rollback**: Remove `DataEnrichmentConfig` from `src/config.rs` and the `[enrichment]` block from `config.toml`;
-  delete `src/data/entity.rs`, `src/data/adapters/mod.rs`, `src/workflow/tasks/preflight.rs`,
-  `src/workflow/tasks/common.rs`; revert `src/data/mod.rs`, `src/workflow/tasks/mod.rs`, and
-  `src/workflow/pipeline.rs`. No database migration, no state schema change, no agent prompt change required.
+  delete `src/data/entity.rs`, `src/data/adapters/`, and `src/workflow/tasks/preflight.rs`; revert the additive edits
+  in `src/data/mod.rs`, `src/workflow/tasks/common.rs`, `src/workflow/tasks/mod.rs`, `src/workflow/pipeline.rs`, and
+  the affected shared test/support files. No database migration, no state schema change, no agent prompt change
+  required.
+
+## Cross-Owner Changes
+
+This change requires approved cross-owner edits before implementation begins.
+
+- [`src/config.rs`](../../../src/config.rs) — owner: `add-project-foundation`. Adds `DataEnrichmentConfig` and extends
+  `Config` validation.
+- [`config.toml`](../../../config.toml) — owner: `add-project-foundation`. Adds the checked-in `[enrichment]` defaults.
+- [`src/data/mod.rs`](../../../src/data/mod.rs) — owner: `add-project-foundation` skeleton. Exports `entity` and
+  `adapters`, and widens `symbol` module visibility enough for shared validation reuse.
+- [`src/workflow/tasks/common.rs`](../../../src/workflow/tasks/common.rs) — owner: `add-graph-orchestration`. Adds
+  preflight context-key constants to an already-existing shared task-constants module.
+- [`src/workflow/tasks/mod.rs`](../../../src/workflow/tasks/mod.rs) — owner: `add-graph-orchestration`. Exports the
+  new `preflight` task module and preflight-related constants.
+- [`src/workflow/pipeline.rs`](../../../src/workflow/pipeline.rs) — owner: `add-graph-orchestration`. Inserts the new
+  `PreflightTask`, changes the start task from `analyst_fanout` to `preflight`, and updates session bootstrap.
+- [`tests/support/workflow_pipeline_make_pipeline.rs`](../../../tests/support/workflow_pipeline_make_pipeline.rs) —
+  shared test-support owner. Manual `Config { ... }` construction must grow the new `enrichment` field.
+- [`tests/support/workflow_observability_pipeline_support.rs`](../../../tests/support/workflow_observability_pipeline_support.rs)
+  — shared test-support owner. Manual `Config { ... }` construction must grow the new `enrichment` field.
+- [`tests/workflow_pipeline_structure.rs`](../../../tests/workflow_pipeline_structure.rs) — shared workflow test owner.
+  Assertions about the graph start task and task list must be updated for the new `preflight` node.
+- [`src/agents/trader/tests.rs`](../../../src/agents/trader/tests.rs) and
+  [`src/agents/fund_manager/tests.rs`](../../../src/agents/fund_manager/tests.rs) — current direct `Config { ... }`
+  literals will also need the new `enrichment` field once `Config` changes.
 
 ## Alternatives Considered
 
