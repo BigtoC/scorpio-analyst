@@ -17,7 +17,7 @@ Find the OpenSpec proposal for `<SpecName>` under `openspec/changes/`. Read the 
 
 ## Step 2: Code Review
 
-Run `/ce:review <SpecName>`. The spec tasks from Step 1 serve as the requirements — pass them via `plan:` only if a plan document also exists under `docs/plans/`. This covers security, performance, code quality, maintainability, and test coverage.
+Run `/ce:review` on the current branch or checkout. Do **not** pass `<SpecName>` as a positional argument because `ce:review` interprets positional arguments as PR/URL/branch targets, not OpenSpec change IDs. Only pass `plan:` when a matching implementation plan exists under `docs/plans/`; otherwise use the Step 1 spec tasks as the review requirements in your final report. This covers security, performance, code quality, maintainability, and test coverage.
 
 ## Return
 

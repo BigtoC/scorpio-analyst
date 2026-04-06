@@ -52,6 +52,6 @@
 
 - [x] 4.1 Run `cargo fmt -- --check` and fix any formatting issues.
 - [x] 4.2 Run `cargo clippy --all-targets -- -D warnings` and resolve all warnings.
-- [x] 4.3 Run `cargo test` and confirm all tests pass, including the new helper tests and rendered-prompt tests.
-- [x] 4.4 Run `cargo build` and confirm clean compilation.
+- [x] 4.3 Run `cargo nextest run --all-features --locked` and confirm all tests pass, including the new helper tests and rendered-prompt tests.
+- [x] 4.4 Run `cargo build` and confirm clean compilation after the required CI checks pass.
 - [x] 4.5 Run `openspec validate chunk1-docs-prompt-rules --strict` and confirm the change remains valid.
