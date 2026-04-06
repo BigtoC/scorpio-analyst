@@ -375,9 +375,10 @@ fn pipeline_graph_topology_has_correct_start_and_all_nodes() {
     let (pipeline, _store, _dir) = rt.block_on(make_pipeline("topology.db", "test-topology", 1, 1));
     let graph = pipeline.build_graph();
 
-    assert_eq!(graph.start_task_id(), Some("analyst_fanout".to_owned()));
+    assert_eq!(graph.start_task_id(), Some("preflight".to_owned()));
 
     for id in [
+        "preflight",
         "analyst_fanout",
         "analyst_sync",
         "bullish_researcher",

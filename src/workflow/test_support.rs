@@ -20,7 +20,9 @@ pub use crate::workflow::tasks::test_helpers::{
 pub use crate::workflow::{
     pipeline::map_graph_error,
     tasks::{
-        AnalystSyncTask, FundamentalAnalystTask, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS,
-        KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
+        AnalystSyncTask, FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED,
+        KEY_CACHED_TRANSCRIPT, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
+        KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+        KEY_RISK_ROUND,
     },
 };

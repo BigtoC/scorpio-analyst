@@ -52,6 +52,7 @@ pub async fn make_pipeline(
         storage: Default::default(),
         providers: Default::default(),
         rate_limits: Default::default(),
+        enrichment: Default::default(),
     };
 
     let finnhub = FinnhubClient::for_test();

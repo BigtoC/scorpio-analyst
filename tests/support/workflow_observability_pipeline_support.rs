@@ -40,6 +40,7 @@ fn obs_test_config() -> Config {
         storage: Default::default(),
         providers: Default::default(),
         rate_limits: Default::default(),
+        enrichment: Default::default(),
     }
 }
 
