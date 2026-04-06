@@ -1,7 +1,8 @@
 use crate::{
     agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+        build_data_quality_context, build_evidence_context, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
+        UNTRUSTED_CONTEXT_NOTICE,
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     state::{DebateMessage, RiskReport, TradingState},
@@ -242,6 +243,16 @@ fn build_user_prompt(
         ),
         MAX_USER_PROMPT_CHARS,
     );
+    push_bounded_line(
+        &mut prompt,
+        &build_evidence_context(state),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
+        &build_data_quality_context(state),
+        MAX_USER_PROMPT_CHARS,
+    );
 
     prompt
 }
@@ -284,7 +295,7 @@ fn push_bounded_line(buffer: &mut String, line: &str, max_chars: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{FUND_MANAGER_SYSTEM_PROMPT, build_prompt_context};
+    use super::{build_prompt_context, FUND_MANAGER_SYSTEM_PROMPT};
     use crate::state::{
         DebateMessage, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData,
         RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction,

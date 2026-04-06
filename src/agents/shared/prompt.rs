@@ -1,4 +1,4 @@
-use crate::constants::MAX_PROMPT_CONTEXT_CHARS;
+use crate::{constants::MAX_PROMPT_CONTEXT_CHARS, state::TradingState};
 
 /// Marker inserted before untrusted model-generated prompt context.
 pub(crate) const UNTRUSTED_CONTEXT_NOTICE: &str =
@@ -171,11 +171,82 @@ pub(crate) fn build_data_quality_prompt_rule() -> &'static str {
 interpretation as established fact."
 }
 
+// ─── Typed evidence and data-quality context builders ────────────────────────
+
+/// Render a prompt-safe summary of all typed evidence records present in state.
+///
+/// Returns a non-empty fallback string when all evidence fields are `None`,
+/// so callers never receive an empty section.
+pub(crate) fn build_evidence_context(state: &TradingState) -> String {
+    let fundamental =
+        serde_json::to_string(&state.evidence_fundamental).unwrap_or_else(|_| "null".to_owned());
+    let technical =
+        serde_json::to_string(&state.evidence_technical).unwrap_or_else(|_| "null".to_owned());
+    let sentiment =
+        serde_json::to_string(&state.evidence_sentiment).unwrap_or_else(|_| "null".to_owned());
+    let news = serde_json::to_string(&state.evidence_news).unwrap_or_else(|_| "null".to_owned());
+
+    let any_present = state.evidence_fundamental.is_some()
+        || state.evidence_technical.is_some()
+        || state.evidence_sentiment.is_some()
+        || state.evidence_news.is_some();
+
+    if !any_present {
+        return "Typed evidence: no typed evidence records available for this run.".to_owned();
+    }
+
+    format!(
+        "Typed evidence records:\n\
+         - Fundamental: {}\n\
+         - Technical: {}\n\
+         - Sentiment: {}\n\
+         - News: {}",
+        sanitize_prompt_context(&fundamental),
+        sanitize_prompt_context(&technical),
+        sanitize_prompt_context(&sentiment),
+        sanitize_prompt_context(&news),
+    )
+}
+
+/// Render a prompt-safe summary of `DataCoverageReport` and `ProvenanceSummary` from state.
+///
+/// Returns a non-empty fallback string when all coverage/provenance fields are `None`,
+/// so callers never receive an empty section.
+pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
+    let coverage = state.data_coverage.as_ref().map_or_else(
+        || "coverage unavailable".to_owned(),
+        |c| {
+            if c.missing_inputs.is_empty() {
+                "All required analyst inputs present.".to_owned()
+            } else {
+                format!("Missing inputs: {}.", c.missing_inputs.join(", "))
+            }
+        },
+    );
+
+    let provenance = state.provenance_summary.as_ref().map_or_else(
+        || "provenance unavailable".to_owned(),
+        |p| {
+            if p.providers_used.is_empty() {
+                "No providers recorded.".to_owned()
+            } else {
+                format!("Providers used: {}.", p.providers_used.join(", "))
+            }
+        },
+    );
+
+    format!("Data quality: {coverage}\nProvenance: {provenance}")
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_state() -> TradingState {
+        TradingState::new("AAPL", "2026-01-15")
+    }
 
     #[test]
     fn test_authoritative_source_rule_mentions_runtime_evidence() {
@@ -209,6 +280,94 @@ mod tests {
         assert!(
             rule.contains("interpretation"),
             "data quality rule should mention 'interpretation'; got: {rule}"
+        );
+    }
+
+    // ─── Task 4.3: build_evidence_context and build_data_quality_context ─────
+
+    #[test]
+    fn build_evidence_context_empty_state_returns_non_empty_fallback() {
+        let state = empty_state();
+        let ctx = build_evidence_context(&state);
+        assert!(
+            !ctx.is_empty(),
+            "build_evidence_context must return non-empty string for empty state"
+        );
+        assert!(
+            ctx.contains("no typed evidence"),
+            "fallback should mention 'no typed evidence'; got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn build_data_quality_context_empty_state_returns_non_empty_fallback() {
+        let state = empty_state();
+        let ctx = build_data_quality_context(&state);
+        assert!(
+            !ctx.is_empty(),
+            "build_data_quality_context must return non-empty string for empty state"
+        );
+        // Both coverage and provenance unavailable
+        assert!(
+            ctx.contains("unavailable"),
+            "fallback should mention 'unavailable'; got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn build_evidence_context_populated_state_includes_fundamental_label() {
+        use crate::state::{
+            DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource, FundamentalData,
+            ProvenanceSummary,
+        };
+        use chrono::Utc;
+
+        let mut state = empty_state();
+        state.evidence_fundamental = Some(EvidenceRecord {
+            kind: EvidenceKind::Fundamental,
+            payload: FundamentalData {
+                revenue_growth_pct: None,
+                pe_ratio: Some(20.0),
+                eps: None,
+                current_ratio: None,
+                debt_to_equity: None,
+                gross_margin: None,
+                net_income: None,
+                insider_transactions: vec![],
+                summary: "test".to_owned(),
+            },
+            sources: vec![EvidenceSource {
+                provider: "finnhub".to_owned(),
+                datasets: vec!["fundamentals".to_owned()],
+                fetched_at: Utc::now(),
+                effective_at: None,
+                url: None,
+                citation: None,
+            }],
+            quality_flags: vec![],
+        });
+        state.data_coverage = Some(DataCoverageReport {
+            required_inputs: vec!["fundamentals".to_owned()],
+            missing_inputs: vec![],
+        });
+        state.provenance_summary = Some(ProvenanceSummary {
+            providers_used: vec!["finnhub".to_owned()],
+        });
+
+        let evidence_ctx = build_evidence_context(&state);
+        assert!(
+            evidence_ctx.contains("Fundamental"),
+            "evidence context should mention 'Fundamental'; got: {evidence_ctx}"
+        );
+
+        let quality_ctx = build_data_quality_context(&state);
+        assert!(
+            quality_ctx.contains("finnhub"),
+            "data quality context should list provider 'finnhub'; got: {quality_ctx}"
+        );
+        assert!(
+            quality_ctx.contains("All required"),
+            "data quality context should confirm all required inputs present; got: {quality_ctx}"
         );
     }
 }

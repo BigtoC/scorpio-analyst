@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use rig::completion::Message;
-use rig::{OneOrMany, message::UserContent};
+use rig::{message::UserContent, OneOrMany};
 
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
@@ -14,13 +14,14 @@ use crate::{
     config::LlmConfig,
     constants::{MAX_RAW_MODEL_OUTPUT_CHARS, MAX_RISK_CHARS, MAX_RISK_HISTORY_CHARS},
     error::{RetryPolicy, TradingError},
-    providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
+    providers::factory::{build_agent, CompletionModelHandle, LlmAgent},
     state::{DebateMessage, RiskReport, TradingState},
 };
 
 pub(super) use crate::agents::shared::{
-    UNTRUSTED_CONTEXT_NOTICE, extract_json_object, sanitize_date_for_prompt,
-    sanitize_prompt_context, sanitize_symbol_for_prompt,
+    build_data_quality_context, build_evidence_context, extract_json_object,
+    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+    UNTRUSTED_CONTEXT_NOTICE,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -203,8 +204,11 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
         &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
     );
 
+    let evidence_section = build_evidence_context(state);
+    let data_quality_section = build_data_quality_context(state);
+
     format!(
-        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}"
+        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n\n{evidence_section}\n\n{data_quality_section}"
     )
 }
 
@@ -418,13 +422,11 @@ mod tests {
 
     #[test]
     fn validate_moderator_output_accepts_valid() {
-        assert!(
-            validate_moderator_output(
-                "Violation status: Conservative and Neutral both flag a material violation.",
-                true,
-            )
-            .is_ok()
-        );
+        assert!(validate_moderator_output(
+            "Violation status: Conservative and Neutral both flag a material violation.",
+            true,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -613,5 +615,20 @@ mod tests {
         let raw = "```json\n{\"outer\":{\"inner\":true}}\n```";
         let result = extract_json_object("test", raw).unwrap();
         assert_eq!(result, r#"{"outer":{"inner":true}}"#);
+    }
+
+    #[test]
+    fn build_analyst_context_includes_evidence_and_data_quality_sections() {
+        let state = make_state();
+        let ctx = build_analyst_context(&state);
+        // Empty state — both helpers return their fallback strings.
+        assert!(
+            ctx.contains("no typed evidence") || ctx.contains("Typed evidence"),
+            "risk context must include evidence section; got: {ctx}"
+        );
+        assert!(
+            ctx.contains("Data quality"),
+            "risk context must include data quality section; got: {ctx}"
+        );
     }
 }
