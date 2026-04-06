@@ -54,3 +54,9 @@ fred_rps = 2
 # Path to the SQLite snapshot database. Supports ~ and $HOME expansion.
 # Override: SCORPIO__STORAGE__SNAPSHOT_DB_PATH=/your/custom/path.db
 snapshot_db_path = "~/.scorpio-analyst/phase_snapshots.db"
+
+[enrichment]
+enable_transcripts = false
+enable_consensus_estimates = false
+enable_event_news = false
+max_evidence_age_hours = 48

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use secrecy::SecretString;
 use serde::{Deserialize, Deserializer};
 
@@ -17,6 +17,43 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub rate_limits: RateLimitConfig,
+    #[serde(default)]
+    pub enrichment: DataEnrichmentConfig,
+}
+
+/// Enrichment feature flags and evidence staleness ceiling.
+///
+/// All flags default to `false`; existing configs without an `[enrichment]`
+/// section continue to work with current behaviour unchanged.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DataEnrichmentConfig {
+    /// Whether to fetch earnings-call transcript evidence.
+    #[serde(default)]
+    pub enable_transcripts: bool,
+    /// Whether to fetch analyst consensus estimates evidence.
+    #[serde(default)]
+    pub enable_consensus_estimates: bool,
+    /// Whether to fetch event-driven news evidence.
+    #[serde(default)]
+    pub enable_event_news: bool,
+    /// Maximum age (hours) of cached evidence before it is considered stale.
+    #[serde(default = "default_max_evidence_age_hours")]
+    pub max_evidence_age_hours: u32,
+}
+
+fn default_max_evidence_age_hours() -> u32 {
+    48
+}
+
+impl Default for DataEnrichmentConfig {
+    fn default() -> Self {
+        Self {
+            enable_transcripts: false,
+            enable_consensus_estimates: false,
+            enable_event_news: false,
+            max_evidence_age_hours: default_max_evidence_age_hours(),
+        }
+    }
 }
 
 /// LLM provider and model routing settings.
@@ -340,9 +377,12 @@ impl Config {
     fn validate(&self) -> Result<()> {
         // Provider name validity is enforced at deserialization time via
         // `#[serde(deserialize_with = "deserialize_provider_name")]`.
-        if self.trading.asset_symbol.is_empty() {
-            bail!("config validation: trading.asset_symbol must not be empty");
-        }
+
+        // Validate asset symbol format using the shared data-layer validator.
+        // This runs before any LLM or API client is constructed.
+        crate::data::symbol::validate_symbol(&self.trading.asset_symbol)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
         // Check that at least one LLM key is available
         if !self.has_any_llm_key() {
             tracing::warn!(
@@ -392,6 +432,7 @@ mod tests {
             providers: ProvidersConfig::default(),
             storage: StorageConfig::default(),
             rate_limits: RateLimitConfig::default(),
+            enrichment: DataEnrichmentConfig::default(),
         }
     }
 
@@ -748,5 +789,167 @@ asset_symbol = "AAPL"
         }
         // Fallback home is "." so format!("{home}/{rest}") == "./foo/bar.db"
         assert_eq!(result, std::path::PathBuf::from("./foo/bar.db"));
+    }
+
+    // ── DataEnrichmentConfig tests ────────────────────────────────────────
+
+    #[test]
+    fn enrichment_config_defaults_are_all_disabled() {
+        let cfg = DataEnrichmentConfig::default();
+        assert!(!cfg.enable_transcripts);
+        assert!(!cfg.enable_consensus_estimates);
+        assert!(!cfg.enable_event_news);
+        assert_eq!(cfg.max_evidence_age_hours, 48);
+    }
+
+    #[test]
+    fn config_loads_enrichment_defaults_from_config_toml() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cfg = Config::load_from("config.toml").expect("config.toml should load");
+        assert!(!cfg.enrichment.enable_transcripts);
+        assert!(!cfg.enrichment.enable_consensus_estimates);
+        assert!(!cfg.enrichment.enable_event_news);
+        assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
+    }
+
+    #[test]
+    fn enrichment_env_override_sets_enable_transcripts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS", "true");
+        }
+        let result = Config::load_from("config.toml");
+        unsafe {
+            std::env::remove_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS");
+        }
+        let cfg = result.expect("config should load with enrichment env override");
+        assert!(cfg.enrichment.enable_transcripts);
+    }
+
+    #[test]
+    fn enrichment_env_override_sets_max_evidence_age_hours() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SCORPIO__ENRICHMENT__MAX_EVIDENCE_AGE_HOURS", "24");
+        }
+        let result = Config::load_from("config.toml");
+        unsafe {
+            std::env::remove_var("SCORPIO__ENRICHMENT__MAX_EVIDENCE_AGE_HOURS");
+        }
+        let cfg = result.expect("config should load with max_evidence_age_hours override");
+        assert_eq!(cfg.enrichment.max_evidence_age_hours, 24);
+    }
+
+    #[test]
+    fn config_without_enrichment_section_uses_defaults() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("no-enrichment.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+        )
+        .expect("config file");
+        let cfg = Config::load_from(&config_path).expect("should load without enrichment section");
+        assert!(!cfg.enrichment.enable_transcripts);
+        assert!(!cfg.enrichment.enable_consensus_estimates);
+        assert!(!cfg.enrichment.enable_event_news);
+        assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
+    }
+
+    // ── Symbol validation in Config::validate() tests ─────────────────────
+
+    #[test]
+    fn validate_rejects_empty_symbol() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("empty-symbol.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+
+[trading]
+asset_symbol = ""
+"#,
+        )
+        .expect("config file");
+        let result = Config::load_from(&config_path);
+        assert!(
+            result.is_err(),
+            "empty symbol should be rejected by validate()"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("invalid symbol"),
+            "error should mention invalid symbol: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_symbol_with_semicolons() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("bad-symbol.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+
+[trading]
+asset_symbol = "DROP;TABLE"
+"#,
+        )
+        .expect("config file");
+        let result = Config::load_from(&config_path);
+        assert!(result.is_err(), "semicolon in symbol should be rejected");
+    }
+
+    #[test]
+    fn validate_accepts_lowercase_symbol() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("lower-symbol.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+
+[trading]
+asset_symbol = "nvda"
+"#,
+        )
+        .expect("config file");
+        // lowercase is accepted by validate_symbol — normalisation happens at resolve_symbol
+        let result = Config::load_from(&config_path);
+        assert!(
+            result.is_ok(),
+            "lowercase symbol should be accepted: {result:?}"
+        );
     }
 }
