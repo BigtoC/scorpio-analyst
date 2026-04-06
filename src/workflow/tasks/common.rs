@@ -20,6 +20,42 @@ pub const KEY_RISK_ROUND: &str = "risk_round";
 /// Context key for pre-fetched news data shared between Sentiment and News analysts.
 pub const KEY_CACHED_NEWS: &str = "analyst.cached_news";
 
+// ── Stage 1 preflight context keys ──────────────────────────────────────────
+
+/// Context key for the [`ResolvedInstrument`] written by [`PreflightTask`].
+///
+/// Value: JSON-serialised [`crate::data::ResolvedInstrument`].
+pub const KEY_RESOLVED_INSTRUMENT: &str = "resolved_instrument";
+
+/// Context key for [`ProviderCapabilities`] written by [`PreflightTask`].
+///
+/// Value: JSON-serialised [`crate::data::adapters::ProviderCapabilities`].
+pub const KEY_PROVIDER_CAPABILITIES: &str = "provider_capabilities";
+
+/// Context key for the ordered list of required coverage inputs written by
+/// [`PreflightTask`].
+///
+/// Value: JSON array `["fundamentals", "sentiment", "news", "technical"]`.
+pub const KEY_REQUIRED_COVERAGE_INPUTS: &str = "required_coverage_inputs";
+
+/// Context key for the optional cached transcript payload.
+///
+/// Value: JSON-serialised `Option<TranscriptEvidence>` — always present after
+/// preflight.  Stage 1 value is the JSON literal `null`.
+pub const KEY_CACHED_TRANSCRIPT: &str = "cached_transcript";
+
+/// Context key for the optional cached consensus-estimates payload.
+///
+/// Value: JSON-serialised `Option<ConsensusEvidence>` — always present after
+/// preflight.  Stage 1 value is the JSON literal `null`.
+pub const KEY_CACHED_CONSENSUS: &str = "cached_consensus";
+
+/// Context key for the optional cached event-news payload.
+///
+/// Value: JSON-serialised `Option<EventNewsEvidence>` — always present after
+/// preflight.  Stage 1 value is the JSON literal `null`.
+pub const KEY_CACHED_EVENT_FEED: &str = "cached_event_feed";
+
 pub(super) const ANALYST_PREFIX: &str = "analyst";
 pub(super) const OK_SUFFIX: &str = "ok";
 pub(super) const ERR_SUFFIX: &str = "err";
