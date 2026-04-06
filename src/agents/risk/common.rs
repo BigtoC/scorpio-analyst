@@ -19,8 +19,9 @@ use crate::{
 };
 
 pub(super) use crate::agents::shared::{
-    UNTRUSTED_CONTEXT_NOTICE, extract_json_object, sanitize_date_for_prompt,
-    sanitize_prompt_context, sanitize_symbol_for_prompt,
+    UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
+    extract_json_object, sanitize_date_for_prompt, sanitize_prompt_context,
+    sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -203,8 +204,11 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
         &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
     );
 
+    let evidence_section = build_evidence_context(state);
+    let data_quality_section = build_data_quality_context(state);
+
     format!(
-        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}"
+        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n\n{evidence_section}\n\n{data_quality_section}"
     )
 }
 
@@ -337,6 +341,12 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         }
     }
@@ -607,5 +617,15 @@ mod tests {
         let raw = "```json\n{\"outer\":{\"inner\":true}}\n```";
         let result = extract_json_object("test", raw).unwrap();
         assert_eq!(result, r#"{"outer":{"inner":true}}"#);
+    }
+
+    #[test]
+    fn build_analyst_context_includes_evidence_and_data_quality_sections() {
+        let state = make_state();
+        let ctx = build_analyst_context(&state);
+        assert!(ctx.contains("Typed evidence snapshot:"));
+        assert!(ctx.contains("- fundamentals: null"));
+        assert!(ctx.contains("Data quality snapshot:"));
+        assert!(ctx.contains("- required_inputs: unavailable"));
     }
 }

@@ -113,3 +113,9 @@
 - [x] 6.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [x] 6.3 Ensure `cargo fmt -- --check` passes
 - [x] 6.4 Ensure `cargo test` passes all new and existing tests
+
+### Cross-Owner Touch-points
+
+- Approved for `chunk3-evidence-state-sync` to update `src/agents/researcher/common.rs` so the shared researcher
+  analyst-context builder appends the typed evidence/data-quality context blocks without altering the existing legacy
+  analyst snapshot.

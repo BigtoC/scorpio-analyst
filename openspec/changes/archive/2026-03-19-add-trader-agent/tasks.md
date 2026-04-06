@@ -83,3 +83,9 @@
 - [x] 6.2 Ensure `cargo clippy -- -D warnings` passes with no new warnings
 - [x] 6.3 Ensure `cargo fmt -- --check` passes
 - [x] 6.4 Ensure `cargo test` passes all new and existing tests
+
+### Cross-Owner Touch-points
+
+- Approved for `chunk3-evidence-state-sync` to update `src/agents/trader/mod.rs` and `src/agents/trader/tests.rs`
+  so the trader prompt includes the shared typed evidence/data-quality context and regression coverage pins the new
+  prompt contract.

@@ -381,16 +381,107 @@ fn arb_token_usage_tracker() -> impl Strategy<Value = TokenUsageTracker> {
         )
 }
 
+fn arb_evidence_source() -> impl Strategy<Value = EvidenceSource> {
+    (
+        "[a-z]{3,12}",
+        proptest::collection::vec("[a-z_]{3,20}", 0..3),
+        1u32..=9u32,
+        1u32..=28u32,
+        0u32..=23u32,
+        0u32..=59u32,
+        0u32..=59u32,
+    )
+        .prop_map(|(provider, datasets, month, day, hour, minute, second)| {
+            let fetched_at = format!("2024-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
+            EvidenceSource {
+                provider,
+                datasets,
+                fetched_at: chrono::DateTime::parse_from_rfc3339(&fetched_at)
+                    .expect("valid rfc3339")
+                    .with_timezone(&chrono::Utc),
+                effective_at: None,
+                url: None,
+                citation: None,
+            }
+        })
+}
+
+fn arb_evidence_record<T: Strategy>(
+    kind: EvidenceKind,
+    payload: T,
+) -> impl Strategy<Value = EvidenceRecord<T::Value>>
+where
+    T::Value: Clone,
+{
+    (
+        payload,
+        proptest::collection::vec(arb_evidence_source(), 0..2),
+    )
+        .prop_map(move |(payload, sources)| EvidenceRecord {
+            kind: kind.clone(),
+            payload,
+            sources,
+            quality_flags: vec![],
+        })
+}
+
+fn arb_data_coverage_report() -> impl Strategy<Value = DataCoverageReport> {
+    proptest::collection::vec(
+        prop::sample::select(vec![
+            "fundamentals".to_owned(),
+            "sentiment".to_owned(),
+            "news".to_owned(),
+            "technical".to_owned(),
+        ]),
+        0..4,
+    )
+    .prop_map(|missing_inputs| DataCoverageReport {
+        required_inputs: vec![
+            "fundamentals".to_owned(),
+            "sentiment".to_owned(),
+            "news".to_owned(),
+            "technical".to_owned(),
+        ],
+        missing_inputs,
+    })
+}
+
+fn arb_provenance_summary() -> impl Strategy<Value = ProvenanceSummary> {
+    proptest::collection::vec("[a-z]{3,12}", 0..4)
+        .prop_map(|providers_used| ProvenanceSummary { providers_used })
+}
+
 fn arb_trading_state() -> impl Strategy<Value = TradingState> {
     (
         "[A-Z]{1,5}",
         "2024-0[1-9]-[0-2][0-9]",
-        proptest::option::of(arb_fundamental_data()),
-        proptest::option::of(arb_technical_data()),
-        proptest::option::of(arb_sentiment_data()),
-        proptest::option::of(arb_news_data()),
-        proptest::collection::vec(arb_debate_message(), 0..4),
-        proptest::option::of("[a-z ]{5,30}"),
+        (
+            proptest::option::of(arb_fundamental_data()),
+            proptest::option::of(arb_technical_data()),
+            proptest::option::of(arb_sentiment_data()),
+            proptest::option::of(arb_news_data()),
+        ),
+        (
+            proptest::option::of(arb_evidence_record(
+                EvidenceKind::Fundamental,
+                arb_fundamental_data(),
+            )),
+            proptest::option::of(arb_evidence_record(
+                EvidenceKind::Technical,
+                arb_technical_data(),
+            )),
+            proptest::option::of(arb_evidence_record(
+                EvidenceKind::Sentiment,
+                arb_sentiment_data(),
+            )),
+            proptest::option::of(arb_evidence_record(EvidenceKind::News, arb_news_data())),
+            proptest::option::of(arb_data_coverage_report()),
+            proptest::option::of(arb_provenance_summary()),
+        ),
+        (
+            proptest::collection::vec(arb_debate_message(), 0..4),
+            proptest::option::of("[a-z ]{5,30}"),
+        ),
         (
             proptest::option::of(arb_trade_proposal()),
             proptest::collection::vec(arb_debate_message(), 0..4),
@@ -405,12 +496,16 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
             |(
                 asset_symbol,
                 target_date,
-                fundamental_metrics,
-                technical_indicators,
-                market_sentiment,
-                macro_news,
-                debate_history,
-                consensus_summary,
+                (fundamental_metrics, technical_indicators, market_sentiment, macro_news),
+                (
+                    evidence_fundamental,
+                    evidence_technical,
+                    evidence_sentiment,
+                    evidence_news,
+                    data_coverage,
+                    provenance_summary,
+                ),
+                (debate_history, consensus_summary),
                 (
                     trader_proposal,
                     risk_discussion_history,
@@ -431,6 +526,12 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     technical_indicators,
                     market_sentiment,
                     macro_news,
+                    evidence_fundamental,
+                    evidence_technical,
+                    evidence_sentiment,
+                    evidence_news,
+                    data_coverage,
+                    provenance_summary,
                     debate_history,
                     consensus_summary,
                     trader_proposal,

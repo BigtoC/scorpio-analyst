@@ -53,3 +53,6 @@
 ### Cross-Owner Touch-points
 
 - Completed: `src/agents/mod.rs` (owned by `add-project-foundation`) — uncommented line 10 `pub mod fund_manager;`
+- Approved for `chunk3-evidence-state-sync` to update `src/agents/fund_manager/prompt.rs` and
+  `src/agents/fund_manager/tests.rs` so the user-prompt runtime context includes the shared typed
+  evidence/data-quality blocks and regression coverage pins that contract.

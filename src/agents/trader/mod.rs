@@ -13,8 +13,9 @@ use rig::agent::TypedPromptResponse;
 use crate::agents::shared::redact_secret_like_values;
 use crate::{
     agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, agent_token_usage_from_completion, sanitize_date_for_prompt,
-        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
+        UNTRUSTED_CONTEXT_NOTICE, agent_token_usage_from_completion, build_data_quality_context,
+        build_evidence_context, sanitize_date_for_prompt, sanitize_prompt_context,
+        sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     config::{Config, LlmConfig},
     constants::{MAX_RATIONALE_CHARS, TRADER_MAX_TURNS},
@@ -292,8 +293,11 @@ fn build_prompt_context(state: &TradingState, symbol: &str, target_date: &str) -
         .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE);
 
     let user_prompt = format!(
-        "Produce a TradeProposal JSON for {} as of {}.",
-        symbol, target_date
+        "Produce a TradeProposal JSON for {} as of {}.\n\n{}\n\n{}",
+        symbol,
+        target_date,
+        build_evidence_context(state),
+        build_data_quality_context(state),
     );
 
     PromptContext {

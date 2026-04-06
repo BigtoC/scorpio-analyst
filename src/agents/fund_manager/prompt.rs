@@ -1,7 +1,8 @@
 use crate::{
     agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+        UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
+        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+        serialize_prompt_value,
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     state::{DebateMessage, RiskReport, TradingState},
@@ -240,6 +241,16 @@ fn build_user_prompt(
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
+        &build_evidence_context(state),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
+        &build_data_quality_context(state),
         MAX_USER_PROMPT_CHARS,
     );
 

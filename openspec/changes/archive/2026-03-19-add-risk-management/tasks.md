@@ -146,3 +146,8 @@
 - [x] 8.4 Add regression tests covering same-round peer-view propagation, malformed persona JSON,
       oversized adjustments, repeated persona chat history, moderator failure propagation, and
       redaction-on-write behavior
+
+### Cross-Owner Touch-points
+
+- Approved for `chunk3-evidence-state-sync` to update `src/agents/risk/common.rs` so the shared risk analyst-context
+  builder appends the typed evidence/data-quality context blocks while preserving the existing legacy analyst snapshot.

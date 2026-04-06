@@ -857,3 +857,14 @@ fn constructor_rejects_wrong_model_id() {
     let result = TraderAgent::new(handle, "AAPL", "2026-03-15", &cfg);
     assert!(matches!(result, Err(TradingError::Config(_))));
 }
+
+// Task 4.8 — trader prompt includes typed evidence and data quality sections.
+#[test]
+fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
+    let state = TradingState::new("AAPL", "2026-01-15");
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(ctx.user_prompt.contains("Typed evidence snapshot:"));
+    assert!(ctx.user_prompt.contains("- fundamentals: null"));
+    assert!(ctx.user_prompt.contains("Data quality snapshot:"));
+    assert!(ctx.user_prompt.contains("- required_inputs: unavailable"));
+}

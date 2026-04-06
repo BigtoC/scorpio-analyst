@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use crate::{
     agents::shared::{
-        agent_token_usage_from_completion, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt,
+        agent_token_usage_from_completion, build_data_quality_context, build_evidence_context,
+        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
     },
     config::LlmConfig,
     constants::MAX_DEBATE_CHARS,
@@ -116,8 +116,11 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
         &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
     );
 
+    let evidence_section = build_evidence_context(state);
+    let data_quality_section = build_data_quality_context(state);
+
     format!(
-        "{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}"
+        "{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n\n{evidence_section}\n\n{data_quality_section}"
     )
 }
 
@@ -417,12 +420,28 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            evidence_fundamental: None,
+            evidence_technical: None,
+            evidence_sentiment: None,
+            evidence_news: None,
+            data_coverage: None,
+            provenance_summary: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         };
 
         let context = build_analyst_context(&state);
         assert!(context.contains("Fundamental data: null"));
         assert!(context.contains("Technical data: null"));
+    }
+
+    #[test]
+    fn build_analyst_context_includes_evidence_and_data_quality_sections() {
+        let state = TradingState::new("TSLA", "2026-01-15");
+        let context = build_analyst_context(&state);
+        assert!(context.contains("Typed evidence snapshot:"));
+        assert!(context.contains("- fundamentals: null"));
+        assert!(context.contains("Data quality snapshot:"));
+        assert!(context.contains("- required_inputs: unavailable"));
     }
 
     #[test]

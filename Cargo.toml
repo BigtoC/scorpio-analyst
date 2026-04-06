@@ -9,7 +9,7 @@ repository = "https://github.com/BigtoC/scorpio-analyst"
 [dependencies]
 # LLM framework
 rig-core = "0.32"
-schemars = "1"
+schemars = { version = "1", features = ["chrono04"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

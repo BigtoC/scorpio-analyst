@@ -1,4 +1,4 @@
-use crate::constants::MAX_PROMPT_CONTEXT_CHARS;
+use crate::{constants::MAX_PROMPT_CONTEXT_CHARS, state::TradingState};
 
 /// Marker inserted before untrusted model-generated prompt context.
 pub(crate) const UNTRUSTED_CONTEXT_NOTICE: &str =
@@ -171,11 +171,73 @@ pub(crate) fn build_data_quality_prompt_rule() -> &'static str {
 interpretation as established fact."
 }
 
+// ─── Typed evidence and data-quality context builders ────────────────────────
+
+/// Render a prompt-safe typed evidence snapshot in the Stage 4 contract shape.
+pub(crate) fn build_evidence_context(state: &TradingState) -> String {
+    let fundamental =
+        serde_json::to_string(&state.evidence_fundamental).unwrap_or_else(|_| "null".to_owned());
+    let technical =
+        serde_json::to_string(&state.evidence_technical).unwrap_or_else(|_| "null".to_owned());
+    let sentiment =
+        serde_json::to_string(&state.evidence_sentiment).unwrap_or_else(|_| "null".to_owned());
+    let news = serde_json::to_string(&state.evidence_news).unwrap_or_else(|_| "null".to_owned());
+
+    format!(
+        "Typed evidence snapshot:\n\
+         - fundamentals: {}\n\
+         - sentiment: {}\n\
+         - news: {}\n\
+         - technical: {}",
+        sanitize_prompt_context(&fundamental),
+        sanitize_prompt_context(&sentiment),
+        sanitize_prompt_context(&news),
+        sanitize_prompt_context(&technical),
+    )
+}
+
+/// Render a prompt-safe data quality snapshot in the Stage 4 contract shape.
+pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
+    fn unavailable() -> String {
+        "unavailable".to_owned()
+    }
+
+    let required_inputs = state.data_coverage.as_ref().map_or_else(unavailable, |c| {
+        sanitize_prompt_context(
+            &serde_json::to_string(&c.required_inputs).unwrap_or_else(|_| "[]".to_owned()),
+        )
+    });
+    let missing_inputs = state.data_coverage.as_ref().map_or_else(unavailable, |c| {
+        sanitize_prompt_context(
+            &serde_json::to_string(&c.missing_inputs).unwrap_or_else(|_| "[]".to_owned()),
+        )
+    });
+    let providers_used = state
+        .provenance_summary
+        .as_ref()
+        .map_or_else(unavailable, |p| {
+            sanitize_prompt_context(
+                &serde_json::to_string(&p.providers_used).unwrap_or_else(|_| "[]".to_owned()),
+            )
+        });
+
+    format!(
+        "Data quality snapshot:\n\
+         - required_inputs: {required_inputs}\n\
+         - missing_inputs: {missing_inputs}\n\
+         - providers_used: {providers_used}"
+    )
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_state() -> TradingState {
+        TradingState::new("AAPL", "2026-01-15")
+    }
 
     #[test]
     fn test_authoritative_source_rule_mentions_runtime_evidence() {
@@ -210,5 +272,106 @@ mod tests {
             rule.contains("interpretation"),
             "data quality rule should mention 'interpretation'; got: {rule}"
         );
+    }
+
+    // ─── Task 4.3: build_evidence_context and build_data_quality_context ─────
+
+    #[test]
+    fn build_evidence_context_empty_state_returns_non_empty_fallback() {
+        let state = empty_state();
+        let ctx = build_evidence_context(&state);
+        assert!(
+            !ctx.is_empty(),
+            "build_evidence_context must return non-empty string for empty state"
+        );
+        assert!(ctx.contains("Typed evidence snapshot:"));
+        assert!(ctx.contains("- fundamentals: null"));
+        assert!(ctx.contains("- sentiment: null"));
+        assert!(ctx.contains("- news: null"));
+        assert!(ctx.contains("- technical: null"));
+    }
+
+    #[test]
+    fn build_data_quality_context_empty_state_returns_non_empty_fallback() {
+        let state = empty_state();
+        let ctx = build_data_quality_context(&state);
+        assert!(
+            !ctx.is_empty(),
+            "build_data_quality_context must return non-empty string for empty state"
+        );
+        assert!(ctx.contains("Data quality snapshot:"));
+        assert!(ctx.contains("- required_inputs: unavailable"));
+        assert!(ctx.contains("- missing_inputs: unavailable"));
+        assert!(ctx.contains("- providers_used: unavailable"));
+    }
+
+    #[test]
+    fn build_data_quality_context_partial_state_marks_absent_side_unavailable() {
+        use crate::state::DataCoverageReport;
+
+        let mut state = empty_state();
+        state.data_coverage = Some(DataCoverageReport {
+            required_inputs: vec!["fundamentals".to_owned()],
+            missing_inputs: vec!["technical".to_owned()],
+        });
+
+        let ctx = build_data_quality_context(&state);
+        assert!(ctx.contains("- required_inputs: [\"fundamentals\"]"));
+        assert!(ctx.contains("- missing_inputs: [\"technical\"]"));
+        assert!(ctx.contains("- providers_used: unavailable"));
+    }
+
+    #[test]
+    fn build_evidence_context_populated_state_matches_required_shape() {
+        use crate::state::{
+            DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource, FundamentalData,
+            ProvenanceSummary,
+        };
+        use chrono::Utc;
+
+        let mut state = empty_state();
+        state.evidence_fundamental = Some(EvidenceRecord {
+            kind: EvidenceKind::Fundamental,
+            payload: FundamentalData {
+                revenue_growth_pct: None,
+                pe_ratio: Some(20.0),
+                eps: None,
+                current_ratio: None,
+                debt_to_equity: None,
+                gross_margin: None,
+                net_income: None,
+                insider_transactions: vec![],
+                summary: "test".to_owned(),
+            },
+            sources: vec![EvidenceSource {
+                provider: "finnhub".to_owned(),
+                datasets: vec!["fundamentals".to_owned()],
+                fetched_at: Utc::now(),
+                effective_at: None,
+                url: None,
+                citation: None,
+            }],
+            quality_flags: vec![],
+        });
+        state.data_coverage = Some(DataCoverageReport {
+            required_inputs: vec!["fundamentals".to_owned()],
+            missing_inputs: vec![],
+        });
+        state.provenance_summary = Some(ProvenanceSummary {
+            providers_used: vec!["finnhub".to_owned()],
+        });
+
+        let evidence_ctx = build_evidence_context(&state);
+        assert!(evidence_ctx.contains("Typed evidence snapshot:"));
+        assert!(evidence_ctx.contains("- fundamentals: {\"kind\":\"fundamental\""));
+        assert!(evidence_ctx.contains("- sentiment: null"));
+        assert!(evidence_ctx.contains("- news: null"));
+        assert!(evidence_ctx.contains("- technical: null"));
+
+        let quality_ctx = build_data_quality_context(&state);
+        assert!(quality_ctx.contains("Data quality snapshot:"));
+        assert!(quality_ctx.contains("- required_inputs: [\"fundamentals\"]"));
+        assert!(quality_ctx.contains("- missing_inputs: []"));
+        assert!(quality_ctx.contains("- providers_used: [\"finnhub\"]"));
     }
 }

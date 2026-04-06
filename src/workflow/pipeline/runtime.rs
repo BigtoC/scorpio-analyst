@@ -39,6 +39,12 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.technical_indicators = None;
     state.market_sentiment = None;
     state.macro_news = None;
+    state.evidence_fundamental = None;
+    state.evidence_technical = None;
+    state.evidence_sentiment = None;
+    state.evidence_news = None;
+    state.data_coverage = None;
+    state.provenance_summary = None;
     state.debate_history.clear();
     state.consensus_summary = None;
     state.trader_proposal = None;

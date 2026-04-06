@@ -210,6 +210,43 @@ async fn analyst_sync_all_succeed_returns_continue() {
     assert!(recovered.market_sentiment.is_some());
     assert!(recovered.macro_news.is_some());
     assert!(recovered.technical_indicators.is_some());
+
+    // Task 3.5 — typed evidence fields must all be Some.
+    assert!(
+        recovered.evidence_fundamental.is_some(),
+        "evidence_fundamental must be populated"
+    );
+    assert!(
+        recovered.evidence_sentiment.is_some(),
+        "evidence_sentiment must be populated"
+    );
+    assert!(
+        recovered.evidence_news.is_some(),
+        "evidence_news must be populated"
+    );
+    assert!(
+        recovered.evidence_technical.is_some(),
+        "evidence_technical must be populated"
+    );
+    // Coverage: no missing inputs.
+    let coverage = recovered
+        .data_coverage
+        .as_ref()
+        .expect("data_coverage must be Some");
+    assert!(
+        coverage.missing_inputs.is_empty(),
+        "missing_inputs must be empty when all analysts succeed"
+    );
+    // Provenance: all three providers, sorted.
+    let provenance = recovered
+        .provenance_summary
+        .as_ref()
+        .expect("provenance_summary must be Some");
+    assert_eq!(
+        provenance.providers_used,
+        vec!["finnhub", "fred", "yfinance"],
+        "providers_used must be sorted and deduplicated"
+    );
 }
 
 #[tokio::test]
@@ -309,6 +346,132 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
         }
         other => panic!("expected TaskExecutionFailed, got: {other:?}"),
     }
+}
+
+/// Task 3.6 — when technical analyst fails but the other three succeed,
+/// `AnalystSyncTask` should still return Continue, `evidence_technical` should
+/// remain `None`, `missing_inputs` should equal `["technical"]`, and
+/// `providers_used` should equal `["finnhub", "fred"]` (no yfinance).
+#[tokio::test]
+async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+
+    // Fundamental, Sentiment, News succeed; Technical fails.
+    for key in [
+        common::ANALYST_FUNDAMENTAL,
+        common::ANALYST_SENTIMENT,
+        common::ANALYST_NEWS,
+    ] {
+        ctx.set(
+            format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
+            true,
+        )
+        .await;
+    }
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_TECHNICAL,
+            common::OK_SUFFIX
+        ),
+        false,
+    )
+    .await;
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(15.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.3,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let task = AnalystSyncTask::new(store);
+    let result = task
+        .run(ctx.clone())
+        .await
+        .expect("one failure should continue");
+
+    assert_eq!(result.next_action, NextAction::Continue);
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+
+    assert!(recovered.evidence_fundamental.is_some());
+    assert!(recovered.evidence_sentiment.is_some());
+    assert!(recovered.evidence_news.is_some());
+    assert!(
+        recovered.evidence_technical.is_none(),
+        "evidence_technical must remain None when technical analyst failed"
+    );
+
+    let coverage = recovered
+        .data_coverage
+        .as_ref()
+        .expect("data_coverage must be Some");
+    assert_eq!(
+        coverage.missing_inputs,
+        vec!["technical"],
+        "missing_inputs must list the failed analyst input"
+    );
+
+    let provenance = recovered
+        .provenance_summary
+        .as_ref()
+        .expect("provenance_summary must be Some");
+    assert_eq!(
+        provenance.providers_used,
+        vec!["finnhub", "fred"],
+        "yfinance must not appear when technical evidence is absent"
+    );
 }
 
 #[tokio::test]
