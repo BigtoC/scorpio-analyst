@@ -143,3 +143,72 @@ pub(crate) fn redact_secret_like_values(input: &str) -> String {
     }
     out
 }
+
+// ─── Evidence-discipline static rule helpers ──────────────────────────────────
+
+/// Evidence-discipline rule: prefer authoritative runtime evidence, never infer unsupported claims.
+///
+/// Returns a terse imperative rule suitable for appending to an agent system prompt.
+pub(crate) fn build_authoritative_source_prompt_rule() -> &'static str {
+    "Prefer authoritative runtime evidence (tool output, schema data) over inference or recalled \
+memory. Never infer estimates, transcript commentary, or quarter labels unless the runtime \
+explicitly provides them."
+}
+
+/// Evidence-discipline rule: handle missing data honestly without padding.
+///
+/// Returns a terse imperative rule suitable for appending to an agent system prompt.
+pub(crate) fn build_missing_data_prompt_rule() -> &'static str {
+    "When evidence is sparse or missing, say so explicitly in `summary` rather than padding weak \
+claims. Return `null` or `[]` for missing structured fields; do not guess or extrapolate values."
+}
+
+/// Evidence-discipline rule: separate observed facts from interpretation.
+///
+/// Returns a terse imperative rule suitable for appending to an agent system prompt.
+pub(crate) fn build_data_quality_prompt_rule() -> &'static str {
+    "Separate observed facts (tool output) from interpretation (your reasoning). Do not present \
+interpretation as established fact."
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_authoritative_source_rule_mentions_runtime_evidence() {
+        let rule = build_authoritative_source_prompt_rule();
+        assert!(
+            rule.contains("runtime"),
+            "authoritative source rule should mention 'runtime'; got: {rule}"
+        );
+        assert!(
+            !rule.is_empty(),
+            "authoritative source rule must not be empty"
+        );
+    }
+
+    #[test]
+    fn test_missing_data_rule_mentions_null_or_empty() {
+        let rule = build_missing_data_prompt_rule();
+        assert!(
+            rule.contains("null") || rule.contains("[]"),
+            "missing data rule should mention 'null' or '[]'; got: {rule}"
+        );
+    }
+
+    #[test]
+    fn test_data_quality_rule_mentions_facts_and_interpretation() {
+        let rule = build_data_quality_prompt_rule();
+        assert!(
+            rule.contains("facts") || rule.contains("observed"),
+            "data quality rule should mention 'facts' or 'observed'; got: {rule}"
+        );
+        assert!(
+            rule.contains("interpretation"),
+            "data quality rule should mention 'interpretation'; got: {rule}"
+        );
+    }
+}

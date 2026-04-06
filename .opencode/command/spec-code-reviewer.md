@@ -1,24 +1,28 @@
 ---
 agent: build
-description: Run a multi-angle code review for an OpenSpec change.
+description: Run a multi-angle code review using ce:review, extended with OpenSpec requirements fulfillment.
 ---
 Review the implementation for the requested spec.
 
 `<SpecName>`: `$ARGUMENTS`
 
-Read `@PRD.md`, `@docs/architect-plan.md`, and `.github/instructions/rust.instructions.md`.
+## Step 1: OpenSpec Requirements Fulfillment
 
-Create an agent team to review `<SpecName>` and report findings from 5 perspectives:
-- requirements fulfillment
-- security implications
-- performance impact
-- code quality and maintainability
-- test coverage
+Read `@PRD.md`, `@docs/architect-plan.md`, and `@.github/instructions/rust.instructions.md`.
 
-Review the corresponding OpenSpec proposal and implementation together.
-Return:
-- key findings by reviewer
-- severity for each issue
-- if cross-owner modifications are needed, specify the files and owners involved
-- missing tests or edge cases
-- a final go/no-go recommendation
+Find the OpenSpec proposal for `<SpecName>` under `openspec/changes/`. Read the proposal and its tasks. For each requirement and task, check whether the implementation addresses it and report:
+- met
+- partially addressed (with what's missing)
+- not addressed
+
+## Step 2: Code Review
+
+Run `/ce:review` on the current branch or checkout. Do **not** pass `<SpecName>` as a positional argument because `ce:review` interprets positional arguments as PR/URL/branch targets, not OpenSpec change IDs. Only pass `plan:` when a matching implementation plan exists under `docs/plans/`; otherwise use the Step 1 spec tasks as the review requirements in your final report. This covers security, performance, code quality, maintainability, and test coverage.
+
+## Return
+
+Combine both steps into a single report:
+- OpenSpec requirements fulfillment checklist
+- `ce:review` findings (severity, route, reviewer)
+- Missing tests or edge cases
+- A final go/no-go recommendation

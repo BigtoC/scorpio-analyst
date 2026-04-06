@@ -11,7 +11,10 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
-    agents::shared::agent_token_usage_from_completion,
+    agents::shared::{
+        agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
+        build_data_quality_prompt_rule, build_missing_data_prompt_rule,
+    },
     config::LlmConfig,
     constants::NEWS_ANALYST_MAX_TURNS,
     data::{
@@ -54,6 +57,25 @@ Instructions:
 7. Return exactly one JSON object required by `NewsData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.";
+
+/// Build the rendered system prompt for the News Analyst.
+///
+/// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
+/// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
+pub(crate) fn build_news_system_prompt(symbol: &str, target_date: &str) -> String {
+    format!(
+        "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
+Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
+If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
+Separate observed facts from interpretation.",
+        base = NEWS_SYSTEM_PROMPT
+            .replace("{ticker}", symbol)
+            .replace("{current_date}", target_date),
+        auth_rule = build_authoritative_source_prompt_rule(),
+        missing_rule = build_missing_data_prompt_rule(),
+        quality_rule = build_data_quality_prompt_rule(),
+    )
+}
 
 /// The News Analyst agent.
 ///
@@ -128,9 +150,7 @@ impl NewsAnalyst {
         ];
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
-        let system_prompt = NEWS_SYSTEM_PROMPT
-            .replace("{ticker}", &self.symbol)
-            .replace("{current_date}", &self.target_date);
+        let system_prompt = build_news_system_prompt(&self.symbol, &self.target_date);
 
         let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
 
@@ -616,5 +636,42 @@ mod tests {
         assert_eq!(agent_test_support::typed_attempts(&agent), 0);
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
         assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+    }
+
+    // ── Task chunk1: Rendered-prompt evidence-discipline hardening ─────────
+
+    #[test]
+    fn news_rendered_prompt_includes_evidence_discipline_rules() {
+        use crate::agents::shared::{
+            build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
+            build_missing_data_prompt_rule,
+        };
+
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01");
+
+        assert!(
+            prompt.contains(build_authoritative_source_prompt_rule()),
+            "rendered prompt must contain authoritative source rule"
+        );
+        assert!(
+            prompt.contains(build_missing_data_prompt_rule()),
+            "rendered prompt must contain missing data rule"
+        );
+        assert!(
+            prompt.contains(build_data_quality_prompt_rule()),
+            "rendered prompt must contain data quality rule"
+        );
+        assert!(
+            prompt.contains("Do not infer estimates"),
+            "rendered prompt must contain 'Do not infer estimates'"
+        );
+        assert!(
+            prompt.contains("sparse or missing"),
+            "rendered prompt must contain 'sparse or missing'"
+        );
+        assert!(
+            prompt.contains("Separate observed facts"),
+            "rendered prompt must contain 'Separate observed facts'"
+        );
     }
 }
