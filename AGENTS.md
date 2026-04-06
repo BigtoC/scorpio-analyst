@@ -38,7 +38,7 @@ Behavior: follow this sequence strictly:
 
 ### Coding Mode
 
-Trigger: User explicitly says "write code" or uses , `/opsx:apply`, `/spec-code-developer` commands.
+Trigger: User explicitly says "write code" or uses `/opsx:apply` or `/spec-code-developer`.
 1. `/superpowers:test-driven-development` — TDD implementation
 2. `/ce:review` — multi-agent code review
 3. `/ce:compound` — knowledge consolidation
