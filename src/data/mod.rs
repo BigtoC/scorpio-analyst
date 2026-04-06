@@ -21,12 +21,18 @@
 //! | [`GetOhlcv`] | `rig` tool: fetch historical OHLCV bars |
 //! | [`OhlcvToolContext`] | Shared analysis-scoped OHLCV cache for technical tools |
 //! | [`fetch_vix_data`] | Fetch and compute VIX market volatility snapshot |
+//! | [`ResolvedInstrument`] | Canonical instrument identity record |
+//! | [`resolve_symbol`] | Validate and canonicalise a raw ticker string |
+//! | [`adapters`] | Stage 1 enrichment adapter contracts and [`ProviderCapabilities`] |
 
+pub mod adapters;
+pub mod entity;
 pub mod finnhub;
 pub mod fred;
-mod symbol;
+pub(crate) mod symbol;
 pub mod yfinance;
 
+pub use entity::{ResolvedInstrument, resolve_symbol};
 pub use finnhub::{
     FinnhubClient, GetCachedNews, GetEarnings, GetFundamentals, GetInsiderTransactions,
     GetMarketNews, GetNews, SymbolArgs,
