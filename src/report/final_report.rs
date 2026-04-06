@@ -15,6 +15,8 @@ pub fn format_final_report(state: &TradingState) -> String {
     write_executive_summary(&mut out, state);
     write_trader_proposal(&mut out, state);
     write_analyst_snapshot(&mut out, state);
+    super::coverage::write_data_quality_and_coverage(&mut out, state);
+    super::provenance::write_evidence_provenance(&mut out, state);
     write_research_debate(&mut out, state);
     write_risk_review(&mut out, state);
     write_safety_check(&mut out, state);
@@ -126,7 +128,7 @@ fn summarize_model_ids<'a>(agent_usage: impl Iterator<Item = &'a AgentTokenUsage
     }
 }
 
-fn section_header(out: &mut String, title: &str) {
+pub(super) fn section_header(out: &mut String, title: &str) {
     let _ = writeln!(out, "\n{}", title.bold().underline());
 }
 
@@ -625,6 +627,67 @@ mod tests {
         let state = minimal_state();
         let report = format_final_report(&state);
         assert!(report.contains("educational"));
+    }
+
+    #[test]
+    fn format_final_report_section_order_analyst_then_coverage_then_provenance_then_debate() {
+        let state = minimal_state();
+        let report = format_final_report(&state);
+
+        let analyst_pos = report
+            .find("Analyst Evidence Snapshot")
+            .expect("Analyst Evidence Snapshot must appear");
+        let coverage_pos = report
+            .find("Data Quality and Coverage")
+            .expect("Data Quality and Coverage must appear");
+        let provenance_pos = report
+            .find("Evidence Provenance")
+            .expect("Evidence Provenance must appear");
+        let debate_pos = report
+            .find("Research Debate Summary")
+            .expect("Research Debate Summary must appear");
+
+        assert!(
+            analyst_pos < coverage_pos,
+            "Analyst Evidence Snapshot must precede Data Quality and Coverage"
+        );
+        assert!(
+            coverage_pos < provenance_pos,
+            "Data Quality and Coverage must precede Evidence Provenance"
+        );
+        assert!(
+            provenance_pos < debate_pos,
+            "Evidence Provenance must precede Research Debate Summary"
+        );
+    }
+
+    #[test]
+    fn format_final_report_coverage_shows_unavailable_when_not_set() {
+        let state = minimal_state(); // data_coverage is None
+        let report = format_final_report(&state);
+        // Find "Data Quality and Coverage" section and verify "Unavailable" appears after it
+        let coverage_pos = report
+            .find("Data Quality and Coverage")
+            .expect("section must appear");
+        let after_heading = &report[coverage_pos..];
+        assert!(
+            after_heading.contains("Unavailable"),
+            "section must render Unavailable when data_coverage is None"
+        );
+    }
+
+    #[test]
+    fn format_final_report_provenance_shows_unavailable_when_not_set() {
+        let state = minimal_state(); // provenance_summary is None
+        let report = format_final_report(&state);
+        let provenance_pos = report
+            .find("Evidence Provenance")
+            .expect("section must appear");
+        let after_heading = &report[provenance_pos..];
+        assert!(
+            after_heading.contains("Unavailable"),
+            "section must render Unavailable when provenance_summary is None"
+        );
     }
 
     #[test]

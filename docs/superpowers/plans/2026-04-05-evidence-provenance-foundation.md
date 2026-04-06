@@ -63,7 +63,7 @@
 - Modify: `README.md`
 - Modify: `docs/prompts.md`
 
-- [ ] **Step 1: Update the README intro paragraph**
+- [x] **Step 1: Update the README intro paragraph**
 
 Edit the first project-description paragraph so it mentions both TradingAgents and Anthropic's
 `financial-services-plugins` as inspirations.
@@ -77,7 +77,7 @@ reporting patterns from Anthropic's financial-services-plugins repository, espec
 provenance, and modular financial workflows.
 ```
 
-- [ ] **Step 2: Add global prompt rules to `docs/prompts.md`**
+- [x] **Step 2: Add global prompt rules to `docs/prompts.md`**
 
 Under `## Global Prompt Rules`, add rules for:
 
@@ -89,13 +89,13 @@ Under `## Global Prompt Rules`, add rules for:
 - Let Rust compute deterministic comparisons and ranges; use the model to interpret them.
 ```
 
-- [ ] **Step 3: Verify the doc changes are present**
+- [x] **Step 3: Verify the doc changes are present**
 
 Run: `rg -n "financial-services-plugins|authoritative runtime evidence|Let Rust compute" README.md docs/prompts.md`
 
 Expected: matches in both files.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md docs/prompts.md
@@ -107,7 +107,7 @@ git commit -m "docs: credit financial-services-plugins inspiration and harden pr
 **Files:**
 - Modify: `src/agents/shared/prompt.rs`
 
-- [ ] **Step 1: Add the three static rule helpers**
+- [x] **Step 1: Add the three static rule helpers**
 
 Add helpers shaped like:
 
@@ -125,7 +125,7 @@ pub(crate) fn build_data_quality_prompt_rule() -> &'static str {
 }
 ```
 
-- [ ] **Step 2: Add `build_evidence_context` and `build_data_quality_context` with explicit output contracts**
+- [x] **Step 2: Add `build_evidence_context` and `build_data_quality_context` with explicit output contracts**
 
 Add:
 
@@ -157,7 +157,7 @@ Data quality snapshot:
 
 If the corresponding state is absent, each helper must return a compact fallback string instead of panicking.
 
-- [ ] **Step 3: Add unit tests in `src/agents/shared/prompt.rs`**
+- [x] **Step 3: Add unit tests in `src/agents/shared/prompt.rs`**
 
 Add tests named:
 
@@ -194,13 +194,13 @@ fn data_quality_context_handles_empty_state() {
 }
 ```
 
-- [ ] **Step 4: Run the prompt helper tests**
+- [x] **Step 4: Run the prompt helper tests**
 
 Run: `cargo test --lib agents::shared::prompt -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/agents/shared/prompt.rs
@@ -215,11 +215,11 @@ git commit -m "feat: add shared prompt helpers for evidence and data quality"
 - Modify: `src/agents/analyst/sentiment.rs`
 - Modify: `src/agents/analyst/technical.rs`
 
-- [ ] **Step 1: Append the shared rule strings to analyst prompts**
+- [x] **Step 1: Append the shared rule strings to analyst prompts**
 
 Import the shared rule helpers and append them to each analyst system prompt.
 
-- [ ] **Step 2: Add explicit unsupported-inference rules**
+- [x] **Step 2: Add explicit unsupported-inference rules**
 
 For each analyst prompt, add lines equivalent to:
 
@@ -229,7 +229,7 @@ If evidence is sparse or missing, say so explicitly in `summary` rather than pad
 Separate observed facts from interpretation.
 ```
 
-- [ ] **Step 3: Add or update prompt-rendering tests**
+- [x] **Step 3: Add or update prompt-rendering tests**
 
 Add focused string-contains tests in each modified analyst file asserting the new rule text is present, including:
 
@@ -237,13 +237,13 @@ Add focused string-contains tests in each modified analyst file asserting the ne
 - `Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.`
 - separate observed facts from interpretation
 
-- [ ] **Step 4: Run analyst tests**
+- [x] **Step 4: Run analyst tests**
 
 Run: `cargo test --lib agents::analyst -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/agents/analyst
@@ -260,7 +260,7 @@ git commit -m "feat: harden analyst prompts around missing and unsupported evide
 - Modify: `src/config.rs`
 - Modify: `config.toml`
 
-- [ ] **Step 1: Add `DataEnrichmentConfig` to `src/config.rs`**
+- [x] **Step 1: Add `DataEnrichmentConfig` to `src/config.rs`**
 
 Add:
 
@@ -289,7 +289,7 @@ Attach it to `Config` as:
 pub enrichment: DataEnrichmentConfig,
 ```
 
-- [ ] **Step 2: Add config tests in `src/config.rs`**
+- [x] **Step 2: Add config tests in `src/config.rs`**
 
 Add tests named:
 
@@ -304,7 +304,7 @@ fn load_from_accepts_enrichment_section() { ... }
 fn env_overrides_apply_to_enrichment_fields() { ... }
 ```
 
-- [ ] **Step 3: Add default config to `config.toml`**
+- [x] **Step 3: Add default config to `config.toml`**
 
 Append:
 
@@ -316,13 +316,13 @@ enable_event_news = false
 max_evidence_age_hours = 48
 ```
 
-- [ ] **Step 4: Run config tests**
+- [x] **Step 4: Run config tests**
 
 Run: `cargo test --lib config -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/config.rs config.toml
@@ -335,7 +335,7 @@ git commit -m "feat: add data enrichment configuration"
 - Create: `src/data/entity.rs`
 - Modify: `src/data/mod.rs`
 
-- [ ] **Step 1: Implement `ResolvedInstrument` and `resolve_symbol`**
+- [x] **Step 1: Implement `ResolvedInstrument` and `resolve_symbol`**
 
 Create `src/data/entity.rs` and make `resolve_symbol` call the existing validator in `src/data/symbol.rs`.
 
@@ -365,7 +365,7 @@ pub fn resolve_symbol(symbol: &str) -> Result<ResolvedInstrument, TradingError> 
 }
 ```
 
-- [ ] **Step 2: Export the new module from `src/data/mod.rs`**
+- [x] **Step 2: Export the new module from `src/data/mod.rs`**
 
 Add:
 
@@ -374,7 +374,7 @@ pub mod entity;
 pub use entity::{ResolvedInstrument, resolve_symbol};
 ```
 
-- [ ] **Step 3: Add unit tests in `src/data/entity.rs`**
+- [x] **Step 3: Add unit tests in `src/data/entity.rs`**
 
 Add:
 
@@ -389,13 +389,13 @@ fn resolve_symbol_preserves_original_input() { ... }
 fn resolve_symbol_rejects_empty_input() { ... }
 ```
 
-- [ ] **Step 4: Run entity tests**
+- [x] **Step 4: Run entity tests**
 
 Run: `cargo test --lib data::entity -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/data/entity.rs src/data/mod.rs
@@ -411,7 +411,7 @@ git commit -m "feat: add canonical instrument resolution on top of symbol valida
 - Create: `src/data/adapters/events.rs`
 - Modify: `src/data/mod.rs`
 
-- [ ] **Step 1: Define `ProviderCapabilities` in `src/data/adapters/mod.rs`**
+- [x] **Step 1: Define `ProviderCapabilities` in `src/data/adapters/mod.rs`**
 
 Add:
 
@@ -424,7 +424,7 @@ pub struct ProviderCapabilities {
 }
 ```
 
-- [ ] **Step 2: Define `TranscriptEvidence` and `TranscriptProvider`**
+- [x] **Step 2: Define `TranscriptEvidence` and `TranscriptProvider`**
 
 In `src/data/adapters/transcripts.rs`, add:
 
@@ -446,7 +446,7 @@ pub trait TranscriptProvider {
 }
 ```
 
-- [ ] **Step 3: Define `ConsensusEvidence` and `EstimatesProvider`**
+- [x] **Step 3: Define `ConsensusEvidence` and `EstimatesProvider`**
 
 In `src/data/adapters/estimates.rs`, add:
 
@@ -469,7 +469,7 @@ pub trait EstimatesProvider {
 }
 ```
 
-- [ ] **Step 4: Define `EventNewsEvidence` and `EventNewsProvider`**
+- [x] **Step 4: Define `EventNewsEvidence` and `EventNewsProvider`**
 
 In `src/data/adapters/events.rs`, add:
 
@@ -492,21 +492,21 @@ pub trait EventNewsProvider {
 }
 ```
 
-- [ ] **Step 5: Export the adapters through `src/data/adapters/mod.rs` and `src/data/mod.rs`**
+- [x] **Step 5: Export the adapters through `src/data/adapters/mod.rs` and `src/data/mod.rs`**
 
 Add public module exports and re-exports so workflow code can import these contracts from `crate::data`.
 
-- [ ] **Step 6: Add serde tests in each new adapter file**
+- [x] **Step 6: Add serde tests in each new adapter file**
 
 Add one small serialize/deserialize round-trip test for each evidence struct.
 
-- [ ] **Step 7: Run adapter tests**
+- [x] **Step 7: Run adapter tests**
 
 Run: `cargo test --lib data::adapters -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/data/adapters src/data/mod.rs
@@ -524,7 +524,7 @@ git commit -m "feat: add provider-agnostic enrichment contracts"
 - Create: `src/workflow/tasks/preflight_tests.rs`
 - Modify: `src/workflow/tasks/test_helpers.rs`
 
-- [ ] **Step 1: Add the preflight context keys**
+- [x] **Step 1: Add the preflight context keys**
 
 In `src/workflow/tasks/common.rs`, add:
 
@@ -537,7 +537,7 @@ pub const KEY_CACHED_CONSENSUS: &str = "cached_consensus";
 pub const KEY_CACHED_EVENT_FEED: &str = "cached_event_feed";
 ```
 
-- [ ] **Step 2: Implement `PreflightTask`**
+- [x] **Step 2: Implement `PreflightTask`**
 
 Create `src/workflow/tasks/preflight.rs` with a task that:
 
@@ -560,7 +560,7 @@ Create `src/workflow/tasks/preflight.rs` with a task that:
 
 If `resolve_symbol` returns an error, `PreflightTask` must fail hard.
 
-- [ ] **Step 3: Export `PreflightTask` and wire the test module**
+- [x] **Step 3: Export `PreflightTask` and wire the test module**
 
 In `src/workflow/tasks/mod.rs`:
 
@@ -569,7 +569,7 @@ In `src/workflow/tasks/mod.rs`:
 3. re-export `PreflightTask`
 4. re-export the new key constants from `common`
 
-- [ ] **Step 4: Insert `PreflightTask` into `src/workflow/pipeline.rs`**
+- [x] **Step 4: Insert `PreflightTask` into `src/workflow/pipeline.rs`**
 
 Add a task id constant, include it in `REPLACEABLE_TASK_IDS`, instantiate it in `build_graph_impl`, and add the edge:
 
@@ -582,7 +582,7 @@ Also update the current start-task call sites so execution really begins at pref
 - `graph.set_start_task(...)`
 - `Session::new_from_task(...)`
 
-- [ ] **Step 5: Make analyst tasks consume the canonical symbol**
+- [x] **Step 5: Make analyst tasks consume the canonical symbol**
 
 In `src/workflow/tasks/analyst.rs`, add a helper that reads `KEY_RESOLVED_INSTRUMENT` from context and deserializes
 `ResolvedInstrument`.
@@ -592,7 +592,7 @@ constructing the analyst.
 
 If the key is missing after `PreflightTask`, treat it as orchestration corruption and return an error.
 
-- [ ] **Step 6: Add focused tests in `src/workflow/tasks/preflight_tests.rs`**
+- [x] **Step 6: Add focused tests in `src/workflow/tasks/preflight_tests.rs`**
 
 Add tests named:
 
@@ -630,13 +630,13 @@ async fn pipeline_orders_preflight_before_analyst_fanout() {
 
 If the task test seam stubs every workflow task, add a simple preflight stub in `src/workflow/tasks/test_helpers.rs`.
 
-- [ ] **Step 7: Run workflow tests**
+- [x] **Step 7: Run workflow tests**
 
 Run: `cargo test --lib workflow::tasks -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/workflow/tasks src/workflow/pipeline.rs
@@ -655,7 +655,7 @@ git commit -m "feat: add preflight task and canonical symbol flow"
 - Create: `src/state/reporting.rs`
 - Modify: `src/state/mod.rs`
 
-- [ ] **Step 1: Create `src/state/provenance.rs`**
+- [x] **Step 1: Create `src/state/provenance.rs`**
 
 Add exactly:
 
@@ -683,7 +683,7 @@ pub enum DataQualityFlag {
 }
 ```
 
-- [ ] **Step 2: Create `src/state/evidence.rs`**
+- [x] **Step 2: Create `src/state/evidence.rs`**
 
 Add exactly:
 
@@ -710,7 +710,7 @@ pub struct EvidenceRecord<T> {
 }
 ```
 
-- [ ] **Step 3: Create `src/state/reporting.rs`**
+- [x] **Step 3: Create `src/state/reporting.rs`**
 
 Add exactly:
 
@@ -731,21 +731,21 @@ pub struct ProvenanceSummary {
 }
 ```
 
-- [ ] **Step 4: Export the new modules from `src/state/mod.rs`**
+- [x] **Step 4: Export the new modules from `src/state/mod.rs`**
 
 Add the `mod` declarations and `pub use` lines.
 
-- [ ] **Step 5: Add serde round-trip tests in each new file**
+- [x] **Step 5: Add serde round-trip tests in each new file**
 
 Each new file should have at least one round-trip test proving its main types serialize and deserialize cleanly.
 
-- [ ] **Step 6: Run state tests**
+- [x] **Step 6: Run state tests**
 
 Run: `cargo test --lib state -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/state/evidence.rs src/state/provenance.rs src/state/reporting.rs src/state/mod.rs
@@ -759,7 +759,7 @@ git commit -m "feat: add evidence provenance and reporting state modules"
 - Modify: `src/workflow/context_bridge.rs`
 - Modify: `src/workflow/snapshot.rs`
 
-- [ ] **Step 1: Extend `TradingState` with the new fields**
+- [x] **Step 1: Extend `TradingState` with the new fields**
 
 Add:
 
@@ -784,17 +784,17 @@ Also update any exhaustive `TradingState { ... }` literals that compilation surf
 
 Do not stop at the listed files if `cargo build` reveals additional literal initializers.
 
-- [ ] **Step 2: Add an explicit round-trip test in `src/workflow/context_bridge.rs`**
+- [x] **Step 2: Add an explicit round-trip test in `src/workflow/context_bridge.rs`**
 
 Extend the test module in `src/workflow/context_bridge.rs` with a case that populates
 `evidence_fundamental`, `data_coverage`, and `provenance_summary`, serializes the state to context, deserializes it, and
 asserts the new fields round-trip correctly.
 
-- [ ] **Step 3: Add a snapshot round-trip test in `src/workflow/snapshot.rs`**
+- [x] **Step 3: Add a snapshot round-trip test in `src/workflow/snapshot.rs`**
 
 Extend the snapshot tests with a case that saves a `TradingState` populated with the new fields and loads it back.
 
-- [ ] **Step 4: Run bridge and snapshot tests**
+- [x] **Step 4: Run bridge and snapshot tests**
 
 Run: `cargo test --lib workflow::context_bridge -- --nocapture`
 
@@ -802,7 +802,7 @@ Run: `cargo test --lib workflow::snapshot -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/state/trading_state.rs src/workflow/context_bridge.rs src/workflow/snapshot.rs
@@ -815,7 +815,7 @@ git commit -m "feat: persist evidence and reporting fields in TradingState"
 - Modify: `src/workflow/tasks/analyst.rs`
 - Modify: `src/workflow/tasks/tests.rs`
 
-- [ ] **Step 1: Add exact source-mapping helpers in `src/workflow/tasks/analyst.rs`**
+- [x] **Step 1: Add exact source-mapping helpers in `src/workflow/tasks/analyst.rs`**
 
 Add small helpers or constants for the exact first-slice mapping:
 
@@ -826,12 +826,12 @@ Add small helpers or constants for the exact first-slice mapping:
 
 Use RFC3339 UTC for `fetched_at` and an empty `quality_flags` vector in the first slice.
 
-- [ ] **Step 2: Update `AnalystSyncTask` to dual-write legacy and new fields**
+- [x] **Step 2: Update `AnalystSyncTask` to dual-write legacy and new fields**
 
 When an analyst output is present, continue populating the legacy field and also populate the corresponding `evidence_*`
 field.
 
-- [ ] **Step 3: Compute `DataCoverageReport` and `ProvenanceSummary`**
+- [x] **Step 3: Compute `DataCoverageReport` and `ProvenanceSummary`**
 
 Use this exact first-slice logic:
 
@@ -847,7 +847,7 @@ Use this exact first-slice logic:
 - `generated_at`: current UTC RFC3339 timestamp
 - `caveats`: `[]` in the first slice
 
-- [ ] **Step 4: Extend `src/workflow/tasks/tests.rs`**
+- [x] **Step 4: Extend `src/workflow/tasks/tests.rs`**
 
 Update `analyst_sync_all_succeed_returns_continue` to assert the new `evidence_*`, `data_coverage`, and
 `provenance_summary` fields are populated.
@@ -863,7 +863,7 @@ async fn analyst_sync_marks_missing_inputs_in_coverage_report() {
 }
 ```
 
-- [ ] **Step 5: Run analyst-sync tests**
+- [x] **Step 5: Run analyst-sync tests**
 
 Run: `cargo test --lib workflow::tasks::tests::analyst_sync_all_succeed_returns_continue -- --nocapture`
 
@@ -871,7 +871,7 @@ Run: `cargo test --lib workflow::tasks -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/workflow/tasks/analyst.rs src/workflow/tasks/tests.rs
@@ -886,15 +886,15 @@ git commit -m "feat: dual-write analyst evidence and coverage metadata"
 - Modify: `src/agents/trader/mod.rs`
 - Modify: `src/agents/fund_manager/prompt.rs`
 
-- [ ] **Step 1: Append `build_evidence_context(state)` and `build_data_quality_context(state)` to researcher prompts**
+- [x] **Step 1: Append `build_evidence_context(state)` and `build_data_quality_context(state)` to researcher prompts**
 
 In `src/agents/researcher/common.rs`, inject both shared context builders after the current analyst-context block.
 
-- [ ] **Step 2: Append the same shared context to risk prompts**
+- [x] **Step 2: Append the same shared context to risk prompts**
 
 In `src/agents/risk/common.rs`, inject both builders after the analyst snapshot block.
 
-- [ ] **Step 3: Update trader and fund-manager prompts explicitly**
+- [x] **Step 3: Update trader and fund-manager prompts explicitly**
 
 In `src/agents/trader/mod.rs`, append the evidence/data-quality context and add a short instruction that missing or
 sparse upstream evidence must be acknowledged directly.
@@ -902,7 +902,7 @@ sparse upstream evidence must be acknowledged directly.
 In `src/agents/fund_manager/prompt.rs`, append the evidence/data-quality context and add a short instruction that data
 quality limits must be surfaced in the final rationale.
 
-- [ ] **Step 4: Ensure the prompt text covers facts vs interpretation and unresolved uncertainty**
+- [x] **Step 4: Ensure the prompt text covers facts vs interpretation and unresolved uncertainty**
 
 Across the four modified modules, make sure the prompt text explicitly says:
 
@@ -911,7 +911,7 @@ Separate observed facts from interpretation.
 Surface unresolved uncertainty when evidence is weak or incomplete.
 ```
 
-- [ ] **Step 5: Add or update tests for prompt rendering**
+- [x] **Step 5: Add or update tests for prompt rendering**
 
 In each of these files:
 
@@ -927,7 +927,7 @@ add focused string-contains tests asserting that:
 - the prompt text contains `Separate observed facts from interpretation.`
 - the prompt text contains `Surface unresolved uncertainty when evidence is weak or incomplete.`
 
-- [ ] **Step 6: Run downstream prompt tests**
+- [x] **Step 6: Run downstream prompt tests**
 
 Run: `cargo test --lib agents::researcher -- --nocapture`
 
@@ -939,7 +939,7 @@ Run: `cargo test --lib agents::fund_manager -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/agents/researcher src/agents/risk src/agents/trader src/agents/fund_manager
@@ -958,7 +958,7 @@ git commit -m "feat: inject typed evidence and quality context into downstream p
 - Modify: `src/report/final_report.rs`
 - Modify: `src/report/mod.rs`
 
-- [ ] **Step 1: Create `src/report/coverage.rs`**
+- [x] **Step 1: Create `src/report/coverage.rs`**
 
 Add:
 
@@ -972,7 +972,7 @@ Behavior:
 - if `state.data_coverage` is `None`, write `Unavailable`
 - otherwise list required inputs and missing inputs at minimum
 
-- [ ] **Step 2: Create `src/report/provenance.rs`**
+- [x] **Step 2: Create `src/report/provenance.rs`**
 
 Add:
 
@@ -986,11 +986,11 @@ Behavior:
 - if `state.provenance_summary` is `None`, write `Unavailable`
 - otherwise list providers used and caveats at minimum
 
-- [ ] **Step 3: Call the new helpers from `format_final_report`**
+- [x] **Step 3: Call the new helpers from `format_final_report`**
 
 Insert both sections after the analyst snapshot and before the debate/risk sections.
 
-- [ ] **Step 4: Add report tests**
+- [x] **Step 4: Add report tests**
 
 Add tests that assert:
 
@@ -999,13 +999,13 @@ Add tests that assert:
 3. `Data Quality and Coverage` appears after `Analyst Evidence Snapshot`
 4. `Evidence Provenance` appears before the research and risk sections
 
-- [ ] **Step 5: Run report tests**
+- [x] **Step 5: Run report tests**
 
 Run: `cargo test --lib report -- --nocapture`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/report
@@ -1017,25 +1017,25 @@ git commit -m "feat: add report coverage and provenance sections"
 **Files:**
 - No code changes expected
 
-- [ ] **Step 1: Run formatting**
+- [x] **Step 1: Run formatting**
 
 Run: `cargo fmt -- --check`
 
 Expected: no diffs.
 
-- [ ] **Step 2: Run clippy**
+- [x] **Step 2: Run clippy**
 
 Run: `cargo clippy --all-targets -- -D warnings`
 
 Expected: PASS.
 
-- [ ] **Step 3: Run full tests**
+- [x] **Step 3: Run full tests**
 
 Run: `cargo nextest run --all-features --locked`
 
 Expected: PASS.
 
-- [ ] **Step 4: Manual smoke test**
+- [x] **Step 4: Manual smoke test**
 
 Run: `cargo run`
 
