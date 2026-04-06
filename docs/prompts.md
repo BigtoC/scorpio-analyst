@@ -32,15 +32,20 @@ currently stores plain strings instead of typed handoff structs, the prompts bel
 ## Global Prompt Rules
 
 - Use only the tools actually registered for the current run. Never invent tools or assume optional tools exist.
+- Prefer authoritative runtime evidence (tool output, schema data) over inference or recalled memory. Never infer
+  estimates, transcript commentary, or quarter labels unless the runtime explicitly provides them.
 - When a prompt requires structured output, return only the single JSON object required by the runtime schema. No code
   fences, Markdown, prose preamble, or trailing explanation.
-- Preserve missing data honestly. Use schema-compatible `null`, `[]`, or an empty string summary instead of guessing.
+- Preserve missing data honestly. Use schema-compatible `null`, `[]`, or an explicit acknowledgement in `summary`
+  rather than padding weak claims or guessing. When evidence is sparse or missing, lower confidence signals explicitly
+  in `summary` rather than extrapolating.
 - Use exact Rust enum spellings in structured outputs:
   - `TradeAction`: `Buy`, `Sell`, `Hold`
   - `RiskLevel`: `Aggressive`, `Neutral`, `Conservative`
   - `Decision`: `Approved`, `Rejected`
 - Do not hallucinate social-media access, macro feeds, earnings commentary, price targets, or technical calculations.
-- Distinguish observed facts from interpretation. Tool output comes first; reasoning comes second.
+- Distinguish observed facts from interpretation. Tool output comes first; reasoning comes second. Let Rust compute
+  deterministic numeric comparisons; the model owns the interpretive narrative.
 - Do not dump raw OHLCV arrays, copied article bodies, or other large intermediate data into model responses.
 - Only the Fund Manager makes the final approve/reject decision.
 

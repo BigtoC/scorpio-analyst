@@ -7,6 +7,8 @@ Scorpio-Analyst is a Rust-native reimplementation of the [TradingAgents framewor
 
 The project's primary goal is to overcome the limitations of traditional algorithmic trading and monolithic AI systems by leveraging a structured, multi-agent approach. This allows for the integration of qualitative data, enhances explainability, and achieves superior risk-adjusted returns.
 
+The evidence discipline and provenance-reporting patterns in this project are additionally inspired by Anthropic's [financial-services-plugins](https://github.com/anthropics/anthropic-quickstarts/tree/main/financial-services-plugins) architecture, which demonstrates rigorous grounding of LLM outputs in authoritative runtime evidence.
+
 ![Project Infographic](docs/images/infographic.png)
 
 ## Conceptual Foundation
