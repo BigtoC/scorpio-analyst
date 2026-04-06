@@ -5,10 +5,14 @@ mod workflow_pipeline_e2e_support;
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_analyst::{
     error::TradingError,
-    state::{Decision, ExecutionStatus, TradingState},
+    state::{
+        DataCoverageReport, Decision, EvidenceKind, EvidenceRecord, EvidenceSource,
+        ExecutionStatus, FundamentalData, ProvenanceSummary, TradingState,
+    },
 };
 use workflow_pipeline_e2e_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
 
@@ -288,6 +292,36 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
             content: "stale risk".to_owned(),
         });
     initial_state.consensus_summary = Some("stale consensus".to_owned());
+    initial_state.evidence_fundamental = Some(EvidenceRecord {
+        kind: EvidenceKind::Fundamental,
+        payload: FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(999.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "stale fundamentals".to_owned(),
+        },
+        sources: vec![EvidenceSource {
+            provider: "stale-provider".to_owned(),
+            datasets: vec!["stale-dataset".to_owned()],
+            fetched_at: Utc::now(),
+            effective_at: None,
+            url: None,
+            citation: None,
+        }],
+        quality_flags: vec![],
+    });
+    initial_state.data_coverage = Some(DataCoverageReport {
+        required_inputs: vec!["stale".to_owned()],
+        missing_inputs: vec!["stale-missing".to_owned()],
+    });
+    initial_state.provenance_summary = Some(ProvenanceSummary {
+        providers_used: vec!["stale-provider".to_owned()],
+    });
     initial_state.final_execution_status = Some(ExecutionStatus {
         decision: Decision::Rejected,
         action: scorpio_analyst::state::TradeAction::Hold,
@@ -305,6 +339,30 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
     assert_ne!(
         final_state.consensus_summary.as_deref(),
         Some("stale consensus")
+    );
+    assert_ne!(
+        final_state
+            .evidence_fundamental
+            .as_ref()
+            .and_then(|record| record.payload.pe_ratio),
+        Some(999.0)
+    );
+    assert_eq!(
+        final_state
+            .data_coverage
+            .as_ref()
+            .expect("data coverage must be recomputed")
+            .required_inputs,
+        vec!["fundamentals", "sentiment", "news", "technical"]
+    );
+    assert!(
+        !final_state
+            .provenance_summary
+            .as_ref()
+            .expect("provenance summary must be recomputed")
+            .providers_used
+            .iter()
+            .any(|provider| provider == "stale-provider")
     );
     assert!(final_state.final_execution_status.is_some());
     assert!(

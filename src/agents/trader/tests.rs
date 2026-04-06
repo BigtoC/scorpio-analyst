@@ -863,14 +863,8 @@ fn constructor_rejects_wrong_model_id() {
 fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
     let state = TradingState::new("AAPL", "2026-01-15");
     let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
-    assert!(
-        ctx.user_prompt.contains("no typed evidence") || ctx.user_prompt.contains("Typed evidence"),
-        "trader user_prompt must include evidence section; got: {}",
-        ctx.user_prompt
-    );
-    assert!(
-        ctx.user_prompt.contains("Data quality"),
-        "trader user_prompt must include data quality section; got: {}",
-        ctx.user_prompt
-    );
+    assert!(ctx.user_prompt.contains("Typed evidence snapshot:"));
+    assert!(ctx.user_prompt.contains("- fundamentals: null"));
+    assert!(ctx.user_prompt.contains("Data quality snapshot:"));
+    assert!(ctx.user_prompt.contains("- required_inputs: unavailable"));
 }

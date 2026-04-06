@@ -740,12 +740,8 @@ fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
 
     let state = TradingState::new("AAPL", "2026-01-15");
     let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
-    assert!(
-        user.contains("no typed evidence") || user.contains("Typed evidence"),
-        "fund manager user prompt must include evidence section; got: {user}"
-    );
-    assert!(
-        user.contains("Data quality"),
-        "fund manager user prompt must include data quality section; got: {user}"
-    );
+    assert!(user.contains("Typed evidence snapshot:"));
+    assert!(user.contains("- fundamentals: null"));
+    assert!(user.contains("Data quality snapshot:"));
+    assert!(user.contains("- required_inputs: unavailable"));
 }
