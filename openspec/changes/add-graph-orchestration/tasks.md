@@ -245,3 +245,9 @@ for `src/agents/researcher/mod.rs`, `src/agents/risk/mod.rs`, and `src/agents/an
 - [x] 14.4 Run `openspec validate add-graph-orchestration --strict` and confirm the change remains valid
 - [x] 14.5 Verify all 14 sections above are complete with every task checked off
 - [x] 14.6 After remediation: re-run full verification suite and confirm all new and original tests pass
+
+### Cross-Owner Touch-points
+
+- Approved for `chunk3-evidence-state-sync` to update `src/workflow/context_bridge.rs`, `src/workflow/snapshot.rs`,
+  `src/workflow/tasks/analyst.rs`, and `src/workflow/tasks/tests.rs` to persist/round-trip the new typed evidence
+  fields and derive run-level coverage/provenance metadata on the analyst sync continue path.

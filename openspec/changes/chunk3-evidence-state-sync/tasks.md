@@ -176,4 +176,4 @@
 - [x] 5.2 Run `cargo clippy --all-targets -- -D warnings`.
 - [x] 5.3 Run `cargo nextest run --all-features --locked`.
 - [x] 5.4 Run `cargo build`.
-- [ ] 5.5 Run `openspec validate chunk3-evidence-state-sync --strict`.
+- [x] 5.5 Run `openspec validate chunk3-evidence-state-sync --strict`.

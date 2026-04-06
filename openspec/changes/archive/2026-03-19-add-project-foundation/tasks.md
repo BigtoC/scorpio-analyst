@@ -59,3 +59,6 @@
 - Approved for `add-analyst-team` to update `src/state/token_usage.rs`, `src/state/trading_state.rs`, and
   `src/config.rs` to align token-accounting semantics, analyst timeout naming, and analyst fan-out state writes with
   the `analyst-team` spec.
+- Approved for `chunk3-evidence-state-sync` to update `src/state/trading_state.rs`, `src/state/mod.rs`, and
+  `src/agents/shared/prompt.rs` to add typed evidence/provenance/reporting state and shared prompt-context builders for
+  the `evidence-provenance` capability slice.
