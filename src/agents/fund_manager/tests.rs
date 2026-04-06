@@ -63,6 +63,7 @@ fn sample_config() -> Config {
         storage: Default::default(),
         providers: sample_providers_config(),
         rate_limits: Default::default(),
+        enrichment: Default::default(),
     }
 }
 
