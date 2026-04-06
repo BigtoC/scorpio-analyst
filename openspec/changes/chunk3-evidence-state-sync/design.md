@@ -1,88 +1,98 @@
 ## Context
 
-Chunk 2 delivered `ResolvedInstrument` in workflow context and a `PreflightTask` that runs before the analyst
-fan-out. The five-phase pipeline is otherwise unchanged. `TradingState` still carries only legacy analyst
-fields; there is no typed evidence wrapper, no provenance record, and no coverage report in state.
+Chunk 2 delivered `ResolvedInstrument` in workflow context and a `PreflightTask` that runs before the analyst fan-out.
+The five-phase pipeline is otherwise unchanged. `TradingState` still carries only legacy analyst fields; there is no
+typed evidence wrapper, no provenance record, and no run-level coverage report in state.
+
+The current codebase also has three prompt-construction boundaries that matter for this chunk:
+
+- `src/agents/shared/prompt.rs` currently provides sanitization and serialization helpers only; it has no
+  state-dependent evidence/data-quality builders yet.
+- Researcher and risk agents already centralize analyst context in `src/agents/researcher/common.rs` and
+  `src/agents/risk/common.rs`. Persona agents and moderators reuse those helpers.
+- Trader and fund-manager prompts are built through existing `build_prompt_context(...)` helpers. The trader places
+  runtime context in the system prompt; the fund manager intentionally keeps serialized runtime context in the user
+  prompt while preserving a mostly static system prompt.
 
 Existing code that must not break:
 
-- `src/state/trading_state.rs` — `TradingState` legacy fields (`fundamental_metrics`, `technical_indicators`,
-  `market_sentiment`, `macro_news`) must not be renamed or removed. All new fields are additive.
-- `src/workflow/tasks/analyst.rs` — `AnalystSyncTask` existing logic for populating legacy fields and
-  returning `NextAction::Continue` is preserved. Dual-write is additive.
-- `src/agents/shared/prompt.rs` — existing helper functions (`build_analyst_context`, etc.) are not changed.
-  Two new functions are added.
-- Agent prompt files (`researcher/common.rs`, `risk/common.rs`, `trader/mod.rs`, `fund_manager/prompt.rs`) —
-  the injection is append-only; no existing prompt text is removed.
+- `src/state/trading_state.rs` — legacy analyst fields (`fundamental_metrics`, `technical_indicators`,
+  `market_sentiment`, `macro_news`) stay additive-only; they are not renamed or removed.
+- `src/workflow/tasks/analyst.rs` — `AnalystSyncTask` retains its graph-orchestration degradation policy: `0-1`
+  failures continue, `2+` failures abort.
+- `src/agents/shared/prompt.rs` — current sanitization/redaction helpers remain the common foundation for any new
+  context builders.
+- `src/agents/researcher/common.rs`, `src/agents/risk/common.rs`, `src/agents/trader/mod.rs`, and
+  `src/agents/fund_manager/prompt.rs` — new evidence/data-quality context is additive at each module's existing dynamic
+  prompt boundary; no existing legacy analyst snapshot is removed in Stage 1.
 
-Constraints:
+## Constraints
 
-- No new crate dependencies. `schemars` is already a dependency (used by existing `#[tool]` structs).
-- All new state types derive `Serialize`, `Deserialize`, and `JsonSchema` — required for context-bridge
-  round-trips and schema-enforcement downstream.
-- `EvidenceRecord<T>.quality_flags` is always initialized to `[]` in Stage 1. Quality flags within evidence
-  records are reserved for later milestones.
+- No new crate dependencies.
+- All new state types derive `Serialize`, `Deserialize`, and `JsonSchema`.
+- `EvidenceRecord<T>.quality_flags` is always initialized to `[]` in Stage 1; quality flags inside evidence records are
+  reserved for later milestones.
 - `DataQualityFlag::Conflicted` must not be emitted in Stage 1.
-- Coverage authority rule: `data_coverage.missing_inputs` is derived from the _new_ `evidence_*` fields,
-  not from the legacy fields. If `evidence_fundamental` is `None`, `"fundamentals"` is in `missing_inputs`.
-- `providers_used` in `ProvenanceSummary` must be sorted ascending and deduplicated for stable test assertions.
-- `required_inputs` and `missing_inputs` in `DataCoverageReport` keep the fixed order:
-  `["fundamentals", "sentiment", "news", "technical"]`.
-- Report rendering must never panic — both new prompt context builders must return fallback strings when the
-  relevant state fields are `None`.
+- Coverage authority rule: `data_coverage` is derived from the new `evidence_*` fields, not from the legacy mirrors.
+- `required_inputs` keeps the fixed order `["fundamentals", "sentiment", "news", "technical"]`, and the issue lists
+  preserve that order when they contain a subset of those inputs.
+- `ProvenanceSummary.providers_used` is derived from the providers attached to evidence records that are actually
+  present on the continue path. It must be sorted ascending and deduplicated; absent evidence must not contribute
+  placeholder providers.
+- Prompt construction must never panic. New prompt-context builders must use the existing prompt-safe
+  serialization/sanitization posture.
+- Chunk 3 must not add human-readable report sections; those remain in Chunk 4.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Define `EvidenceKind`, `EvidenceRecord<T>`, `EvidenceSource`, `DataQualityFlag`, `DataCoverageReport`,
-  and `ProvenanceSummary` with serde and `JsonSchema` derives in three focused state modules.
-- Extend `TradingState` with six `Option<>` fields for typed evidence and reporting; initialize all to `None`.
-- Update `AnalystSyncTask` to dual-write legacy and `evidence_*` fields; compute `DataCoverageReport` and
-  `ProvenanceSummary` with exact Stage 1 source mappings.
-- Add context bridge and snapshot round-trip tests for the new state fields.
-- Add `build_evidence_context(state)` and `build_data_quality_context(state)` to `src/agents/shared/prompt.rs`
-  with no-panic fallback paths.
-- Inject both context builders into researcher, risk, trader, and fund-manager prompts.
+- Define `EvidenceKind`, `EvidenceRecord<T>`, `EvidenceSource`, `DataQualityFlag`, `DataCoverageReport`, and
+  `ProvenanceSummary` with serde/schemars derives in three focused state modules.
+- Extend `TradingState` with six additive `Option<>` fields for typed evidence and run-level reporting.
+- Update `AnalystSyncTask` to dual-write legacy and `evidence_*` fields and to derive `DataCoverageReport` /
+  `ProvenanceSummary` on the continue path.
+- Add context bridge and snapshot round-trip coverage for the new fields.
+- Add `build_evidence_context(state)` and `build_data_quality_context(state)` to `src/agents/shared/prompt.rs`.
+- Inject those builders into researcher, risk, trader, and fund-manager prompt construction at the real code boundaries
+  already used by each module.
 
 **Non-Goals:**
 
-- Emitting `DataQualityFlag` variants inside `EvidenceRecord<T>.quality_flags` — deferred to later milestones.
-- Fetching live provenance metadata (`effective_at`, `url`, `citation`) from data adapters — `None` in Stage 1
-  unless the adapter already provides the value without extra work.
-- Adding `thesis.rs` or `derived.rs` state files — follow-on milestones.
-- Changing legacy analyst fields or removing the dual-write compatibility layer.
-- Adding `build_thesis_memory_context` — deferred to the thesis-memory milestone.
+- Emitting `DataQualityFlag` variants inside `EvidenceRecord<T>.quality_flags`.
+- Fetching live provenance metadata (`effective_at`, `url`, `citation`) from adapters.
+- Removing legacy analyst fields or finishing the consumer migration away from them.
+- Human-readable report rendering of coverage/provenance data.
+- Thesis-memory or scenario-valuation work.
 
 ## Decisions
 
-### 1. Three focused state modules rather than one large `evidence.rs`
+### 1. Three focused state modules rather than one large provenance file
 
-**Decision**: Split the new state types across three files:
+**Decision**: Split the new types across three files:
 
-- `src/state/provenance.rs` — `EvidenceSource`, `DataQualityFlag` (source attribution + quality primitives)
-- `src/state/evidence.rs` — `EvidenceKind`, `EvidenceRecord<T>` (the generic evidence wrapper)
-- `src/state/reporting.rs` — `DataCoverageReport`, `ProvenanceSummary` (aggregated run-level reporting)
+- `src/state/provenance.rs` — `EvidenceSource`, `DataQualityFlag`
+- `src/state/evidence.rs` — `EvidenceKind`, `EvidenceRecord<T>`
+- `src/state/reporting.rs` — `DataCoverageReport`, `ProvenanceSummary`
 
-**Rationale**: The three files represent three distinct concern layers: what a single piece of evidence came
-from (`provenance`), how evidence is typed and wrapped (`evidence`), and what the aggregated run-level picture
-looks like (`reporting`). Separating them makes each file small and independently testable. The dependency
-direction is natural: `evidence.rs` imports from `provenance.rs`; `reporting.rs` imports from neither (it is
-purely reporting-level).
+**Rationale**: These represent three distinct concern layers: provenance primitives, generic evidence wrapping, and
+run-level reporting. Keeping them separate makes each file smaller and easier to test.
 
-**Alternatives considered**:
-
-- *Single `evidence.rs` with all six types*: Simpler module tree but creates a large file mixing provenance
-  primitives, generic wrappers, and run-level reports. Harder to navigate and test independently. Rejected.
-
-### 2. `EvidenceRecord<T>` is a generic wrapper; `EvidenceKind` is a discriminant enum
+### 2. `EvidenceRecord<T>` remains the generic typed evidence envelope
 
 **Decision**:
 
 ```rust
 pub enum EvidenceKind {
-    Fundamental, Technical, Sentiment, News, Macro,
-    Transcript, Estimates, Peers, Volatility,
+    Fundamental,
+    Technical,
+    Sentiment,
+    News,
+    Macro,
+    Transcript,
+    Estimates,
+    Peers,
+    Volatility,
 }
 
 pub struct EvidenceRecord<T> {
@@ -93,115 +103,100 @@ pub struct EvidenceRecord<T> {
 }
 ```
 
-`EvidenceRecord<T>` is the single envelope for all evidence categories. `EvidenceKind` allows
-`AnalystSyncTask` and report code to identify the category without downcasting.
+**Rationale**: The generic wrapper lets the system carry typed analyst payloads without duplicating the provenance and
+quality envelope on every data struct.
 
-**Rationale**: The generic `T` payload allows each analyst type (`FundamentalData`, `TechnicalData`, etc.) to
-be wrapped without losing its type. `sources` and `quality_flags` are shared across all categories.
-`EvidenceKind` as a separate enum makes pattern-matching and coverage-id mapping straightforward. The
-`JsonSchema` derive is required because `EvidenceRecord<T>` may be used in `#[tool]` contexts downstream.
+**Implementation note**: The docs intentionally do not over-prescribe one exact generic-bound syntax for serde/schemars
+derive macros. The contract is behavioral: `EvidenceRecord<FundamentalData>`, `EvidenceRecord<TechnicalData>`,
+`EvidenceRecord<SentimentData>`, `EvidenceRecord<NewsData>`, and `EvidenceRecord<serde_json::Value>` must all compile,
+serialize, deserialize, and derive schema cleanly.
 
-### 3. Dual-write strategy: legacy fields remain authoritative mirrors during Stage 1
+### 3. Stage 1 uses dual-write: legacy mirrors stay, typed evidence becomes authoritative for new readers
 
-**Decision**: `AnalystSyncTask` writes both:
+**Decision**: `AnalystSyncTask` writes both the existing legacy analyst fields and the new typed `evidence_*` fields.
 
-1. The existing legacy field (e.g., `state.fundamental_metrics = Some(data.clone())`).
-2. The new typed field (e.g., `state.evidence_fundamental = Some(EvidenceRecord { ... })`).
+Legacy fields remain for existing readers. New evidence-aware readers introduced by this chunk and Chunk 4 consume the
+typed evidence fields and run-level reports as the authoritative source.
 
-Legacy fields remain the compatibility source for any code paths not yet updated to read `evidence_*` fields.
-New typed evidence fields are authoritative for newly added readers (Chunk 4 report, prompt context builders).
-If the two disagree, that is a bug — new typed evidence is authoritative for new readers.
+**Rationale**: Dual-write avoids a big-bang migration. It lets the project adopt typed evidence incrementally.
 
-**Rationale**: Dual-write avoids a big-bang migration where every reader must be updated in the same PR.
-Stage 1 introduces the new fields and proves the data flows through them; later milestones can drop the legacy
-fields once all consumers migrate.
+### 4. `AnalystSyncTask` owns coverage and provenance derivation on the continue path
 
-### 4. `AnalystSyncTask` owns all provenance construction; source mappings are fixed constants
+**Decision**: `AnalystSyncTask` builds `EvidenceSource` values using the fixed Stage 1 mappings:
 
-**Decision**: `AnalystSyncTask` builds `EvidenceSource` values using these exact fixed Stage 1 mappings:
+| Coverage ID    | Provider(s)                | Dataset(s)                      |
+|----------------|----------------------------|----------------------------------|
+| `fundamentals` | `finnhub`                  | `fundamentals`                   |
+| `sentiment`    | `finnhub`                  | `company_news_sentiment_inputs`  |
+| `news`         | `finnhub` + `fred`         | `company_news` + `macro_indicators` |
+| `technical`    | `yfinance`                 | `ohlcv`                          |
 
-| Coverage ID    | Provider(s)                                        | Dataset(s)                                   |
-|----------------|----------------------------------------------------|----------------------------------------------|
-| `fundamentals` | `finnhub`                                          | `fundamentals`                               |
-| `sentiment`    | `finnhub`                                          | `company_news_sentiment_inputs`              |
-| `news`         | `finnhub` + `fred`                                 | `company_news` + `macro_indicators`          |
-| `technical`    | `yfinance`                                         | `ohlcv`                                      |
+`effective_at`, `url`, and `citation` stay `None` in Stage 1. `fetched_at` is recorded at sync time. `quality_flags`
+on each `EvidenceRecord` stay empty.
 
-`effective_at`, `url`, and `citation` are `None` in Stage 1. `fetched_at` is the current UTC RFC3339
-timestamp at the time `AnalystSyncTask` runs. `quality_flags` on each `EvidenceRecord` is `[]`.
+`DataCoverageReport` is derived from the new `evidence_*` fields only.
 
-**Rationale**: Hardcoding the mappings in Stage 1 avoids requiring every data adapter to instrument itself
-with provenance metadata in this PR. The spec explicitly lists these mappings as the fixed Stage 1 contract.
-When concrete enrichment providers are added in Milestone 7, each adapter can pass its own `EvidenceSource`
-and the mapping constants become the fallback for the existing four analysts.
+`ProvenanceSummary.providers_used` is built from the providers attached to evidence records that are actually present
+after merge, not from a pre-populated "all configured providers" list.
 
-### 5. `build_evidence_context` and `build_data_quality_context` have no-panic fallback paths
+**Rationale**: This keeps the aggregation deterministic and aligned with the graph-orchestration ownership boundary.
+
+### 5. New shared prompt-context builders must reuse the existing prompt-safety posture
 
 **Decision**:
 
 ```rust
-pub(crate) fn build_evidence_context(state: &TradingState) -> String {
-    // Returns a compact block; if evidence_* fields are None, renders "null" for each.
-    // Never panics.
-}
-
-pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
-    // Returns a compact block; if data_coverage / provenance_summary are None, renders fallback text.
-    // Never panics.
-}
+pub(crate) fn build_evidence_context(state: &TradingState) -> String { /* never panics */ }
+pub(crate) fn build_data_quality_context(state: &TradingState) -> String { /* never panics */ }
 ```
 
-Both builders render explicit compact fallback text when the relevant state fields are absent, rather than
-panicking or returning an empty string.
+These helpers render compact prompt-safe summaries of typed evidence and run-level data quality/provenance. They reuse
+the existing shared prompt-safe serialization/sanitization posture already present in `src/agents/shared/prompt.rs`.
 
-**Rationale**: These builders are called during prompt construction, which runs inside async tasks. A panic
-during prompt construction would crash the entire pipeline run. An empty string would silently omit the context
-section, making it harder to diagnose missing data. Explicit fallback text (`"(evidence not yet available)"`,
-`"(data quality snapshot not yet available)"`) makes the absence visible to the LLM and to logs.
+**Rationale**: The new blocks are untrusted runtime context. They should inherit the same sanitization and redaction
+rules as existing prompt context.
 
-### 6. Injection is append-only in downstream agent prompts
+### 6. Injection happens at each module's real dynamic prompt boundary
 
-**Decision**: In each of the four downstream agent prompt files, append the evidence and data-quality context
-after the existing analyst-context block. Do not modify or reorganize existing prompt text.
+**Decision**:
 
-**Rationale**: Append-only injection minimizes diff noise and reduces regression risk. The evidence/quality
-context is supplementary — it provides additional signal after the agent has already received the core
-analyst output. Placing it at the end avoids disrupting existing prompt token counts or LLM attention patterns
-that the current prompts were tuned for.
+- `src/agents/researcher/common.rs` extends the shared analyst-context helper already consumed by bullish, bearish, and
+  moderator prompt paths.
+- `src/agents/risk/common.rs` extends the shared analyst-context helper already consumed by persona agents and the risk
+  moderator.
+- `src/agents/trader/mod.rs` appends the new blocks inside the existing `build_prompt_context(...)` flow.
+- `src/agents/fund_manager/prompt.rs` appends the new blocks inside the existing
+  `build_prompt_context(...)` / `build_user_prompt(...)` flow while preserving the current separation between static
+  system instructions and serialized runtime context.
+
+**Rationale**: The downstream modules do not all build prompts the same way. The smallest correct change is to inject at
+the boundaries each module already owns.
 
 ## Risks / Trade-offs
 
-- **[Exhaustive struct literal sites]** Adding six fields to `TradingState` requires updating every
-  `TradingState { ... }` literal in the codebase (tests, context bridge, agent test stubs). `cargo build` will
-  surface all of them; there may be more than the five files listed in the plan. Mitigation: follow the
-  compilation errors systematically; all new fields are `None` initializers.
-- **[`JsonSchema` derive on generic type]** `EvidenceRecord<T>` requires `T: JsonSchema`. The four analyst
-  data types (`FundamentalData`, `TechnicalData`, `SentimentData`, `NewsData`) must either already derive
-  `JsonSchema` or have it added. Mitigation: check each type before writing `EvidenceRecord<T>` fields to
-  `TradingState`; add `#[derive(JsonSchema)]` where missing.
-- **[Prompt length increase]** Each downstream agent prompt grows by the size of the evidence and data-quality
-  context blocks (typically 5–15 lines). For deep-thinking models this is negligible; for quick-thinking models
-  with tight context budgets it may push token counts. Mitigation: keep the rendered blocks compact (no verbose
-  JSON formatting); use `serde_json::to_string` (not `to_string_pretty`) for evidence payloads.
-- **[`fetched_at` approximation]** `fetched_at` is recorded at sync time, not at the moment each adapter
-  returned data. For Stage 1 this is acceptable; the spec notes that `effective_at`, `url`, and `citation` are
-  `None` unless an adapter already provides them without extra work.
+- **[Exhaustive struct literal sites]** Adding six fields to `TradingState` will require updating many test fixtures.
+  `cargo build` will surface them, and the list in the tasks doc is only a starting point.
+- **[Serde/schemars generic derive quirks]** `EvidenceRecord<T>` may need explicit derive-bound annotations depending
+  on how the macros expand. The docs deliberately focus on the behavioral contract rather than one exact syntax.
+- **[Degradation-policy mismatch in tests]** `AnalystSyncTask` aborts on `2+` failures. Coverage/provenance regression
+  tests must target the `0-1` failure continue path instead of expecting reports after an abort.
+- **[Prompt length increase]** Downstream prompts grow modestly. The new blocks should stay compact.
+- **[Cross-owner approval]** This chunk touches foundation-, orchestration-, and agent-owned files. Implementation must
+  wait for approval.
 
 ## Migration Plan
 
-1. Add the three new state files and update `src/state/mod.rs` — no existing code breaks yet.
-2. Extend `TradingState` with the six new `None` fields — `cargo build` reveals all literal initializer sites.
-   Update each one.
-3. Update `AnalystSyncTask` dual-write logic — all new fields are `Option<>`, so incomplete data (fewer than
-   four analyst outputs) simply leaves some `evidence_*` fields as `None`, which is correct.
-4. Update agent prompt files with append-only injection — no existing prompt text is removed.
-5. Run `cargo fmt`, `cargo clippy`, `cargo test` to verify.
-
-No database migration required. New `TradingState` fields are nullable — existing SQLite snapshots
-deserialize correctly with `None` for the new fields.
+1. Add the three new state files and update `src/state/mod.rs`.
+2. Extend `TradingState` with the six additive fields and update all struct literal sites flagged by `cargo build`.
+3. Update `AnalystSyncTask` dual-write logic and derive coverage/provenance on the `0-1` failure continue path.
+4. Add the shared prompt-context builders.
+5. Update the four downstream consumer boundaries (`researcher/common.rs`, `risk/common.rs`, `trader/mod.rs`,
+   `fund_manager/prompt.rs`) without removing the legacy analyst snapshot.
+6. Verify with `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`,
+   `cargo nextest run --all-features --locked`, `cargo build`, and
+   `openspec validate chunk3-evidence-state-sync --strict`.
 
 ## Open Questions
 
-None. The spec defines the exact types, source mappings, quality-flag deferral, and prompt rendering contracts
-for Stage 1. Milestone-specific decisions (live `fetched_at` from adapters, quality flag emission, thesis
-memory context) are explicitly deferred.
+None for this chunk. Future work such as richer quality flag emission, adapter-sourced provenance metadata, and human
+report rendering is explicitly deferred.

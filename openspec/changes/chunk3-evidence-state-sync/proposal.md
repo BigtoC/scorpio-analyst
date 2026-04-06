@@ -1,137 +1,171 @@
 ## Why
 
-Chunks 1 and 2 established evidence discipline at the prompt layer and created the runtime infrastructure
-(enrichment config, entity resolution, `PreflightTask`). Chunk 3 introduces the typed state model that makes
-evidence discipline concrete and machine-verifiable.
+Chunks 1 and 2 established the Stage 1 evidence-discipline posture at the docs/prompt layer and created the runtime
+scaffolding (`DataEnrichmentConfig`, entity resolution, `PreflightTask`). Chunk 3 introduces the typed state and
+downstream prompt-consumer slice that makes evidence discipline concrete and machine-verifiable.
 
-Currently, each analyst writes raw data into a single legacy field on `TradingState`
-(`fundamental_metrics`, `technical_indicators`, `market_sentiment`, `macro_news`). There is no record of _where_
-the data came from, _when_ it was fetched, _which provider_ produced it, or _what quality flags_ apply. As a
+Per `docs/architect-plan.md`, this work belongs to the single architected `evidence-provenance` capability. The
+repository is currently executing that capability in reviewable chunked changes (`chunk1` through `chunk4`), so Chunk 3
+must stay constrained to the typed-state and prompt-consumer slice rather than inventing new capability IDs or drifting
+into adjacent chunks.
+
+Today, each analyst writes raw data into a single legacy field on `TradingState`
+(`fundamental_metrics`, `technical_indicators`, `market_sentiment`, `macro_news`). There is no typed record of _where_
+the data came from, _when_ it was fetched, _which provider_ contributed it, or _what_ quality caveats apply. As a
 result:
 
-- Downstream agents (researcher, trader, risk, fund manager) receive analyst output with no provenance metadata.
-  They cannot distinguish high-confidence complete data from partial or stale data.
-- The final report cannot surface data coverage gaps or provider attribution — there is no authoritative record
-  of missing inputs.
-- Adding new evidence categories (transcripts, consensus estimates, event feeds) in later milestones would require
-  ad-hoc state fields with no consistent schema.
+- downstream agents (researcher, trader, risk, fund manager) receive analyst output with no typed provenance or
+  coverage metadata, so they cannot reliably distinguish complete evidence from partial evidence
+- the final report chunk has no authoritative run-level coverage or provenance state to render
+- adding future evidence categories (transcripts, estimates, event feeds) would require ad-hoc state growth instead of
+  using a consistent typed envelope
 
-Chunk 3 closes these gaps by:
-
-1. Adding three new state modules (`evidence.rs`, `provenance.rs`, `reporting.rs`) with typed structs for
-   evidence records, provenance sources, data quality flags, coverage reports, and provenance summaries.
-2. Extending `TradingState` with six new `Option<>` fields that carry the typed evidence and reporting data
-   alongside the existing legacy fields — preserving backward compatibility via a dual-write strategy.
-3. Updating `AnalystSyncTask` to populate both legacy fields and the new `evidence_*` fields, compute
-   `DataCoverageReport` and `ProvenanceSummary` from fixed Stage 1 source mappings, and write them to state.
-4. Injecting `build_evidence_context(state)` and `build_data_quality_context(state)` into the system prompts of
-   all four downstream agents (researcher, risk, trader, fund manager) so they reason with awareness of data
-   quality and provenance.
-
-Chunk 4 (report sections) then reads `data_coverage` and `provenance_summary` from state to render the two new
-report sections.
+The previous draft was incomplete and partially inconsistent: it had no OpenSpec delta, no `## Cross-Owner Changes`
+section, it invented standalone capability names that do not exist in the architect plan, it prescribed
+`ProvenanceSummary.providers_used` semantics that conflicted with "evidence used in the current run", and it described
+prompt injection patterns that do not match the current code shape. This review corrects those gaps.
 
 ## What Changes
 
 - **`src/state/provenance.rs`** (new file): `EvidenceSource` and `DataQualityFlag`.
-- **`src/state/evidence.rs`** (new file): `EvidenceKind` enum and `EvidenceRecord<T>` generic wrapper struct.
+- **`src/state/evidence.rs`** (new file): `EvidenceKind` and generic `EvidenceRecord<T>`.
 - **`src/state/reporting.rs`** (new file): `DataCoverageReport` and `ProvenanceSummary`.
-- **`src/state/mod.rs`**: Export the three new modules.
-- **`src/state/trading_state.rs`**: Add six new `Option<>` fields — `evidence_fundamental`,
-  `evidence_technical`, `evidence_sentiment`, `evidence_news`, `data_coverage`, `provenance_summary` — all
-  initialized to `None` in `TradingState::new`. Legacy fields remain untouched.
-- **`src/workflow/context_bridge.rs`**: Add round-trip test covering the new `TradingState` fields.
-- **`src/workflow/snapshot.rs`**: Add round-trip test saving and loading `TradingState` with the new fields.
-- **`src/workflow/tasks/analyst.rs`**: Add source-mapping helpers; update `AnalystSyncTask` to dual-write
-  legacy and `evidence_*` fields and to compute `DataCoverageReport` / `ProvenanceSummary`.
-- **`src/workflow/tasks/tests.rs`**: Extend `analyst_sync_all_succeed_returns_continue` and add
-  `analyst_sync_marks_missing_inputs_in_coverage_report`.
-- **`src/agents/shared/prompt.rs`**: Add `build_evidence_context(state)` and `build_data_quality_context(state)`
-  with no-panic fallback paths.
-- **`src/agents/researcher/common.rs`**, **`src/agents/risk/common.rs`**, **`src/agents/trader/mod.rs`**,
-  **`src/agents/fund_manager/prompt.rs`**: Inject both context builders after existing analyst-context blocks.
+- **`src/state/mod.rs`** (modify): export the three new state modules and re-export their public types.
+- **`src/state/trading_state.rs`** (modify): add six additive `Option<>` fields — `evidence_fundamental`,
+  `evidence_technical`, `evidence_sentiment`, `evidence_news`, `data_coverage`, and `provenance_summary` — all
+  initialized to `None` in `TradingState::new`.
+- **`src/workflow/context_bridge.rs`** (modify): add round-trip coverage proving the new state fields survive
+  graph-flow context serialization.
+- **`src/workflow/snapshot.rs`** (modify): add round-trip coverage proving the new state fields survive SQLite
+  snapshot save/load.
+- **`src/workflow/tasks/analyst.rs`** (modify): update `AnalystSyncTask` to dual-write legacy and `evidence_*`
+  fields and to derive `DataCoverageReport` / `ProvenanceSummary` from the typed evidence that is actually present on
+  the continue path.
+- **`src/workflow/tasks/tests.rs`** (modify): extend the all-success regression and add a one-missing-input regression
+  that exercises the `0-1` failure continue path.
+- **`src/agents/shared/prompt.rs`** (modify): add `build_evidence_context(state)` and `build_data_quality_context(state)`
+  with no-panic fallback paths using the shared prompt-safe serialization/sanitization posture already present in this
+  module.
+- **`src/agents/researcher/common.rs`**, **`src/agents/risk/common.rs`**, **`src/agents/trader/mod.rs`**, and
+  **`src/agents/fund_manager/prompt.rs`** (modify): inject the new typed evidence/data-quality builders at each
+  module's existing dynamic prompt-construction boundary.
+- **`openspec/changes/chunk3-evidence-state-sync/specs/evidence-provenance/spec.md`** (new file): add the missing
+  OpenSpec delta for this typed-state, analyst-sync, and prompt-consumer slice of the `evidence-provenance`
+  capability.
 
 ## Capabilities
 
-### New Capabilities
+### Architected Capability Slice
 
-- `evidence-state-model`: Typed `EvidenceRecord<T>`, `EvidenceKind`, `EvidenceSource`, `DataQualityFlag` structs
-  in `src/state/`. Every analyst output can now be wrapped with provenance and quality metadata.
-- `data-coverage-report`: `DataCoverageReport` computed by `AnalystSyncTask` — tracks required, missing, stale,
-  and partial inputs for each run.
-- `provenance-summary`: `ProvenanceSummary` computed by `AnalystSyncTask` — tracks providers used, timestamp,
-  and caveats for the current run.
-- `evidence-prompt-context`: Two shared context builders (`build_evidence_context`, `build_data_quality_context`)
-  that render typed evidence and coverage snapshots for injection into downstream agent prompts.
+- `evidence-provenance`: This change delivers the typed evidence/provenance/coverage state, the `AnalystSyncTask`
+  derivation rules, and the downstream prompt-consumer slice of the architected cross-cutting capability described in
+  `docs/architect-plan.md`. It does **not** create separate top-level capability IDs such as `evidence-state-model`,
+  `data-coverage-report`, `provenance-summary`, or `evidence-prompt-context`.
 
-### Modified Capabilities
+### Explicitly Deferred To Later Chunks
 
-- `analyst-sync`: `AnalystSyncTask` now dual-writes both legacy analyst fields and typed `evidence_*` fields,
-  and computes coverage/provenance reports after each run.
-- `downstream-prompts`: Researcher, risk, trader, and fund-manager system prompts now include evidence and
-  data-quality context sections, making quality gaps visible to reasoning agents.
+- Documentation tightening and shared static evidence-discipline rule helpers remain in `chunk1-docs-prompt-rules`.
+- `DataEnrichmentConfig`, entity resolution, enrichment adapter contracts, and `PreflightTask` remain in
+  `chunk2-config-entity-preflight`.
+- Human-readable final report sections remain in `chunk4-report-verification`.
+
+## Cross-Owner Changes
+
+This slice requires explicit cross-owner acknowledgement under
+[`docs/architect-plan.md#conflict-analysis`](../../../docs/architect-plan.md#conflict-analysis) and
+[`docs/architect-plan.md#module-ownership-map`](../../../docs/architect-plan.md#module-ownership-map).
+
+- [`src/state/trading_state.rs`](../../../src/state/trading_state.rs) — owner: `add-project-foundation`. Chunk 3 adds
+  the new `evidence_*`, `data_coverage`, and `provenance_summary` fields to the shared core state.
+- [`src/state/mod.rs`](../../../src/state/mod.rs) — owner: `add-project-foundation`. Chunk 3 re-exports the new
+  evidence/provenance/reporting modules for downstream consumers.
+- [`src/agents/shared/prompt.rs`](../../../src/agents/shared/prompt.rs) — owner: `add-project-foundation`. This is
+  the architected home for shared state-dependent prompt-context builders.
+- [`src/workflow/context_bridge.rs`](../../../src/workflow/context_bridge.rs) — owner: `add-graph-orchestration`.
+  Context round-trip coverage must expand to the new state fields.
+- [`src/workflow/snapshot.rs`](../../../src/workflow/snapshot.rs) — owner: `add-graph-orchestration`. Snapshot
+  persistence must prove the new fields survive save/load round-trips.
+- [`src/workflow/tasks/analyst.rs`](../../../src/workflow/tasks/analyst.rs) — owner: `add-graph-orchestration`.
+  `AnalystSyncTask` is the architected aggregation point for dual-write plus coverage/provenance derivation.
+- [`src/workflow/tasks/tests.rs`](../../../src/workflow/tasks/tests.rs) — owner: `add-graph-orchestration`. Existing
+  `AnalystSyncTask` regressions must expand to assert the new evidence/provenance behavior.
+- [`src/agents/researcher/common.rs`](../../../src/agents/researcher/common.rs) — owner: `add-researcher-debate`.
+  Researcher prompt construction already centralizes analyst context here, so this is the smallest correct injection
+  point.
+- [`src/agents/risk/common.rs`](../../../src/agents/risk/common.rs) — owner: `add-risk-management`. Risk prompt
+  construction already centralizes analyst context here, so this is the smallest correct injection point.
+- [`src/agents/trader/mod.rs`](../../../src/agents/trader/mod.rs) and
+  [`src/agents/trader/tests.rs`](../../../src/agents/trader/tests.rs) — owner: `add-trader-agent`. Trader prompt
+  construction and its regression coverage must surface the new typed evidence/data-quality context alongside the legacy
+  analyst snapshot.
+- [`src/agents/fund_manager/prompt.rs`](../../../src/agents/fund_manager/prompt.rs) and
+  [`src/agents/fund_manager/tests.rs`](../../../src/agents/fund_manager/tests.rs) — owner: `add-fund-manager`.
+  Fund-manager prompt assembly and its regression coverage must surface the new typed evidence/data-quality context at
+  the existing user-prompt boundary.
+
+No cross-owner modifications to `src/config.rs`, `config.toml`, `src/data/*`, `src/report/*`, or `src/providers/*`
+are required in this chunk. If implementation needs those files, the work has drifted back into Chunks 1, 2, or 4 and
+the proposal must be re-scoped.
 
 ## Impact
 
-- **State schema**: Six new `Option<>` fields added to `TradingState`. All default to `None`. No existing field
-  is renamed or removed. Code paths that construct `TradingState { ... }` with all fields must be updated to
-  include the new `None` initializers — `cargo build` surfaces these sites.
-- **Serialization**: `TradingState` serialization (context bridge, snapshot store) is backward-compatible
-  because the new fields are `Option<>` and serialize as `null`; existing snapshots without these fields
-  deserialize with `None` values.
-- **Tests**: Unit tests for each new state type (serde round-trips); context bridge round-trip test; snapshot
-  round-trip test; `AnalystSyncTask` dual-write and coverage tests; prompt-rendering string-contains tests.
-- **Rollback**: Remove the three new state files; revert `src/state/mod.rs`, `src/state/trading_state.rs`,
-  `src/workflow/tasks/analyst.rs`, the four agent prompt files, and `src/agents/shared/prompt.rs`. No database
-  migration is required — new fields are nullable and ignored by existing snapshot readers.
+- **State schema**: Six new `Option<>` fields are added to `TradingState`. All default to `None`. No existing field is
+  renamed or removed.
+- **Serialization**: `TradingState` remains backward-compatible for context/snapshot serialization because the new
+  fields are optional and deserialize to `None` when absent.
+- **Prompt consumers**: Downstream agents continue to receive the legacy analyst snapshot during the Stage 1 dual-write
+  window, but now also receive typed evidence/data-quality context sourced from the new fields.
+- **Tests**: Unit tests for the new state types; context bridge and snapshot round-trip tests; `AnalystSyncTask`
+  dual-write/coverage/provenance tests; prompt-context string-contains tests at the real downstream injection points.
+- **Rollback**: Remove the three new state files and revert the additive state/workflow/prompt-consumer edits. No
+  database migration is required because the new fields are nullable and ignored by older snapshot readers.
 
 ## Alternatives Considered
 
-### Option: Add provenance as free-text fields on existing analyst structs instead of a generic wrapper
+### Option: Add provenance fields directly onto each analyst payload type
 
-Extend `FundamentalData`, `TechnicalData`, `SentimentData`, and `NewsData` directly with `provider: String`
-and `fetched_at: String` fields rather than introducing a generic `EvidenceRecord<T>` wrapper.
+Extend `FundamentalData`, `TechnicalData`, `SentimentData`, and `NewsData` directly with provenance fields instead of
+introducing a generic `EvidenceRecord<T>` wrapper.
 
-Pros: No generic type in the state model. Simpler serialization. Each analyst struct is self-describing with
-no indirection.
+Pros: No generic wrapper. Each analyst payload is self-describing.
 
-Cons: Duplicates provenance fields across four structs. Adding a new evidence category (e.g., `TranscriptData`
-from Milestone 7) requires adding the same fields again. The `DataQualityFlag` mechanism would need to be
-replicated per type. The unified `EvidenceKind` discriminant used by `AnalystSyncTask` and the coverage report
-would have no natural home.
+Cons: Duplicates provenance fields across multiple structs, gives future evidence categories no common envelope, and
+scatters shared provenance logic across many types.
 
-Why rejected: The architecture spec explicitly defines `EvidenceRecord<T>` as the generic evidence wrapper. The
-generic approach means provenance and quality-flag logic is written once and works for all current and future
-evidence categories. The cost — one generic type — is low.
+Why rejected: The PRD and architect plan explicitly model `EvidenceRecord<T>` as the generic evidence wrapper. The
+shared envelope is the smaller long-term surface area.
 
-### Option: Compute coverage and provenance in each analyst task rather than in `AnalystSyncTask`
+### Option: Compute coverage and provenance inside each analyst task instead of `AnalystSyncTask`
 
-Have each analyst task (`FundamentalAnalystTask`, etc.) populate its own `EvidenceSource` and write a partial
-`DataCoverageReport` to state, then aggregate in `AnalystSyncTask`.
+Have each analyst task populate provenance metadata and write partial coverage state before the sync task runs.
 
-Pros: Provenance is written closest to where data is fetched, so `fetched_at` timestamps are more accurate.
-Each analyst task is self-contained.
+Pros: Provenance is recorded closer to the fetch point.
 
-Cons: The spec explicitly assigns cross-source normalization and coverage/provenance aggregation to
-`AnalystSyncTask`, not to individual analyst tasks. Individual analyst tasks run concurrently and would need
-synchronization to aggregate into a shared coverage report. Partial coverage writes during fan-out would leave
-`TradingState` in an inconsistent intermediate state visible to any concurrent reader.
+Cons: Analyst tasks run concurrently, so they would need additional synchronization to aggregate shared coverage state.
+It also blurs the graph-orchestration ownership boundary that already assigns fan-out aggregation to `AnalystSyncTask`.
 
-Why rejected: The spec's analyst-vs-sync ownership boundary is clear and correct. `AnalystSyncTask` runs after
-all analyst tasks complete — it is the natural aggregation point. The slightly less precise `fetched_at`
-(recorded at sync time rather than fetch time) is an acceptable Stage 1 trade-off.
+Why rejected: `AnalystSyncTask` is the natural aggregation point after all child results have been read from context.
+That keeps the state transition deterministic and centralized.
 
-### Option: Defer downstream prompt injection to Chunk 4
+### Option: Pre-populate `ProvenanceSummary.providers_used` with all Stage 1 providers
 
-Add `build_evidence_context` and `build_data_quality_context` to `src/agents/shared/prompt.rs` in Chunk 3 but
-wire them into agent prompts in Chunk 4 alongside the report sections.
+Always write `["finnhub", "fred", "yfinance"]` to `providers_used` regardless of which evidence records are present.
 
-Pros: Smaller per-chunk scope. Chunk 4 becomes a unified "consumer" chunk for all new state.
+Pros: Very simple implementation and stable test output.
 
-Cons: The report sections (Chunk 4) read from `TradingState.data_coverage` and `TradingState.provenance_summary`
-— the same fields populated in Chunk 3. Agents reasoning about evidence quality is independent of how the
-report renders it. Deferring prompt injection would mean running Chunks 3 and 4 sequentially with no
-intermediate verification that the prompt builders work correctly on real state.
+Cons: Misstates which providers actually contributed evidence in the current run, conflicts with the PRD's
+"provenance of all evidence used in the current run" wording, and weakens Chunk 4's human-readable provenance section.
 
-Why rejected: Prompt injection belongs with the state model change that makes the data available. Testing both
-together in Chunk 3 means the evidence context helpers are verified before Chunk 4 depends on them.
+Why rejected: `providers_used` must summarize the providers that actually contributed evidence on the continue path.
+
+### Option: Defer state-dependent prompt context builders to Chunk 4
+
+Add the typed state in Chunk 3 but postpone `build_evidence_context` / `build_data_quality_context` and downstream
+prompt consumption until the report-rendering chunk.
+
+Pros: Smaller Chunk 3 scope.
+
+Cons: Leaves downstream agents unaware of evidence quality even though the typed metadata already exists, and makes the
+prompt-builder behavior harder to verify before Chunk 4 starts depending on the same state.
+
+Why rejected: The prompt-consumer slice belongs with the typed state that powers it.
