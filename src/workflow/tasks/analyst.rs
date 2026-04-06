@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use graph_flow::{Context, NextAction, Task, TaskResult};
 use serde::de::DeserializeOwned;
 use tracing::{error, info, warn};
@@ -11,8 +12,9 @@ use crate::{
     data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     state::{
-        AgentTokenUsage, FundamentalData, NewsData, PhaseTokenUsage, SentimentData, TechnicalData,
-        TradingState,
+        AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
+        FundamentalData, NewsData, PhaseTokenUsage, ProvenanceSummary, SentimentData,
+        TechnicalData, TradingState,
     },
     workflow::{
         context_bridge::{
@@ -27,6 +29,31 @@ use crate::{
         },
     },
 };
+
+// ─── Stage 1 source-mapping constants ─────────────────────────────────────────
+
+/// Fixed provider for fundamentals in Stage 1.
+const PROVIDER_FINNHUB: &str = "finnhub";
+/// Fixed provider for macro/news (FRED) in Stage 1.
+const PROVIDER_FRED: &str = "fred";
+/// Fixed provider for technical data in Stage 1.
+const PROVIDER_YFINANCE: &str = "yfinance";
+
+/// Required analyst input labels in the fixed Stage 1 order used by
+/// [`DataCoverageReport`].
+const REQUIRED_INPUTS: &[&str] = &["fundamentals", "sentiment", "news", "technical"];
+
+/// Build a single-provider [`EvidenceSource`] with Stage 1 defaults.
+fn stage1_source(provider: &str, datasets: Vec<String>) -> EvidenceSource {
+    EvidenceSource {
+        provider: provider.to_owned(),
+        datasets,
+        fetched_at: Utc::now(),
+        effective_at: None,
+        url: None,
+        citation: None,
+    }
+}
 
 async fn read_cached_news(
     task_name: &str,
@@ -407,15 +434,17 @@ impl AnalystSyncTask {
     }
 }
 
-async fn merge_analyst_result<T, F>(
+async fn merge_analyst_result<T, F, G>(
     context: &Context,
     state: &mut TradingState,
     failures: &mut Vec<&'static str>,
     analyst_key: &'static str,
     on_success: F,
+    on_evidence: G,
 ) where
-    T: DeserializeOwned,
+    T: DeserializeOwned + Clone,
     F: FnOnce(&mut TradingState, T),
+    G: FnOnce(&mut TradingState, T),
 {
     let ok_key = format!("{ANALYST_PREFIX}.{analyst_key}.{OK_SUFFIX}");
     let succeeded: bool = context.get(&ok_key).await.unwrap_or(false);
@@ -426,7 +455,11 @@ async fn merge_analyst_result<T, F>(
     }
 
     match read_prefixed_result::<T>(context, ANALYST_PREFIX, analyst_key).await {
-        Ok(data) => on_success(state, data),
+        Ok(data) => {
+            let data_clone = data.clone();
+            on_success(state, data);
+            on_evidence(state, data_clone);
+        }
         Err(error) => {
             warn!(analyst = analyst_key, error = %error, "failed to read analyst result");
             failures.push(analyst_key);
@@ -452,36 +485,86 @@ impl Task for AnalystSyncTask {
 
         let mut failures = Vec::new();
 
-        merge_analyst_result::<FundamentalData, _>(
+        merge_analyst_result::<FundamentalData, _, _>(
             &context,
             &mut state,
             &mut failures,
             ANALYST_FUNDAMENTAL,
             |state, data| state.fundamental_metrics = Some(data),
+            |state, data| {
+                state.evidence_fundamental = Some(EvidenceRecord {
+                    kind: EvidenceKind::Fundamental,
+                    payload: data,
+                    sources: vec![stage1_source(
+                        PROVIDER_FINNHUB,
+                        vec!["fundamentals".to_owned()],
+                    )],
+                    quality_flags: vec![],
+                });
+            },
         )
         .await;
-        merge_analyst_result::<SentimentData, _>(
+        merge_analyst_result::<SentimentData, _, _>(
             &context,
             &mut state,
             &mut failures,
             ANALYST_SENTIMENT,
             |state, data| state.market_sentiment = Some(data),
+            |state, data| {
+                state.evidence_sentiment = Some(EvidenceRecord {
+                    kind: EvidenceKind::Sentiment,
+                    payload: data,
+                    sources: vec![stage1_source(
+                        PROVIDER_FINNHUB,
+                        vec!["company_news_sentiment_inputs".to_owned()],
+                    )],
+                    quality_flags: vec![],
+                });
+            },
         )
         .await;
-        merge_analyst_result::<NewsData, _>(
+        merge_analyst_result::<NewsData, _, _>(
             &context,
             &mut state,
             &mut failures,
             ANALYST_NEWS,
             |state, data| state.macro_news = Some(data),
+            |state, data| {
+                state.evidence_news = Some(EvidenceRecord {
+                    kind: EvidenceKind::News,
+                    payload: data,
+                    sources: vec![
+                        stage1_source(
+                            PROVIDER_FINNHUB,
+                            vec!["company_news".to_owned()],
+                        ),
+                        stage1_source(
+                            PROVIDER_FRED,
+                            vec!["macro_indicators".to_owned()],
+                        ),
+                    ],
+                    quality_flags: vec![],
+                });
+            },
         )
         .await;
-        merge_analyst_result::<TechnicalData, _>(
+        merge_analyst_result::<TechnicalData, _, _>(
             &context,
             &mut state,
             &mut failures,
             ANALYST_TECHNICAL,
             |state, data| state.technical_indicators = Some(data),
+            |state, data| {
+                state.evidence_technical = Some(EvidenceRecord {
+                    kind: EvidenceKind::Technical,
+                    payload: data,
+                    sources: vec![stage1_source(
+                        PROVIDER_YFINANCE,
+                        vec!["ohlcv".to_owned()],
+                    )],
+                    quality_flags: vec![],
+                });
+            },
         )
         .await;
 
@@ -495,6 +578,43 @@ impl Task for AnalystSyncTask {
                 "AnalystSyncTask: {failure_count}/4 analysts failed — pipeline aborted"
             )));
         }
+
+        // Derive DataCoverageReport from presence/absence of typed evidence fields.
+        let missing_inputs: Vec<String> = [
+            (REQUIRED_INPUTS[0], state.evidence_fundamental.is_none()),
+            (REQUIRED_INPUTS[1], state.evidence_sentiment.is_none()),
+            (REQUIRED_INPUTS[2], state.evidence_news.is_none()),
+            (REQUIRED_INPUTS[3], state.evidence_technical.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(label, missing)| missing.then(|| label.to_owned()))
+        .collect();
+
+        state.data_coverage = Some(DataCoverageReport {
+            required_inputs: REQUIRED_INPUTS.iter().map(|s| s.to_string()).collect(),
+            missing_inputs,
+        });
+
+        // Derive ProvenanceSummary from providers attached to present evidence records.
+        let mut providers: Vec<String> = Vec::new();
+        if let Some(rec) = &state.evidence_fundamental {
+            providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
+        }
+        if let Some(rec) = &state.evidence_sentiment {
+            providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
+        }
+        if let Some(rec) = &state.evidence_news {
+            providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
+        }
+        if let Some(rec) = &state.evidence_technical {
+            providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
+        }
+        providers.sort_unstable();
+        providers.dedup();
+
+        state.provenance_summary = Some(ProvenanceSummary {
+            providers_used: providers,
+        });
 
         let token_usages = vec![
             read_analyst_usage(&context, ANALYST_FUNDAMENTAL, "Fundamental Analyst").await,
