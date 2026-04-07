@@ -80,6 +80,18 @@ The first slice should stay snapshot-store-first. It should not introduce a sepa
 - **Define a bounded first-slice snapshot lookup rule up front.**
   Rationale: the current snapshot store has no symbol index or thesis-specific lookup API, so the implementation must either add metadata/schema support or accept a bounded scan of final snapshots.
 
+- **Add a symbol column and index to the snapshot schema.**
+  Rationale: the current schema (`migrations/0001_create_phase_snapshots.sql`) only indexes by `(execution_id, phase_number)`. Symbol-based thesis lookup requires at minimum a `symbol TEXT` column with an index. A narrow migration is preferable to a bounded scan that would degrade as snapshot count grows.
+
+- **Add a schema version marker to the snapshot table.**
+  Rationale: this plan and later plans (enrichment, valuation) will progressively add metadata to snapshots. A `schema_version INTEGER DEFAULT 1` column allows forward detection and explicit compatibility gating without requiring a separate migration framework.
+
+- **Persist thesis as an additive optional field on the existing phase-5 snapshot row, not as a separate row.**
+  Rationale: thesis is a property of the run's final state, not a standalone artifact. Keeping it on the same row avoids orphaned-row management and aligns with the existing snapshot-per-phase model.
+
+- **Guard against thesis drift from positive feedback loops.**
+  Rationale: thesis memory injects the LLM's own prior output as authoritative context. The first slice should include a staleness window (e.g., max age in days) and the prompt helper should frame prior thesis as "historical context for reference" rather than "established conclusion."
+
 ## Open Questions
 
 ### Resolved During Planning
@@ -130,6 +142,7 @@ flowchart TB
 
 **Files:**
 - Create: `src/state/thesis.rs`
+- Create: `migrations/0002_add_symbol_and_schema_version.sql`
 - Modify: `src/state/mod.rs`
 - Modify: `src/state/trading_state.rs`
 - Modify: `src/workflow/snapshot.rs`
@@ -139,8 +152,9 @@ flowchart TB
 
 **Approach:**
 - Add a compact typed thesis-memory payload.
-- Extend snapshots with one explicit lookup strategy to retrieve the most recent compatible thesis for the current canonical symbol.
-- Prefer keeping the first slice minimal: either add a bounded scan over recent `SnapshotPhase::FundManager` rows or add narrow metadata needed to make that lookup direct.
+- Add a `symbol TEXT` column and index to the snapshot schema via a new migration (`migrations/0002_add_symbol_and_schema_version.sql`). Also add a `schema_version INTEGER DEFAULT 1` column for forward compatibility with later plans.
+- Extend snapshots with one explicit lookup strategy to retrieve the most recent compatible thesis for the current canonical symbol using the new symbol index.
+- When multiple prior snapshots exist for the same symbol, select the most recent phase-5 snapshot by `created_at DESC` with a configurable staleness window (e.g., max 30 days). Log and skip snapshots that fail deserialization or compatibility checks.
 - Preserve additive serde compatibility.
 
 **Patterns to follow:**
@@ -174,7 +188,7 @@ flowchart TB
 - Test: `src/workflow/context_bridge.rs`
 
 **Approach:**
-- Inject snapshot-store access into `PreflightTask` through the pipeline/runtime construction path.
+- Widen the `PreflightTask` constructor to accept snapshot-store access (e.g., `Arc<SnapshotStore>` or a trait-bounded lookup handle). This is a breaking interface change to `PreflightTask::new()` and the corresponding `build_graph()` call site in `runtime.rs`. The implementing agent must update both the constructor and the pipeline build path in the same change.
 - Have preflight resolve current canonical symbol, load prior thesis, and attach it to `TradingState` before downstream prompt construction.
 - Only add a dedicated context key if a concrete non-state consumer requires it; otherwise keep `TradingState` as the single source of truth.
 - Keep missing memory as an explicit absence value, not a missing-key corruption case.
@@ -277,11 +291,14 @@ flowchart TB
 
 ## Risks & Dependencies
 
-| Risk                                                | Mitigation                                                                                       |
-|-----------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| Snapshot schema lacks an indexed thesis lookup path | Keep the first slice small and use the existing snapshot store with a bounded compatibility rule |
-| Stale thesis leaks across reused runs               | Update `reset_cycle_outputs()` and add reused-run regression coverage                            |
-| Prompt bloat from historical memory                 | Centralize rendering in a bounded shared prompt helper                                           |
+| Risk                                                        | Mitigation                                                                                                                             |
+|-------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| Snapshot schema lacks an indexed thesis lookup path         | Add `symbol` column and index via migration; avoid unbounded scans                                                                     |
+| Snapshot schema has no versioning for forward compatibility | Add `schema_version` column in the same migration; later plans check version before deserializing                                      |
+| Stale thesis leaks across reused runs                       | Update `reset_cycle_outputs()` and add reused-run regression coverage                                                                  |
+| Prompt bloat from historical memory                         | Centralize rendering in a bounded shared prompt helper                                                                                 |
+| Thesis feedback loop reinforces prior hallucinations        | Apply staleness window, frame prior thesis as reference context not authoritative conclusion, and log reuse events for operator review |
+| Snapshot storage growth from persisting thesis text         | Keep thesis payload compact and typed; defer rich thesis payloads to a later slice if size becomes a concern                           |
 
 ## Documentation / Operational Notes
 
