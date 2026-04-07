@@ -44,6 +44,12 @@ This milestone should move valuation shape and computations into Rust. The first
 - `src/agents/trader/mod.rs` already asks the model to reason from valuation, peers, and historical norms.
 - `src/agents/fund_manager/prompt.rs` already consumes valuation conceptually.
 - `src/report/final_report.rs` currently renders a single valuation row.
+- `src/state/fundamental.rs` currently exposes these typed fundamental inputs: `revenue_growth_pct`, `pe_ratio`, `eps`, `current_ratio`, `debt_to_equity`, `gross_margin`, `net_income`, and `insider_transactions`.
+- `src/data/finnhub.rs::get_fundamentals()` already fetches and populates `insider_transactions`; insider activity is not a missing Finnhub fetch in the current codebase.
+- `src/state/trading_state.rs` already carries `current_price`, and `src/state/technical.rs` already carries `support_level` / `resistance_level`. These are useful for comparing derived fair value to market price and for price-level outputs, but they do not replace missing peer/comps valuation inputs.
+- The trader prompt currently references valuation concepts the runtime does not yet carry as typed inputs: sector peer medians, historical valuation norms, `P/S`, `PEG`, `EV/EBITDA`, and `DCF` inputs.
+- Missing typed inputs for deterministic valuation today include: peer/comps datasets, sector/industry median multiples, historical valuation bands, price-to-sales inputs, PEG inputs, enterprise value / EBITDA inputs, and DCF inputs such as free cash flow, discount rate, terminal growth, forecast horizon, shares outstanding, and market-cap / enterprise-value conversion data.
+- Existing metric semantics also need normalization before they are safe for deterministic math. In particular, `net_income` is currently populated from either `netIncomeGrowth3Y` or `netIncomeAnnual`, which mixes a growth rate with an absolute value; `eps` and `revenue_growth_pct` also fall back across mixed horizons (`Annual`, `TTM`, `3Y`, `YoY`) and need explicit precedence rules.
 - `docs/solutions/logic-errors/stale-trading-state-evidence-and-unavailable-data-quality-fallbacks-2026-04-07.md` is relevant because any new per-cycle valuation fields must be reset explicitly.
 
 ### Institutional Learnings
@@ -71,6 +77,24 @@ This milestone should move valuation shape and computations into Rust. The first
 - **Use a first-slice repo-local peer/comps contract instead of waiting for a provider.**
   Rationale: the repo has no live peer/comps producer today, so deterministic valuation needs an explicit typed seam even if the first slice populates it sparsely or heuristically.
 
+- **Acknowledge that first-slice valuation operates on sparse/absent peer data.**
+  Rationale: no concrete peer provider exists until Plan 4. The first-slice deterministic valuation is intentionally a typed infrastructure slice that proves the computation and consumer seams work end-to-end with partial/absent inputs. The value is in establishing the typed contract, not in producing rich valuation outputs. This is acceptable because the plan explicitly requires fail-open behavior (R4) and the typed seam becomes immediately useful once Plan 4 delivers real enrichment.
+
+- **Define the first-slice deterministic heuristic explicitly.**
+  Rationale: without a concrete rule, Chunk 2 cannot be implemented or tested. First-slice heuristic: compute a simple relative-valuation ratio from the analyst's extracted financial metrics (e.g., P/E, EV/EBITDA) against sector median values hardcoded or config-driven for the first slice. When peer data is absent, output `None` for the derived valuation and let consumers render the explicit absence. The implementing agent may refine the exact formula but must pin one testable rule before coding.
+
+- **Separate valuation-core inputs from supporting context.**
+  Rationale: `current_price`, `revenue_growth_pct`, `pe_ratio`, `eps`, `current_ratio`, `debt_to_equity`, `gross_margin`, and a normalized net-income field are the current typed inputs most directly relevant to deterministic valuation. `insider_transactions` should remain a qualitative/supporting signal or be reduced into a small derived sentiment summary; raw insider records should not drive the core scenario math.
+
+- **Do not promise deterministic `P/S`, `PEG`, `EV/EBITDA`, or `DCF` math until their typed inputs exist.**
+  Rationale: the trader prompt references these concepts today, but the runtime does not yet carry the needed inputs (for example peer medians, revenue/share-count or market-cap inputs, enterprise value, EBITDA, free cash flow, discount rate, terminal growth, and shares outstanding). This milestone must either add those inputs explicitly or narrow the prompt to deterministic measures the runtime can actually compute.
+
+- **Normalize metric semantics before using them in valuation math.**
+  Rationale: deterministic Rust math requires stable units and horizons. Fields that silently mix annual, TTM, multi-year growth, or absolute-value variants must define one explicit precedence rule or be split into separate typed fields before they are consumed by valuation logic.
+
+- **Add new proposal fields with explicit `#[serde(default)]` and document them in the JsonSchema description before prompt updates land.**
+  Rationale: `TradeProposal` uses `#[derive(JsonSchema)]` for LLM structured output. Adding scenario-aware fields in Chunk 1 before the prompt updates in Chunk 3 creates a window where the schema includes unexplained fields. Mitigation: use `Option<T>` with `#[serde(default)]` so the LLM can omit them, and add `#[schemars(description = "...")]` annotations that explain each field's purpose in the schema itself. This reduces hallucination risk even before the full prompt update lands.
+
 - **Add explicit report support in the same milestone.**
   Rationale: structured valuation should be visible and auditable once it exists.
 
@@ -91,6 +115,9 @@ This milestone should move valuation shape and computations into Rust. The first
 
 - **Exact first-slice peer/comps selection rule.**
   The first slice should use one explicit repo-local rule: define a typed peer/comps input on `TradingState`, allow it to be absent, and start with the simplest deterministic heuristic available from existing runtime data until a later provider-backed source exists.
+
+- **Exact first-slice valuation-input inventory and unsupported prompt terms.**
+  Before coding begins, pin down which valuation measures are actually supported by typed inputs in this milestone. If the milestone does not add typed inputs for `P/S`, `PEG`, `EV/EBITDA`, or `DCF`, Chunk 3 must remove or narrow those terms in the trader / fund-manager prompt contract so prompts match runtime capabilities.
 
 - **Whether risk agents need full direct valuation context or only the expanded proposal.**
   This can be finalized after implementing the typed state and proposal changes.
@@ -123,19 +150,22 @@ flowchart TB
 - Modify: `src/state/mod.rs`
 - Modify: `src/state/proposal.rs`
 - Modify: `src/state/trading_state.rs`
-- Modify: `src/agents/risk/aggressive.rs`
-- Modify: `src/agents/risk/conservative.rs`
-- Modify: `src/agents/risk/neutral.rs`
-- Modify: `src/agents/risk/moderator.rs`
-- Modify: `src/providers/factory/agent.rs`
-- Modify: `src/providers/factory/retry.rs`
-- Modify: `src/workflow/tasks/test_helpers.rs`
+- Modify (compile-fix cascade): `src/agents/risk/aggressive.rs`
+- Modify (compile-fix cascade): `src/agents/risk/conservative.rs`
+- Modify (compile-fix cascade): `src/agents/risk/neutral.rs`
+- Modify (compile-fix cascade): `src/agents/risk/moderator.rs`
+- Modify (compile-fix cascade): `src/providers/factory/agent.rs`
+- Modify (compile-fix cascade): `src/providers/factory/retry.rs`
+- Modify (compile-fix cascade): `src/workflow/tasks/test_helpers.rs`
 - Test: `src/state/derived.rs`
 - Test: `tests/state_roundtrip.rs`
 
 **Approach:**
 - Add typed peer/comps and scenario valuation structures.
+- Add an explicit valuation-input inventory that separates currently available inputs from future optional inputs. At minimum, call out current inputs (`current_price`, `revenue_growth_pct`, `pe_ratio`, `eps`, `current_ratio`, `debt_to_equity`, `gross_margin`, normalized `net_income`) and future optional inputs (`peer_medians`, `historical_bands`, `price_to_sales`, `peg_ratio`, `ev_to_ebitda`, `market_cap`, `enterprise_value`, `shares_outstanding`, `free_cash_flow`).
+- Normalize any mixed-unit or mixed-horizon fields before exposing them to deterministic valuation. Do not reuse a field like `net_income` if it can represent either growth or absolute value without first splitting or renaming it.
 - Define the first-slice peer/comps input contract in the same change so deterministic valuation has an explicit typed upstream seam even when peer data is absent.
+- Decide whether insider activity is represented as a raw list (supporting context only) or a small derived signal (for example net insider buy/sell bias over a bounded window). Do not treat raw insider transactions as core valuation math inputs.
 - Extend `TradeProposal` with optional scenario-aware fields.
 - Keep serde compatibility additive.
 
@@ -147,6 +177,7 @@ flowchart TB
 - Happy path: derived valuation and expanded proposal fields round-trip through serde.
 - Edge case: old snapshots/proposals without the new fields still deserialize.
 - Edge case: invalid scenario ordering is rejected by validation helpers.
+- Edge case: risk agents compile and pass existing tests with the expanded proposal schema (regression).
 - Error path: proposal validation rejects inconsistent structured valuation.
 
 **Verification:**
@@ -168,6 +199,7 @@ flowchart TB
 **Approach:**
 - Extend the cross-source deterministic merge path to compute a typed valuation payload.
 - Keep peer/comps inputs optional and fail-open.
+- Only compute deterministic outputs from inputs that are actually present and semantically normalized. Do not fabricate `P/S`, `PEG`, `EV/EBITDA`, or `DCF` outputs from prose-only analyst summaries.
 - Persist the derived valuation on `TradingState` for downstream use.
 - Make the control-flow contract explicit in code and tests: missing inputs or empty peer sets continue without valuation; invalid computed values either drop valuation with an explicit fallback path or fail the task, but that choice must be pinned down in the implementation before wiring consumers.
 
@@ -204,6 +236,7 @@ flowchart TB
 **Approach:**
 - Add a shared prompt-context builder for structured valuation state if needed.
 - Update trader/fund-manager prompts to consume typed valuation context and proposal fields.
+- If this milestone does not add typed inputs for `P/S`, `PEG`, `EV/EBITDA`, or `DCF`, narrow the prompt text to supported deterministic measures only (for example P/E-relative comparison, current-price-vs-derived-range, and explicitly absent peer/comps context).
 - Preserve explicit fallback behavior when valuation is partial or absent.
 
 **Patterns to follow:**
@@ -234,6 +267,8 @@ flowchart TB
 - Modify: `src/workflow/pipeline/runtime.rs`
 - Test: `src/report/final_report.rs`
 - Test: `tests/workflow_pipeline_e2e.rs`
+
+**Note:** Creating `src/report/valuation.rs` follows the existing pattern of `src/report/coverage.rs` and `src/report/provenance.rs` — dedicated report section helpers that are composed by `final_report.rs`. If the valuation section proves too small to justify a separate file, the implementing agent may inline it into `final_report.rs` instead.
 
 **Approach:**
 - Add a dedicated valuation report section helper.
@@ -273,6 +308,7 @@ flowchart TB
 ## Documentation / Operational Notes
 
 - Update `docs/prompts.md` if the valuation contract in trader/fund-manager prompts changes materially.
+- Update the "Adding things" table in `AGENTS.md` to document `src/state/derived.rs` and the valuation derivation pattern.
 - If a richer peer-provider model becomes necessary, capture that in a later milestone rather than broadening this plan ad hoc.
 
 ## Sources & References
