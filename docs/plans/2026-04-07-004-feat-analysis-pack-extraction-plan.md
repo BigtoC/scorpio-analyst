@@ -17,6 +17,8 @@ This plan implements Milestone 8 from `docs/superpowers/specs/2026-04-05-financi
 
 After Stage 1 and the earlier follow-on milestones, the repo will have stable typed seams for evidence/provenance, thesis memory, valuation, and enrichment. Today those behaviors are still effectively a single implicit runtime profile wired through config defaults, workflow startup, prompt helpers, and report renderers. Milestone 8 should extract those stable concepts into declarative analysis packs so the system can select a coherent analysis profile without editing code or changing graph topology.
 
+**Who benefits:** Operators and developers who want to run different analysis strategies (e.g., momentum-focused vs value-focused, or sector-specific analysis profiles) without code changes. The current single-profile runtime requires editing config, prompt logic, and report rendering to change analysis behavior. Packs make this a single config/env selection. This also enables future A/B testing of analysis strategies and reproducible replay with explicit pack versioning.
+
 The first slice should remain a policy extraction. Packs should not become a second orchestrator or a plugin runtime. They should configure stable surfaces on top of the existing Rust runtime.
 
 ## Requirements Trace
@@ -25,7 +27,7 @@ The first slice should remain a policy extraction. Packs should not become a sec
 - R2. Keep packs out of provider-factory and graph-topology ownership.
 - R3. Provide a baseline/default pack that reproduces current behavior.
 - R4. Resolve pack selection into typed runtime policy during startup/preflight.
-- R5. Persist enough pack identity/version information for replay/debugging compatibility.
+- R5. ~~Persist enough pack identity/version information for replay/debugging compatibility.~~ **Deferred from first slice.** The first slice is single-pack-only with built-in packs, so there is nothing to replay-distinguish. Pack identity persistence should land in a follow-on slice when multiple packs or external manifests exist. Chunk 3 should persist a lightweight pack-name string in snapshot metadata as a minimal forward-compatibility measure, but full version tracking is not needed yet.
 - R6. Fail invalid pack selection before analysis starts.
 
 ## Scope Boundaries
@@ -71,8 +73,8 @@ The first slice should remain a policy extraction. Packs should not become a sec
 - **Pack selection chooses policy; existing raw config remains the source for infrastructure wiring unless the plan explicitly replaces it.**
   Rationale: Stage 1 already derives runtime capabilities from checked-in config, so pack extraction needs a clear precedence contract instead of implicit overlap.
 
-- **Persist lightweight pack identity/version metadata with runs.**
-  Rationale: replay, debugging, and future compatibility need to know which pack shaped a run.
+- **Persist lightweight pack name in snapshot metadata as a minimal forward-compatibility measure.**
+  Rationale: full identity/version persistence is deferred from the first slice (see R5), but recording which built-in pack shaped a run costs almost nothing and prevents ambiguity in future replay scenarios.
 
 - **Keep first-slice pack selection single-pack-only.**
   Rationale: multiple layered packs introduce precedence/merge complexity too early.
@@ -125,11 +127,14 @@ flowchart TB
 - Create: `src/analysis_packs/mod.rs`
 - Create: `src/analysis_packs/manifest.rs`
 - Create: `src/analysis_packs/builtin.rs`
+- Modify: `src/lib.rs`
 - Modify: `src/config.rs`
 - Modify: `config.toml`
 - Test: `src/analysis_packs/manifest.rs`
 - Test: `src/analysis_packs/builtin.rs`
 - Test: `src/config.rs`
+
+**Note on file count:** Three new files (mod/manifest/builtin) is the minimum viable module structure following the repo's existing module conventions. `mod.rs` re-exports the public API; `manifest.rs` defines the pack schema/validation; `builtin.rs` defines the baseline pack. If the implementing agent judges that `manifest.rs` and `builtin.rs` combined would be <100 lines, they may consolidate into a single `mod.rs` file instead.
 
 **Approach:**
 - Define the allowed pack vocabulary: coverage, optional enrichments, prompt/report policy, risk-policy selectors, and metadata.
@@ -195,7 +200,7 @@ flowchart TB
 
 **Goal:** Make pack selection meaningfully shape shared consumers while keeping execution topology unchanged.
 
-**Requirements:** R2, R4, R5
+**Requirements:** R2, R4
 
 **Dependencies:** Chunk 2
 
@@ -211,8 +216,10 @@ flowchart TB
 - Test: `tests/state_roundtrip.rs`
 - Test: `tests/workflow_pipeline_e2e.rs`
 
+**Note on e2e test coupling:** Adding pack-aware assertions to `tests/workflow_pipeline_e2e.rs` risks coupling pack extraction to unrelated test failures. Prefer adding pack-specific assertions as separate test functions within the same file rather than modifying existing test functions. If the e2e test file grows too large, consider a dedicated `tests/analysis_packs_e2e.rs` instead.
+
 **Approach:**
-- Persist lightweight pack identity/version metadata with runs if needed for snapshots/reports.
+- Persist lightweight pack name string in snapshot metadata for forward compatibility.
 - Update shared prompt/report helpers to branch on normalized runtime policy.
 - Keep pack behavior at the policy layer only.
 - Update any hard-coded coverage/reporting derivation points that would otherwise ignore pack policy, especially the fixed required-input derivation path.
@@ -242,15 +249,17 @@ flowchart TB
 
 ## Risks & Dependencies
 
-| Risk                                                       | Mitigation                                                                      |
-|------------------------------------------------------------|---------------------------------------------------------------------------------|
-| Packs become a second orchestrator                         | Restrict the contract to policy only and test against graph/provider invariants |
-| Current behavior changes unintentionally during extraction | Start with a baseline pack and prove parity                                     |
-| Pack precedence becomes ambiguous too early                | Keep first-slice selection to a single selected pack                            |
+| Risk                                                       | Mitigation                                                                                                                                                                          |
+|------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Packs become a second orchestrator                         | Restrict the contract to policy only and test against graph/provider invariants                                                                                                     |
+| Current behavior changes unintentionally during extraction | Start with a baseline pack and prove parity                                                                                                                                         |
+| Pack precedence becomes ambiguous too early                | Keep first-slice selection to a single selected pack                                                                                                                                |
+| Pack resolution adds startup latency                       | First-slice built-in packs are compile-time constants with negligible resolution cost; if future slices add file/manifest loading, bound resolution time with a startup-time budget |
 
 ## Documentation / Operational Notes
 
 - Document the baseline/default pack and the chosen operator-facing selection surface.
+- Update the "Adding things" table in `AGENTS.md` to document `src/analysis_packs/` and the pack creation pattern.
 - If the first slice reveals a need for layered packs or inheritance, capture that in a later plan instead of expanding this one.
 
 ## Sources & References
