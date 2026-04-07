@@ -59,11 +59,11 @@ This slice should stay disciplined: concrete providers go behind the existing ad
 - **Use the current Stage 1 seams directly; do not re-bootstrap them.**
   Rationale: Stage 1 is already complete in code, so Milestone 7 should build on those seams instead of treating them as missing prerequisites.
 
-- **Fetch enrichment in preflight or a single shared enrichment-loading seam, not inside LLM agents.**
-  Rationale: the cache-key and provider-capability model is already centered around startup-time enrichment availability.
+- **Fetch enrichment in `run_analysis_cycle` startup hydration, not inside LLM agents or preflight.**
+  Rationale: the cache-key and provider-capability model is already centered around startup-time enrichment availability. `run_analysis_cycle` already owns pre-graph data hydration and has provider clients available. `PreflightTask` currently only receives `DataEnrichmentConfig` and does not have provider client access. This plan uses `run_analysis_cycle` as the single enrichment hydration owner.
 
-- **Treat `run_analysis_cycle` startup hydration as the default first-slice owner unless preflight is explicitly widened to accept provider clients.**
-  Rationale: `PreflightTask` currently only receives enrichment config, while `run_analysis_cycle` already owns pre-graph data hydration.
+- **Do not widen `PreflightTask` for enrichment in this slice.**
+  Rationale: Plan 2 (thesis memory) already widens `PreflightTask` to accept snapshot-store access. Adding provider clients to `PreflightTask` in this plan would overload that seam. Enrichment hydration in `run_analysis_cycle` keeps the responsibilities separated.
 
 - **Normalize event-news end-to-end as a list payload.**
   Rationale: the adapter contract already returns `Vec<EventNewsEvidence>`, so the cache key and consumer surfaces should align with that canonical shape.
@@ -71,11 +71,14 @@ This slice should stay disciplined: concrete providers go behind the existing ad
 - **Use `target_date` as the time authority.**
   Rationale: enrichment must be valid for the analysis date, not just the wall-clock “latest” response.
 
-- **Differentiate semantic absence from runtime failure.**
-  Rationale: `None`/empty payloads are normal absence cases; network/runtime failures should still be observable while preserving fail-open enrichment behavior at the run level.
+- **Differentiate semantic absence from runtime failure using an explicit three-state type.**
+  Rationale: `Option<Vec<T>>` conflates "not fetched" with "fetched, nothing found." Use an explicit enum (e.g., `EnrichmentResult<T> { Available(T), NotAvailable, FetchFailed(String) }` or equivalent) at the adapter boundary so consumers can distinguish unavailability from failure. The cache-key serialization can flatten this, but the typed boundary must preserve the distinction. If the implementing agent judges an enum too heavy for the first slice, `Option<T>` with a separate `EnrichmentStatus` sidecar field per category is acceptable, but the choice must be explicit and tested.
 
 - **Land user-visible consumer updates in the same slice.**
   Rationale: once real enrichment exists, the prompt/report path should surface it rather than keeping it invisible in internal cache keys.
+
+- **Bound enrichment fetch time with explicit timeouts.**
+  Rationale: enrichment fetches are network calls in the startup path. Each category fetch should have a configurable timeout (default ~10s) so a slow or unresponsive vendor does not block the entire run. On timeout, treat the category as `FetchFailed` and proceed with fail-open semantics. The timeout should be config-driven (e.g., `SCORPIO__ENRICHMENT__FETCH_TIMEOUT_SECS`).
 
 ## Open Questions
 
@@ -93,10 +96,10 @@ This slice should stay disciplined: concrete providers go behind the existing ad
 ### Deferred to Implementation
 
 - **Exact vendor choice per enrichment category.**
-  The plan should preserve the category boundary, but implementation should lock one concrete provider choice per category before coding begins and explicitly split transcript support into a later slice if that choice is not ready.
+  The plan should preserve the category boundary, but implementation should lock one concrete provider choice per category before coding begins and explicitly split transcript support into a later slice if that choice is not ready. **Note:** vendor choice must be resolved before Chunk 1 implementation starts, not during it. Chunk 1's file list, test scenarios, and approach all assume concrete provider code exists. If vendor choice for a category remains unresolved at implementation time, that category should be excluded from Chunk 1 scope and deferred to a follow-on sub-slice.
 
 - **Whether all three categories ship together or transcript support is a later sub-slice if vendor choice remains unresolved.**
-  This can be finalized during implementation planning per chunk.
+  This can be finalized during implementation planning per chunk. The default expectation is that estimates and events (both Finnhub-compatible) ship together, with transcript as a follow-on sub-slice if needed.
 
 ## High-Level Technical Design
 
@@ -134,14 +137,13 @@ flowchart TB
 - Test: `src/data/adapters/events.rs`
 
 **Approach:**
-- Implement concrete providers behind the existing category contracts.
+- Implement concrete providers behind the existing category contracts. Concrete implementations should live in the adapter files themselves (e.g., `transcripts.rs`, `estimates.rs`, `events.rs`) when backed by a single vendor, or in vendor-specific sub-modules (e.g., `src/data/adapters/finnhub_estimates.rs`) if implementation complexity warrants separation. The adapter `mod.rs` should re-export only the trait-level API.
 - Normalize vendor payloads into the shared adapter types.
 - Filter or reject records that are not valid for the current `target_date`.
 - Add any provider-specific auth/config plumbing needed by the chosen first-slice vendors in the same chunk.
 
 **Patterns to follow:**
 - `src/data/finnhub.rs`
-- `src/data/symbol.rs`
 
 **Test scenarios:**
 - Happy path: provider returns a valid normalized transcript/consensus/event payload.
@@ -209,6 +211,7 @@ flowchart TB
 - Modify: `src/agents/trader/mod.rs`
 - Modify: `src/agents/fund_manager/prompt.rs`
 - Modify: `src/report/final_report.rs`
+- Modify: `src/workflow/pipeline/runtime.rs`
 - Test: `src/agents/shared/prompt.rs`
 - Test: `src/agents/trader/tests.rs`
 - Test: `src/agents/fund_manager/tests.rs`
@@ -249,11 +252,15 @@ flowchart TB
 | Provider contract and vendor payload shapes drift | Normalize everything through the shared adapter types and test category contracts directly |
 | Backtests ingest future-published enrichment      | Use `target_date` as the time authority and test future-data exclusion explicitly          |
 | Optional enrichment failures silently disappear   | Keep explicit absence/caveat semantics and verify them in prompt/report output             |
+| Slow or unresponsive vendor blocks startup        | Configurable per-category fetch timeout with fail-open fallback on timeout                 |
 
 ## Documentation / Operational Notes
 
 - Update prompt docs if enrichment-backed evidence changes downstream prompt contracts materially.
 - If transcript-provider choice remains unresolved, split transcript delivery into a later chunk rather than blocking estimates/events.
+- Update the "Adding things" table in `AGENTS.md` to document the concrete enrichment provider pattern under `src/data/adapters/`.
+- Add required API keys for concrete providers to `.env.example` with the `SCORPIO_` prefix convention. Document credential setup in the plan's implementation notes or a short operational guide so operators know which keys are needed per enrichment category.
+- Add enrichment fetch timeout configuration to `config.toml` with sensible defaults.
 
 ## Sources & References
 
