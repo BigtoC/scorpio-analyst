@@ -44,7 +44,7 @@ The 5 plans move the repo from a stronger typed foundation toward reusable, pack
 |-------------------------------------------------|-----------|---------------------------------------------------------------------------------------------------------|---------------------------------------------|-------------------------------------|
 | 1. Evidence / provenance foundation             | Completed | `PreflightTask`, typed evidence/provenance/coverage state, prompt/report seams, enrichment placeholders | None                                        | all later milestones                |
 | 2. Thesis memory                                | Planned   | snapshot-backed prior-thesis reuse and prompt injection                                                 | Plan 1                                      | historical continuity across runs   |
-| 3. Peer/comps and scenario valuation            | Planned   | deterministic typed valuation state and scenario-aware proposal/reporting                               | Plan 1; Plan 2 recommended but not required | structured valuation reasoning      |
+| 3. Peer/comps and scenario valuation            | Planned   | deterministic typed valuation state and scenario-aware proposal/reporting                               | Plan 1                                      | structured valuation reasoning      |
 | 4. Concrete earnings/event enrichment providers | Planned   | real transcript/consensus-estimates/event payloads behind adapter contracts                             | Plan 1                                      | concrete enrichment-backed evidence |
 | 5. Analysis pack extraction                     | Planned   | declarative analysis-profile layer above config/evidence/prompt/report policy                           | Plans 1-4 stabilized                        | configurable analysis profiles      |
 
@@ -52,20 +52,21 @@ The 5 plans move the repo from a stronger typed foundation toward reusable, pack
 
 ```mermaid
 flowchart LR
-    P1[1. Evidence / Provenance Foundation]
-    P2[2. Thesis Memory]
-    P3[3. Peer/Comps + Scenario Valuation]
-    P4[4. Concrete Enrichment Providers]
-    P5[5. Analysis Pack Extraction]
+    P1[0. Evidence / Provenance Foundation]
+    P2[1. Thesis Memory]
+    P3[2. Peer/Comps + Scenario Valuation]
+    P4[3. Concrete Enrichment Providers]
+    P5[4. Analysis Pack Extraction]
 
     P1 --> P2
     P1 --> P3
     P1 --> P4
+    P2 --> P5
     P3 --> P5
     P4 --> P5
 ```
 
-## Plan 1: Evidence / Provenance Foundation
+## Plan 0: Evidence / Provenance Foundation
 
 Source plan: `docs/superpowers/plans/2026-04-05-evidence-provenance-foundation.md`
 
@@ -86,7 +87,12 @@ What it intentionally deferred:
 - concrete enrichment providers
 - analysis pack extraction
 
-## Plan 2: Thesis Memory
+How it improves the system:
+
+- every downstream agent now reads typed, provenance-tagged evidence instead of free-text strings, eliminating ambiguity about whether data is real or hallucinated
+- the report gains a built-in audit trail: coverage gaps and data-quality degradations are surfaced explicitly rather than silently absorbed into prompt context
+
+## Plan 1: Thesis Memory
 
 Plan file: `docs/plans/2026-04-07-001-feat-thesis-memory-plan.md`
 
@@ -108,7 +114,12 @@ Why it comes next:
 - it reuses the Stage 1 snapshot and prompt seams directly
 - it adds cross-run continuity before later derived valuation work
 
-## Plan 3: Peer/Comps And Scenario Valuation
+How it improves the system:
+
+- the trader and researcher agents can anchor new recommendations against the prior-run thesis, catching thesis drift early and preventing the system from reversing a well-reasoned position without explicit cause
+- repeated analysis on the same ticker becomes cumulative rather than amnesiac, reducing redundant LLM work and improving recommendation stability over time
+
+## Plan 2: Peer/Comps And Scenario Valuation
 
 Plan file: `docs/plans/2026-04-07-002-feat-peer-comps-scenario-valuation-plan.md`
 
@@ -130,7 +141,12 @@ Why it follows thesis memory:
 
 - structured valuation becomes more useful once the system can retain prior thesis context
 
-## Plan 4: Concrete Earnings / Event Enrichment Providers
+How it improves the system:
+
+- replaces ad-hoc LLM prose estimates with deterministic Rust math, so every trade proposal carries a reproducible valuation basis rather than a number that varies run-to-run
+- scenario-aware inputs (bull/base/bear) make the fund manager's approve/reject decision traceable to specific valuation assumptions rather than opaque model outputs
+
+## Plan 3: Concrete Earnings / Event Enrichment Providers
 
 Plan file: `docs/plans/2026-04-07-003-feat-concrete-enrichment-providers-plan.md`
 
@@ -151,7 +167,12 @@ Why it comes before packs:
 
 - analysis packs should configure stable enrichment concepts, not placeholder-only seams
 
-## Plan 5: Analysis Pack Extraction
+How it improves the system:
+
+- gives analyst and trader agents real earnings-call transcripts, consensus estimates, and event payloads instead of null placeholders, materially raising signal quality for sentiment and fundamental analysis
+- fail-open adapter contracts ensure that missing or slow external data degrades gracefully rather than aborting the run, keeping the system production-safe even when enrichment sources are partially unavailable
+
+## Plan 4: Analysis Pack Extraction
 
 Plan file: `docs/plans/2026-04-07-004-feat-analysis-pack-extraction-plan.md`
 
@@ -171,6 +192,11 @@ Key repo surfaces:
 Why it is last:
 
 - packs should be built on stabilized seams from the earlier plans, not on still-moving abstractions
+
+How it improves the system:
+
+- operators can swap the entire analytical posture — evidence scope, prompt strategy, reporting style — through a config change instead of a code edit, making the system adaptable to different asset classes, time horizons, or risk appetites without touching business logic
+- extracting policy into declarative packs makes behavioral differences between analysis runs explicit and auditable, replacing implicit prompt variation with versioned, reviewable configuration
 
 ## Global Architectural Invariants
 
