@@ -198,6 +198,16 @@ How it improves the system:
 - operators can swap the entire analytical posture — evidence scope, prompt strategy, reporting style — through a config change instead of a code edit, making the system adaptable to different asset classes, time horizons, or risk appetites without touching business logic
 - extracting policy into declarative packs makes behavioral differences between analysis runs explicit and auditable, replacing implicit prompt variation with versioned, reviewable configuration
 
+## Ordering Rationale
+
+The current ordering (thesis → valuation → enrichment → packs) prioritizes typed infrastructure before real data flow. An alternative ordering would move Plan 4 (enrichment) before Plan 3 (valuation) so deterministic valuation has real data to operate on instead of absent/heuristic inputs. The current ordering was chosen because:
+
+- Plan 3's typed valuation contract can be proven correct with partial/absent data via fail-open semantics
+- Plan 4's enrichment providers are more vendor-dependent and may take longer to stabilize
+- Moving enrichment first would delay the typed valuation seam that Plan 5 (packs) needs to configure
+
+This ordering is a deliberate tradeoff, not an oversight. If enrichment vendor choices resolve faster than expected, the implementing agent may consider reordering Plans 3 and 4 as long as the final seams for Plan 5 remain stable.
+
 ## Global Architectural Invariants
 
 These should remain true across all 5 plans:
@@ -211,6 +221,7 @@ These should remain true across all 5 plans:
 - orchestration corruption and storage/runtime corruption remain fail-closed
 - snapshot store is the first persistence boundary for cross-run memory
 - analysis packs are the final roadmap extraction step, not an early implementation shortcut
+- contracts introduced by Plans 2-4 (thesis, valuation, enrichment) must be stable before Plan 5 (packs) extracts them into policy; pack vocabulary should describe settled abstractions, not still-moving targets
 
 ## Common Misreads To Avoid
 
