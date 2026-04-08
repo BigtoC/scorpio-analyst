@@ -176,10 +176,11 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    limiting (managing 30 requests per second with burst capacity) and customizable retry logic, which is essential when
    executing four Analyst agents concurrently
 
-2. **Market Pricing and Alternative Data**: The `yfinance-rs` (v0.7.2) crate will be utilized for historical OHLCV
-   (Open, High, Low, Close, Volume) data and real-time quote streaming. This crate utilizes an asynchronous, fluent
-   builder pattern and supports parallel fetching, allowing the Technical Analyst to retrieve massive datasets for
-   technical indicator calculation with minimal network latency.
+2. **Market Pricing and Alternative Data**: The `yfinance-rs` (v0.7.2) crate will be utilized first for historical
+   OHLCV (Open, High, Low, Close, Volume) data and current-price retrieval, and second as an optional source of
+   volume and instrument classification via Yahoo Finance `Info` / `Profile` lookups. In the active roadmap, these optional lookups are
+   expected to provide nullable signals for liquidity and company-vs-fund classification. This improves ETF/fund handling when
+   present, but it MUST remain optional and degrade safely when absent.
 
 3. **Macroeconomic Indicators**: The FRED (Federal Reserve Economic Data) API provides authoritative macroeconomic
    time-series data, replacing the paid Finnhub `economic().data()` endpoint for interest-rate and inflation indicators.
@@ -204,8 +205,10 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    agents regardless of the upstream provider. In the initial implementation, no concrete providers are wired — the
    `PreflightTask` seeds the workflow context with `null` placeholders for each enrichment cache key, and
    `ProviderCapabilities` flags (derived from `DataEnrichmentConfig`) indicate which enrichment categories are enabled.
-   This seam allows future milestones to plug in real providers behind the existing contracts without modifying agent or
-   orchestration code.
+   Under the current provider-constrained roadmap, event/news enrichment is the first concrete target, consensus
+   estimates are only in-scope if free-tier provider verification succeeds, and transcript enrichment is intentionally
+   deferred. This seam allows future milestones to plug in real providers behind the existing contracts without modifying
+   agent or orchestration code.
 
 ### Technical Analysis and Quantitative Mathematics
 
@@ -570,14 +573,18 @@ equipped with specific tools generated via the `#[tool_macro]`.
 
 #### 1. Fundamental Analyst Task
 
-The Fundamental Analyst is responsible for evaluating the intrinsic value of the target asset.
+The Fundamental Analyst is responsible for evaluating issuer fundamentals when that analysis shape is applicable to the
+target asset.
 
 * **Tool Bindings**: This agent is granted access to tools bridging the `finnhub` crate endpoints, specifically
-  `financials`, `company_profile`, and `insider_transactions`.
+  `financials`, `company_profile`, and `insider_transactions`, with optional Yahoo-backed instrument info/profile
+  context available in later roadmap slices.
 * **Execution Logic**: The agent fetches quarterly revenue growth, Price-to-Earnings (P/E) ratios, current liquidity
   ratios, and recent executive stock sales. The `rig` agent is prompted to evaluate these metrics against sector
   averages, identifying severe vulnerabilities such as high leverage in a rising interest rate environment or massive
-  insider dumping. The output is serialized directly into the `FundamentalData` structure.
+  insider dumping. For ETF/fund-like instruments, many corporate metrics may be structurally absent; this is treated as
+  domain-valid absence rather than data corruption, and later valuation layers may honestly emit `NotAssessed` instead
+  of forcing corporate-equity valuation. The output is serialized directly into the `FundamentalData` structure.
 * **Prompt specification**: [Fundamentals Analyst](docs/prompts.md#fundamentals-analyst)
 
 #### 2. Sentiment Analyst Task
@@ -961,7 +968,10 @@ pub struct LLMConfig {
 
 /// Controls optional enrichment data sources. All flags default to `false`,
 /// so the system operates with only the four baseline analyst inputs until
-/// concrete enrichment providers are implemented.
+/// concrete enrichment providers are implemented. In the active roadmap,
+/// event news is the first concrete target, consensus estimates are
+/// conditional on free-tier provider verification, and transcripts remain
+/// deferred.
 #[derive(serde::Deserialize)]
 pub struct DataEnrichmentConfig {
     pub enable_transcripts: bool,           // default: false
