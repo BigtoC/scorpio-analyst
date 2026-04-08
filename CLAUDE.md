@@ -167,14 +167,14 @@ Behavior: follow this sequence strictly:
 1. `/superpowers:brainstorming` — requirements exploration
 2. `/ce:plan` — technical plan, auto-search `docs/solutions/`
 3. `/superpowers:test-driven-development` — TDD implementation
-4. `/ce:review` — multi-agent code review
+4. `/ce:review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
 5. `/ce:compound` — knowledge consolidation
 
 ### Coding Mode
 
 Trigger: User explicitly says "write code" or uses `/opsx:apply` or `/spec-code-developer`.
 1. `/superpowers:test-driven-development` — TDD implementation
-2. `/ce:review` — multi-agent code review
+2. `/ce:review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
 3. `/ce:compound` — knowledge consolidation
 
 ## Knowledge Consolidation
