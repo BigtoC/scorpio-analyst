@@ -49,6 +49,14 @@ async fn run_analysis_cycle_success_path_populates_all_phases() {
         .as_ref()
         .expect("final execution status should be set");
     assert_eq!(exec_status.decision, Decision::Approved);
+    assert!(final_state.current_thesis.is_some());
+    assert_eq!(
+        final_state
+            .current_thesis
+            .as_ref()
+            .map(|thesis| thesis.decision.as_str()),
+        Some("Approved")
+    );
 
     let exec_id_str = final_state.execution_id.to_string();
     for phase_num in 1..=5 {
@@ -365,6 +373,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
             .any(|provider| provider == "stale-provider")
     );
     assert!(final_state.final_execution_status.is_some());
+    assert!(final_state.current_thesis.is_some());
     assert!(
         final_state
             .debate_history
