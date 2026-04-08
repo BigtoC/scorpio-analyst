@@ -53,6 +53,11 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.neutral_risk_report = None;
     state.conservative_risk_report = None;
     state.final_execution_status = None;
+    // Thesis memory is reset here so stale thesis never leaks across reused
+    // runs. Preflight will reload `prior_thesis` from the snapshot store for
+    // the current canonical symbol; FundManagerTask will set `current_thesis`.
+    state.prior_thesis = None;
+    state.current_thesis = None;
     state.token_usage = Default::default();
 }
 
@@ -67,7 +72,7 @@ pub(super) fn build_graph(
 ) -> Arc<Graph> {
     let graph = Arc::new(Graph::new("trading_pipeline"));
 
-    let preflight = PreflightTask::new(config.enrichment.clone());
+    let preflight = PreflightTask::new(config.enrichment.clone(), Arc::clone(&snapshot_store));
     graph.add_task(Arc::new(preflight));
 
     let fan_out = FanOutTask::new(
