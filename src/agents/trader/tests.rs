@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, sync::Mutex, time::Instant};
 
+use chrono::Utc;
 use rig::{agent::TypedPromptResponse, completion::Usage};
 use secrecy::SecretString;
 
@@ -9,7 +10,7 @@ use crate::{
     providers::factory::RetryOutcome,
     state::{
         FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData, SentimentData,
-        SentimentSource, TechnicalData, TradeAction, TradeProposal, TradingState,
+        SentimentSource, TechnicalData, ThesisMemory, TradeAction, TradeProposal, TradingState,
     },
 };
 
@@ -743,6 +744,35 @@ fn prompt_context_serializes_missing_analyst_outputs_as_null() {
     assert!(prompt.contains("Technical data: null"));
     assert!(prompt.contains("Sentiment data: null"));
     assert!(prompt.contains("News data: null"));
+}
+
+#[test]
+fn prompt_context_includes_prior_thesis_when_present() {
+    let mut state = populated_state();
+    state.prior_thesis = Some(ThesisMemory {
+        symbol: "AAPL".to_owned(),
+        action: "Buy".to_owned(),
+        decision: "Approved".to_owned(),
+        rationale: "Historical thesis for reuse.".to_owned(),
+        summary: None,
+        execution_id: "exec-001".to_owned(),
+        target_date: "2026-03-10".to_owned(),
+        captured_at: Utc::now(),
+    });
+
+    let prompt =
+        build_prompt_context(&state, &state.asset_symbol, &state.target_date).system_prompt;
+    assert!(prompt.contains("Historical thesis context"));
+    assert!(prompt.contains("Historical thesis for reuse."));
+    assert!(prompt.contains("Approved"));
+}
+
+#[test]
+fn prompt_context_includes_absence_note_when_prior_thesis_missing() {
+    let state = empty_state();
+    let prompt =
+        build_prompt_context(&state, &state.asset_symbol, &state.target_date).system_prompt;
+    assert!(prompt.contains("No prior thesis memory available for this symbol."));
 }
 
 #[test]
