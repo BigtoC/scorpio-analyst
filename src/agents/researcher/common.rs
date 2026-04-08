@@ -8,7 +8,8 @@ use std::time::Duration;
 use crate::{
     agents::shared::{
         agent_token_usage_from_completion, build_data_quality_context, build_evidence_context,
-        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+        build_thesis_memory_context, sanitize_date_for_prompt, sanitize_prompt_context,
+        sanitize_symbol_for_prompt,
     },
     config::LlmConfig,
     constants::MAX_DEBATE_CHARS,
@@ -185,7 +186,7 @@ impl DebaterCore {
         let system_prompt = system_prompt_template
             .replace("{ticker}", &runtime.symbol)
             .replace("{current_date}", &runtime.target_date)
-            .replace("{past_memory_str}", "");
+            .replace("{past_memory_str}", &build_thesis_memory_context(state));
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -426,6 +427,8 @@ mod tests {
             evidence_news: None,
             data_coverage: None,
             provenance_summary: None,
+            prior_thesis: None,
+            current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         };
 

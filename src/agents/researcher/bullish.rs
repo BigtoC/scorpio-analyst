@@ -196,6 +196,8 @@ mod tests {
             evidence_news: None,
             data_coverage: None,
             provenance_summary: None,
+            prior_thesis: None,
+            current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         }
     }

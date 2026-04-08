@@ -20,8 +20,8 @@ use crate::{
 
 pub(super) use crate::agents::shared::{
     UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
-    extract_json_object, sanitize_date_for_prompt, sanitize_prompt_context,
-    sanitize_symbol_for_prompt,
+    build_thesis_memory_context, extract_json_object, sanitize_date_for_prompt,
+    sanitize_prompt_context, sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -82,7 +82,7 @@ impl RiskAgentCore {
         let system_prompt = system_prompt_template
             .replace("{ticker}", &runtime.symbol)
             .replace("{current_date}", &runtime.target_date)
-            .replace("{past_memory_str}", "");
+            .replace("{past_memory_str}", &build_thesis_memory_context(state));
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -347,6 +347,8 @@ mod tests {
             evidence_news: None,
             data_coverage: None,
             provenance_summary: None,
+            prior_thesis: None,
+            current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
         }
     }
