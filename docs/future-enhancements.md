@@ -15,6 +15,21 @@ follow-up that should be revisited later.
 > Will be considered for implementation after the MVP is complete and stable enough to evaluate whether the added
 > complexity is justified by the benefits.
 
+### Premium-data valuation and enrichment follow-ons
+
+- **Status**: Optional deferred plan
+- **Source**: `docs/plans/2026-04-07-005-optional-premium-data-follow-ons-plan.md`
+- **Current baseline**: The active financial-services-plugins roadmap is constrained to free-tier Finnhub, yfinance, and FRED. The current implementation track supports thesis memory, bounded deterministic valuation for supported corporate-equity inputs, event/news enrichment first, optional estimates only if provider verification succeeds, and explicit valuation/enrichment fallbacks for unsupported cases such as ETF-style asset shapes or missing transcripts.
+- **Why it was deferred**: The original follow-on plans implied richer transcript-backed enrichment and broader deterministic valuation (`P/S`, `PEG`, `EV/EBITDA`, `DCF`, peer/comps, ETF-native inputs). Those capabilities are not realistic with the current provider set and would either stall the active roadmap or encourage prompt/runtime contracts that the system cannot satisfy honestly.
+- **Why revisit later**: If stronger data providers become available, these capabilities could materially improve valuation quality, transcript-backed reasoning, peer-relative analysis, and ETF-native support.
+- **Intentionally deferred details**:
+    - Transcript enrichment behind the transcript adapter contract
+    - Any still-missing consensus-estimates implementation if free-tier verification fails
+    - Typed inputs for `P/S`, `PEG`, `EV/EBITDA`, and DCF-style valuation
+    - Peer/comps datasets, sector medians, and historical valuation bands
+    - ETF-native valuation inputs such as NAV / premium-discount, fund flows, and holdings analytics
+- **Revisit trigger**: After the provider-limited roadmap is complete and stable enough to judge whether premium or alternative data sources justify the added complexity. See the full optional plan at [`docs/plans/2026-04-07-005-optional-premium-data-follow-ons-plan.md`](plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md).
+
 ### Per-agent provider overrides
 
 - **Status**: Deferred until after the MVP is finished
