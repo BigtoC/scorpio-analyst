@@ -21,6 +21,8 @@ After Stage 1 and the earlier follow-on milestones, the repo will have stable ty
 
 The first slice should remain a policy extraction. Packs should not become a second orchestrator or a plugin runtime. They should configure stable surfaces on top of the existing Rust runtime.
 
+The system's data layer is now rich and unconstrained, featuring DCF, EV/EBITDA, options flow, and consensus estimates from our integrations. With this depth of data available, the first pack slice should focus on configuring distinct institutional strategies (e.g., deep value vs. momentum) that selectively utilize this data. Packs will also encode asset-shape behavior explicitly, ensuring cases like "ETF or unsupported asset shape -> valuation not assessed" fall back cleanly.
+
 ## Requirements Trace
 
 - R1. Add a declarative analysis-pack abstraction above config/evidence/prompt/report policy.
@@ -78,6 +80,9 @@ The first slice should remain a policy extraction. Packs should not become a sec
 
 - **Keep first-slice pack selection single-pack-only.**
   Rationale: multiple layered packs introduce precedence/merge complexity too early.
+
+- **Use packs to encode institutional strategies and asset-shape-aware behavior.**
+  Rationale: With our rich data layer (DCF, EV/EBITDA, options flow, consensus estimates), packs allow us to deploy distinct analytical strategies that weight this data differently. Furthermore, they provide a clean place to encode asset-shape boundaries (for example, ETF fallback where valuation is not assessed) without scattering condition branches across prompts and reports.
 
 ## Open Questions
 
@@ -137,8 +142,8 @@ flowchart TB
 **Note on file count:** Three new files (mod/manifest/builtin) is the minimum viable module structure following the repo's existing module conventions. `mod.rs` re-exports the public API; `manifest.rs` defines the pack schema/validation; `builtin.rs` defines the baseline pack. If the implementing agent judges that `manifest.rs` and `builtin.rs` combined would be <100 lines, they may consolidate into a single `mod.rs` file instead.
 
 **Approach:**
-- Define the allowed pack vocabulary: coverage, optional enrichments, prompt/report policy, risk-policy selectors, and metadata.
-- Add a built-in baseline/default pack that mirrors current runtime behavior.
+- Define the allowed pack vocabulary: coverage, optional enrichments, prompt/report policy, risk-policy selectors, asset-shape valuation policy, and metadata.
+- Add a built-in baseline pack that configures a balanced institutional strategy utilizing the rich data layer, and ensures deterministic valuation is allowed only when supported by normalized corporate-equity inputs (e.g., falling back cleanly for ETFs).
 - Add pack selection to config with validation.
 - Define one exact first-slice selection surface, such as a new config key plus `SCORPIO__...` override, and fail blank/unknown ids during config/startup validation.
 
@@ -149,6 +154,7 @@ flowchart TB
 **Test scenarios:**
 - Happy path: baseline pack validates and loads successfully.
 - Edge case: no explicit selection resolves to the baseline/default pack.
+- Edge case: baseline pack maps unsupported valuation shapes (like ETFs) to explicit fallback policy.
 - Edge case: unknown pack id fails before analysis starts.
 - Error path: malformed or unsupported pack definitions fail clearly.
 
@@ -190,6 +196,7 @@ flowchart TB
 **Test scenarios:**
 - Happy path: selected pack hydrates into startup policy before analyst fan-out.
 - Edge case: default pack produces the same required coverage and optional-enrichment intent as the current runtime.
+- Edge case: default pack configures strategy-specific data utilization (e.g., options flow, DCF) appropriate for the targeted analytical profile.
 - Edge case: invalid pack selection fails before any analysis tasks run.
 - Integration: startup/preflight writes pack-derived policy into the expected runtime surfaces.
 
@@ -234,6 +241,7 @@ flowchart TB
 - Happy path: report output identifies the selected pack and pack-aware policy changes shared rendering behavior.
 - Edge case: old snapshots without pack metadata still deserialize and render with fallback values.
 - Edge case: baseline pack preserves current behavior.
+- Edge case: baseline pack renders explicit valuation fallback messaging for unsupported asset shapes (like ETFs) instead of generic missing-data messaging.
 - Error path: missing or malformed pack metadata does not panic renderers.
 
 **Verification:**
