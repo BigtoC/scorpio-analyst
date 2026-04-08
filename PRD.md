@@ -176,11 +176,13 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    limiting (managing 30 requests per second with burst capacity) and customizable retry logic, which is essential when
    executing four Analyst agents concurrently
 
-2. **Market Pricing and Alternative Data**: The `yfinance-rs` (v0.7.2) crate will be utilized first for historical
-   OHLCV (Open, High, Low, Close, Volume) data and current-price retrieval, and second as an optional source of
-   volume and instrument classification via Yahoo Finance `Info` / `Profile` lookups. In the active roadmap, these optional lookups are
-   expected to provide nullable signals for liquidity and company-vs-fund classification. This improves ETF/fund handling when
-   present, but it MUST remain optional and degrade safely when absent.
+2. **Market Pricing and Alternative Data**: The `yfinance-rs` (v0.7.2) crate will be utilized for:
+   - historical OHLCV (Open, High, Low, Close, Volume) data, 
+   - Options Chains (for IV and Put/Call ratio), 
+   - full Financial Statements (Cashflow, Balance Sheet, Income Statement, Shares) for DCF and EV/EBITDA valuation math, 
+   - Analyst Estimates (Forward EPS/Revenue, Upgrades/Downgrades, Price Targets), 
+   - Institutional/Insider ownership (including Net Insider Shares Bought/Sold), 
+   - Corporate Calendar (Earnings dates). It DOES NOT provide ESG data (the `sustainability()` endpoint is broken).
 
 3. **Macroeconomic Indicators**: The FRED (Federal Reserve Economic Data) API provides authoritative macroeconomic
    time-series data, replacing the paid Finnhub `economic().data()` endpoint for interest-rate and inflation indicators.
@@ -576,9 +578,8 @@ equipped with specific tools generated via the `#[tool_macro]`.
 The Fundamental Analyst is responsible for evaluating issuer fundamentals when that analysis shape is applicable to the
 target asset.
 
-* **Tool Bindings**: This agent is granted access to tools bridging the `finnhub` crate endpoints, specifically
-  `financials`, `company_profile`, and `insider_transactions`, with optional Yahoo-backed instrument info/profile
-  context available in later roadmap slices.
+* **Tool Bindings**: This agent is granted access to tools bridging the `finnhub` crate endpoints (e.g. `company_profile`), 
+  and uses `yfinance-rs` for Institutional/Insider net flows and full financial statements.
 * **Execution Logic**: The agent fetches quarterly revenue growth, Price-to-Earnings (P/E) ratios, current liquidity
   ratios, and recent executive stock sales. The `rig` agent is prompted to evaluate these metrics against sector
   averages, identifying severe vulnerabilities such as high leverage in a rising interest rate environment or massive
@@ -592,7 +593,7 @@ target asset.
 This agent quantifies company-specific sentiment and narrative shifts using recent news coverage rather than direct
 social-platform ingestion in the MVP.
 
-* **Tool Bindings**: Accesses company-specific news data from `finnhub` and/or `yfinance-rs` where available. If direct
+* **Tool Bindings**: Accesses company-specific news data from `finnhub` and/or `yfinance-rs` where available, as well as `yfinance-rs` Options Chains (IV, Put/Call ratio) and Analyst Upgrades/Downgrades. If direct
   API access is unavailable or insufficient for the target company/news query, the Gemini CLI can be used as a fallback
   for web-search-based news retrieval.
 * **Execution Logic**: The agent analyzes recent company-specific news to identify tone shifts, recurring themes,
@@ -674,7 +675,7 @@ The Trader Agent acts as the central executive intelligence.
 Capital preservation is prioritized over alpha generation. Per the original paper, the Risk Management Team mirrors
 the structure of the Researcher Team: the three risk agents engage in multi-round natural language discussion guided
 by a `RiskModerator`, rather than simply producing independent reports. The implementation will replicate this cyclic
-debate pattern within the risk phase.
+debate pattern within the risk phase. They use `yfinance-rs` Corporate Calendar to flag earnings risk and Options Implied Volatility.
 
 * **Risk-Seeking Agent** (mapped to "Aggressive" in this implementation): Evaluates whether the proposed stop-loss is
   too tight to survive normal market volatility, specifically referencing the Average True Range calculated by the

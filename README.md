@@ -9,11 +9,11 @@ The project's primary goal is to overcome the limitations of traditional algorit
 
 The evidence discipline and provenance-reporting patterns in this project are additionally inspired by Anthropic's [financial-services-plugins](https://github.com/anthropics/anthropic-quickstarts/tree/main/financial-services-plugins) architecture, which demonstrates rigorous grounding of LLM outputs in authoritative runtime evidence.
 
-The current implementation track assumes a provider-constrained data stack: free-tier Finnhub, yfinance, and FRED. That stack is strong enough for thesis memory, macro/news/technical analysis, bounded deterministic valuation for supported corporate-equity inputs, and explicit fallback behavior for unsupported cases such as ETFs. It is not strong enough for the full premium-data roadmap implied by richer transcript- and DCF-style valuation ideas.
+The current implementation track uses a free-tier data stack: Finnhub, yfinance, and FRED. This stack is highly capable and supports strict DCF, EV/EBITDA, Options flow, Consensus Estimates, thesis memory, and macro/news/technical analysis. However, it still lacks ETF-native valuation metrics and Earnings Call Transcripts.
 
-Within that active track, `yfinance-rs` is used not just for OHLCV/current-price retrieval but also as the planned source for volume data and optional company-vs-fund detection via Yahoo `Profile` lookups. Those fields are nullable and must degrade safely when absent.
+Within that active track, `yfinance-rs` is used extensively for OHLCV data, Options Chains, full Financial Statements, Analyst Estimates, Institutional/Insider ownership, and Corporate Calendar.
 
-In practice, this means the current setup can still analyze ETFs end-to-end as technical + macro + news + debate workflows, but ETF runs will often surface valuation as `not assessed` rather than producing a corporate-equity-style deterministic valuation.
+In practice, this means the current setup can analyze corporate equities deeply with deterministic valuation, while ETF runs will often surface valuation as `not assessed` rather than producing a corporate-equity-style deterministic valuation.
 
 ![Project Infographic](docs/images/infographic.png)
 
@@ -171,12 +171,13 @@ This project is in the early stages of development. The architecture and core co
 The active roadmap assumes only free-tier Finnhub, yfinance, and FRED. As a result:
 
 - thesis memory is in-scope
-- deterministic valuation is intentionally bounded to supported input shapes
+- deterministic valuation is fully capable for corporate equities (DCF, EV/EBITDA)
 - ETF-style runs are supported, but they may legitimately produce `valuation not assessed` rather than a corporate-equity valuation result
-- event/news enrichment is in-scope first
-- consensus estimates are only in-scope if free-tier provider verification succeeds
+- event/news enrichment is in-scope
+- consensus estimates are supported via yfinance
+- options flow and implied volatility are supported via yfinance
 - transcript enrichment is deferred from the current implementation track
-- richer peer/comps, historical bands, `P/S`, `PEG`, `EV/EBITDA`, DCF-style valuation, and ETF-native valuation inputs are deferred
+- ETF-native valuation inputs are deferred
 
 See the active roadmap summary at [`docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md`](docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md) and the optional deferred follow-on plan at [`docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md`](docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md).
 
