@@ -6,19 +6,28 @@
 //! 2. Validates and canonicalises the runtime asset symbol using
 //!    [`crate::data::resolve_symbol`].
 //! 3. Writes the canonical symbol back into `TradingState.asset_symbol`.
-//! 4. Re-serialises the updated state into the context.
-//! 5. Writes all six Stage 1 evidence-provenance context keys.
+//! 4. Loads the most recent compatible prior thesis from the snapshot store and
+//!    attaches it to `TradingState.prior_thesis`.
+//! 5. Re-serialises the updated state into the context.
+//! 6. Writes all six Stage 1 evidence-provenance context keys.
 //!
 //! Any symbol format violation or context I/O failure causes the task to return
 //! `Err`, halting the pipeline before a single analyst task is dispatched
-//! ("fail closed" semantics).
+//! ("fail closed" semantics).  Missing prior thesis is fail-open: the run
+//! continues with `prior_thesis = None`.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use graph_flow::{Context, NextAction, Task, TaskResult};
+use tracing::debug;
 
 use crate::{
     data::{adapters::ProviderCapabilities, resolve_symbol},
-    workflow::context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+    workflow::{
+        SnapshotStore,
+        context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+    },
 };
 
 use super::common::{
@@ -28,18 +37,30 @@ use super::common::{
 
 const TASK_ID: &str = "preflight";
 
+/// Staleness window for prior thesis lookup: snapshots older than this are
+/// ignored even if they exist for the same symbol.
+const THESIS_MEMORY_MAX_AGE_DAYS: i64 = 30;
+
 /// The first pipeline node.
 ///
 /// Constructed with a reference to the enrichment config so it can derive
-/// [`ProviderCapabilities`] at runtime without reloading the full config.
+/// [`ProviderCapabilities`] at runtime without reloading the full config, and
+/// with the shared [`SnapshotStore`] so it can load prior thesis memory.
 pub struct PreflightTask {
     enrichment: crate::config::DataEnrichmentConfig,
+    snapshot_store: Arc<SnapshotStore>,
 }
 
 impl PreflightTask {
     /// Create a new `PreflightTask` using the checked-in enrichment config.
-    pub fn new(enrichment: crate::config::DataEnrichmentConfig) -> Self {
-        Self { enrichment }
+    pub fn new(
+        enrichment: crate::config::DataEnrichmentConfig,
+        snapshot_store: Arc<SnapshotStore>,
+    ) -> Self {
+        Self {
+            enrichment,
+            snapshot_store,
+        }
     }
 }
 
@@ -69,6 +90,27 @@ impl Task for PreflightTask {
 
         // Write the canonical symbol back into TradingState.
         state.asset_symbol = instrument.canonical_symbol.clone();
+
+        // ── Load prior thesis memory (fail-open) ──────────────────────────
+        let prior_thesis = self
+            .snapshot_store
+            .load_prior_thesis_for_symbol(&state.asset_symbol, THESIS_MEMORY_MAX_AGE_DAYS)
+            .await
+            .map_err(|e| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "PreflightTask: thesis memory lookup failed: {e}"
+                ))
+            })?;
+
+        if prior_thesis.is_some() {
+            debug!(symbol = %state.asset_symbol, "loaded prior thesis memory");
+        } else {
+            debug!(
+                symbol = %state.asset_symbol,
+                "no prior thesis memory available for this symbol"
+            );
+        }
+        state.prior_thesis = prior_thesis;
 
         // ── Re-serialise the updated state ────────────────────────────────
         serialize_state_to_context(&state, &context)
@@ -118,6 +160,8 @@ impl Task for PreflightTask {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use graph_flow::Context;
 
     use crate::{
@@ -125,6 +169,7 @@ mod tests {
         data::{ResolvedInstrument, adapters::ProviderCapabilities},
         state::TradingState,
         workflow::{
+            SnapshotStore,
             context_bridge::{deserialize_state_from_context, serialize_state_to_context},
             tasks::common::{
                 KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT,
@@ -136,9 +181,28 @@ mod tests {
     use super::PreflightTask;
     use graph_flow::Task;
 
+    /// Open a temporary on-disk snapshot store for preflight tests.
+    async fn test_store() -> (Arc<SnapshotStore>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("preflight-test.db");
+        let store = SnapshotStore::new(Some(&path))
+            .await
+            .expect("store should open");
+        (Arc::new(store), dir)
+    }
+
     async fn run_preflight(
         symbol: &str,
         enrichment: DataEnrichmentConfig,
+    ) -> graph_flow::Result<Context> {
+        let (store, _dir) = test_store().await;
+        run_preflight_with_store(symbol, enrichment, store).await
+    }
+
+    async fn run_preflight_with_store(
+        symbol: &str,
+        enrichment: DataEnrichmentConfig,
+        store: Arc<SnapshotStore>,
     ) -> graph_flow::Result<Context> {
         let state = TradingState::new(symbol, "2026-01-15");
         let ctx = Context::new();
@@ -146,7 +210,7 @@ mod tests {
             .await
             .expect("state serialization");
 
-        let task = PreflightTask::new(enrichment);
+        let task = PreflightTask::new(enrichment, store);
         task.run(ctx.clone()).await?;
         Ok(ctx)
     }
@@ -261,12 +325,13 @@ mod tests {
     #[tokio::test]
     async fn preflight_fails_closed_on_invalid_symbol() {
         let state = TradingState::new("DROP;TABLE", "2026-01-15");
+        let (store, _dir) = test_store().await;
         let ctx = Context::new();
         serialize_state_to_context(&state, &ctx)
             .await
             .expect("state serialization");
 
-        let task = PreflightTask::new(DataEnrichmentConfig::default());
+        let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
         let result = task.run(ctx).await;
         assert!(
             result.is_err(),
@@ -282,8 +347,9 @@ mod tests {
     #[tokio::test]
     async fn preflight_fails_closed_on_missing_trading_state() {
         // Context has no trading_state key — simulates context corruption.
+        let (store, _dir) = test_store().await;
         let ctx = Context::new();
-        let task = PreflightTask::new(DataEnrichmentConfig::default());
+        let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
         let result = task.run(ctx).await;
         assert!(
             result.is_err(),
@@ -316,5 +382,122 @@ mod tests {
                 "context key '{key}' must be present after preflight"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn preflight_attaches_no_prior_thesis_when_store_is_empty() {
+        let ctx = run_preflight("AAPL", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+
+        assert!(
+            state.prior_thesis.is_none(),
+            "no prior snapshot means prior_thesis must be None"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_attaches_prior_thesis_when_prior_run_exists() {
+        use crate::workflow::snapshot::{SnapshotPhase, SnapshotStore};
+        use chrono::Utc;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("preflight-thesis.db");
+        let store = Arc::new(
+            SnapshotStore::new(Some(&path))
+                .await
+                .expect("store should open"),
+        );
+
+        // Seed a prior phase-5 snapshot with a thesis
+        let mut prior_state = TradingState::new("AAPL", "2026-01-01");
+        prior_state.current_thesis = Some(crate::state::ThesisMemory {
+            symbol: "AAPL".to_owned(),
+            action: "Buy".to_owned(),
+            decision: "Approved".to_owned(),
+            rationale: "Strong momentum.".to_owned(),
+            summary: None,
+            execution_id: "prior-exec-001".to_owned(),
+            target_date: "2026-01-01".to_owned(),
+            captured_at: Utc::now(),
+        });
+        store
+            .save_snapshot(
+                &prior_state.execution_id.to_string(),
+                SnapshotPhase::FundManager,
+                &prior_state,
+                None,
+            )
+            .await
+            .expect("seed prior snapshot");
+
+        // Run preflight for the same symbol
+        let ctx = run_preflight_with_store("AAPL", DataEnrichmentConfig::default(), store)
+            .await
+            .expect("preflight should succeed");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+
+        let thesis = state
+            .prior_thesis
+            .expect("prior_thesis should be set after preflight with a prior run");
+        assert_eq!(thesis.action, "Buy");
+        assert_eq!(thesis.decision, "Approved");
+    }
+
+    #[tokio::test]
+    async fn preflight_prior_thesis_is_none_for_different_symbol() {
+        use crate::workflow::snapshot::{SnapshotPhase, SnapshotStore};
+        use chrono::Utc;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("preflight-diff-symbol.db");
+        let store = Arc::new(
+            SnapshotStore::new(Some(&path))
+                .await
+                .expect("store should open"),
+        );
+
+        // Seed a prior AAPL run
+        let mut prior_state = TradingState::new("AAPL", "2026-01-01");
+        prior_state.current_thesis = Some(crate::state::ThesisMemory {
+            symbol: "AAPL".to_owned(),
+            action: "Buy".to_owned(),
+            decision: "Approved".to_owned(),
+            rationale: "Strong momentum.".to_owned(),
+            summary: None,
+            execution_id: "prior-aapl".to_owned(),
+            target_date: "2026-01-01".to_owned(),
+            captured_at: Utc::now(),
+        });
+        store
+            .save_snapshot(
+                &prior_state.execution_id.to_string(),
+                SnapshotPhase::FundManager,
+                &prior_state,
+                None,
+            )
+            .await
+            .expect("seed prior snapshot");
+
+        // Run preflight for TSLA (different symbol)
+        let ctx = run_preflight_with_store("TSLA", DataEnrichmentConfig::default(), store)
+            .await
+            .expect("preflight should succeed");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+
+        assert!(
+            state.prior_thesis.is_none(),
+            "TSLA preflight must not load AAPL thesis"
+        );
     }
 }
