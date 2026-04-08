@@ -9,6 +9,7 @@ mod reporting;
 mod risk;
 mod sentiment;
 mod technical;
+mod thesis;
 mod token_usage;
 mod trading_state;
 
@@ -23,5 +24,6 @@ pub use reporting::*;
 pub use risk::*;
 pub use sentiment::*;
 pub use technical::*;
+pub use thesis::*;
 pub use token_usage::*;
 pub use trading_state::*;

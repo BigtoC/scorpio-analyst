@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use super::{
     DataCoverageReport, EvidenceRecord, ExecutionStatus, FundamentalData, MarketVolatilityData,
-    NewsData, ProvenanceSummary, RiskReport, SentimentData, TechnicalData, TokenUsageTracker,
-    TradeProposal,
+    NewsData, ProvenanceSummary, RiskReport, SentimentData, TechnicalData, ThesisMemory,
+    TokenUsageTracker, TradeProposal,
 };
 
 /// A single message entry in a debate or risk discussion history.
@@ -62,6 +62,16 @@ pub struct TradingState {
     // Phase 5: Final execution
     pub final_execution_status: Option<ExecutionStatus>,
 
+    // Thesis memory: prior-run context (loaded in preflight) and
+    // current-run capture (set by FundManagerTask before final snapshot save).
+    // Both are `None` at cycle start; `prior_thesis` is populated by preflight
+    // if a compatible prior run exists; `current_thesis` is always reset by
+    // `reset_cycle_outputs` so stale data never leaks across reused runs.
+    #[serde(default)]
+    pub prior_thesis: Option<ThesisMemory>,
+    #[serde(default)]
+    pub current_thesis: Option<ThesisMemory>,
+
     // Token accounting
     pub token_usage: TokenUsageTracker,
 }
@@ -102,6 +112,8 @@ impl TradingState {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            prior_thesis: None,
+            current_thesis: None,
             token_usage: TokenUsageTracker::default(),
         }
     }
