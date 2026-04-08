@@ -1,25 +1,25 @@
 ---
-title: feat: Add peer/comps and scenario valuation
+title: feat: Add scenario valuation
 type: feat
 status: active
 date: 2026-04-07
 ---
 
-# Add Peer/Comps And Scenario Valuation
+# Add Scenario Valuation
 
 ## Overview
 
-Add typed peer/comps and scenario valuation so the trader, fund manager, and report layer reason from deterministic valuation structures rather than relying on prompt-only free-text valuation summaries.
+Add typed scenario valuation so the trader, fund manager, and report layer reason from deterministic valuation structures rather than relying on prompt-only free-text valuation summaries.
 
 This plan implements Milestone 6 from `docs/superpowers/specs/2026-04-05-financial-services-plugins-inspired-architecture-design.md` and builds on the completed Stage 1 foundation.
 
 ## Problem Frame
 
-The current system already expects valuation-oriented reasoning: `TradeProposal` carries `valuation_assessment`, the Trader prompt references sector peers and historical norms, and the Fund Manager prompt anchors entry guidance and sizing to valuation. But none of that is typed or deterministic yet. There is no `src/state/derived.rs`, no structured peer/comps snapshot, and no scenario-aware fields in the proposal schema.
+The current system already expects valuation-oriented reasoning: `TradeProposal` carries `valuation_assessment`, the Trader prompt references historical norms, and the Fund Manager prompt anchors entry guidance and sizing to valuation. But none of that is typed or deterministic yet. There is no `src/state/derived.rs`, no structured valuation snapshot, and no scenario-aware fields in the proposal schema.
 
 This milestone should move valuation shape and computations into Rust. The first slice needs to stay bounded: it should define where deterministic valuation lives, how it flows into the trader proposal, how downstream consumers read it, and how it degrades safely when valuation inputs are incomplete.
 
-ETF coverage needs to be treated as a first-class compatibility case in that degradation model. For ETFs, standard corporate fundamental inputs like `pe_ratio`, `eps`, `revenue_growth_pct`, `gross_margin`, or `debt_to_equity` may be legitimately `None`. That is a domain-valid absence, not necessarily a data-quality failure. The plan must therefore avoid assuming that missing corporate fundamentals imply a broken analysis run; instead, deterministic valuation should either use asset-type-appropriate inputs when they exist or emit an explicit "not assessed for this asset shape" outcome.
+ETF coverage needs to be treated as a first-class compatibility case in that degradation model. For ETFs, standard corporate fundamental inputs like free cash flow, EBITDA, or shares outstanding may be legitimately `None`. That is a domain-valid absence, not necessarily a data-quality failure. The plan must therefore avoid assuming that missing corporate fundamentals imply a broken analysis run; instead, deterministic valuation should either use asset-type-appropriate inputs when they exist or emit an explicit "not assessed for this asset shape" outcome.
 
 ## Requirements Trace
 
@@ -32,7 +32,7 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
 
 ## Scope Boundaries
 
-- No new provider integration requirement in this slice beyond what is needed to define/store deterministic valuation inputs.
+- No new provider integration requirement in this slice beyond what is needed to define/store deterministic valuation inputs (using the existing `yfinance-rs` dependency).
 - No separate scenario simulation engine.
 - No analysis-pack policy extraction.
 - No workflow topology changes.
@@ -43,18 +43,15 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
 
 - `src/state/proposal.rs` currently has only `valuation_assessment: Option<String>`.
 - `src/workflow/tasks/analyst.rs` / `AnalystSyncTask` is the current cross-source deterministic merge point.
-- `src/agents/trader/mod.rs` already asks the model to reason from valuation, peers, and historical norms.
+- `src/agents/trader/mod.rs` already asks the model to reason from valuation and historical norms.
 - `src/agents/fund_manager/prompt.rs` already consumes valuation conceptually.
 - `src/report/final_report.rs` currently renders a single valuation row.
-- `src/state/fundamental.rs` currently exposes these typed fundamental inputs: `revenue_growth_pct`, `pe_ratio`, `eps`, `current_ratio`, `debt_to_equity`, `gross_margin`, `net_income`, and `insider_transactions`.
-- `src/data/finnhub.rs::get_fundamentals()` already fetches and populates `insider_transactions`; insider activity is not a missing Finnhub fetch in the current codebase.
-- `src/state/trading_state.rs` already carries `current_price`, and `src/state/technical.rs` already carries `support_level` / `resistance_level`. These are useful for comparing derived fair value to market price and for price-level outputs, but they do not replace missing peer/comps valuation inputs.
-- The repo already depends on `yfinance-rs = 0.7.2`, but the current `YFinanceClient` only wraps OHLCV and latest-close usage. Wait: `yfinance_rs 0.7.2` explicitly hardcodes `market_cap`, `shares_outstanding`, `dividend_yield`, `pe_ttm`, and `eps_ttm` to `None` in its `Info` struct. Those fields CANNOT be fetched via the current crate version. The ONLY additive fields reliably available from `yfinance_rs` are `volume` and the `profile::Profile` lookup.
+- `src/state/fundamental.rs` currently exposes typed fundamental inputs.
+- `src/state/trading_state.rs` already carries `current_price`, and `src/state/technical.rs` already carries `support_level` / `resistance_level`.
+- The repo already depends on `yfinance-rs = 0.7.2`. While its `Info` struct has missing inputs, `yfinance-rs 0.7.2` natively provides full financial statements (`quarterly_cashflow`, `quarterly_balance_sheet`, `quarterly_income_stmt`, `quarterly_shares`) and earnings trends (`earnings_trend`). This means we CAN compute deterministic Discounted Cash Flow (DCF), EV/EBITDA, Forward P/E, and PEG ratios for corporate equities natively.
 - `yfinance_rs::profile::Profile` can distinguish company vs fund-style instruments when lookup succeeds. `Profile::Fund` is the cleanest current path for identifying ETF/fund-like runs instead of inferring asset shape only from missing corporate fundamentals, but profile lookup itself must remain optional and fall back cleanly when absent.
-- The trader prompt currently references valuation concepts the runtime does not yet carry as typed inputs: sector peer medians, historical valuation norms, `P/S`, `PEG`, `EV/EBITDA`, and `DCF` inputs.
-- Missing typed inputs for deterministic valuation today include: peer/comps datasets, sector/industry median multiples, historical valuation bands, price-to-sales inputs, PEG inputs, enterprise value / EBITDA inputs, DCF inputs such as free cash flow, discount rate, terminal growth, forecast horizon, market_cap, and shares_outstanding. The current `yfinance_rs = 0.7.2` crate does NOT expose `market_cap` or `shares_outstanding`.
 - Existing metric semantics also need normalization before they are safe for deterministic math. In particular, `net_income` is currently populated from either `netIncomeGrowth3Y` or `netIncomeAnnual`, which mixes a growth rate with an absolute value; `eps` and `revenue_growth_pct` also fall back across mixed horizons (`Annual`, `TTM`, `3Y`, `YoY`) and need explicit precedence rules.
-- ETF analysis is a special case for this plan: current typed fundamentals are equity-centric, and ETF runs may legitimately have many of those fields as `None`. The runtime has no asset-class discriminator today, so the first slice should treat unsupported valuation shapes as an explicit no-assessment path rather than as corrupted or low-quality data.
+- ETF analysis is a special case for this plan: current typed fundamentals are equity-centric, and ETF runs may legitimately have many of those fields as `None` (and `yfinance-rs` still lacks ETF-native metrics like NAV and expense ratio). The runtime has no asset-class discriminator today, so the first slice should treat unsupported valuation shapes as an explicit no-assessment path rather than as corrupted or low-quality data.
 - `docs/solutions/logic-errors/stale-trading-state-evidence-and-unavailable-data-quality-fallbacks-2026-04-07.md` is relevant because any new per-cycle valuation fields must be reset explicitly.
 
 ### Institutional Learnings
@@ -71,16 +68,13 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
   Rationale: the trader should consume structured valuation inputs, not invent them ad hoc.
 
 - **Compute deterministic valuation before trader inference.**
-  Rationale: this keeps scenario/peer logic in Rust and lets the LLM interpret rather than originate the valuation model.
+  Rationale: this keeps scenario logic in Rust and lets the LLM interpret rather than originate the valuation model.
 
 - **Keep proposal schema growth additive and optional-first.**
   Rationale: downstream tests, snapshots, and consumers currently assume a small proposal shape.
 
-- **Treat peer/comps inputs as optional in the first slice.**
-  Rationale: current repo state has no fully-fledged peer provider yet. The plan should support partial valuation and fail-open behavior when peer inputs are missing.
-
 - **Treat ETF-style missing corporate fundamentals as domain-valid absence.**
-  Rationale: for ETFs, fields like `pe_ratio`, `eps`, `gross_margin`, or `debt_to_equity` may be structurally unavailable. The deterministic valuation layer must not interpret those nulls as a broken run or automatically downgrade data quality. Instead, it should emit an explicit unsupported/insufficient-input outcome for corporate-equity valuation and let downstream prompts/reports surface that honestly.
+  Rationale: for ETFs, fields like free cash flow or EBITDA may be structurally unavailable. The deterministic valuation layer must not interpret those nulls as a broken run or automatically downgrade data quality. Instead, it should emit an explicit unsupported/insufficient-input outcome (`NotAssessed`) for corporate-equity valuation and let downstream prompts/reports surface that honestly.
 
 - **Use `yfinance_rs::profile::Profile` as the first asset-shape signal when available.**
   Rationale: the runtime currently has no dedicated asset-class field, but `Profile::Fund` provides a cleaner signal for ETF/fund-like instruments than relying only on absent corporate fundamentals. This supports a more honest `NotAssessed` path for fund instruments without introducing a new provider.
@@ -88,26 +82,17 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
 - **Treat `yfinance_rs::profile::Profile` as additive optional context, never a required input.**
   Rationale: Yahoo responses are often partially populated or fail outright. Missing profile data must degrade to data-shape-based detection or `NotAssessed`, not to schema/runtime failure.
 
-- **Use a first-slice repo-local peer/comps contract instead of waiting for a provider.**
-  Rationale: the repo has no live peer/comps producer today, so deterministic valuation needs an explicit typed seam even if the first slice populates it sparsely or heuristically.
-
-- **Acknowledge that first-slice valuation operates on sparse/absent peer data.**
-  Rationale: no concrete peer provider exists until Plan 4. The first-slice deterministic valuation is intentionally a typed infrastructure slice that proves the computation and consumer seams work end-to-end with partial/absent inputs. The value is in establishing the typed contract, not in producing rich valuation outputs. This is acceptable because the plan explicitly requires fail-open behavior (R4) and the typed seam becomes immediately useful once Plan 4 delivers real enrichment.
-
-- **Define the first-slice deterministic heuristic explicitly.**
-  Rationale: without a concrete rule, Chunk 2 cannot be implemented or tested. First-slice heuristic: compute a simple relative-valuation ratio from the analyst's extracted financial metrics (e.g., P/E, EV/EBITDA) against sector median values hardcoded or config-driven for the first slice. When peer data is absent, output `None` for the derived valuation and let consumers render the explicit absence. The implementing agent may refine the exact formula but must pin one testable rule before coding.
-
 - **Separate valuation-core inputs from supporting context.**
-  Rationale: `current_price`, `revenue_growth_pct`, `pe_ratio`, `eps`, `current_ratio`, `debt_to_equity`, `gross_margin`, and a normalized net-income field are the current typed inputs most directly relevant to deterministic valuation. `insider_transactions` should remain a qualitative/supporting signal or be reduced into a small derived sentiment summary; raw insider records should not drive the core scenario math.
+  Rationale: `current_price`, cash flows, income statements, balance sheets, and shares outstanding are the typed inputs most directly relevant to deterministic valuation. Other fields should remain qualitative/supporting signals or be reduced into a small derived sentiment summary.
 
-- **Do not rely on `yfinance_rs::Info` for valuation inputs in the active track.**
-  Rationale: `yfinance_rs 0.7.2` hardcodes `market_cap`, `shares_outstanding`, `pe_ttm`, `eps_ttm`, and `dividend_yield` to `None`. It cannot supplement the valuation math without an upstream crate update or a custom scraper.
+- **Pull comprehensive financial statements via `yfinance_rs`.**
+  Rationale: `yfinance_rs 0.7.2` natively provides `quarterly_cashflow`, `quarterly_balance_sheet`, `quarterly_income_stmt`, `quarterly_shares`, and `earnings_trend`. These provide the exact inputs needed for real deterministic DCF, EV/EBITDA, Forward P/E, and PEG ratio calculations without relying on the limited `Info` struct.
+
+- **Compute deterministic DCF, EV/EBITDA, Forward P/E, and PEG ratios.**
+  Rationale: With the full financial statements and earnings trends now available, the runtime can definitively calculate these intrinsic and relative valuation metrics to ground the trader prompt in hard numbers.
 
 - **Split supported first-slice valuation shapes from unsupported ones.**
-  Rationale: the current typed inputs support a bounded corporate-equity valuation path. They do not yet support ETF-native valuation. The first slice should therefore model at least two outcomes: `CorporateEquityValuation` when enough normalized inputs exist, and `NotAssessed { reason }` when the asset/input shape does not support deterministic valuation yet.
-
-- **Do not promise deterministic `P/S`, `PEG`, `EV/EBITDA`, or `DCF` math until their typed inputs exist.**
-  Rationale: the trader prompt references these concepts today, but the runtime does not yet carry the needed inputs (for example peer medians, revenue/share-count or market-cap inputs, enterprise value, EBITDA, free cash flow, discount rate, terminal growth, and shares outstanding). This milestone must either add those inputs explicitly or narrow the prompt to deterministic measures the runtime can actually compute.
+  Rationale: The current typed inputs and the new `yfinance_rs` statements support a bounded corporate-equity valuation path. They do not yet support ETF-native valuation (which requires NAV, expense ratios, etc.). The first slice should therefore model at least two outcomes: `CorporateEquityValuation` when enough normalized inputs exist, and `NotAssessed { reason }` when the asset/input shape does not support deterministic valuation yet.
 
 - **Normalize metric semantics before using them in valuation math.**
   Rationale: deterministic Rust math requires stable units and horizons. Fields that silently mix annual, TTM, multi-year growth, or absolute-value variants must define one explicit precedence rule or be split into separate typed fields before they are consumed by valuation logic.
@@ -126,21 +111,15 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
   No. Add derived valuation state first, then flow the final scenario-aware output into `TradeProposal`.
 
 - **Should scenario values be LLM-authored?**
-  No. The runtime should compute them deterministically.
+  No. The runtime should compute them deterministically based on real financial statements.
 
 - **Should the report layer expose the new valuation structure?**
   Yes.
 
 ### Deferred to Implementation
 
-- **Exact first-slice peer/comps selection rule.**
-  The first slice should use one explicit repo-local rule: define a typed peer/comps input on `TradingState`, allow it to be absent, and start with the simplest deterministic heuristic available from existing runtime data until a later provider-backed source exists.
-
-- **Exact first-slice valuation-input inventory and unsupported prompt terms.**
-  Before coding begins, pin down which valuation measures are actually supported by typed inputs in this milestone. If the milestone does not add typed inputs for `P/S`, `PEG`, `EV/EBITDA`, or `DCF`, Chunk 3 must remove or narrow those terms in the trader / fund-manager prompt contract so prompts match runtime capabilities.
-
 - **How ETF runs are identified in the absence of an asset-class field.**
-  The first slice should not add a new asset-type system unless it becomes necessary. Start with `yfinance_rs::profile::Profile` when available (`Profile::Fund` => fund/ETF-like), then fall back to data-shape detection when profile lookup is absent or inconclusive. Missing Yahoo profile/info data must not itself be treated as proof of asset shape; it is only one optional signal. When the run lacks the normalized corporate inputs required by the valuation model, return an explicit `NotAssessed` result with a reason like `unsupported_asset_shape` or `insufficient_corporate_fundamentals`. If ETF-specific valuation later becomes important, capture that as a follow-on plan with explicit ETF inputs.
+  The first slice should not add a new asset-type system unless it becomes necessary. Start with `yfinance_rs::profile::Profile` when available (`Profile::Fund` => fund/ETF-like), then fall back to data-shape detection when profile lookup is absent or inconclusive. Missing Yahoo profile/info data must not itself be treated as proof of asset shape; it is only one optional signal. When the run lacks the normalized corporate inputs required by the valuation model, return an explicit `NotAssessed` result with a reason like `unsupported_asset_shape` or `insufficient_corporate_fundamentals`.
 
 - **Whether risk agents need full direct valuation context or only the expanded proposal.**
   This can be finalized after implementing the typed state and proposal changes.
@@ -151,7 +130,7 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
 
 ```mermaid
 flowchart TB
-    A[Analyst outputs] --> B[Deterministic valuation derivation]
+    A[Financial Statements & Analyst outputs] --> B[Deterministic DCF & Multiples derivation]
     B --> C[Typed derived valuation on TradingState]
     C --> D[Trader consumes structured valuation]
     D --> E[Scenario-aware TradeProposal]
@@ -162,7 +141,7 @@ flowchart TB
 
 - [ ] **Chunk 1: Derived valuation state and proposal schema**
 
-**Goal:** Define the typed structures before touching prompts or reports.
+**Goal:** Define the typed structures and fetch real financial data before touching prompts or reports.
 
 **Requirements:** R1, R2, R6
 
@@ -174,7 +153,7 @@ flowchart TB
 - Modify: `src/state/proposal.rs`
 - Modify: `src/state/trading_state.rs`
 - Modify: `src/data/yfinance/mod.rs`
-- Modify: `src/data/yfinance/ohlcv.rs`
+- Modify: `src/data/yfinance/financials.rs` (or equivalent to expose Cashflow, Balance Sheet, Income Statement, and Shares)
 - Modify (compile-fix cascade): `src/agents/risk/aggressive.rs`
 - Modify (compile-fix cascade): `src/agents/risk/conservative.rs`
 - Modify (compile-fix cascade): `src/agents/risk/neutral.rs`
@@ -186,14 +165,12 @@ flowchart TB
 - Test: `tests/state_roundtrip.rs`
 
 **Approach:**
-- Add typed peer/comps and scenario valuation structures.
-- Add an explicit valuation-input inventory that separates currently available inputs from future optional inputs. At minimum, call out current inputs (`current_price`, `revenue_growth_pct`, `pe_ratio`, `eps`, `current_ratio`, `debt_to_equity`, `gross_margin`, normalized `net_income`) and future optional inputs (`market_cap`, `shares_outstanding`, `dividend_yield`, `peer_medians`, `historical_bands`, `price_to_sales`, `peg_ratio`, `ev_to_ebitda`, `enterprise_value`, `free_cash_flow`).
+- Add typed scenario valuation structures for DCF, EV/EBITDA, Forward P/E, and PEG ratios.
+- Update `src/data/yfinance/mod.rs` to explicitly pull `quarterly_cashflow`, `quarterly_balance_sheet`, `quarterly_income_stmt`, `quarterly_shares`, and `earnings_trend` from the `yfinance_rs` client.
+- Add an explicit valuation-input inventory that relies on these real financial statements.
 - Add a small typed asset-shape seam sourced from `yfinance_rs::profile::Profile` so the runtime can distinguish company-style and fund-style instruments.
 - Define the typed seam so `Profile` is optional. The runtime must handle missing profiles cleanly.
-- Add an explicit no-assessment branch to the derived valuation schema so ETF-style runs with domain-valid null corporate fundamentals do not violate assumptions. The schema should be able to represent "valuation not assessed" with a typed reason instead of forcing partial corporate-equity math.
-- Normalize any mixed-unit or mixed-horizon fields before exposing them to deterministic valuation. Do not reuse a field like `net_income` if it can represent either growth or absolute value without first splitting or renaming it.
-- Define the first-slice peer/comps input contract in the same change so deterministic valuation has an explicit typed upstream seam even when peer data is absent.
-- Decide whether insider activity is represented as a raw list (supporting context only) or a small derived signal (for example net insider buy/sell bias over a bounded window). Do not treat raw insider transactions as core valuation math inputs.
+- Add an explicit no-assessment branch (`NotAssessed`) to the derived valuation schema so ETF-style runs with domain-valid null corporate fundamentals do not violate assumptions. The schema should be able to represent "valuation not assessed" with a typed reason.
 - Extend `TradeProposal` with optional scenario-aware fields.
 - Keep serde compatibility additive.
 
@@ -206,7 +183,6 @@ flowchart TB
 - Edge case: old snapshots/proposals without the new fields still deserialize.
 - Edge case: `Profile::Fund` or equivalent fund-style asset shape serializes into an explicit `NotAssessed` valuation outcome rather than a broken corporate-equity path.
 - Edge case: ETF-style inputs with `None` for corporate fundamentals serialize into an explicit `NotAssessed` valuation outcome rather than failing validation.
-- Edge case: invalid scenario ordering is rejected by validation helpers.
 - Edge case: risk agents compile and pass existing tests with the expanded proposal schema (regression).
 - Error path: proposal validation rejects inconsistent structured valuation.
 
@@ -215,7 +191,7 @@ flowchart TB
 
 - [ ] **Chunk 2: Deterministic valuation derivation in the runtime**
 
-**Goal:** Compute structured valuation before trader inference.
+**Goal:** Compute structured valuation using real financial statements before trader inference.
 
 **Requirements:** R1, R3, R4
 
@@ -229,13 +205,12 @@ flowchart TB
 
 **Approach:**
 - Extend the cross-source deterministic merge path to compute a typed valuation payload.
-- Keep peer/comps inputs optional and fail-open.
-- Only compute deterministic outputs from inputs that are actually present and semantically normalized. Do not fabricate `P/S`, `PEG`, `EV/EBITDA`, or `DCF` outputs from prose-only analyst summaries.
+- Compute deterministic intrinsic value ranges (DCF, EV/EBITDA, Forward P/E, PEG) from the `yfinance_rs` fetched financial statements (Cashflow, Balance Sheet, Income Statement, Shares).
 - Use `yfinance_rs::profile::Profile` first, and missing-corporate-input shape second, to decide whether the run should follow the bounded corporate-equity path or emit `NotAssessed`.
 - When the input shape looks ETF/fund-like or otherwise lacks the required corporate fundamentals, emit `NotAssessed` with an explicit reason instead of treating the run as invalid.
 - Never coerce absent fields into fake numeric values. A valuation rule may only run if all of its required inputs are present; otherwise it must produce a partial result or `NotAssessed`.
 - Persist the derived valuation on `TradingState` for downstream use.
-- Make the control-flow contract explicit in code and tests: missing inputs or empty peer sets continue without valuation; invalid computed values either drop valuation with an explicit fallback path or fail the task, but that choice must be pinned down in the implementation before wiring consumers.
+- Make the control-flow contract explicit in code and tests: missing inputs continue without valuation; invalid computed values either drop valuation with an explicit fallback path or fail the task.
 
 **Execution note:** Start with failing sync-task tests for full-data, partial-data, and invalid-range cases before changing the runtime logic.
 
@@ -244,12 +219,10 @@ flowchart TB
 - existing continue-on-partial-data behavior
 
 **Test scenarios:**
-- Happy path: complete upstream evidence yields derived valuation state.
+- Happy path: complete financial statements yield derived intrinsic valuation state.
 - Edge case: missing inputs produce partial or absent valuation while the run still continues.
 - Edge case: ETF-style runs with null corporate fundamentals produce `NotAssessed` and the cycle still continues.
 - Edge case: Yahoo profile lookup fails or returns no profile, and the runtime still falls back to data-shape detection safely.
-- Edge case: no usable peer set does not abort the cycle.
-- Error path: invalid derived values follow one explicit contract that is tested end-to-end rather than being left implicit.
 
 **Verification:**
 - Workflow-task tests prove deterministic valuation exists and respects existing degradation rules.
@@ -271,8 +244,7 @@ flowchart TB
 
 **Approach:**
 - Add a shared prompt-context builder for structured valuation state if needed.
-- Update trader/fund-manager prompts to consume typed valuation context and proposal fields.
-- If this milestone does not add typed inputs for `P/S`, `PEG`, `EV/EBITDA`, or `DCF`, narrow the prompt text to supported deterministic measures only (for example P/E-relative comparison, current-price-vs-derived-range, and explicitly absent peer/comps context).
+- Update trader/fund-manager prompts to consume the typed deterministic DCF, EV/EBITDA, Forward P/E, and PEG computations from the proposal/state fields.
 - Make prompt fallback explicit for ETF-style `NotAssessed` outcomes so downstream agents say valuation is not applicable / not supported for the current asset shape rather than pretending data is merely missing.
 - Preserve explicit fallback behavior when valuation is partial or absent.
 
@@ -329,7 +301,7 @@ flowchart TB
 
 ## System-Wide Impact
 
-- **Interaction graph:** analyst evidence -> deterministic valuation derivation -> trader proposal -> fund-manager/report consumption.
+- **Interaction graph:** analyst evidence & financial statements -> deterministic valuation derivation -> trader proposal -> fund-manager/report consumption.
 - **Error propagation:** incomplete valuation degrades rather than aborting the run; invalid structured valuation must follow one explicit, tested contract at the analyst-sync seam.
 - **State lifecycle risks:** new derived fields must be reset between reused runs.
 - **Integration coverage:** runtime derivation, proposal-schema changes, prompt consumption, and report rendering all need cross-layer tests.
@@ -339,7 +311,6 @@ flowchart TB
 
 | Risk                                                         | Mitigation                                                                                                                             |
 |--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
-| No authoritative peer/comps source exists yet                | Keep first-slice peer inputs optional and use a bounded deterministic heuristic                                                        |
 | Proposal-schema growth breaks downstream consumers           | Change state, prompts, and report/tests together in the same milestone                                                                 |
 | Stale derived valuation leaks across reused runs             | Update `reset_cycle_outputs()` and add reused-run regression coverage                                                                  |
 | ETF runs violate corporate-equity valuation assumptions      | Represent unsupported asset/input shapes as explicit `NotAssessed` outcomes rather than treating them as failures                      |
@@ -349,7 +320,6 @@ flowchart TB
 
 - Update `docs/prompts.md` if the valuation contract in trader/fund-manager prompts changes materially.
 - Update the "Adding things" table in `AGENTS.md` to document `src/state/derived.rs` and the valuation derivation pattern.
-- If a richer peer-provider model becomes necessary, capture that in a later milestone rather than broadening this plan ad hoc.
 
 ## Sources & References
 
