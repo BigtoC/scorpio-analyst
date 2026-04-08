@@ -1,8 +1,8 @@
 # Financial-Services-Plugins Architecture Roadmap Summary
 
-This document summarizes the 5-plan architecture roadmap inspired by `https://github.com/anthropics/financial-services-plugins` and grounded in the current `scorpio-analyst` codebase.
+This document summarizes the active architecture roadmap inspired by `https://github.com/anthropics/financial-services-plugins` and grounded in the current `scorpio-analyst` codebase.
 
-It is intentionally a big-picture briefing document, not an implementation plan. Use it to understand how the completed Stage 1 work and the 4 follow-on plans fit together.
+It is intentionally a big-picture briefing document, not an implementation plan. Use it to understand how the completed Stage 1 work and the active follow-on plans fit together under the current provider constraints.
 
 ## Purpose
 
@@ -10,6 +10,35 @@ It is intentionally a big-picture briefing document, not an implementation plan.
 - clarify dependencies between the plans
 - call out the global invariants that should remain true across all 5 plans
 - reduce the risk of implementing later milestones in the wrong order or with the wrong abstraction boundaries
+
+## Current Provider Constraints
+
+The active roadmap assumes the project currently has access to:
+
+- free-tier Finnhub
+- yfinance
+- FRED
+
+Those providers are sufficient for:
+
+- thesis memory
+- macro and technical context
+- news/event enrichment
+- bounded deterministic valuation for supported corporate-equity inputs
+- explicit "not assessed" valuation fallback for unsupported asset shapes such as ETFs
+
+They are not sufficient for the richer roadmap ambitions implied by the original documents, including:
+
+- transcript enrichment
+- guaranteed consensus-estimates enrichment
+- peer/comps datasets and sector medians
+- historical valuation bands
+- `P/S`, `PEG`, `EV/EBITDA`, and DCF-style valuation inputs
+- ETF-native valuation inputs
+
+Those capabilities now live in an optional deferred follow-on plan: `docs/plans/2026-04-07-005-optional-premium-data-follow-ons-plan.md`.
+
+Important clarification: the current setup can still analyze ETFs. The limitation is not ETF analysis end-to-end; the limitation is that ETFs often do not support the same deterministic valuation path as single-stock runs, so the honest outcome may be explicit valuation fallback rather than a corporate-equity valuation result.
 
 ## Current Baseline
 
@@ -40,13 +69,13 @@ The 5 plans move the repo from a stronger typed foundation toward reusable, pack
 
 ## Roadmap At A Glance
 
-| Plan                                            | Status    | Main outcome                                                                                            | Depends on                                  | What it unlocks                     |
-|-------------------------------------------------|-----------|---------------------------------------------------------------------------------------------------------|---------------------------------------------|-------------------------------------|
-| 1. Evidence / provenance foundation             | Completed | `PreflightTask`, typed evidence/provenance/coverage state, prompt/report seams, enrichment placeholders | None                                        | all later milestones                |
-| 2. Thesis memory                                | Planned   | snapshot-backed prior-thesis reuse and prompt injection                                                 | Plan 1                                      | historical continuity across runs   |
-| 3. Peer/comps and scenario valuation            | Planned   | deterministic typed valuation state and scenario-aware proposal/reporting                               | Plan 1                                      | structured valuation reasoning      |
-| 4. Concrete earnings/event enrichment providers | Planned   | real transcript/consensus-estimates/event payloads behind adapter contracts                             | Plan 1                                      | concrete enrichment-backed evidence |
-| 5. Analysis pack extraction                     | Planned   | declarative analysis-profile layer above config/evidence/prompt/report policy                           | Plans 1-4 stabilized                        | configurable analysis profiles      |
+| Plan                                            | Status    | Main outcome                                                                                                       | Depends on           | What it unlocks                     |
+|-------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------|----------------------|-------------------------------------|
+| 1. Evidence / provenance foundation             | Completed | `PreflightTask`, typed evidence/provenance/coverage state, prompt/report seams, enrichment placeholders            | None                 | all later milestones                |
+| 2. Thesis memory                                | Planned   | snapshot-backed prior-thesis reuse and prompt injection                                                            | Plan 1               | historical continuity across runs   |
+| 3. Peer/comps and scenario valuation            | Planned   | bounded deterministic valuation for supported input shapes plus explicit `NotAssessed` fallbacks                   | Plan 1               | auditable valuation where supported |
+| 4. Concrete earnings/event enrichment providers | Planned   | event/news enrichment first; optional estimates if provider support is verified; transcripts deferred              | Plan 1               | concrete enrichment-backed evidence |
+| 5. Analysis pack extraction                     | Planned   | declarative analysis-profile layer above config/evidence/prompt/report policy, including provider-limited behavior | Plans 1-4 stabilized | configurable analysis profiles      |
 
 ## Dependency View
 
@@ -66,7 +95,7 @@ flowchart LR
     P4 --> P5
 ```
 
-## Plan 0: Evidence / Provenance Foundation
+## Plan 1: Evidence / Provenance Foundation
 
 Source plan: `docs/superpowers/plans/2026-04-05-evidence-provenance-foundation.md`
 
@@ -92,9 +121,9 @@ How it improves the system:
 - every downstream agent now reads typed, provenance-tagged evidence instead of free-text strings, eliminating ambiguity about whether data is real or hallucinated
 - the report gains a built-in audit trail: coverage gaps and data-quality degradations are surfaced explicitly rather than silently absorbed into prompt context
 
-## Plan 1: Thesis Memory
+## Plan 2: Thesis Memory
 
-Plan file: `docs/plans/2026-04-07-001-feat-thesis-memory-plan.md`
+Plan file: `docs/plans/2026-04-07-002-feat-thesis-memory-plan.md`
 
 Primary goal:
 
@@ -113,15 +142,16 @@ Why it comes next:
 
 - it reuses the Stage 1 snapshot and prompt seams directly
 - it adds cross-run continuity before later derived valuation work
+- it is largely independent of premium vs free data-provider constraints
 
 How it improves the system:
 
 - the trader and researcher agents can anchor new recommendations against the prior-run thesis, catching thesis drift early and preventing the system from reversing a well-reasoned position without explicit cause
 - repeated analysis on the same ticker becomes cumulative rather than amnesiac, reducing redundant LLM work and improving recommendation stability over time
 
-## Plan 2: Peer/Comps And Scenario Valuation
+## Plan 3: Peer/Comps And Scenario Valuation
 
-Plan file: `docs/plans/2026-04-07-002-feat-peer-comps-scenario-valuation-plan.md`
+Plan file: `docs/plans/2026-04-07-003-feat-peer-comps-scenario-valuation-plan.md`
 
 Primary goal:
 
@@ -143,16 +173,16 @@ Why it follows thesis memory:
 
 How it improves the system:
 
-- replaces ad-hoc LLM prose estimates with deterministic Rust math, so every trade proposal carries a reproducible valuation basis rather than a number that varies run-to-run
-- scenario-aware inputs (bull/base/bear) make the fund manager's approve/reject decision traceable to specific valuation assumptions rather than opaque model outputs
+- replaces ad-hoc LLM prose estimates with deterministic Rust math where supported by current typed inputs, and emits explicit `NotAssessed` outcomes where valuation is not supported honestly
+- makes approve/reject decisions more traceable for supported corporate-equity cases without forcing fake precision for ETFs or provider-limited runs
 
-## Plan 3: Concrete Earnings / Event Enrichment Providers
+## Plan 4: Concrete Earnings / Event Enrichment Providers
 
-Plan file: `docs/plans/2026-04-07-003-feat-concrete-enrichment-providers-plan.md`
+Plan file: `docs/plans/2026-04-07-004-feat-concrete-enrichment-providers-plan.md`
 
 Primary goal:
 
-- replace `null` enrichment placeholders with real transcript / consensus-estimates / event payloads
+- replace `null` enrichment placeholders with real event payloads and, if verified on current providers, consensus-estimates payloads
 - preserve fail-open optional-enrichment behavior
 - make concrete enrichment visible to prompts and reports
 
@@ -169,12 +199,12 @@ Why it comes before packs:
 
 How it improves the system:
 
-- gives analyst and trader agents real earnings-call transcripts, consensus estimates, and event payloads instead of null placeholders, materially raising signal quality for sentiment and fundamental analysis
+- gives analyst and trader agents real event payloads first, and possibly consensus estimates if provider support is verified, instead of null placeholders
 - fail-open adapter contracts ensure that missing or slow external data degrades gracefully rather than aborting the run, keeping the system production-safe even when enrichment sources are partially unavailable
 
-## Plan 4: Analysis Pack Extraction
+## Plan 5: Analysis Pack Extraction
 
-Plan file: `docs/plans/2026-04-07-004-feat-analysis-pack-extraction-plan.md`
+Plan file: `docs/plans/2026-04-07-005-feat-analysis-pack-extraction-plan.md`
 
 Primary goal:
 
@@ -195,8 +225,8 @@ Why it is last:
 
 How it improves the system:
 
-- operators can swap the entire analytical posture — evidence scope, prompt strategy, reporting style — through a config change instead of a code edit, making the system adaptable to different asset classes, time horizons, or risk appetites without touching business logic
-- extracting policy into declarative packs makes behavioral differences between analysis runs explicit and auditable, replacing implicit prompt variation with versioned, reviewable configuration
+- operators can swap the analytical posture — including provider-limited fallback behavior and asset-shape-aware valuation policy — through a config change instead of a code edit
+- extracting policy into declarative packs makes provider and asset-shape limitations explicit and auditable instead of hiding them inside prompt wording
 
 ## Ordering Rationale
 
@@ -207,6 +237,17 @@ The current ordering (thesis → valuation → enrichment → packs) prioritizes
 - Moving enrichment first would delay the typed valuation seam that Plan 5 (packs) needs to configure
 
 This ordering is a deliberate tradeoff, not an oversight. If enrichment vendor choices resolve faster than expected, the implementing agent may consider reordering Plans 3 and 4 as long as the final seams for Plan 5 remain stable.
+
+## Current Implementation Track
+
+Under the current provider constraints, the practical implementation sequence is:
+
+1. Plan 2: thesis memory
+2. Plan 3: bounded valuation with explicit `NotAssessed` outcomes
+3. Plan 4: event/news enrichment first, optional estimates only if provider verification succeeds
+4. Plan 5: packs that encode provider-limited and asset-shape-aware behavior
+
+The premium-data follow-ons are intentionally excluded from this active sequence.
 
 ## Global Architectural Invariants
 
@@ -227,7 +268,7 @@ These should remain true across all 5 plans:
 
 - Stage 1 seams do not mean concrete enrichment providers already exist
 - thesis memory does not imply a new dedicated memory database in the first slice
-- valuation is not meant to stay prompt-only after Plan 3
+- valuation is not meant to stay prompt-only after Plan 3, but the active slice is intentionally narrower than the original premium-data vision
 - analysis packs are not a plugin runtime or a graph-topology feature
 - missing derived data should not be silently serialized as “empty but valid” if the real meaning is “not available”
 
@@ -235,8 +276,9 @@ These should remain true across all 5 plans:
 
 - Completed Stage 1 plan: `docs/superpowers/plans/2026-04-05-evidence-provenance-foundation.md`
 - Architecture spec: `docs/superpowers/specs/2026-04-05-financial-services-plugins-inspired-architecture-design.md`
-- Thesis memory plan: `docs/plans/2026-04-07-001-feat-thesis-memory-plan.md`
-- Peer/comps and scenario valuation plan: `docs/plans/2026-04-07-002-feat-peer-comps-scenario-valuation-plan.md`
-- Concrete enrichment providers plan: `docs/plans/2026-04-07-003-feat-concrete-enrichment-providers-plan.md`
-- Analysis pack extraction plan: `docs/plans/2026-04-07-004-feat-analysis-pack-extraction-plan.md`
+- Thesis memory plan: `docs/plans/2026-04-07-002-feat-thesis-memory-plan.md`
+- Peer/comps and scenario valuation plan: `docs/plans/2026-04-07-003-feat-peer-comps-scenario-valuation-plan.md`
+- Concrete enrichment providers plan: `docs/plans/2026-04-07-004-feat-concrete-enrichment-providers-plan.md`
+- Analysis pack extraction plan: `docs/plans/2026-04-07-005-feat-analysis-pack-extraction-plan.md`
+- Optional premium-data follow-ons plan: `docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md`
 - Relevant solution note: `docs/solutions/logic-errors/stale-trading-state-evidence-and-unavailable-data-quality-fallbacks-2026-04-07.md`
