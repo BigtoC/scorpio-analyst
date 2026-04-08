@@ -19,6 +19,8 @@ Stage 1 established typed evidence, provenance, preflight, and snapshot persiste
 
 The first slice should stay snapshot-store-first. It should not introduce a separate thesis database or a second workflow. It also needs to preserve the repo's fail-open semantics for missing prior memory while keeping runtime storage errors fail-closed.
 
+This plan is asset-shape agnostic. It should work equally for single-stock and ETF runs because thesis memory keys off canonical symbol identity and persisted final-run state, not corporate-fundamental completeness. ETF runs may later pair with weaker or unsupported deterministic valuation, but that does not change the usefulness of cross-run thesis continuity.
+
 ## Requirements Trace
 
 - R1. Add typed thesis-memory state under `src/state/thesis.rs` and thread it through `TradingState`.
@@ -67,6 +69,9 @@ The first slice should stay snapshot-store-first. It should not introduce a sepa
 
 - **Use canonical symbol semantics for lookup.**
   Rationale: `PreflightTask` already rewrites `TradingState.asset_symbol` to the canonical symbol. Thesis reuse should align with that authority.
+
+- **Keep thesis memory independent from valuation support.**
+  Rationale: ETF runs and other unsupported valuation shapes should still be able to reuse prior thesis context. Memory should not be gated on whether deterministic valuation produced a structured result.
 
 - **Keep the thesis payload compact and typed.**
   Rationale: downstream prompts need a bounded memory block, not raw prior snapshots.
@@ -200,6 +205,7 @@ flowchart TB
 **Test scenarios:**
 - Happy path: preflight loads prior thesis and makes it available to downstream consumers.
 - Edge case: no compatible prior thesis yields explicit absence and run continues.
+- Edge case: ETF runs load prior thesis exactly the same way as single-stock runs.
 - Edge case: reused pipeline runs do not leak stale thesis state across cycles.
 - Error path: lookup/storage failure surfaces clearly at preflight.
 
