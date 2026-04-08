@@ -15,6 +15,19 @@ follow-up that should be revisited later.
 > Will be considered for implementation after the MVP is complete and stable enough to evaluate whether the added
 > complexity is justified by the benefits.
 
+### Premium-data valuation and enrichment follow-ons
+
+- **Status**: Optional deferred plan
+- **Source**: `docs/plans/2026-04-07-005-optional-premium-data-follow-ons-plan.md`
+- **Current baseline**: The active roadmap successfully handles DCF, EV/EBITDA, Options Flow, and Consensus Estimates on the free tier. The current implementation track supports thesis memory, bounded deterministic valuation, event/news enrichment, and explicit fallbacks for unsupported cases such as ETF-style asset shapes or missing transcripts.
+- **Why it was deferred**: The original follow-on plans included transcript-backed enrichment, peer/comps analysis, and ETF-native inputs. Those remaining capabilities are not realistic with the current free-tier provider set and require premium data.
+- **Why revisit later**: If stronger premium data providers become available, these capabilities could materially improve transcript-backed reasoning, peer-relative analysis, and ETF-native support.
+- **Intentionally deferred details**:
+    - Transcript enrichment behind the transcript adapter contract
+    - Peer/comps datasets, sector medians, and historical valuation bands
+    - ETF-native valuation inputs such as NAV / premium-discount, fund flows, and holdings analytics
+- **Revisit trigger**: After the provider-limited roadmap is complete and stable enough to judge whether premium or alternative data sources justify the added complexity. See the full optional plan at [`docs/plans/2026-04-07-005-optional-premium-data-follow-ons-plan.md`](plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md).
+
 ### Per-agent provider overrides
 
 - **Status**: Deferred until after the MVP is finished

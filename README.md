@@ -9,6 +9,12 @@ The project's primary goal is to overcome the limitations of traditional algorit
 
 The evidence discipline and provenance-reporting patterns in this project are additionally inspired by Anthropic's [financial-services-plugins](https://github.com/anthropics/anthropic-quickstarts/tree/main/financial-services-plugins) architecture, which demonstrates rigorous grounding of LLM outputs in authoritative runtime evidence.
 
+The current implementation track uses a free-tier data stack: Finnhub, yfinance, and FRED. This stack is highly capable and supports strict DCF, EV/EBITDA, Options flow, Consensus Estimates, thesis memory, and macro/news/technical analysis. However, it still lacks ETF-native valuation metrics and Earnings Call Transcripts.
+
+Within that active track, `yfinance-rs` is used extensively for OHLCV data, Options Chains, full Financial Statements, Analyst Estimates, Institutional/Insider ownership, and Corporate Calendar.
+
+In practice, this means the current setup can analyze corporate equities deeply with deterministic valuation, while ETF runs will often surface valuation as `not assessed` rather than producing a corporate-equity-style deterministic valuation.
+
 ![Project Infographic](docs/images/infographic.png)
 
 ## Conceptual Foundation
@@ -97,6 +103,7 @@ Scorpio-Analyst is designed with a phased user interface approach to provide bot
 - Register a free account and get the financial data APIs key :
   - [Finnhub](https://finnhub.io/) for market data and news
   - [FRED](https://fred.stlouisfed.org/) for economic indicators
+  - `yfinance` is used through the bundled Rust client and does not require an API key
 
 ### 1. Configure secrets
 
@@ -158,6 +165,21 @@ The pipeline executes all five phases and prints a structured report to the term
 This project is in the early stages of development. The architecture and core components are being actively built.
 
 ### Known Limitations
+
+**Current financial-data roadmap is intentionally scoped to free-tier provider reality**
+
+The active roadmap assumes only free-tier Finnhub, yfinance, and FRED. As a result:
+
+- thesis memory is in-scope
+- deterministic valuation is fully capable for corporate equities (DCF, EV/EBITDA)
+- ETF-style runs are supported, but they may legitimately produce `valuation not assessed` rather than a corporate-equity valuation result
+- event/news enrichment is in-scope
+- consensus estimates are supported via yfinance
+- options flow and implied volatility are supported via yfinance
+- transcript enrichment is deferred from the current implementation track
+- ETF-native valuation inputs are deferred
+
+See the active roadmap summary at [`docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md`](docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md) and the optional deferred follow-on plan at [`docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md`](docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md).
 
 **GitHub Copilot provider does not yet support tool calling (Phase 1 analysts non-functional with Copilot)**
 
