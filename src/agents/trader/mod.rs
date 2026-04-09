@@ -14,8 +14,8 @@ use crate::agents::shared::redact_secret_like_values;
 use crate::{
     agents::shared::{
         UNTRUSTED_CONTEXT_NOTICE, agent_token_usage_from_completion, build_data_quality_context,
-        build_evidence_context, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+        build_evidence_context, build_thesis_memory_context, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     config::{Config, LlmConfig},
     constants::{MAX_RATIONALE_CHARS, TRADER_MAX_TURNS},
@@ -288,14 +288,15 @@ fn build_prompt_context(state: &TradingState, symbol: &str, target_date: &str) -
             "{market_volatility_report}",
             &serialize_prompt_value(&state.market_volatility),
         )
-        .replace("{past_memory_str}", "")
+        .replace("{past_memory_str}", "see user context")
         .replace("{data_quality_note}", data_quality_note)
         .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE);
 
     let user_prompt = format!(
-        "Produce a TradeProposal JSON for {} as of {}.\n\n{}\n\n{}",
+        "Produce a TradeProposal JSON for {} as of {}.\n\nPast learnings: {}\n\n{}\n\n{}",
         symbol,
         target_date,
+        build_thesis_memory_context(state),
         build_evidence_context(state),
         build_data_quality_context(state),
     );

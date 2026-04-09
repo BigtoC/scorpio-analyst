@@ -451,6 +451,31 @@ fn arb_provenance_summary() -> impl Strategy<Value = ProvenanceSummary> {
         .prop_map(|providers_used| ProvenanceSummary { providers_used })
 }
 
+fn arb_thesis_memory() -> impl Strategy<Value = ThesisMemory> {
+    (
+        "[A-Z]{1,5}",
+        prop::sample::select(vec!["Buy".to_owned(), "Sell".to_owned(), "Hold".to_owned()]),
+        prop::sample::select(vec!["Approved".to_owned(), "Rejected".to_owned()]),
+        "[a-z ]{5,40}",
+        "[a-z]{8,12}",
+        "2024-0[1-9]-[0-2][0-9]",
+    )
+        .prop_map(
+            |(symbol, action, decision, rationale, execution_id, target_date)| ThesisMemory {
+                symbol,
+                action,
+                decision,
+                rationale,
+                summary: None,
+                execution_id,
+                target_date,
+                captured_at: chrono::DateTime::parse_from_rfc3339("2026-01-15T10:00:00Z")
+                    .expect("valid rfc3339")
+                    .with_timezone(&chrono::Utc),
+            },
+        )
+}
+
 fn arb_trading_state() -> impl Strategy<Value = TradingState> {
     (
         "[A-Z]{1,5}",
@@ -491,6 +516,10 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
             proptest::option::of(arb_execution_status()),
             arb_token_usage_tracker(),
         ),
+        (
+            proptest::option::of(arb_thesis_memory()),
+            proptest::option::of(arb_thesis_memory()),
+        ),
     )
         .prop_map(
             |(
@@ -515,6 +544,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     final_execution_status,
                     token_usage,
                 ),
+                (prior_thesis, current_thesis),
             )| {
                 TradingState {
                     execution_id: uuid::Uuid::new_v4(),
@@ -540,6 +570,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     neutral_risk_report,
                     conservative_risk_report,
                     final_execution_status,
+                    prior_thesis,
+                    current_thesis,
                     token_usage,
                 }
             },
@@ -599,5 +631,10 @@ proptest! {
     #[test]
     fn risk_report_json_roundtrip(report in arb_risk_report()) {
         assert_json_idempotent(&report);
+    }
+
+    #[test]
+    fn thesis_memory_json_roundtrip(thesis in arb_thesis_memory()) {
+        assert_json_idempotent(&thesis);
     }
 }

@@ -239,7 +239,7 @@ async fn task_id_constants_match_task_impl_ids() {
 
     assert_eq!(
         TASKS.preflight,
-        crate::workflow::tasks::PreflightTask::new(Default::default()).id()
+        crate::workflow::tasks::PreflightTask::new(Default::default(), snapshot_store.clone()).id()
     );
     assert_eq!(
         TASKS.analyst_fan_out,

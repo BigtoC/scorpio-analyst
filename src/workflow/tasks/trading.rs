@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::info;
 
 use crate::{
     agents::{fund_manager::run_fund_manager, trader::run_trader},
     config::Config,
-    state::PhaseTokenUsage,
+    state::{PhaseTokenUsage, ThesisMemory},
     workflow::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::runtime::{load_state, save_state, task_error},
@@ -124,6 +125,21 @@ impl Task for FundManagerTask {
             phase_total_tokens: usage.total_tokens,
             phase_duration_ms: phase_start.elapsed().as_millis() as u64,
         });
+
+        // Build and persist the current-run thesis before the final snapshot so
+        // future runs for the same symbol can load it as prior context.
+        if let Some(status) = &state.final_execution_status {
+            state.current_thesis = Some(ThesisMemory {
+                symbol: state.asset_symbol.clone(),
+                action: format!("{:?}", status.action),
+                decision: format!("{:?}", status.decision),
+                rationale: status.rationale.clone(),
+                summary: None,
+                execution_id: state.execution_id.to_string(),
+                target_date: state.target_date.clone(),
+                captured_at: Utc::now(),
+            });
+        }
 
         save_state(Self::TASK_NAME, &state, &context).await?;
 

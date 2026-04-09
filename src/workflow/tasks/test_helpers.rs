@@ -5,8 +5,8 @@ use graph_flow::Context;
 use crate::{
     state::{
         AgentTokenUsage, DebateMessage, Decision, ExecutionStatus, FundamentalData, NewsData,
-        PhaseTokenUsage, RiskLevel, RiskReport, SentimentData, TechnicalData, TradeAction,
-        TradeProposal,
+        PhaseTokenUsage, RiskLevel, RiskReport, SentimentData, TechnicalData, ThesisMemory,
+        TradeAction, TradeProposal,
     },
     workflow::{
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
@@ -727,6 +727,16 @@ impl graph_flow::Task for StubFundManagerTask {
             decided_at: "2026-03-20T00:00:00Z".to_owned(),
             entry_guidance: None,
             suggested_position: None,
+        });
+        state.current_thesis = Some(ThesisMemory {
+            symbol: state.asset_symbol.clone(),
+            action: "Buy".to_owned(),
+            decision: "Approved".to_owned(),
+            rationale: "stub: approved — risk within tolerances".to_owned(),
+            summary: None,
+            execution_id: state.execution_id.to_string(),
+            target_date: state.target_date.clone(),
+            captured_at: chrono::Utc::now(),
         });
 
         let usage = stub_usage("Fund Manager");
