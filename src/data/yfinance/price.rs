@@ -134,7 +134,20 @@ pub async fn fetch_vix_data(
 
 #[cfg(test)]
 mod tests {
+    use super::{fetch_vix_data, get_latest_close};
+    use crate::data::YFinanceClient;
     use crate::state::{VixRegime, VixTrend};
+
+    fn candle(date: &str, close: f64) -> crate::data::Candle {
+        crate::data::Candle {
+            date: date.to_owned(),
+            open: close,
+            high: close + 1.0,
+            low: close - 1.0,
+            close,
+            volume: Some(1_000),
+        }
+    }
 
     // ── VIX metrics ───────────────────────────────────────────────────────
 
@@ -240,5 +253,101 @@ mod tests {
         let closes: Vec<f64> = vec![30.0; 25];
         let (_, _, _, regime) = compute_vix_metrics(&closes);
         assert_eq!(regime, VixRegime::High);
+    }
+
+    #[tokio::test]
+    async fn get_latest_close_returns_last_cached_close() {
+        let client = YFinanceClient::default();
+        client
+            .cache_seed(
+                "AAPL",
+                "2024-01-08",
+                "2024-01-15",
+                vec![candle("2024-01-12", 101.0), candle("2024-01-15", 103.5)],
+            )
+            .await;
+
+        let close = get_latest_close(&client, "AAPL", "2024-01-15").await;
+        assert_eq!(close, Some(103.5));
+    }
+
+    #[tokio::test]
+    async fn get_latest_close_returns_none_for_invalid_date() {
+        let client = YFinanceClient::default();
+        let close = get_latest_close(&client, "AAPL", "not-a-date").await;
+        assert_eq!(close, None);
+    }
+
+    #[tokio::test]
+    async fn get_latest_close_returns_none_when_no_cached_history_exists() {
+        let client = YFinanceClient::default();
+        client
+            .cache_seed("AAPL", "2024-01-08", "2024-01-15", vec![])
+            .await;
+        let close = get_latest_close(&client, "AAPL", "2024-01-15").await;
+        assert_eq!(close, None);
+    }
+
+    #[tokio::test]
+    async fn get_latest_close_uses_prior_trading_day_within_lookback_window() {
+        let client = YFinanceClient::default();
+        client
+            .cache_seed(
+                "AAPL",
+                "2024-01-09",
+                "2024-01-16",
+                vec![candle("2024-01-12", 101.0)],
+            )
+            .await;
+
+        let close = get_latest_close(&client, "AAPL", "2024-01-16").await;
+        assert_eq!(close, Some(101.0));
+    }
+
+    #[tokio::test]
+    async fn fetch_vix_data_returns_none_for_invalid_date() {
+        let client = YFinanceClient::default();
+        let data = fetch_vix_data(&client, "not-a-date").await;
+        assert!(data.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_vix_data_returns_none_for_insufficient_history() {
+        let client = YFinanceClient::default();
+        client
+            .cache_seed(
+                "^VIX",
+                "2024-01-16",
+                "2024-03-16",
+                vec![candle("2024-03-15", 18.0); 10],
+            )
+            .await;
+
+        let data = fetch_vix_data(&client, "2024-03-16").await;
+        assert!(data.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_vix_data_returns_expected_market_volatility_snapshot() {
+        let client = YFinanceClient::default();
+        let closes: Vec<f64> = vec![15.0; 20].into_iter().chain(vec![25.0; 5]).collect();
+        let candles: Vec<crate::data::Candle> = closes
+            .into_iter()
+            .enumerate()
+            .map(|(index, close)| candle(&format!("2024-03-{:02}", index + 1), close))
+            .collect();
+        client
+            .cache_seed("^VIX", "2024-01-16", "2024-03-16", candles)
+            .await;
+
+        let data = fetch_vix_data(&client, "2024-03-16")
+            .await
+            .expect("expected a VIX snapshot");
+
+        assert_eq!(data.vix_level, 25.0);
+        assert!((data.vix_sma_20 - 17.5).abs() < f64::EPSILON);
+        assert_eq!(data.vix_trend, VixTrend::Rising);
+        assert_eq!(data.vix_regime, VixRegime::Elevated);
+        assert_eq!(data.fetched_at, "2024-03-25");
     }
 }

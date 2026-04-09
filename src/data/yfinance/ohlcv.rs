@@ -77,7 +77,7 @@ pub struct YFinanceClient {
     limiter: SharedRateLimiter,
     /// Shared across all `Clone`s of this client; keyed by the normalized
     /// (uppercase) symbol + ISO-8601 start/end dates.
-    pub(super) cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
+    cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
 }
 
 impl std::fmt::Debug for YFinanceClient {
@@ -196,6 +196,39 @@ impl YFinanceClient {
             .insert(cache_key, Arc::new(result.clone()));
 
         Ok(result)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn cache_len(&self) -> usize {
+        self.cache.read().await.len()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn cache_seed(
+        &self,
+        symbol: &str,
+        start: &str,
+        end: &str,
+        candles: Vec<Candle>,
+    ) {
+        self.cache.write().await.insert(
+            (
+                symbol.to_ascii_uppercase(),
+                start.to_owned(),
+                end.to_owned(),
+            ),
+            Arc::new(candles),
+        );
+    }
+
+    #[cfg(test)]
+    fn limiter_label(&self) -> &str {
+        self.limiter.label()
+    }
+
+    #[cfg(test)]
+    fn limiter_is_enabled(&self) -> bool {
+        self.limiter.is_enabled()
     }
 }
 
@@ -856,8 +889,12 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 0,
         };
-        // Should construct without panicking (disabled limiter path).
-        let _client = YFinanceClient::from_config(&cfg);
+        let client = YFinanceClient::from_config(&cfg);
+        assert_eq!(client.limiter_label(), "yahoo_finance");
+        assert!(
+            !client.limiter_is_enabled(),
+            "yahoo_finance_rps=0 should disable the limiter"
+        );
     }
 
     #[test]
@@ -868,7 +905,12 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 5,
         };
-        let _client = YFinanceClient::from_config(&cfg);
+        let client = YFinanceClient::from_config(&cfg);
+        assert_eq!(client.limiter_label(), "yahoo_finance");
+        assert!(
+            client.limiter_is_enabled(),
+            "non-zero yahoo_finance_rps should enable the limiter"
+        );
     }
 
     #[test]
@@ -876,16 +918,32 @@ mod tests {
         use crate::config::RateLimitConfig;
         let default_client = YFinanceClient::default();
         let config_client = YFinanceClient::from_config(&RateLimitConfig::default());
-        // Both should surface the "yahoo_finance" label in their debug output.
-        let default_debug = format!("{default_client:?}");
-        let config_debug = format!("{config_client:?}");
-        assert!(
-            default_debug.contains("yahoo_finance"),
-            "default client debug should show yahoo_finance label: {default_debug}"
+        assert_eq!(default_client.limiter_label(), "yahoo_finance");
+        assert_eq!(config_client.limiter_label(), "yahoo_finance");
+        assert_eq!(
+            default_client.limiter_is_enabled(),
+            config_client.limiter_is_enabled()
         );
-        assert!(
-            config_debug.contains("yahoo_finance"),
-            "from_config client debug should show yahoo_finance label: {config_debug}"
-        );
+    }
+
+    #[tokio::test]
+    async fn cache_seed_helper_populates_cache_for_tests() {
+        let client = YFinanceClient::default();
+        client
+            .cache_seed(
+                "aapl",
+                "2024-01-01",
+                "2024-01-31",
+                vec![Candle {
+                    date: "2024-01-02".to_owned(),
+                    open: 100.0,
+                    high: 101.0,
+                    low: 99.0,
+                    close: 100.5,
+                    volume: Some(1),
+                }],
+            )
+            .await;
+        assert_eq!(client.cache_len().await, 1);
     }
 }

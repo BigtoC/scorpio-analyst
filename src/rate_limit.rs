@@ -107,6 +107,11 @@ impl SharedRateLimiter {
     pub fn label(&self) -> &str {
         &self.label
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.inner.is_some()
+    }
 }
 
 /// Per-provider LLM rate limiters keyed by [`ProviderId`].
