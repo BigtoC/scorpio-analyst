@@ -440,6 +440,7 @@ impl graph_flow::Task for StubTraderTask {
             confidence: 0.75,
             rationale: "stub: buy on strong fundamentals and positive sentiment".to_owned(),
             valuation_assessment: None,
+            scenario_valuation: None,
         });
 
         let usage = stub_usage("Trader");
