@@ -288,14 +288,15 @@ fn build_prompt_context(state: &TradingState, symbol: &str, target_date: &str) -
             "{market_volatility_report}",
             &serialize_prompt_value(&state.market_volatility),
         )
-        .replace("{past_memory_str}", &build_thesis_memory_context(state))
+        .replace("{past_memory_str}", "see user context")
         .replace("{data_quality_note}", data_quality_note)
         .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE);
 
     let user_prompt = format!(
-        "Produce a TradeProposal JSON for {} as of {}.\n\n{}\n\n{}",
+        "Produce a TradeProposal JSON for {} as of {}.\n\nPast learnings: {}\n\n{}\n\n{}",
         symbol,
         target_date,
+        build_thesis_memory_context(state),
         build_evidence_context(state),
         build_data_quality_context(state),
     );
