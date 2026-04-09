@@ -200,7 +200,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store);
+    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);
@@ -333,7 +333,7 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store);
+    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
     let error = task
         .run(ctx)
         .await
@@ -435,7 +435,7 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store);
+    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
     let result = task
         .run(ctx.clone())
         .await
@@ -587,7 +587,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store);
+    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);
@@ -761,7 +761,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
             .expect("usage write should succeed");
     }
 
-    let task = AnalystSyncTask::new(store);
+    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
     task.run(ctx.clone()).await.expect("task should succeed");
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
@@ -868,6 +868,299 @@ async fn sentiment_analyst_invalid_cached_news_fails_closed() {
         }
         other => panic!("expected TaskExecutionFailed, got: {other:?}"),
     }
+}
+
+// ─── Chunk 3: derive_valuation unit tests (RED before implementation) ─────────
+
+mod derive_valuation_tests {
+    use yfinance_rs::{
+        analysis::EarningsTrendRow,
+        fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow},
+        profile::Profile,
+    };
+
+    use crate::state::{AssetShape, ScenarioValuation, derive_valuation};
+
+    fn company_profile() -> Profile {
+        serde_json::from_str(
+            r#"{"Company":{"name":"Test Corp","sector":null,"industry":null,"website":null,"address":null,"summary":null,"isin":null}}"#,
+        )
+        .unwrap()
+    }
+
+    fn fund_profile() -> Profile {
+        serde_json::from_str(
+            r#"{"Fund":{"name":"Test ETF","family":null,"kind":"ETF","isin":null}}"#,
+        )
+        .unwrap()
+    }
+
+    fn cashflow_rows_with_fcf() -> Vec<CashflowRow> {
+        serde_json::from_str(
+            r#"[{"period":"2025Q4","operating_cashflow":{"amount":"1200000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}}]"#,
+        )
+        .unwrap()
+    }
+
+    fn balance_sheet_rows_with_shares() -> Vec<BalanceSheetRow> {
+        serde_json::from_str(
+            r#"[{"period":"2025Q4","total_assets":{"amount":"5000000000","currency":"USD"},"total_liabilities":{"amount":"2000000000","currency":"USD"},"total_equity":{"amount":"3000000000","currency":"USD"},"cash":{"amount":"500000000","currency":"USD"},"long_term_debt":{"amount":"1000000000","currency":"USD"},"shares_outstanding":1000000000}]"#,
+        )
+        .unwrap()
+    }
+
+    fn income_statement_rows() -> Vec<IncomeStatementRow> {
+        serde_json::from_str(
+            r#"[{"period":"2025Q4","total_revenue":{"amount":"4000000000","currency":"USD"},"gross_profit":{"amount":"1800000000","currency":"USD"},"operating_income":{"amount":"1200000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}}]"#,
+        )
+        .unwrap()
+    }
+
+    fn earnings_trend_rows_with_forward_eps() -> Vec<EarningsTrendRow> {
+        serde_json::from_str(
+            r#"[{"period":"+1y","growth":0.08,"earnings_estimate":{"avg":{"amount":"7.25","currency":"USD"},"low":null,"high":null,"year_ago_eps":null,"num_analysts":null,"growth":0.08},"revenue_estimate":{"avg":null,"low":null,"high":null,"year_ago_revenue":null,"num_analysts":null,"growth":null},"eps_trend":{"current":null,"historical":[]},"eps_revisions":{"historical":[]}}]"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn derive_valuation_with_complete_corporate_data_produces_corporate_equity_valuation() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&income_statement_rows()),
+            None,
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        assert_eq!(result.asset_shape, AssetShape::CorporateEquity);
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                let dcf = val
+                    .dcf
+                    .expect("DCF should be computed when FCF and shares are present");
+                assert!(
+                    dcf.free_cash_flow > 0.0,
+                    "free_cash_flow must be positive, got: {}",
+                    dcf.free_cash_flow
+                );
+                assert_eq!(dcf.discount_rate_pct, 10.0);
+                assert!(
+                    dcf.intrinsic_value_per_share > 0.0,
+                    "intrinsic_value_per_share must be positive, got: {}",
+                    dcf.intrinsic_value_per_share
+                );
+                let fpe = val
+                    .forward_pe
+                    .expect("forward_pe should be computed when EPS and price are available");
+                assert!(
+                    (fpe.forward_eps - 7.25).abs() < 0.01,
+                    "forward_eps mismatch"
+                );
+                assert!(fpe.forward_pe > 0.0);
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_with_missing_cashflow_produces_valuation_without_dcf() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            None, // no cashflow
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&income_statement_rows()),
+            None,
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        assert_eq!(result.asset_shape, AssetShape::CorporateEquity);
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                assert!(
+                    val.dcf.is_none(),
+                    "DCF must be None when cashflow rows are absent"
+                );
+                assert!(
+                    val.forward_pe.is_some(),
+                    "forward_pe should be computed when EPS and price are available"
+                );
+            }
+            ScenarioValuation::NotAssessed { reason } => {
+                panic!(
+                    "expected CorporateEquity (partial), got NotAssessed: {reason} \
+                     — forward_pe should have been computable from EPS + price"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn derive_valuation_with_fund_profile_produces_not_assessed_with_fund_reason() {
+        let result = derive_valuation(
+            Some(fund_profile()),
+            Some(&cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_with_shares()),
+            None,
+            None,
+            None,
+            Some(100.0),
+        );
+
+        assert_eq!(result.asset_shape, AssetShape::Fund);
+        match result.scenario {
+            ScenarioValuation::NotAssessed { reason } => {
+                assert_eq!(reason, "fund_style_asset");
+            }
+            other => panic!("expected NotAssessed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_with_no_profile_falls_back_to_corporate_equity_from_data_shape() {
+        let result = derive_valuation(
+            None, // no profile
+            Some(&cashflow_rows_with_fcf()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        // When profile is absent but cashflow data is present, shape must be CorporateEquity.
+        assert_eq!(
+            result.asset_shape,
+            AssetShape::CorporateEquity,
+            "absent profile + present cashflow data should yield CorporateEquity shape"
+        );
+    }
+
+    #[test]
+    fn derive_valuation_with_no_data_at_all_produces_unknown_not_assessed() {
+        let result = derive_valuation(None, None, None, None, None, None, None);
+
+        assert_eq!(result.asset_shape, AssetShape::Unknown);
+        match result.scenario {
+            ScenarioValuation::NotAssessed { .. } => {}
+            other => panic!("expected NotAssessed for no-data input, got: {other:?}"),
+        }
+    }
+}
+
+// ─── Chunk 3: AnalystSyncTask integration test for derived_valuation ──────────
+
+#[tokio::test]
+async fn analyst_sync_sets_derived_valuation_some_on_state() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+
+    // Seed all four analysts as successful so the task proceeds.
+    for key in &[
+        common::ANALYST_FUNDAMENTAL,
+        common::ANALYST_SENTIMENT,
+        common::ANALYST_NEWS,
+        common::ANALYST_TECHNICAL,
+    ] {
+        ctx.set(
+            format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
+            true,
+        )
+        .await;
+    }
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Use a default YFinanceClient — in CI (no network) all yfinance calls return
+    // None, so derived_valuation will be NotAssessed. The important contract is
+    // that derived_valuation is always Some(...) after the task runs and the cycle
+    // continues regardless.
+    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let result = task.run(ctx.clone()).await.expect("task should succeed");
+
+    assert_eq!(result.next_action, NextAction::Continue);
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    assert!(
+        recovered.derived_valuation.is_some(),
+        "derived_valuation must be Some after AnalystSyncTask runs; \
+         was None — the derivation step was not executed"
+    );
 }
 
 #[tokio::test]

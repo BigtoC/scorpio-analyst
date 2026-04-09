@@ -14,7 +14,7 @@ use crate::{
     state::{
         AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
         FundamentalData, NewsData, PhaseTokenUsage, ProvenanceSummary, SentimentData,
-        TechnicalData, TradingState,
+        TechnicalData, TradingState, derive_valuation,
     },
     workflow::{
         context_bridge::{
@@ -425,12 +425,21 @@ impl Task for TechnicalAnalystTask {
 /// and returns [`NextAction::Continue`] or [`NextAction::End`] accordingly.
 pub struct AnalystSyncTask {
     snapshot_store: Arc<SnapshotStore>,
+    yfinance: YFinanceClient,
 }
 
 impl AnalystSyncTask {
     /// Create a new `AnalystSyncTask`.
-    pub fn new(snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
-        Arc::new(Self { snapshot_store })
+    ///
+    /// `yfinance` is used to fetch financial statement data for deterministic
+    /// valuation derivation after the analyst fan-out completes. In tests,
+    /// [`YFinanceClient::default`] may be supplied; network-unavailable calls
+    /// degrade gracefully to `NotAssessed` without aborting the cycle.
+    pub fn new(snapshot_store: Arc<SnapshotStore>, yfinance: YFinanceClient) -> Arc<Self> {
+        Arc::new(Self {
+            snapshot_store,
+            yfinance,
+        })
     }
 }
 
@@ -607,6 +616,34 @@ impl Task for AnalystSyncTask {
         state.provenance_summary = Some(ProvenanceSummary {
             providers_used: providers,
         });
+
+        // Derive deterministic valuation from Yahoo Finance financial statements.
+        // All fetchers degrade gracefully to `None` on network failure — the cycle
+        // must always continue regardless of availability.
+        let symbol = state.asset_symbol.clone();
+        let profile = self.yfinance.get_profile(&symbol).await;
+        let cashflow = self.yfinance.get_quarterly_cashflow(&symbol).await;
+        let balance = self.yfinance.get_quarterly_balance_sheet(&symbol).await;
+        let income = self.yfinance.get_quarterly_income_stmt(&symbol).await;
+        let shares = self.yfinance.get_quarterly_shares(&symbol).await;
+        let trend = self.yfinance.get_earnings_trend(&symbol).await;
+        let current_price = state.current_price;
+
+        state.derived_valuation = Some(derive_valuation(
+            profile,
+            cashflow.as_deref(),
+            balance.as_deref(),
+            income.as_deref(),
+            shares.as_deref(),
+            trend.as_deref(),
+            current_price,
+        ));
+
+        info!(
+            task = "analyst_sync",
+            asset_shape = ?state.derived_valuation.as_ref().map(|d| &d.asset_shape),
+            "deterministic valuation derived"
+        );
 
         let token_usages = vec![
             read_analyst_usage(&context, ANALYST_FUNDAMENTAL, "Fundamental Analyst").await,
