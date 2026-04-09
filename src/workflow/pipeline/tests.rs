@@ -255,7 +255,11 @@ async fn task_id_constants_match_task_impl_ids() {
     );
     assert_eq!(
         TASKS.analyst_sync,
-        crate::workflow::tasks::AnalystSyncTask::new(Arc::clone(&snapshot_store)).id()
+        crate::workflow::tasks::AnalystSyncTask::new(
+            Arc::clone(&snapshot_store),
+            crate::data::YFinanceClient::default(),
+        )
+        .id()
     );
     assert_eq!(
         TASKS.bullish_researcher,

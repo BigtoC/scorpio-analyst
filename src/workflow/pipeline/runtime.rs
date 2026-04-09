@@ -93,7 +93,7 @@ pub(super) fn build_graph(
     graph.add_task(fan_out);
     graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
 
-    let analyst_sync = AnalystSyncTask::new(Arc::clone(&snapshot_store));
+    let analyst_sync = AnalystSyncTask::new(Arc::clone(&snapshot_store), yfinance.clone());
     graph.add_task(analyst_sync);
     graph.add_edge(TASKS.analyst_fan_out, TASKS.analyst_sync);
 
