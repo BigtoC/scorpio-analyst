@@ -98,7 +98,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let yfinance = YFinanceClient::default();
+            let yfinance = YFinanceClient::from_config(&cfg.rate_limits);
 
             let symbol = cfg.trading.asset_symbol.clone();
             let target_date = Local::now().format("%Y-%m-%d").to_string();

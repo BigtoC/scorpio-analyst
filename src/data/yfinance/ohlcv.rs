@@ -21,7 +21,7 @@ use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfClient, YfError};
 
-use crate::{error::TradingError, rate_limit::SharedRateLimiter};
+use crate::{config::RateLimitConfig, error::TradingError, rate_limit::SharedRateLimiter};
 
 use crate::data::symbol::validate_symbol;
 
@@ -101,6 +101,18 @@ impl YFinanceClient {
             limiter,
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Create a new client from `RateLimitConfig`.
+    ///
+    /// Uses `SharedRateLimiter::yahoo_finance_from_config` so operators can tune or
+    /// disable the Yahoo Finance rate limit via config without recompiling. When
+    /// `cfg.yahoo_finance_rps == 0` the limiter is disabled (no blocking).
+    #[must_use]
+    pub fn from_config(cfg: &RateLimitConfig) -> Self {
+        let limiter = SharedRateLimiter::yahoo_finance_from_config(cfg)
+            .unwrap_or_else(|| SharedRateLimiter::disabled("yahoo_finance"));
+        Self::new(limiter)
     }
 
     /// Fetch daily OHLCV bars for `symbol` between `start` and `end`
@@ -189,7 +201,7 @@ impl YFinanceClient {
 
 impl Default for YFinanceClient {
     fn default() -> Self {
-        Self::new(SharedRateLimiter::new("yahoo_finance", 10))
+        Self::from_config(&RateLimitConfig::default())
     }
 }
 
@@ -832,5 +844,48 @@ mod tests {
         assert_eq!(candles[0].date, "2024-01-01");
         assert_eq!(candles[1].date, "2024-01-02");
         assert_eq!(candles[2].date, "2024-01-03");
+    }
+
+    // ── from_config constructor ───────────────────────────────────────────
+
+    #[test]
+    fn from_config_with_zero_rps_creates_client_without_panic() {
+        use crate::config::RateLimitConfig;
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 0,
+        };
+        // Should construct without panicking (disabled limiter path).
+        let _client = YFinanceClient::from_config(&cfg);
+    }
+
+    #[test]
+    fn from_config_with_nonzero_rps_creates_client_without_panic() {
+        use crate::config::RateLimitConfig;
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 5,
+        };
+        let _client = YFinanceClient::from_config(&cfg);
+    }
+
+    #[test]
+    fn default_and_from_config_default_produce_same_limiter_label() {
+        use crate::config::RateLimitConfig;
+        let default_client = YFinanceClient::default();
+        let config_client = YFinanceClient::from_config(&RateLimitConfig::default());
+        // Both should surface the "yahoo_finance" label in their debug output.
+        let default_debug = format!("{default_client:?}");
+        let config_debug = format!("{config_client:?}");
+        assert!(
+            default_debug.contains("yahoo_finance"),
+            "default client debug should show yahoo_finance label: {default_debug}"
+        );
+        assert!(
+            config_debug.contains("yahoo_finance"),
+            "from_config client debug should show yahoo_finance label: {config_debug}"
+        );
     }
 }
