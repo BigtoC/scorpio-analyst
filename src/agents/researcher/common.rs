@@ -431,6 +431,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
+            derived_valuation: None,
         };
 
         let context = build_analyst_context(&state);
