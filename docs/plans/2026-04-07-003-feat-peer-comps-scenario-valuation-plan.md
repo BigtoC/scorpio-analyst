@@ -98,7 +98,7 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
   Rationale: deterministic Rust math requires stable units and horizons. Fields that silently mix annual, TTM, multi-year growth, or absolute-value variants must define one explicit precedence rule or be split into separate typed fields before they are consumed by valuation logic.
 
 - **Add new proposal fields with explicit `#[serde(default)]` and document them in the JsonSchema description before prompt updates land.**
-  Rationale: `TradeProposal` uses `#[derive(JsonSchema)]` for LLM structured output. Adding scenario-aware fields in Chunk 1 before the prompt updates in Chunk 3 creates a window where the schema includes unexplained fields. Mitigation: use `Option<T>` with `#[serde(default)]` so the LLM can omit them, and add `#[schemars(description = "...")]` annotations that explain each field's purpose in the schema itself. This reduces hallucination risk even before the full prompt update lands.
+  Rationale: `TradeProposal` uses `#[derive(JsonSchema)]` for LLM structured output. Adding scenario-aware fields in Chunk 1 before the prompt updates in Chunk 4 creates a window where the schema includes unexplained fields. Mitigation: use `Option<T>` with `#[serde(default)]` so the LLM can omit them, and add `#[schemars(description = "...")]` annotations that explain each field's purpose in the schema itself. This reduces hallucination risk even before the full prompt update lands.
 
 - **Add explicit report support in the same milestone.**
   Rationale: structured valuation should be visible and auditable once it exists.
@@ -189,13 +189,51 @@ flowchart TB
 **Verification:**
 - State/property tests prove the new structures are additive and validatable.
 
-- [ ] **Chunk 2: Deterministic valuation derivation in the runtime**
+- [ ] **Chunk 2: Live yfinance-rs API smoke test**
+
+**Goal:** Verify that every method in `src/data/yfinance/` makes a successful real network call and returns data in the expected shape before any derivation logic is built on top of it.
+
+**Requirements:** R3 (prerequisite confidence gate)
+
+**Dependencies:** Chunk 1 (the financial statement and profile methods added there must be covered here)
+
+**Files:**
+- Create: `examples/yfinance_live_test.rs`
+
+**Approach:**
+- Write a standalone `tokio::main` binary under `examples/` that can be run with `cargo run --example yfinance_live_test`.
+- Use a well-known, liquid equity (`AAPL`) as the test symbol and a recent but fixed 30-day date window so results are deterministic for a given run.
+- Cover every public method currently in `src/data/yfinance/`:
+  - `YFinanceClient::get_ohlcv` — assert non-empty `Vec<Candle>`, each candle has a valid date and positive OHLCV values.
+  - `YFinanceClient::get_latest_close` — assert `Some(price)` with `price > 0.0`.
+  - `fetch_vix_data` — assert `Some(MarketVolatilityData)` with a non-zero `current_vix`.
+  - All financial statement fetchers added in Chunk 1 (`get_quarterly_cashflow`, `get_quarterly_balance_sheet`, `get_quarterly_income_stmt`, `get_quarterly_shares`, `get_earnings_trend`) — assert `Some` result and that the returned data frame / struct is non-empty.
+  - Profile fetch (`get_profile`) — assert `Some(Profile)` for the test equity symbol.
+- Also cover a known ETF symbol (`SPY`) to confirm that the profile call returns `Profile::Fund` (or equivalent) and that financial statement fetchers return `None` / empty gracefully rather than panicking.
+- Print a human-readable pass/fail summary for each call so a developer can run this manually and immediately spot which API has become unavailable or changed shape.
+- The example must compile with `--all-features` but must NOT be run automatically in CI (`cargo nextest` does not execute `examples/`). Add a comment at the top of the file making this explicit.
+- Do not introduce any new `Cargo.toml` dependencies; use only crates already in the dependency graph (`tokio`, `tracing`, `tracing-subscriber`, `chrono`).
+
+**Patterns to follow:**
+- `src/data/yfinance/ohlcv.rs` — how `YFinanceClient` and `YfClient` are constructed
+- `src/data/yfinance/vix.rs` — how `fetch_vix_data` is called
+- The financial statement and profile fetch functions added in Chunk 1
+
+**Test scenarios:**
+- Happy path (equity): all six method groups return `Ok(Some(_))` / `Ok(_)` with non-trivially-populated data for `AAPL`.
+- Degradation path (ETF): `get_profile("SPY")` returns `Profile::Fund`; financial statement calls for `SPY` return `None` or empty without panicking.
+- Shape validation: candle dates are in `YYYY-MM-DD` format, financial statement rows have at least one non-`None` numeric column, VIX value is in a plausible range (1–100).
+
+**Verification:**
+- Developer runs `cargo run --example yfinance_live_test` and sees all checks pass. Failures are printed with the raw error so the root cause is immediately visible without needing `RUST_LOG=debug`.
+
+- [ ] **Chunk 3: Deterministic valuation derivation in the runtime**
 
 **Goal:** Compute structured valuation using real financial statements before trader inference.
 
 **Requirements:** R1, R3, R4
 
-**Dependencies:** Chunk 1
+**Dependencies:** Chunks 1–2
 
 **Files:**
 - Modify: `src/workflow/tasks/analyst.rs`
@@ -227,13 +265,13 @@ flowchart TB
 **Verification:**
 - Workflow-task tests prove deterministic valuation exists and respects existing degradation rules.
 
-- [ ] **Chunk 3: Trader and fund-manager prompt integration**
+- [ ] **Chunk 4: Trader and fund-manager prompt integration**
 
 **Goal:** Make downstream reasoning consume structured valuation instead of prompt-only free-text valuation expectations.
 
 **Requirements:** R2, R3, R5
 
-**Dependencies:** Chunk 2
+**Dependencies:** Chunk 3
 
 **Files:**
 - Modify: `src/agents/shared/prompt.rs`
@@ -262,13 +300,13 @@ flowchart TB
 **Verification:**
 - Prompt tests prove structured valuation is consumed safely and explicitly.
 
-- [ ] **Chunk 4: Final report and reused-run hardening**
+- [ ] **Chunk 5: Final report and reused-run hardening**
 
 **Goal:** Surface valuation in operator output and prevent stale valuation state reuse across cycles.
 
 **Requirements:** R4, R5, R6
 
-**Dependencies:** Chunks 1-3
+**Dependencies:** Chunks 1-4
 
 **Files:**
 - Create: `src/report/valuation.rs`
