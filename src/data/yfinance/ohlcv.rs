@@ -19,7 +19,9 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
-use yfinance_rs::{HistoryBuilder, Interval, YfClient, YfError};
+use yfinance_rs::{HistoryBuilder, Interval, YfError};
+
+use super::client::YfSession;
 
 use crate::{config::RateLimitConfig, error::TradingError, rate_limit::SharedRateLimiter};
 
@@ -73,8 +75,8 @@ type OhlcvCacheKey = (String, String, String);
 /// than once.
 #[derive(Clone)]
 pub struct YFinanceClient {
-    inner: YfClient,
-    limiter: SharedRateLimiter,
+    /// Shared Yahoo Finance session (HTTP client + rate limiter).
+    pub(super) session: YfSession,
     /// Shared across all `Clone`s of this client; keyed by the normalized
     /// (uppercase) symbol + ISO-8601 start/end dates.
     cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
@@ -86,7 +88,7 @@ impl std::fmt::Debug for YFinanceClient {
         // lock elsewhere at the same time doesn't deadlock the debug path.
         let cache_len = self.cache.try_read().map(|g| g.len()).unwrap_or(0);
         f.debug_struct("YFinanceClient")
-            .field("limiter", &self.limiter.label())
+            .field("session", &self.session)
             .field("cached_entries", &cache_len)
             .finish()
     }
@@ -97,8 +99,7 @@ impl YFinanceClient {
     #[must_use]
     pub fn new(limiter: SharedRateLimiter) -> Self {
         Self {
-            inner: YfClient::default(),
-            limiter,
+            session: YfSession::new(limiter),
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -110,9 +111,10 @@ impl YFinanceClient {
     /// `cfg.yahoo_finance_rps == 0` the limiter is disabled (no blocking).
     #[must_use]
     pub fn from_config(cfg: &RateLimitConfig) -> Self {
-        let limiter = SharedRateLimiter::yahoo_finance_from_config(cfg)
-            .unwrap_or_else(|| SharedRateLimiter::disabled("yahoo_finance"));
-        Self::new(limiter)
+        Self {
+            session: YfSession::from_config(cfg),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     /// Fetch daily OHLCV bars for `symbol` between `start` and `end`
@@ -176,8 +178,8 @@ impl YFinanceClient {
                 message: format!("invalid end datetime for {end}"),
             })?;
 
-        self.limiter.acquire().await;
-        let candles = HistoryBuilder::new(&self.inner, symbol)
+        self.session.limiter().acquire().await;
+        let candles = HistoryBuilder::new(self.session.client(), symbol)
             .between(start_dt, end_dt)
             .interval(Interval::D1)
             .fetch()
@@ -221,31 +223,14 @@ impl YFinanceClient {
         );
     }
 
-    /// Expose the underlying `YfClient` to sibling modules in this crate.
-    ///
-    /// Used by [`super::financials`] to build `FundamentalsBuilder` and
-    /// `AnalysisBuilder` without duplicating the inner client.
-    /// TODO: yf_inner should not be here, financials.rs should not import anything from ohlcv.rs
-    pub(crate) fn yf_inner(&self) -> &YfClient {
-        &self.inner
-    }
-
-    pub(crate) async fn with_rate_limit<F, T>(&self, fetch: F) -> T
-    where
-        F: std::future::Future<Output = T>,
-    {
-        self.limiter.acquire().await;
-        fetch.await
-    }
-
     #[cfg(test)]
     fn limiter_label(&self) -> &str {
-        self.limiter.label()
+        self.session.limiter().label()
     }
 
     #[cfg(test)]
     fn limiter_is_enabled(&self) -> bool {
-        self.limiter.is_enabled()
+        self.session.limiter().is_enabled()
     }
 }
 
