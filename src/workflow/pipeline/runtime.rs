@@ -58,6 +58,7 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     // the current canonical symbol; FundManagerTask will set `current_thesis`.
     state.prior_thesis = None;
     state.current_thesis = None;
+    state.derived_valuation = None;
     state.token_usage = Default::default();
 }
 
