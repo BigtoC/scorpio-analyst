@@ -8,7 +8,7 @@
 //! 3. Writes the canonical symbol back into `TradingState.asset_symbol`.
 //! 4. Loads the most recent compatible prior thesis from the snapshot store and
 //!    attaches it to `TradingState.prior_thesis`.
-//! 5. Re-serialises the updated state into the context.
+//! 5. Re-serializes the updated state into the context.
 //! 6. Writes all six Stage 1 evidence-provenance context keys.
 //!
 //! Any symbol format violation or context I/O failure causes the task to return
@@ -159,4 +159,361 @@ impl Task for PreflightTask {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use graph_flow::{Context, Task};
+
+    use crate::{
+        config::DataEnrichmentConfig,
+        data::{ResolvedInstrument, adapters::ProviderCapabilities},
+        state::TradingState,
+        workflow::{
+            SnapshotStore,
+            context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+            snapshot::SnapshotPhase,
+            tasks::common::{
+                KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT,
+                KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+            },
+        },
+    };
+
+    use super::PreflightTask;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// Open a temporary on-disk snapshot store for preflight tests.
+    async fn test_store() -> (Arc<SnapshotStore>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("preflight-test.db");
+        let store = SnapshotStore::new(Some(&path))
+            .await
+            .expect("store should open");
+        (Arc::new(store), dir)
+    }
+
+    async fn run_preflight(
+        symbol: &str,
+        enrichment: DataEnrichmentConfig,
+    ) -> graph_flow::Result<Context> {
+        let (store, _dir) = test_store().await;
+        run_preflight_with_store(symbol, enrichment, store).await
+    }
+
+    async fn run_preflight_with_store(
+        symbol: &str,
+        enrichment: DataEnrichmentConfig,
+        store: Arc<SnapshotStore>,
+    ) -> graph_flow::Result<Context> {
+        let state = TradingState::new(symbol, "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let task = PreflightTask::new(enrichment, store);
+        task.run(ctx.clone()).await?;
+        Ok(ctx)
+    }
+
+    // ── Basic / fail-closed tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn preflight_fails_closed_on_invalid_symbol() {
+        let state = TradingState::new("DROP;TABLE", "2026-01-15");
+        let (store, _dir) = test_store().await;
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
+        let result = task.run(ctx).await;
+        assert!(
+            result.is_err(),
+            "invalid symbol must cause preflight to fail"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("PreflightTask"),
+            "error must identify the task: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_fails_closed_on_missing_trading_state() {
+        let (store, _dir) = test_store().await;
+        let ctx = Context::new();
+        let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
+        let result = task.run(ctx).await;
+        assert!(
+            result.is_err(),
+            "missing trading state must cause preflight to fail"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("PreflightTask"),
+            "error must identify the task: {msg}"
+        );
+    }
+
+    // ── Context-contract tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn preflight_writes_canonical_uppercase_symbol_to_state() {
+        let ctx = run_preflight("nvda", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed with lowercase symbol");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+        assert_eq!(state.asset_symbol, "NVDA");
+    }
+
+    #[tokio::test]
+    async fn preflight_writes_resolved_instrument_to_context() {
+        let ctx = run_preflight("AAPL", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let json: String = ctx
+            .get(KEY_RESOLVED_INSTRUMENT)
+            .await
+            .expect("resolved_instrument key must be present");
+        let instrument: ResolvedInstrument =
+            serde_json::from_str(&json).expect("ResolvedInstrument deserialization");
+        assert_eq!(instrument.canonical_symbol, "AAPL");
+    }
+
+    #[tokio::test]
+    async fn preflight_writes_provider_capabilities_to_context() {
+        let enrichment = DataEnrichmentConfig {
+            enable_transcripts: true,
+            enable_consensus_estimates: false,
+            enable_event_news: false,
+            max_evidence_age_hours: 48,
+        };
+        let ctx = run_preflight("AAPL", enrichment)
+            .await
+            .expect("preflight should succeed");
+
+        let json: String = ctx
+            .get(KEY_PROVIDER_CAPABILITIES)
+            .await
+            .expect("provider_capabilities key must be present");
+        let caps: ProviderCapabilities =
+            serde_json::from_str(&json).expect("ProviderCapabilities deserialization");
+        assert!(caps.transcripts);
+        assert!(!caps.consensus_estimates);
+        assert!(!caps.event_news);
+    }
+
+    #[tokio::test]
+    async fn preflight_writes_required_coverage_inputs_in_fixed_order() {
+        let ctx = run_preflight("MSFT", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let json: String = ctx
+            .get(KEY_REQUIRED_COVERAGE_INPUTS)
+            .await
+            .expect("required_coverage_inputs key must be present");
+        let inputs: Vec<String> =
+            serde_json::from_str(&json).expect("required_coverage_inputs deserialization");
+        assert_eq!(
+            inputs,
+            vec!["fundamentals", "sentiment", "news", "technical"]
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_seeds_cached_transcript_as_null_placeholder() {
+        let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let raw: String = ctx
+            .get(KEY_CACHED_TRANSCRIPT)
+            .await
+            .expect("cached_transcript must be present");
+        assert_eq!(raw, "null", "Stage 1 value must be the JSON literal 'null'");
+    }
+
+    #[tokio::test]
+    async fn preflight_seeds_cached_consensus_as_null_placeholder() {
+        let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let raw: String = ctx
+            .get(KEY_CACHED_CONSENSUS)
+            .await
+            .expect("cached_consensus must be present");
+        assert_eq!(raw, "null");
+    }
+
+    #[tokio::test]
+    async fn preflight_seeds_cached_event_feed_as_null_placeholder() {
+        let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let raw: String = ctx
+            .get(KEY_CACHED_EVENT_FEED)
+            .await
+            .expect("cached_event_feed must be present");
+        assert_eq!(raw, "null");
+    }
+
+    #[tokio::test]
+    async fn preflight_all_six_context_keys_present_after_run() {
+        let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        for key in [
+            KEY_RESOLVED_INSTRUMENT,
+            KEY_PROVIDER_CAPABILITIES,
+            KEY_REQUIRED_COVERAGE_INPUTS,
+            KEY_CACHED_TRANSCRIPT,
+            KEY_CACHED_CONSENSUS,
+            KEY_CACHED_EVENT_FEED,
+        ] {
+            let val: Option<String> = ctx.get(key).await;
+            assert!(
+                val.is_some(),
+                "context key '{key}' must be present after preflight"
+            );
+        }
+    }
+
+    // ── Thesis-memory tests ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn preflight_attaches_no_prior_thesis_when_store_is_empty() {
+        let ctx = run_preflight("AAPL", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+
+        assert!(
+            state.prior_thesis.is_none(),
+            "no prior snapshot means prior_thesis must be None"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_attaches_prior_thesis_when_prior_run_exists() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("preflight-thesis.db");
+        let store = Arc::new(
+            SnapshotStore::new(Some(&path))
+                .await
+                .expect("store should open"),
+        );
+
+        let mut prior_state = TradingState::new("AAPL", "2026-01-01");
+        prior_state.current_thesis = Some(crate::state::ThesisMemory {
+            symbol: "AAPL".to_owned(),
+            action: "Buy".to_owned(),
+            decision: "Approved".to_owned(),
+            rationale: "Strong momentum.".to_owned(),
+            summary: None,
+            execution_id: "prior-exec-001".to_owned(),
+            target_date: "2026-01-01".to_owned(),
+            captured_at: Utc::now(),
+        });
+        store
+            .save_snapshot(
+                &prior_state.execution_id.to_string(),
+                SnapshotPhase::FundManager,
+                &prior_state,
+                None,
+            )
+            .await
+            .expect("seed prior snapshot");
+
+        let ctx = run_preflight_with_store("AAPL", DataEnrichmentConfig::default(), store)
+            .await
+            .expect("preflight should succeed");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+
+        let thesis = state
+            .prior_thesis
+            .expect("prior_thesis should be set after preflight with a prior run");
+        assert_eq!(thesis.action, "Buy");
+        assert_eq!(thesis.decision, "Approved");
+    }
+
+    #[tokio::test]
+    async fn preflight_prior_thesis_is_none_for_different_symbol() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("preflight-diff-symbol.db");
+        let store = Arc::new(
+            SnapshotStore::new(Some(&path))
+                .await
+                .expect("store should open"),
+        );
+
+        let mut prior_state = TradingState::new("AAPL", "2026-01-01");
+        prior_state.current_thesis = Some(crate::state::ThesisMemory {
+            symbol: "AAPL".to_owned(),
+            action: "Buy".to_owned(),
+            decision: "Approved".to_owned(),
+            rationale: "Strong momentum.".to_owned(),
+            summary: None,
+            execution_id: "prior-aapl".to_owned(),
+            target_date: "2026-01-01".to_owned(),
+            captured_at: Utc::now(),
+        });
+        store
+            .save_snapshot(
+                &prior_state.execution_id.to_string(),
+                SnapshotPhase::FundManager,
+                &prior_state,
+                None,
+            )
+            .await
+            .expect("seed prior snapshot");
+
+        let ctx = run_preflight_with_store("TSLA", DataEnrichmentConfig::default(), store)
+            .await
+            .expect("preflight should succeed");
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+
+        assert!(
+            state.prior_thesis.is_none(),
+            "TSLA preflight must not load AAPL thesis"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_fails_closed_when_thesis_lookup_storage_fails() {
+        let (store, _dir) = test_store().await;
+        store.close_for_test().await;
+
+        let result = run_preflight_with_store("AAPL", DataEnrichmentConfig::default(), store).await;
+
+        assert!(
+            result.is_err(),
+            "lookup/storage failure must fail preflight"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("thesis memory lookup failed"),
+            "unexpected error: {msg}"
+        );
+    }
+}
