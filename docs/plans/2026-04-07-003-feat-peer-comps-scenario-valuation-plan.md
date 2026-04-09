@@ -229,7 +229,7 @@ flowchart TB
 **Verification:**
 - State/property tests prove the new structures are additive and validatable.
 
-- [ ] **Chunk 2: Live yfinance-rs API smoke test**
+- [x] **Chunk 2: Live yfinance-rs API smoke test**
 
 **Goal:** Verify that every method in `src/data/yfinance/` makes a successful real network call and returns data in the expected shape before any derivation logic is built on top of it.
 
