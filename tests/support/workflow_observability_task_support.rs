@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use graph_flow::{Context, Task};
 use scorpio_analyst::{
+    data::YFinanceClient,
     state::{FundamentalData, NewsData, SentimentData, TechnicalData, TradingState},
     workflow::{
         SnapshotStore,
@@ -129,7 +130,7 @@ pub fn run_analyst_sync_under_collector(collector: EventCollector) {
 
             seed_all_analysts_ok(&ctx, &state).await;
 
-            let task = AnalystSyncTask::new(store);
+            let task = AnalystSyncTask::new(store, YFinanceClient::default());
             task.run(ctx).await.expect("AnalystSyncTask should succeed");
         });
     });
@@ -151,7 +152,7 @@ pub fn run_analyst_sync_under_structured_collector(collector: StructuredEventCol
 
             seed_all_analysts_ok(&ctx, &state).await;
 
-            let task = AnalystSyncTask::new(store);
+            let task = AnalystSyncTask::new(store, YFinanceClient::default());
             task.run(ctx).await.expect("AnalystSyncTask should succeed");
         });
     });
