@@ -100,7 +100,7 @@ pub(super) fn build_prompt_context(
         .replace("{technical_report}", "see user context")
         .replace("{sentiment_report}", "see user context")
         .replace("{news_report}", "see user context")
-        .replace("{past_memory_str}", &build_thesis_memory_context(state))
+        .replace("{past_memory_str}", "see user context")
         .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE)
         .replace(
             "{current_price}",
@@ -157,6 +157,11 @@ fn build_user_prompt(
     push_bounded_line(
         &mut prompt,
         &format!("Data quality note: {}", data_quality_note),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
+        &format!("Past learnings: {}", build_thesis_memory_context(state)),
         MAX_USER_PROMPT_CHARS,
     );
     push_bounded_line(
