@@ -3196,6 +3196,7 @@ dependencies = [
  "kand",
  "mockall",
  "nonzero_ext",
+ "num-traits",
  "paft-money",
  "pretty_assertions",
  "proptest",
