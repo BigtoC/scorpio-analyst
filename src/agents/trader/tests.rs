@@ -63,6 +63,7 @@ fn valid_proposal() -> TradeProposal {
         rationale: "Despite the moderator consensus leaning Hold, stronger fundamental growth and technical confirmation outweigh that stance, so this proposal is Buy. Main risk is macro headwinds compressing multiples."
             .to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     }
 }
 
@@ -468,6 +469,7 @@ fn valid_sell_proposal_passes_validation() {
         confidence: 0.7,
         rationale: "Deteriorating fundamentals and bearish technicals warrant a Sell.".to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     };
     assert!(validate_trade_proposal(&proposal).is_ok());
 }
@@ -482,6 +484,7 @@ fn hold_proposal_with_monitoring_levels_passes_validation() {
         rationale: "Mixed signals. Hold pending clearer macro direction. Re-enter above 190, thesis breaks below 175."
             .to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     };
     assert!(validate_trade_proposal(&proposal).is_ok());
 }

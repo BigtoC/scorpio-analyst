@@ -224,6 +224,20 @@ fn arb_trade_action() -> impl Strategy<Value = TradeAction> {
     prop::sample::select(vec![TradeAction::Buy, TradeAction::Sell, TradeAction::Hold])
 }
 
+fn arb_scenario_valuation() -> impl Strategy<Value = ScenarioValuation> {
+    prop_oneof![
+        "[a-z_]{3,30}".prop_map(|reason| ScenarioValuation::NotAssessed { reason }),
+        Just(ScenarioValuation::CorporateEquity(
+            CorporateEquityValuation {
+                dcf: None,
+                ev_ebitda: None,
+                forward_pe: None,
+                peg: None,
+            }
+        )),
+    ]
+}
+
 fn arb_trade_proposal() -> impl Strategy<Value = TradeProposal> {
     (
         arb_trade_action(),
@@ -231,15 +245,19 @@ fn arb_trade_proposal() -> impl Strategy<Value = TradeProposal> {
         arb_f64(),
         arb_f64(),
         "[a-z ]{5,40}",
+        proptest::option::of(arb_scenario_valuation()),
     )
         .prop_map(
-            |(action, target_price, stop_loss, confidence, rationale)| TradeProposal {
-                action,
-                target_price,
-                stop_loss,
-                confidence,
-                rationale,
-                valuation_assessment: None,
+            |(action, target_price, stop_loss, confidence, rationale, scenario_valuation)| {
+                TradeProposal {
+                    action,
+                    target_price,
+                    stop_loss,
+                    confidence,
+                    rationale,
+                    valuation_assessment: None,
+                    scenario_valuation,
+                }
             },
         )
 }
@@ -573,6 +591,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     prior_thesis,
                     current_thesis,
                     token_usage,
+                    derived_valuation: None,
                 }
             },
         )
@@ -629,6 +648,11 @@ proptest! {
     }
 
     #[test]
+    fn scenario_valuation_json_roundtrip(val in arb_scenario_valuation()) {
+        assert_json_idempotent(&val);
+    }
+
+    #[test]
     fn risk_report_json_roundtrip(report in arb_risk_report()) {
         assert_json_idempotent(&report);
     }
@@ -637,4 +661,36 @@ proptest! {
     fn thesis_memory_json_roundtrip(thesis in arb_thesis_memory()) {
         assert_json_idempotent(&thesis);
     }
+}
+
+// ── Backward-compatibility tests ───────────────────────────────────
+//
+// These verify that JSON snapshots produced *before* Chunk 1 (which added
+// `scenario_valuation` on TradeProposal and `derived_valuation` on
+// TradingState) still deserialize cleanly.  New optional fields should
+// silently default to `None` rather than causing a parse error.
+
+#[test]
+fn trade_proposal_without_scenario_valuation_deserializes_as_none() {
+    // Simulates a JSON snapshot produced before `scenario_valuation` was added.
+    let json = r#"{"action":"Buy","target_price":185.5,"stop_loss":178.0,"confidence":0.8,"rationale":"Growth outlook"}"#;
+    let proposal: TradeProposal =
+        serde_json::from_str(json).expect("old snapshot must deserialize");
+    assert!(proposal.scenario_valuation.is_none());
+    assert_eq!(proposal.action, TradeAction::Buy);
+}
+
+#[test]
+fn trading_state_without_derived_valuation_deserializes_as_none() {
+    // Build a valid TradingState, serialize it, remove the new field added in
+    // Chunk 1, then verify it still deserializes cleanly (simulating a
+    // pre-Chunk-1 snapshot stored in SQLite before the field existed).
+    let state = TradingState::new("AAPL", "2026-03-15");
+    let mut json: serde_json::Value = serde_json::to_value(&state).expect("serialize");
+    json.as_object_mut()
+        .expect("json is object")
+        .remove("derived_valuation");
+    let back: TradingState = serde_json::from_value(json).expect("old snapshot must deserialize");
+    assert!(back.derived_valuation.is_none());
+    assert_eq!(back.asset_symbol, "AAPL");
 }
