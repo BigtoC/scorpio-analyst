@@ -21,8 +21,9 @@
 //! | [`GetOhlcv`] | `rig` tool: fetch historical OHLCV bars |
 //! | [`OhlcvToolContext`] | Shared analysis-scoped OHLCV cache for technical tools |
 //! | [`fetch_vix_data`] | Fetch and compute VIX market volatility snapshot |
+//! | [`get_latest_close`] | Fetch the most recent closing price for a symbol |
 //! | [`ResolvedInstrument`] | Canonical instrument identity record |
-//! | [`resolve_symbol`] | Validate and canonicalise a raw ticker string |
+//! | [`resolve_symbol`] | Validate and canonicalize a raw ticker string |
 //! | [`adapters`] | Stage 1 enrichment adapter contracts and [`ProviderCapabilities`] |
 
 pub mod adapters;
@@ -38,4 +39,6 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
-pub use yfinance::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient, fetch_vix_data};
+pub use yfinance::{
+    Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient, fetch_vix_data, get_latest_close,
+};

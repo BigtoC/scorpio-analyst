@@ -202,7 +202,7 @@ pub(super) async fn run_analysis_cycle(
         tokio::join!(
             async {
                 if need_price {
-                    pipeline.yfinance.get_latest_close(&symbol, &date).await
+                    crate::data::get_latest_close(&pipeline.yfinance, &symbol, &date).await
                 } else {
                     None
                 }
