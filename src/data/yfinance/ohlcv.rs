@@ -230,6 +230,14 @@ impl YFinanceClient {
         &self.inner
     }
 
+    pub(crate) async fn with_rate_limit<F, T>(&self, fetch: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        self.limiter.acquire().await;
+        fetch.await
+    }
+
     #[cfg(test)]
     fn limiter_label(&self) -> &str {
         self.limiter.label()

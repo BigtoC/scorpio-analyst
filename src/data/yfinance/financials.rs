@@ -35,8 +35,8 @@ impl YFinanceClient {
     /// Returns `None` on network or parsing failures so the caller can degrade
     /// gracefully without aborting the pipeline.
     pub async fn get_quarterly_cashflow(&self, symbol: &str) -> Option<Vec<CashflowRow>> {
-        match FundamentalsBuilder::new(self.yf_inner(), symbol)
-            .cashflow(true, None)
+        match self
+            .with_rate_limit(FundamentalsBuilder::new(self.yf_inner(), symbol).cashflow(true, None))
             .await
         {
             Ok(rows) => Some(rows),
@@ -51,8 +51,10 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_balance_sheet(&self, symbol: &str) -> Option<Vec<BalanceSheetRow>> {
-        match FundamentalsBuilder::new(self.yf_inner(), symbol)
-            .balance_sheet(true, None)
+        match self
+            .with_rate_limit(
+                FundamentalsBuilder::new(self.yf_inner(), symbol).balance_sheet(true, None),
+            )
             .await
         {
             Ok(rows) => Some(rows),
@@ -67,8 +69,10 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_income_stmt(&self, symbol: &str) -> Option<Vec<IncomeStatementRow>> {
-        match FundamentalsBuilder::new(self.yf_inner(), symbol)
-            .income_statement(true, None)
+        match self
+            .with_rate_limit(
+                FundamentalsBuilder::new(self.yf_inner(), symbol).income_statement(true, None),
+            )
             .await
         {
             Ok(rows) => Some(rows),
@@ -83,8 +87,8 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_shares(&self, symbol: &str) -> Option<Vec<ShareCount>> {
-        match FundamentalsBuilder::new(self.yf_inner(), symbol)
-            .shares(true)
+        match self
+            .with_rate_limit(FundamentalsBuilder::new(self.yf_inner(), symbol).shares(true))
             .await
         {
             Ok(rows) => Some(rows),
@@ -101,8 +105,8 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_earnings_trend(&self, symbol: &str) -> Option<Vec<EarningsTrendRow>> {
-        match AnalysisBuilder::new(self.yf_inner(), symbol)
-            .earnings_trend(None)
+        match self
+            .with_rate_limit(AnalysisBuilder::new(self.yf_inner(), symbol).earnings_trend(None))
             .await
         {
             Ok(rows) => Some(rows),
@@ -124,7 +128,10 @@ impl YFinanceClient {
     /// as proof that the symbol is an equity — absent profile data is not a
     /// discriminating signal for asset shape.
     pub async fn get_profile(&self, symbol: &str) -> Option<Profile> {
-        match profile::load_profile(self.yf_inner(), symbol).await {
+        match self
+            .with_rate_limit(profile::load_profile(self.yf_inner(), symbol))
+            .await
+        {
             Ok(p) => Some(p),
             Err(e) => {
                 warn!(error = %e, symbol, "failed to fetch profile");
@@ -139,6 +146,35 @@ impl YFinanceClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use crate::rate_limit::SharedRateLimiter;
+
+    #[tokio::test]
+    async fn with_rate_limit_acquires_permit_before_running_fetch() {
+        let client = YFinanceClient::new(SharedRateLimiter::disabled("yahoo_finance"));
+        let acquired = Arc::new(AtomicBool::new(false));
+        let acquired_for_fetch = acquired.clone();
+
+        client
+            .with_rate_limit(async move {
+                acquired_for_fetch.store(true, Ordering::SeqCst);
+                Some(())
+            })
+            .await;
+
+        assert!(acquired.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn with_rate_limit_returns_fetch_result_unchanged() {
+        let client = YFinanceClient::default();
+        let result = client.with_rate_limit(async { Some(42_u8) }).await;
+        assert_eq!(result, Some(42));
+    }
 
     // Smoke: ensure all methods exist and have the correct signatures.
     // Network calls are not made in CI; this test only validates that the
