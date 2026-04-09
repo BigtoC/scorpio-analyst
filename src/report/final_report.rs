@@ -543,6 +543,7 @@ mod tests {
             confidence: 0.8,
             rationale: "Strong growth and momentum.".to_owned(),
             valuation_assessment: None,
+            scenario_valuation: None,
         });
         state
     }
