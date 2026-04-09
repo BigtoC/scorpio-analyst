@@ -265,7 +265,7 @@ fn default_fred_rps() -> u32 {
     2
 }
 fn default_yahoo_finance_rps() -> u32 {
-    30
+    10
 }
 
 impl Default for RateLimitConfig {
@@ -968,8 +968,8 @@ asset_symbol = "nvda"
     fn rate_limit_config_default_has_yahoo_finance_rps_10() {
         let cfg = RateLimitConfig::default();
         assert_eq!(
-            cfg.yahoo_finance_rps, 30,
-            "default yahoo_finance_rps should be 30"
+            cfg.yahoo_finance_rps, 10,
+            "default yahoo_finance_rps should be 10"
         );
     }
 
