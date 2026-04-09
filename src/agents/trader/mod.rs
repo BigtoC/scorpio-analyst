@@ -316,6 +316,12 @@ fn serialize_consensus_summary(consensus_summary: Option<&str>) -> String {
 /// All failures return [`TradingError::SchemaViolation`] and are treated as
 /// non-retriable.
 pub(crate) fn validate_trade_proposal(proposal: &TradeProposal) -> Result<(), TradingError> {
+    if proposal.scenario_valuation.is_some() {
+        return Err(TradingError::SchemaViolation {
+            message: "TraderAgent: scenario_valuation is runtime-owned and must not be authored by the LLM"
+                .to_owned(),
+        });
+    }
     if !proposal.target_price.is_finite() || proposal.target_price <= 0.0 {
         return Err(TradingError::SchemaViolation {
             message: format!(

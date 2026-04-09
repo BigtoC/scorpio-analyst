@@ -9,8 +9,9 @@ use crate::{
     config::{ProviderSettings, ProvidersConfig, TradingConfig},
     providers::factory::RetryOutcome,
     state::{
-        FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData, SentimentData,
-        SentimentSource, TechnicalData, ThesisMemory, TradeAction, TradeProposal, TradingState,
+        CorporateEquityValuation, FundamentalData, ImpactDirection, MacroEvent, NewsArticle,
+        NewsData, ScenarioValuation, SentimentData, SentimentSource, TechnicalData, ThesisMemory,
+        TradeAction, TradeProposal, TradingState,
     },
 };
 
@@ -676,6 +677,27 @@ fn newline_and_tab_in_rationale_allowed() {
     let mut proposal = valid_proposal();
     proposal.rationale = "Thesis.\nRisk:\tMacro headwinds.".to_owned();
     assert!(validate_trade_proposal(&proposal).is_ok());
+}
+
+#[test]
+fn scenario_valuation_from_llm_output_is_rejected() {
+    let mut proposal = valid_proposal();
+    proposal.scenario_valuation = Some(ScenarioValuation::CorporateEquity(
+        CorporateEquityValuation {
+            dcf: None,
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        },
+    ));
+
+    match validate_trade_proposal(&proposal) {
+        Err(TradingError::SchemaViolation { message }) => {
+            assert!(message.contains("scenario_valuation"));
+            assert!(message.contains("runtime-owned"));
+        }
+        other => panic!("expected schema violation, got {other:?}"),
+    }
 }
 
 #[test]
