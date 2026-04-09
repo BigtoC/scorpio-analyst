@@ -139,7 +139,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Chunk 0: Make Yahoo Finance rate limit configurable**
+- [x] **Chunk 0: Make Yahoo Finance rate limit configurable**
 
 **Goal:** Wire Yahoo Finance's hardcoded `10 RPS` ceiling into the same config-driven pattern already used for Finnhub and FRED, so operators can tune or disable it without recompiling.
 
@@ -193,7 +193,7 @@ flowchart TB
 - Modify: `src/state/proposal.rs`
 - Modify: `src/state/trading_state.rs`
 - Modify: `src/data/yfinance/mod.rs`
-- Modify: `src/data/yfinance/financials.rs` (or equivalent to expose Cashflow, Balance Sheet, Income Statement, and Shares)
+- Modify: `src/data/yfinance/financials.rs` (exposes quarterly Cashflow, Balance Sheet, Income Statement, Shares, Earnings Trend, and Profile as `YFinanceClient` methods; already exists as of the `price.rs`/`ohlcv.rs` refactor)
 - Modify (compile-fix cascade): `src/agents/risk/aggressive.rs`
 - Modify (compile-fix cascade): `src/agents/risk/conservative.rs`
 - Modify (compile-fix cascade): `src/agents/risk/neutral.rs`
@@ -206,7 +206,7 @@ flowchart TB
 
 **Approach:**
 - Add typed scenario valuation structures for DCF, EV/EBITDA, Forward P/E, and PEG ratios.
-- Update `src/data/yfinance/mod.rs` to explicitly pull `quarterly_cashflow`, `quarterly_balance_sheet`, `quarterly_income_stmt`, `quarterly_shares`, and `earnings_trend` from the `yfinance_rs` client.
+- Update `src/data/yfinance/mod.rs` to re-export `financials` alongside `ohlcv` and `price` — the module now has three layers: `ohlcv` (raw OHLCV fetcher and `rig` tool plumbing), `price` (derived price queries: `get_latest_close`, `fetch_vix_data`), and `financials` (financial statement and profile methods on `YFinanceClient`).
 - Add an explicit valuation-input inventory that relies on these real financial statements.
 - Add a small typed asset-shape seam sourced from `yfinance_rs::profile::Profile` so the runtime can distinguish company-style and fund-style instruments.
 - Define the typed seam so `Profile` is optional. The runtime must handle missing profiles cleanly.
@@ -245,10 +245,10 @@ flowchart TB
 - Use a well-known, liquid equity (`AAPL`) as the test symbol and a recent but fixed 30-day date window so results are deterministic for a given run.
 - Cover every public method currently in `src/data/yfinance/`:
   - `YFinanceClient::get_ohlcv` — assert non-empty `Vec<Candle>`, each candle has a valid date and positive OHLCV values.
-  - `YFinanceClient::get_latest_close` — assert `Some(price)` with `price > 0.0`.
-  - `fetch_vix_data` — assert `Some(MarketVolatilityData)` with a non-zero `current_vix`.
-  - All financial statement fetchers added in Chunk 1 (`get_quarterly_cashflow`, `get_quarterly_balance_sheet`, `get_quarterly_income_stmt`, `get_quarterly_shares`, `get_earnings_trend`) — assert `Some` result and that the returned data frame / struct is non-empty.
-  - Profile fetch (`get_profile`) — assert `Some(Profile)` for the test equity symbol.
+  - `get_latest_close(&client, symbol, as_of_date)` (free function from `price.rs`) — assert `Some(price)` with `price > 0.0`.
+  - `fetch_vix_data(&client, as_of_date)` (free function from `price.rs`) — assert `Some(MarketVolatilityData)` with a non-zero `vix_level` in a plausible range.
+  - All financial statement fetchers on `YFinanceClient` from `financials.rs` (`get_quarterly_cashflow`, `get_quarterly_balance_sheet`, `get_quarterly_income_stmt`, `get_quarterly_shares`, `get_earnings_trend`) — assert `Some` result and that the returned vec is non-empty.
+  - `YFinanceClient::get_profile` (from `financials.rs`) — assert `Some(Profile)` for the test equity symbol.
 - Also cover a known ETF symbol (`SPY`) to confirm that the profile call returns `Profile::Fund` (or equivalent) and that financial statement fetchers return `None` / empty gracefully rather than panicking.
 - Print a human-readable pass/fail summary for each call so a developer can run this manually and immediately spot which API has become unavailable or changed shape.
 - The example must compile with `--all-features` but must NOT be run automatically in CI (`cargo nextest` does not execute `examples/`). Add a comment at the top of the file making this explicit.
@@ -256,8 +256,8 @@ flowchart TB
 
 **Patterns to follow:**
 - `src/data/yfinance/ohlcv.rs` — how `YFinanceClient` and `YfClient` are constructed
-- `src/data/yfinance/vix.rs` — how `fetch_vix_data` is called
-- The financial statement and profile fetch functions added in Chunk 1
+- `src/data/yfinance/price.rs` — how `fetch_vix_data` and `get_latest_close` are called as free functions taking `&YFinanceClient`
+- `src/data/yfinance/financials.rs` — the financial statement and profile methods on `YFinanceClient`
 
 **Test scenarios:**
 - Happy path (equity): all six method groups return `Ok(Some(_))` / `Ok(_)` with non-trivially-populated data for `AAPL`.
