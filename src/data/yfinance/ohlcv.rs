@@ -221,6 +221,15 @@ impl YFinanceClient {
         );
     }
 
+    /// Expose the underlying `YfClient` to sibling modules in this crate.
+    ///
+    /// Used by [`super::financials`] to build `FundamentalsBuilder` and
+    /// `AnalysisBuilder` without duplicating the inner client.
+    /// TODO: yf_inner should not be here, financials.rs should not import anything from ohlcv.rs
+    pub(crate) fn yf_inner(&self) -> &YfClient {
+        &self.inner
+    }
+
     #[cfg(test)]
     fn limiter_label(&self) -> &str {
         self.limiter.label()
