@@ -964,6 +964,7 @@ mod tests {
                 confidence: 0.6,
                 rationale: "typed mock".to_owned(),
                 valuation_assessment: None,
+                scenario_valuation: None,
             },
             rig::completion::Usage {
                 input_tokens: 4,

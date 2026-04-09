@@ -1,3 +1,4 @@
+mod derived;
 mod evidence;
 mod execution;
 mod fundamental;
@@ -13,6 +14,7 @@ mod thesis;
 mod token_usage;
 mod trading_state;
 
+pub use derived::*;
 pub use evidence::*;
 pub use execution::*;
 pub use fundamental::*;

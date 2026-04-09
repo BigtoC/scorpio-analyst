@@ -86,6 +86,16 @@ impl SharedRateLimiter {
         Some(Self::new("fred", cfg.fred_rps))
     }
 
+    /// Create a Yahoo Finance rate limiter from `RateLimitConfig`.
+    ///
+    /// Returns `None` when `cfg.yahoo_finance_rps == 0` (disabled).
+    pub fn yahoo_finance_from_config(cfg: &RateLimitConfig) -> Option<Self> {
+        if cfg.yahoo_finance_rps == 0 {
+            return None;
+        }
+        Some(Self::new("yahoo_finance", cfg.yahoo_finance_rps))
+    }
+
     /// Wait until a single permit becomes available. This is cancel-safe.
     pub async fn acquire(&self) {
         if let Some(inner) = &self.inner {
@@ -96,6 +106,11 @@ impl SharedRateLimiter {
     /// The human-readable label for this limiter (e.g., provider name).
     pub fn label(&self) -> &str {
         &self.label
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.inner.is_some()
     }
 }
 
@@ -287,6 +302,7 @@ mod tests {
         let cfg = RateLimitConfig {
             finnhub_rps: 30,
             fred_rps: 0,
+            yahoo_finance_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_some());
@@ -298,6 +314,7 @@ mod tests {
         let cfg = RateLimitConfig {
             finnhub_rps: 0,
             fred_rps: 0,
+            yahoo_finance_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_none());
@@ -321,5 +338,32 @@ mod tests {
         };
         let limiter = SharedRateLimiter::fred_from_config(&cfg);
         assert!(limiter.is_none());
+    }
+
+    #[test]
+    fn yahoo_finance_from_config_returns_some_when_rps_nonzero() {
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 5,
+        };
+        let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
+        assert!(limiter.is_some(), "non-zero rps should produce a limiter");
+        assert_eq!(
+            limiter.unwrap().label(),
+            "yahoo_finance",
+            "limiter label should be \"yahoo_finance\""
+        );
+    }
+
+    #[test]
+    fn yahoo_finance_from_config_returns_none_when_rps_zero() {
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 0,
+        };
+        let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
+        assert!(limiter.is_none(), "rps=0 should disable the limiter");
     }
 }

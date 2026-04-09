@@ -1,9 +1,12 @@
-//! Yahoo Finance OHLCV client wrapper.
+//! Yahoo Finance OHLCV data types, raw fetcher, and `rig` tool plumbing.
 //!
-//! Provides a typed async interface for fetching historical price data from
+//! Provides a typed async interface for fetching historical price bars from
 //! Yahoo Finance via the `yfinance-rs` crate.  The crate's internal [`Candle`]
 //! type uses `paft_money::Money` for prices; this module defines its own
 //! [`Candle`] struct with plain `f64` fields and converts on the boundary.
+//!
+//! Higher-level price queries (latest close, VIX snapshot) live in the sibling
+//! [`super::price`] module, which builds on top of [`YFinanceClient`].
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -18,7 +21,7 @@ use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfClient, YfError};
 
-use crate::{error::TradingError, rate_limit::SharedRateLimiter};
+use crate::{config::RateLimitConfig, error::TradingError, rate_limit::SharedRateLimiter};
 
 use crate::data::symbol::validate_symbol;
 
@@ -98,6 +101,18 @@ impl YFinanceClient {
             limiter,
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Create a new client from `RateLimitConfig`.
+    ///
+    /// Uses `SharedRateLimiter::yahoo_finance_from_config` so operators can tune or
+    /// disable the Yahoo Finance rate limit via config without recompiling. When
+    /// `cfg.yahoo_finance_rps == 0` the limiter is disabled (no blocking).
+    #[must_use]
+    pub fn from_config(cfg: &RateLimitConfig) -> Self {
+        let limiter = SharedRateLimiter::yahoo_finance_from_config(cfg)
+            .unwrap_or_else(|| SharedRateLimiter::disabled("yahoo_finance"));
+        Self::new(limiter)
     }
 
     /// Fetch daily OHLCV bars for `symbol` between `start` and `end`
@@ -183,31 +198,66 @@ impl YFinanceClient {
         Ok(result)
     }
 
-    /// Fetch the most recent closing price for `symbol` by looking back up to
-    /// 7 calendar days from `as_of_date` (YYYY-MM-DD).
+    #[cfg(test)]
+    pub(super) async fn cache_len(&self) -> usize {
+        self.cache.read().await.len()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn cache_seed(
+        &self,
+        symbol: &str,
+        start: &str,
+        end: &str,
+        candles: Vec<Candle>,
+    ) {
+        self.cache.write().await.insert(
+            (
+                symbol.to_ascii_uppercase(),
+                start.to_owned(),
+                end.to_owned(),
+            ),
+            Arc::new(candles),
+        );
+    }
+
+    /// Expose the underlying `YfClient` to sibling modules in this crate.
     ///
-    /// Returns `None` if no candles are available in that window (e.g. on
-    /// weekends/holidays with no recent trading).
-    pub async fn get_latest_close(&self, symbol: &str, as_of_date: &str) -> Option<f64> {
-        let end_date = parse_date(as_of_date).ok()?;
-        let start_date = end_date - chrono::Duration::days(7);
-        let candles = self
-            .get_ohlcv(symbol, &start_date.to_string(), &end_date.to_string())
-            .await
-            .ok()?;
-        candles.last().map(|c| c.close)
+    /// Used by [`super::financials`] to build `FundamentalsBuilder` and
+    /// `AnalysisBuilder` without duplicating the inner client.
+    /// TODO: yf_inner should not be here, financials.rs should not import anything from ohlcv.rs
+    pub(crate) fn yf_inner(&self) -> &YfClient {
+        &self.inner
+    }
+
+    pub(crate) async fn with_rate_limit<F, T>(&self, fetch: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        self.limiter.acquire().await;
+        fetch.await
+    }
+
+    #[cfg(test)]
+    fn limiter_label(&self) -> &str {
+        self.limiter.label()
+    }
+
+    #[cfg(test)]
+    fn limiter_is_enabled(&self) -> bool {
+        self.limiter.is_enabled()
     }
 }
 
 impl Default for YFinanceClient {
     fn default() -> Self {
-        Self::new(SharedRateLimiter::new("yahoo_finance", 10))
+        Self::from_config(&RateLimitConfig::default())
     }
 }
 
-// ─── Error mapping ────────────────────────────────────────────────────────────
+// ─── Helpers (shared with the price module) ───────────────────────────────────
 
-fn parse_date(s: &str) -> Result<NaiveDate, TradingError> {
+pub(super) fn parse_date(s: &str) -> Result<NaiveDate, TradingError> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| TradingError::SchemaViolation {
         message: format!("cannot parse date {s:?}: {e}"),
     })
@@ -844,5 +894,73 @@ mod tests {
         assert_eq!(candles[0].date, "2024-01-01");
         assert_eq!(candles[1].date, "2024-01-02");
         assert_eq!(candles[2].date, "2024-01-03");
+    }
+
+    // ── from_config constructor ───────────────────────────────────────────
+
+    #[test]
+    fn from_config_with_zero_rps_creates_client_without_panic() {
+        use crate::config::RateLimitConfig;
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 0,
+        };
+        let client = YFinanceClient::from_config(&cfg);
+        assert_eq!(client.limiter_label(), "yahoo_finance");
+        assert!(
+            !client.limiter_is_enabled(),
+            "yahoo_finance_rps=0 should disable the limiter"
+        );
+    }
+
+    #[test]
+    fn from_config_with_nonzero_rps_creates_client_without_panic() {
+        use crate::config::RateLimitConfig;
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 5,
+        };
+        let client = YFinanceClient::from_config(&cfg);
+        assert_eq!(client.limiter_label(), "yahoo_finance");
+        assert!(
+            client.limiter_is_enabled(),
+            "non-zero yahoo_finance_rps should enable the limiter"
+        );
+    }
+
+    #[test]
+    fn default_and_from_config_default_produce_same_limiter_label() {
+        use crate::config::RateLimitConfig;
+        let default_client = YFinanceClient::default();
+        let config_client = YFinanceClient::from_config(&RateLimitConfig::default());
+        assert_eq!(default_client.limiter_label(), "yahoo_finance");
+        assert_eq!(config_client.limiter_label(), "yahoo_finance");
+        assert_eq!(
+            default_client.limiter_is_enabled(),
+            config_client.limiter_is_enabled()
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_seed_helper_populates_cache_for_tests() {
+        let client = YFinanceClient::default();
+        client
+            .cache_seed(
+                "aapl",
+                "2024-01-01",
+                "2024-01-31",
+                vec![Candle {
+                    date: "2024-01-02".to_owned(),
+                    open: 100.0,
+                    high: 101.0,
+                    low: 99.0,
+                    close: 100.5,
+                    volume: Some(1),
+                }],
+            )
+            .await;
+        assert_eq!(client.cache_len().await, 1);
     }
 }

@@ -9,8 +9,9 @@ use crate::{
     config::{ProviderSettings, ProvidersConfig, TradingConfig},
     providers::factory::RetryOutcome,
     state::{
-        FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData, SentimentData,
-        SentimentSource, TechnicalData, ThesisMemory, TradeAction, TradeProposal, TradingState,
+        CorporateEquityValuation, FundamentalData, ImpactDirection, MacroEvent, NewsArticle,
+        NewsData, ScenarioValuation, SentimentData, SentimentSource, TechnicalData, ThesisMemory,
+        TradeAction, TradeProposal, TradingState,
     },
 };
 
@@ -63,6 +64,7 @@ fn valid_proposal() -> TradeProposal {
         rationale: "Despite the moderator consensus leaning Hold, stronger fundamental growth and technical confirmation outweigh that stance, so this proposal is Buy. Main risk is macro headwinds compressing multiples."
             .to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     }
 }
 
@@ -468,6 +470,7 @@ fn valid_sell_proposal_passes_validation() {
         confidence: 0.7,
         rationale: "Deteriorating fundamentals and bearish technicals warrant a Sell.".to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     };
     assert!(validate_trade_proposal(&proposal).is_ok());
 }
@@ -482,6 +485,7 @@ fn hold_proposal_with_monitoring_levels_passes_validation() {
         rationale: "Mixed signals. Hold pending clearer macro direction. Re-enter above 190, thesis breaks below 175."
             .to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     };
     assert!(validate_trade_proposal(&proposal).is_ok());
 }
@@ -673,6 +677,27 @@ fn newline_and_tab_in_rationale_allowed() {
     let mut proposal = valid_proposal();
     proposal.rationale = "Thesis.\nRisk:\tMacro headwinds.".to_owned();
     assert!(validate_trade_proposal(&proposal).is_ok());
+}
+
+#[test]
+fn scenario_valuation_from_llm_output_is_rejected() {
+    let mut proposal = valid_proposal();
+    proposal.scenario_valuation = Some(ScenarioValuation::CorporateEquity(
+        CorporateEquityValuation {
+            dcf: None,
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        },
+    ));
+
+    match validate_trade_proposal(&proposal) {
+        Err(TradingError::SchemaViolation { message }) => {
+            assert!(message.contains("scenario_valuation"));
+            assert!(message.contains("runtime-owned"));
+        }
+        other => panic!("expected schema violation, got {other:?}"),
+    }
 }
 
 #[test]

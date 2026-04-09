@@ -608,6 +608,7 @@ mod tests {
                 confidence: 0.75,
                 rationale: "Growth outlook".to_owned(),
                 valuation_assessment: None,
+                scenario_valuation: None,
             }),
             risk_discussion_history: Vec::new(),
             aggressive_risk_report: None,
@@ -623,6 +624,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: TokenUsageTracker::default(),
+            derived_valuation: None,
         }
     }
 

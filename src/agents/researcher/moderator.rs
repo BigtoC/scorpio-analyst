@@ -225,6 +225,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
+            derived_valuation: None,
         }
     }
 
@@ -342,6 +343,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
+            derived_valuation: None,
         };
 
         let prompt = build_moderator_prompt(&state);
@@ -420,6 +422,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
+            derived_valuation: None,
         };
 
         let result = moderator.run(&state).await;
@@ -469,6 +472,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
+            derived_valuation: None,
         };
 
         let (summary, usage) = moderator.run(&state).await.unwrap();

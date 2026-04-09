@@ -4,9 +4,9 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use super::{
-    DataCoverageReport, EvidenceRecord, ExecutionStatus, FundamentalData, MarketVolatilityData,
-    NewsData, ProvenanceSummary, RiskReport, SentimentData, TechnicalData, ThesisMemory,
-    TokenUsageTracker, TradeProposal,
+    DataCoverageReport, DerivedValuation, EvidenceRecord, ExecutionStatus, FundamentalData,
+    MarketVolatilityData, NewsData, ProvenanceSummary, RiskReport, SentimentData, TechnicalData,
+    ThesisMemory, TokenUsageTracker, TradeProposal,
 };
 
 /// A single message entry in a debate or risk discussion history.
@@ -72,6 +72,13 @@ pub struct TradingState {
     #[serde(default)]
     pub current_thesis: Option<ThesisMemory>,
 
+    // Derived valuation state (Chunk 1): deterministic valuation computed before
+    // trader inference.  `None` at cycle start and on pre-feature snapshots.
+    // Must be reset by `reset_cycle_outputs` to prevent stale values leaking
+    // across reused pipeline runs.
+    #[serde(default)]
+    pub derived_valuation: Option<DerivedValuation>,
+
     // Token accounting
     pub token_usage: TokenUsageTracker,
 }
@@ -114,6 +121,7 @@ impl TradingState {
             final_execution_status: None,
             prior_thesis: None,
             current_thesis: None,
+            derived_valuation: None,
             token_usage: TokenUsageTracker::default(),
         }
     }

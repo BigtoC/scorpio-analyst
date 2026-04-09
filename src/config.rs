@@ -253,6 +253,9 @@ pub struct RateLimitConfig {
     /// FRED requests per second (0 = disabled; free tier allows ~2 rps).
     #[serde(default = "default_fred_rps")]
     pub fred_rps: u32,
+    /// Yahoo Finance requests per second (0 = disabled; default: 10).
+    #[serde(default = "default_yahoo_finance_rps")]
+    pub yahoo_finance_rps: u32,
 }
 
 fn default_finnhub_rps() -> u32 {
@@ -261,12 +264,16 @@ fn default_finnhub_rps() -> u32 {
 fn default_fred_rps() -> u32 {
     2
 }
+fn default_yahoo_finance_rps() -> u32 {
+    10
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
             finnhub_rps: default_finnhub_rps(),
             fred_rps: default_fred_rps(),
+            yahoo_finance_rps: default_yahoo_finance_rps(),
         }
     }
 }
@@ -505,6 +512,10 @@ mod tests {
         );
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
         assert_eq!(cfg.rate_limits.fred_rps, 2, "fred_rps default should be 2");
+        assert_eq!(
+            cfg.rate_limits.yahoo_finance_rps, 10,
+            "yahoo_finance_rps should default to 10"
+        );
         assert_eq!(cfg.providers.openai.rpm, 500);
         assert_eq!(cfg.providers.anthropic.rpm, 500);
         assert_eq!(cfg.providers.gemini.rpm, 500);
@@ -950,6 +961,32 @@ asset_symbol = "nvda"
         assert!(
             result.is_ok(),
             "lowercase symbol should be accepted: {result:?}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_config_default_has_yahoo_finance_rps_10() {
+        let cfg = RateLimitConfig::default();
+        assert_eq!(
+            cfg.yahoo_finance_rps, 10,
+            "default yahoo_finance_rps should be 10"
+        );
+    }
+
+    #[test]
+    fn env_override_honours_yahoo_finance_rps() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS", "5");
+        }
+        let result = Config::load_from("config.toml");
+        unsafe {
+            std::env::remove_var("SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS");
+        }
+        let cfg = result.expect("config should load with yahoo_finance_rps env override");
+        assert_eq!(
+            cfg.rate_limits.yahoo_finance_rps, 5,
+            "SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS env var should override the config value"
         );
     }
 }

@@ -76,6 +76,7 @@ fn valid_proposal() -> TradeProposal {
         confidence: 0.82,
         rationale: "Strong fundamentals and momentum support this Buy.".to_owned(),
         valuation_assessment: None,
+        scenario_valuation: None,
     }
 }
 

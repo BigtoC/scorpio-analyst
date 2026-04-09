@@ -1,14 +1,16 @@
 //! Yahoo Finance data sub-module.
 //!
-//! Organises all Yahoo Finance related fetching into two focused files:
+//! Organised into focused layers:
 //!
-//! | Sub-module | Description |
-//! |------------|-------------|
-//! | [`ohlcv`] | [`YFinanceClient`], [`Candle`], [`GetOhlcv`], [`OhlcvToolContext`] — historical price bars |
-//! | [`vix`] | [`fetch_vix_data`] — CBOE VIX market volatility snapshot |
+//! | Sub-module    | Description |
+//! |---------------|-------------|
+//! | [`ohlcv`]     | [`YFinanceClient`], [`Candle`], [`GetOhlcv`], [`OhlcvToolContext`] — raw OHLCV fetcher and `rig` tool plumbing |
+//! | [`price`]     | [`get_latest_close`], [`fetch_vix_data`] — derived price queries over `YFinanceClient` |
+//! | [`financials`]| Quarterly financial statement, earnings trend, and profile fetchers |
 
+pub mod financials;
 pub mod ohlcv;
-pub mod vix;
+pub mod price;
 
 pub use ohlcv::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
-pub use vix::fetch_vix_data;
+pub use price::{fetch_vix_data, get_latest_close};

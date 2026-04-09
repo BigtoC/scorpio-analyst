@@ -365,6 +365,7 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: TokenUsageTracker::default(),
+            derived_valuation: None,
         }
     }
 
