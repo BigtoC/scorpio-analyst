@@ -88,3 +88,4 @@ The prompt fix restores the semantic distinction between absent and empty derive
 
 ## Related Issues
 - OpenSpec change: `chunk3-evidence-state-sync`
+- Related follow-up learning: `docs/solutions/logic-errors/thesis-memory-untrusted-context-boundary-2026-04-09.md`
