@@ -1,7 +1,7 @@
 ---
 title: feat: Add thesis memory
 type: feat
-status: active
+status: done
 date: 2026-04-07
 ---
 
@@ -137,7 +137,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Chunk 1: Thesis state model and snapshot lookup seam**
+- [x] **Chunk 1: Thesis state model and snapshot lookup seam**
 
 **Goal:** Define the typed thesis-memory payload and a lookup seam against the existing snapshot store.
 
@@ -176,7 +176,7 @@ flowchart TB
 **Verification:**
 - Snapshot/state tests prove thesis memory can be serialized, deserialized, and looked up safely.
 
-- [ ] **Chunk 2: Preflight load path and context contract**
+- [x] **Chunk 2: Preflight load path and context contract**
 
 **Goal:** Load prior thesis into the current run before any downstream prompt construction.
 
@@ -212,7 +212,7 @@ flowchart TB
 **Verification:**
 - Preflight/context tests prove prior thesis is seeded before downstream prompt builders run.
 
-- [ ] **Chunk 3: Shared prompt helper and downstream prompt consumption**
+- [x] **Chunk 3: Shared prompt helper and downstream prompt consumption**
 
 **Goal:** Replace empty `{past_memory_str}` behavior with a bounded, sanitized thesis-memory block.
 
@@ -253,7 +253,7 @@ flowchart TB
 **Verification:**
 - Prompt tests prove historical memory is consumed safely and boundedly.
 
-- [ ] **Chunk 4: Persist current-run thesis for future runs**
+- [x] **Chunk 4: Persist current-run thesis for future runs**
 
 **Goal:** Ensure run N+1 can reuse thesis from run N.
 
