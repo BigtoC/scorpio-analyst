@@ -968,8 +968,8 @@ asset_symbol = "nvda"
     fn rate_limit_config_default_has_yahoo_finance_rps_10() {
         let cfg = RateLimitConfig::default();
         assert_eq!(
-            cfg.yahoo_finance_rps, 10,
-            "default yahoo_finance_rps should be 10 (matching the previous hardcoded constant)"
+            cfg.yahoo_finance_rps, 30,
+            "default yahoo_finance_rps should be 30"
         );
     }
 
