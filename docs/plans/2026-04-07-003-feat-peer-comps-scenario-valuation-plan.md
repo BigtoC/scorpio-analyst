@@ -98,7 +98,7 @@ ETF coverage needs to be treated as a first-class compatibility case in that deg
   Rationale: deterministic Rust math requires stable units and horizons. Fields that silently mix annual, TTM, multi-year growth, or absolute-value variants must define one explicit precedence rule or be split into separate typed fields before they are consumed by valuation logic.
 
 - **Add new proposal fields with explicit `#[serde(default)]` and document them in the JsonSchema description before prompt updates land.**
-  Rationale: `TradeProposal` uses `#[derive(JsonSchema)]` for LLM structured output. Adding scenario-aware fields in Chunk 1 before the prompt updates in Chunk 4 creates a window where the schema includes unexplained fields. Mitigation: use `Option<T>` with `#[serde(default)]` so the LLM can omit them, and add `#[schemars(description = "...")]` annotations that explain each field's purpose in the schema itself. This reduces hallucination risk even before the full prompt update lands.
+  Rationale: `TradeProposal` uses `#[derive(JsonSchema)]` for LLM structured output. Adding scenario-aware fields in Chunk 1 before the prompt updates in Chunk 5 creates a window where the schema includes unexplained fields. Mitigation: use `Option<T>` with `#[serde(default)]` so the LLM can omit them, and add `#[schemars(description = "...")]` annotations that explain each field's purpose in the schema itself. This reduces hallucination risk even before the full prompt update lands.
 
 - **Add explicit report support in the same milestone.**
   Rationale: structured valuation should be visible and auditable once it exists.
@@ -139,13 +139,53 @@ flowchart TB
 
 ## Implementation Units
 
+- [ ] **Chunk 0: Make Yahoo Finance rate limit configurable**
+
+**Goal:** Wire Yahoo Finance's hardcoded `10 RPS` ceiling into the same config-driven pattern already used for Finnhub and FRED, so operators can tune or disable it without recompiling.
+
+**Requirements:** R6 (backward-compatible config change)
+
+**Dependencies:** Stage 1 is complete.
+
+**Files:**
+- Modify: `src/config.rs`
+- Modify: `src/rate_limit.rs`
+- Modify: `config.toml`
+- Modify: `src/data/yfinance/ohlcv.rs`
+- Modify: wherever `YFinanceClient::default()` is called in the pipeline (compile-fix cascade if needed)
+- Test: `src/config.rs` (unit)
+- Test: `src/rate_limit.rs` (unit)
+
+**Approach:**
+- Add `yahoo_finance_rps: u32` to `RateLimitConfig` in `src/config.rs`, with `#[serde(default = "default_yahoo_finance_rps")]` and a default value of `10` (matching the current hardcoded constant).
+- Add `fn default_yahoo_finance_rps() -> u32 { 10 }` and update `RateLimitConfig::default()`.
+- Add `SharedRateLimiter::yahoo_finance_from_config(cfg: &RateLimitConfig) -> Option<Self>` to `src/rate_limit.rs`, mirroring `finnhub_from_config` and `fred_from_config`: return `None` when `cfg.yahoo_finance_rps == 0` (disabled), otherwise `Some(Self::new("yahoo_finance", cfg.yahoo_finance_rps))`.
+- Add `YFinanceClient::from_config(cfg: &RateLimitConfig) -> Self` to `src/data/yfinance/ohlcv.rs` that calls `SharedRateLimiter::yahoo_finance_from_config(cfg).unwrap_or_else(|| SharedRateLimiter::disabled("yahoo_finance"))`. Keep `YFinanceClient::default()` as a convenience wrapper that calls `from_config(&RateLimitConfig::default())`.
+- Add `yahoo_finance_rps = 10` to the `[rate_limits]` section in `config.toml` with a comment matching the style of `finnhub_rps` and `fred_rps`.
+- Update pipeline construction sites that build `YFinanceClient` to use `YFinanceClient::from_config(&cfg.rate_limits)` instead of `YFinanceClient::default()`.
+
+**Patterns to follow:**
+- `SharedRateLimiter::finnhub_from_config` / `fred_from_config` in `src/rate_limit.rs`
+- `finnhub_rps` / `fred_rps` in `src/config.rs` and `config.toml`
+
+**Test scenarios:**
+- `yahoo_finance_rps = 0` in config produces `SharedRateLimiter::disabled` (no blocking).
+- `yahoo_finance_rps = 5` produces a limiter with the correct label `"yahoo_finance"`.
+- `RateLimitConfig::default()` gives `yahoo_finance_rps = 10`.
+- `SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS=5` env override is honoured.
+- `YFinanceClient::default()` still compiles and behaves identically to the pre-change code (regression guard).
+
+**Verification:**
+- `cargo clippy --all-targets -- -D warnings` passes.
+- Existing `YFinanceClient` unit tests still pass.
+
 - [ ] **Chunk 1: Derived valuation state and proposal schema**
 
 **Goal:** Define the typed structures and fetch real financial data before touching prompts or reports.
 
 **Requirements:** R1, R2, R6
 
-**Dependencies:** Stage 1 is complete.
+**Dependencies:** Chunk 0
 
 **Files:**
 - Create: `src/state/derived.rs`
