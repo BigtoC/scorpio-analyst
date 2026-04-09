@@ -179,6 +179,23 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
         .expect("run #2 must succeed");
 
     assert_ne!(final_1.execution_id, final_2.execution_id);
+    assert!(final_1.current_thesis.is_some());
+    assert!(final_2.current_thesis.is_some());
+    assert!(final_2.prior_thesis.is_some());
+    assert_eq!(
+        final_2
+            .prior_thesis
+            .as_ref()
+            .map(|thesis| thesis.symbol.as_str()),
+        Some("AAPL")
+    );
+    assert_eq!(
+        final_2
+            .prior_thesis
+            .as_ref()
+            .map(|thesis| thesis.action.as_str()),
+        Some("Buy")
+    );
 
     let exec_id_1 = final_1.execution_id.to_string();
     let exec_id_2 = final_2.execution_id.to_string();
@@ -238,6 +255,7 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
     assert!(snaps[4].trader_proposal.is_some());
     assert!(snaps[4].aggressive_risk_report.is_some());
     assert!(snaps[4].final_execution_status.is_some());
+    assert!(snaps[4].current_thesis.is_some());
 }
 
 #[tokio::test]
@@ -374,6 +392,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
     );
     assert!(final_state.final_execution_status.is_some());
     assert!(final_state.current_thesis.is_some());
+    assert!(final_state.prior_thesis.is_none());
     assert!(
         final_state
             .debate_history
