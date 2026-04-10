@@ -15,6 +15,7 @@ pub fn format_final_report(state: &TradingState) -> String {
     write_executive_summary(&mut out, state);
     write_trader_proposal(&mut out, state);
     write_analyst_snapshot(&mut out, state);
+    write_enrichment_summary(&mut out, state);
     super::valuation::write_scenario_valuation(&mut out, state);
     super::coverage::write_data_quality_and_coverage(&mut out, state);
     super::provenance::write_evidence_provenance(&mut out, state);
@@ -315,6 +316,67 @@ fn write_analyst_snapshot(out: &mut String, state: &TradingState) {
         if *present && let Some(full) = summary {
             let _ = writeln!(out, "\n  {} {}", format!("[{name}]").bold(), full);
         }
+    }
+}
+
+fn write_enrichment_summary(out: &mut String, state: &TradingState) {
+    let has_events = state
+        .enrichment_event_news
+        .as_ref()
+        .is_some_and(|v| !v.is_empty());
+    let has_consensus = state.enrichment_consensus.is_some();
+
+    if !has_events && !has_consensus {
+        return;
+    }
+
+    section_header(out, "Enrichment Data");
+
+    if let Some(ref events) = state.enrichment_event_news
+        && !events.is_empty()
+    {
+        let _ = writeln!(
+            out,
+            "{} {} event(s) in window",
+            "Event News:".bold(),
+            events.len(),
+        );
+        for e in events.iter().take(5) {
+            let impact_str = e
+                .impact
+                .as_deref()
+                .map(|i| format!(" [{i}]"))
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "  {} {} ({}){impact_str}",
+                e.event_timestamp, e.headline, e.event_type,
+            );
+        }
+        if events.len() > 5 {
+            let _ = writeln!(out, "  ... and {} more", events.len() - 5);
+        }
+    }
+
+    if let Some(ref c) = state.enrichment_consensus {
+        let eps = c
+            .eps_estimate
+            .map(|v| format!("{v:.2}"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let rev = c
+            .revenue_estimate_m
+            .map(|v| format!("${v:.0}M"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let analysts = c
+            .analyst_count
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "N/A".to_owned());
+        let _ = writeln!(
+            out,
+            "{} EPS: {eps} | Revenue: {rev} | Analysts: {analysts} (as of {})",
+            "Consensus Estimates:".bold(),
+            c.as_of_date,
+        );
     }
 }
 
