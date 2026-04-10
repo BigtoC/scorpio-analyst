@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use graph_flow::{Context, NextAction, Task};
 use scorpio_analyst::{
-    data::{FredClient, YFinanceClient},
+    data::FredClient,
     state::{
         AgentTokenUsage, FundamentalData, NewsData, SentimentData, TechnicalData, TradingState,
     },
@@ -187,7 +187,7 @@ async fn integration_one_analyst_failure_pipeline_continues() {
     write_analyst_data(&ctx, "news", news_data()).await;
     write_analyst_data(&ctx, "technical", technical_data()).await;
 
-    let task = AnalystSyncTask::new(store, YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let result = task
         .run(ctx.clone())
         .await
@@ -218,7 +218,7 @@ async fn integration_two_analyst_failures_abort_pipeline() {
     write_analyst_data(&ctx, "news", news_data()).await;
     write_analyst_data(&ctx, "technical", technical_data()).await;
 
-    let task = AnalystSyncTask::new(store, YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let error = task
         .run(ctx)
         .await
@@ -286,7 +286,7 @@ async fn integration_phase_snapshot_written_and_readable() {
     seed_state(&ctx, &state).await;
     seed_all_analysts_ok(&ctx).await;
 
-    let task = AnalystSyncTask::new(Arc::clone(&store), YFinanceClient::default());
+    let task = AnalystSyncTask::new(Arc::clone(&store));
     let result = task.run(ctx.clone()).await.expect("task must succeed");
     assert_eq!(result.next_action, NextAction::Continue);
 
@@ -310,7 +310,7 @@ async fn integration_token_usage_accumulated_after_analyst_sync() {
     seed_state(&ctx, &state).await;
     seed_all_analysts_ok(&ctx).await;
 
-    let task = AnalystSyncTask::new(store, YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let result = task.run(ctx.clone()).await.expect("task must succeed");
     assert_eq!(result.next_action, NextAction::Continue);
 
