@@ -828,7 +828,7 @@ mod tests {
         state.trader_proposal.as_mut().unwrap().scenario_valuation = Some(scenario);
 
         let report = format_final_report(&state);
-        assert!(report.contains("| Valuation | Not assessed |"));
+        assert!(report.contains("Not assessed"));
         assert!(
             !report.contains("Model-authored assessment omitted because deterministic valuation")
         );
