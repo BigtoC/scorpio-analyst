@@ -1,7 +1,7 @@
 ---
 title: feat: Add concrete earnings and event enrichment providers
 type: feat
-status: active
+status: done
 date: 2026-04-07
 ---
 
@@ -123,7 +123,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Chunk 1: Provider alignment and concrete adapter implementations**
+- [x] **Chunk 1: Provider alignment and concrete adapter implementations**
 
 **Goal:** Turn contract-only adapters into concrete event providers and estimates providers.
 
@@ -167,7 +167,7 @@ flowchart TB
 **Verification:**
 - Adapter tests prove the concrete providers produce deterministic shared payloads.
 
-- [ ] **Chunk 2: Runtime enrichment hydration and cache replacement**
+- [x] **Chunk 2: Runtime enrichment hydration and cache replacement**
 
 **Goal:** Replace preflight-seeded placeholders with real typed payloads during a run.
 
@@ -206,7 +206,7 @@ flowchart TB
 **Verification:**
 - Workflow/context tests prove cache hydration is typed, explicit, and fail-open where intended.
 
-- [ ] **Chunk 3: Evidence/provenance and downstream consumer integration**
+- [x] **Chunk 3: Evidence/provenance and downstream consumer integration**
 
 **Goal:** Make the new active-slice enrichment payloads visible to prompt, evidence, and report consumers.
 

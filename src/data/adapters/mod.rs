@@ -1,9 +1,13 @@
-//! Stage 1 enrichment adapter contracts.
+//! Enrichment adapter contracts and concrete provider implementations.
 //!
-//! This module declares [`ProviderCapabilities`] and the three provider-trait
-//! seams for transcripts, consensus estimates, and event news.  In Stage 1 the
-//! capabilities are config-derived only (no live API discovery); concrete
-//! provider implementations are deferred to Milestone 7.
+//! This module declares [`ProviderCapabilities`], the three provider-trait
+//! seams for transcripts, consensus estimates, and event news, and the
+//! [`EnrichmentResult`] three-state type used at the adapter boundary.
+//!
+//! Concrete providers:
+//! - [`events::FinnhubEventNewsProvider`] — event-news via Finnhub company news
+//! - [`estimates::YFinanceEstimatesProvider`] — consensus estimates via yfinance-rs
+//! - Transcripts: contract-only seam (deferred to a future plan)
 
 pub mod estimates;
 pub mod events;
@@ -12,6 +16,61 @@ pub mod transcripts;
 use serde::{Deserialize, Serialize};
 
 use crate::config::DataEnrichmentConfig;
+
+/// Persisted status for an enrichment category.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EnrichmentStatus {
+    /// Enrichment category is disabled by configuration.
+    Disabled,
+    /// Enrichment category is not configured or intentionally skipped.
+    NotConfigured,
+    /// Provider returned no usable data for the requested scope.
+    NotAvailable,
+    /// Provider fetch failed or timed out.
+    FetchFailed(String),
+    /// Provider returned usable data.
+    Available,
+}
+
+/// Three-state enrichment result that distinguishes "data available" from
+/// "no data exists" from "fetch failed."
+///
+/// Consumers should treat [`EnrichmentResult::FetchFailed`] the same as
+/// [`EnrichmentResult::NotAvailable`] for fail-open semantics, but can log
+/// or surface the failure reason for observability.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EnrichmentResult<T> {
+    /// The provider returned usable data.
+    Available(T),
+    /// The provider confirmed no data exists for the requested scope.
+    NotAvailable,
+    /// The fetch attempt failed with the given reason.
+    FetchFailed(String),
+}
+
+impl<T> EnrichmentResult<T> {
+    /// Convert to `Option<T>`, collapsing both absence and failure to `None`.
+    pub fn into_option(self) -> Option<T> {
+        match self {
+            Self::Available(v) => Some(v),
+            Self::NotAvailable | Self::FetchFailed(_) => None,
+        }
+    }
+
+    /// Returns `true` if the result contains available data.
+    pub fn is_available(&self) -> bool {
+        matches!(self, Self::Available(_))
+    }
+
+    /// Convert this transient fetch result into a persisted status value.
+    pub fn status(&self) -> EnrichmentStatus {
+        match self {
+            Self::Available(_) => EnrichmentStatus::Available,
+            Self::NotAvailable => EnrichmentStatus::NotAvailable,
+            Self::FetchFailed(reason) => EnrichmentStatus::FetchFailed(reason.clone()),
+        }
+    }
+}
 
 /// Runtime enrichment capabilities derived from [`DataEnrichmentConfig`].
 ///
@@ -51,6 +110,52 @@ mod tests {
     use super::*;
     use crate::config::DataEnrichmentConfig;
 
+    // ── EnrichmentResult tests ───────────────────────────────────────────
+
+    #[test]
+    fn enrichment_result_available_roundtrips() {
+        let result: EnrichmentResult<String> = EnrichmentResult::Available("hello".to_owned());
+        let json = serde_json::to_string(&result).expect("serialize");
+        let recovered: EnrichmentResult<String> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, recovered);
+    }
+
+    #[test]
+    fn enrichment_result_not_available_roundtrips() {
+        let result: EnrichmentResult<String> = EnrichmentResult::NotAvailable;
+        let json = serde_json::to_string(&result).expect("serialize");
+        let recovered: EnrichmentResult<String> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, recovered);
+    }
+
+    #[test]
+    fn enrichment_result_fetch_failed_roundtrips() {
+        let result: EnrichmentResult<String> = EnrichmentResult::FetchFailed("timeout".to_owned());
+        let json = serde_json::to_string(&result).expect("serialize");
+        let recovered: EnrichmentResult<String> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, recovered);
+    }
+
+    #[test]
+    fn enrichment_result_to_option_available() {
+        let result = EnrichmentResult::Available(42);
+        assert_eq!(result.into_option(), Some(42));
+    }
+
+    #[test]
+    fn enrichment_result_to_option_not_available() {
+        let result: EnrichmentResult<i32> = EnrichmentResult::NotAvailable;
+        assert_eq!(result.into_option(), None);
+    }
+
+    #[test]
+    fn enrichment_result_to_option_fetch_failed() {
+        let result: EnrichmentResult<i32> = EnrichmentResult::FetchFailed("err".to_owned());
+        assert_eq!(result.into_option(), None);
+    }
+
+    // ── ProviderCapabilities tests ───────────────────────────────────────
+
     #[test]
     fn from_config_all_disabled_produces_all_false() {
         let cfg = DataEnrichmentConfig::default();
@@ -79,6 +184,7 @@ mod tests {
             enable_consensus_estimates: true,
             enable_event_news: true,
             max_evidence_age_hours: 12,
+            ..DataEnrichmentConfig::default()
         };
         let caps = ProviderCapabilities::from_config(&cfg);
         assert!(caps.transcripts);

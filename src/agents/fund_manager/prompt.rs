@@ -1,8 +1,9 @@
 use crate::{
     agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
-        build_thesis_memory_context, build_valuation_context, sanitize_date_for_prompt,
-        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
+        UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
+        build_evidence_context, build_thesis_memory_context, build_valuation_context,
+        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+        serialize_prompt_value,
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     state::{DebateMessage, RiskReport, TradingState},
@@ -268,6 +269,11 @@ fn build_user_prompt(
         &build_data_quality_context(state),
         MAX_USER_PROMPT_CHARS,
     );
+    push_bounded_line(
+        &mut prompt,
+        &build_enrichment_context(state),
+        MAX_USER_PROMPT_CHARS,
+    );
 
     prompt
 }
@@ -477,5 +483,47 @@ mod tests {
             user_prompt.contains("Conservative and Neutral disagree"),
             "prompt should include risk discussion history"
         );
+    }
+
+    #[test]
+    fn prompt_context_includes_enrichment_status_and_payload() {
+        use crate::{
+            data::adapters::{
+                EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
+            },
+            state::EnrichmentState,
+        };
+
+        let mut state = populated_state();
+        state.enrichment_event_news = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(vec![EventNewsEvidence {
+                symbol: "AAPL".to_owned(),
+                event_timestamp: "2026-03-14T12:00:00Z".to_owned(),
+                event_type: "guidance_update".to_owned(),
+                headline: "Apple raises guidance".to_owned(),
+                impact: Some("positive".to_owned()),
+            }]),
+        };
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::FetchFailed(
+                "Yahoo Finance earnings trend unavailable".to_owned(),
+            ),
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: Some(2.5),
+                revenue_estimate_m: Some(95_000.0),
+                analyst_count: Some(35),
+                as_of_date: "2026-03-15".to_owned(),
+            }),
+        };
+
+        let (_system_prompt, user_prompt) =
+            build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+
+        assert!(user_prompt.contains("Event-news enrichment"));
+        assert!(user_prompt.contains("Apple raises guidance"));
+        assert!(user_prompt.contains("Consensus estimates status: fetch_failed"));
+        assert!(user_prompt.contains("Yahoo Finance earnings trend unavailable"));
     }
 }

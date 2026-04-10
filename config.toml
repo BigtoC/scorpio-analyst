@@ -50,7 +50,7 @@ rpm = 20  # Free-tier limit; paid accounts can increase this
 # Data API rate limits (requests per second).
 finnhub_rps = 30
 fred_rps = 2
-yahoo_finance_rps = 10  # Yahoo Finance free-tier ceiling; set to 0 to disable
+yahoo_finance_rps = 30  # set to 0 to disable
 
 [storage]
 # Path to the SQLite snapshot database. Supports ~ and $HOME expansion.
@@ -62,3 +62,4 @@ enable_transcripts = false
 enable_consensus_estimates = false
 enable_event_news = false
 max_evidence_age_hours = 48
+fetch_timeout_secs = 120

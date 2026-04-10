@@ -5,6 +5,8 @@
 //! are gated behind the shared [`SharedRateLimiter`] supplied at construction
 //! time and all errors are mapped to [`TradingError`].
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use finnhub::FinnhubClient as FhClient;
@@ -16,6 +18,8 @@ use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::symbol::validate_symbol;
+use crate::constants::NEWS_ANALYSIS_DAYS;
 use crate::{
     config::ApiConfig,
     constants::{MACRO_KEYWORD_SCAN_CHARS, NEWS_SNIPPET_MAX_CHARS, NEWS_TITLE_MAX_CHARS},
@@ -27,9 +31,10 @@ use crate::{
     },
 };
 
-use super::symbol::validate_symbol;
-
 // ─── Client ─────────────────────────────────────────────────────────────────
+
+/// Cache key for company news: `(symbol, from_date, to_date)`.
+type NewsCacheKey = (String, String, String);
 
 /// Thin async wrapper around the `finnhub` crate, scoped to the data-layer
 /// responsibilities of the Fundamental and News analysts.
@@ -37,6 +42,11 @@ use super::symbol::validate_symbol;
 pub struct FinnhubClient {
     inner: FhClient,
     limiter: SharedRateLimiter,
+    /// Per-run company news cache.  Shared via `Arc` so cloned clients
+    /// (analyst fan-out, enrichment provider) hit the same cache and avoid
+    /// duplicate API calls for identical `(symbol, from, to)` queries.
+    news_cache:
+        Arc<tokio::sync::RwLock<HashMap<NewsCacheKey, Vec<finnhub::models::news::CompanyNews>>>>,
 }
 
 impl std::fmt::Debug for FinnhubClient {
@@ -58,6 +68,7 @@ impl FinnhubClient {
         Ok(Self {
             inner: FhClient::new(key.expose_secret()),
             limiter,
+            news_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         })
     }
 
@@ -71,6 +82,7 @@ impl FinnhubClient {
         Self {
             inner: FhClient::new("test-dummy-key"),
             limiter: SharedRateLimiter::new("test-finnhub", 30),
+            news_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -168,22 +180,51 @@ impl FinnhubClient {
         ))
     }
 
-    /// Fetch the last 30 days of company news and map to [`NewsData`].
-    pub async fn get_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
+    /// Fetch raw company news items for a date range.
+    ///
+    /// Results are cached per `(symbol, from, to)` so concurrent callers
+    /// (e.g. news analyst pre-fetch and enrichment provider) share the same
+    /// API response without duplicate network requests.
+    pub async fn fetch_company_news(
+        &self,
+        symbol: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<finnhub::models::news::CompanyNews>, TradingError> {
         let symbol = validate_symbol(symbol)?;
-        self.limiter.acquire().await;
-        let today = chrono::Utc::now().date_naive();
-        let from = (today - chrono::Duration::days(30))
-            .format("%Y-%m-%d")
-            .to_string();
-        let to = today.format("%Y-%m-%d").to_string();
+        let key: NewsCacheKey = (symbol.to_owned(), from.to_owned(), to.to_owned());
 
-        let raw = self
+        // Fast path: return cached result if available.
+        {
+            let cache = self.news_cache.read().await;
+            if let Some(cached) = cache.get(&key) {
+                return Ok(cached.clone());
+            }
+        }
+
+        // Cache miss: fetch from API.
+        self.limiter.acquire().await;
+        let result = self
             .inner
             .news()
-            .company_news(symbol, &from, &to)
+            .company_news(symbol, from, to)
             .await
             .map_err(map_finnhub_err)?;
+
+        // Store in cache for subsequent callers.
+        self.news_cache.write().await.insert(key, result.clone());
+
+        Ok(result)
+    }
+
+    /// Fetch the last 30 days of company news and map to [`NewsData`].
+    pub async fn get_structured_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
+        let symbol = validate_symbol(symbol)?;
+        let today = chrono::Utc::now().date_naive();
+        let from = (today - NEWS_ANALYSIS_DAYS).format("%Y-%m-%d").to_string();
+        let to = today.format("%Y-%m-%d").to_string();
+
+        let raw = self.fetch_company_news(symbol, &from, &to).await?;
 
         Ok(build_news_data(symbol, raw, &from, &to))
     }
@@ -793,7 +834,7 @@ impl Tool for GetNews {
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!("FinnhubClient not set on GetNews tool"))
         })?;
-        client.get_news(&args.symbol).await
+        client.get_structured_news(&args.symbol).await
     }
 }
 

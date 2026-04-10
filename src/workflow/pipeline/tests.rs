@@ -210,7 +210,23 @@ fn rejects_invalid_runtime_symbol_before_prefetch() {
 
 #[test]
 fn config_loads_default_valuation_fetch_timeout_secs() {
-    let cfg = crate::config::Config::load_from("config.toml").expect("config should load");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+    )
+    .expect("write config");
+    let cfg = crate::config::Config::load_from(&path).expect("config should load");
 
     assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
 }

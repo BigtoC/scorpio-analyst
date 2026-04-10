@@ -81,6 +81,7 @@ pub struct StubbedFinancialResponses {
     pub income: Option<Vec<IncomeStatementRow>>,
     pub shares: Option<Vec<ShareCount>>,
     pub trend: Option<Vec<EarningsTrendRow>>,
+    pub trend_error: Option<String>,
 }
 
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
@@ -281,7 +282,7 @@ pub(super) fn parse_date(s: &str) -> Result<NaiveDate, TradingError> {
     })
 }
 
-fn map_yf_err(err: YfError) -> TradingError {
+pub(super) fn map_yf_err(err: YfError) -> TradingError {
     match &err {
         YfError::Http(e) if e.is_timeout() => TradingError::NetworkTimeout {
             elapsed: Duration::from_secs(30),

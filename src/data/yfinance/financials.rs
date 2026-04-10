@@ -132,9 +132,22 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_earnings_trend(&self, symbol: &str) -> Option<Vec<EarningsTrendRow>> {
+        self.get_earnings_trend_result(symbol).await.ok().flatten()
+    }
+
+    /// Fetch earnings trend data while preserving the failure reason.
+    pub async fn get_earnings_trend_result(
+        &self,
+        symbol: &str,
+    ) -> Result<Option<Vec<EarningsTrendRow>>, crate::error::TradingError> {
         #[cfg(test)]
         if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.trend.clone();
+            if let Some(message) = &stubbed.trend_error {
+                return Err(crate::error::TradingError::SchemaViolation {
+                    message: message.clone(),
+                });
+            }
+            return Ok(stubbed.trend.clone());
         }
 
         match self
@@ -144,10 +157,10 @@ impl YFinanceClient {
             )
             .await
         {
-            Ok(rows) => Some(rows),
+            Ok(rows) => Ok(Some(rows)),
             Err(e) => {
                 warn!(error = %e, symbol, "failed to fetch earnings trend");
-                None
+                Err(super::ohlcv::map_yf_err(e))
             }
         }
     }

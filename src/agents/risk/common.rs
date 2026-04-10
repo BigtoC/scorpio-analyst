@@ -19,9 +19,9 @@ use crate::{
 };
 
 pub(super) use crate::agents::shared::{
-    UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
-    build_thesis_memory_context, extract_json_object, sanitize_date_for_prompt,
-    sanitize_prompt_context, sanitize_symbol_for_prompt,
+    UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
+    build_evidence_context, build_thesis_memory_context, extract_json_object,
+    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -206,9 +206,10 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
 
     let evidence_section = build_evidence_context(state);
     let data_quality_section = build_data_quality_context(state);
+    let enrichment_section = build_enrichment_context(state);
 
     format!(
-        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n- Past learnings: {}\n\n{evidence_section}\n\n{data_quality_section}",
+        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n- Past learnings: {}\n\n{evidence_section}\n\n{data_quality_section}\n\n{enrichment_section}",
         build_thesis_memory_context(state)
     )
 }
@@ -347,6 +348,8 @@ mod tests {
             evidence_technical: None,
             evidence_sentiment: None,
             evidence_news: None,
+            enrichment_event_news: Default::default(),
+            enrichment_consensus: Default::default(),
             data_coverage: None,
             provenance_summary: None,
             prior_thesis: None,

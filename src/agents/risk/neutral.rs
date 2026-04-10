@@ -276,6 +276,8 @@ mod tests {
             evidence_technical: None,
             evidence_sentiment: None,
             evidence_news: None,
+            enrichment_event_news: Default::default(),
+            enrichment_consensus: Default::default(),
             data_coverage: None,
             provenance_summary: None,
             prior_thesis: None,

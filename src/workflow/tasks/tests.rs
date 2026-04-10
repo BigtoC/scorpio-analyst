@@ -1917,6 +1917,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             income: Some(trailing_income_statement_rows()),
             shares: Some(quarterly_shares()),
             trend: Some(earnings_trend_rows_with_forward_eps()),
+            trend_error: None,
         },
     );
     let task = AnalystSyncTask::with_yfinance(store, yfinance, Duration::from_millis(50));

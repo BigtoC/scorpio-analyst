@@ -24,7 +24,7 @@
 //! | [`get_latest_close`] | Fetch the most recent closing price for a symbol |
 //! | [`ResolvedInstrument`] | Canonical instrument identity record |
 //! | [`resolve_symbol`] | Validate and canonicalize a raw ticker string |
-//! | [`adapters`] | Stage 1 enrichment adapter contracts and [`ProviderCapabilities`] |
+//! | [`adapters`] | Enrichment adapter contracts, [`ProviderCapabilities`], and concrete providers |
 
 pub mod adapters;
 pub mod entity;

@@ -148,13 +148,30 @@ impl Task for PreflightTask {
         context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
 
         // ── Seed typed null placeholders for cache keys ───────────────────
-        // Always written unconditionally so downstream consumers can `expect`
-        // the key to be present and treat its absence as a programming error.
-        context.set(KEY_CACHED_TRANSCRIPT, "null".to_owned()).await;
-        context.set(KEY_CACHED_CONSENSUS, "null".to_owned()).await;
-        context.set(KEY_CACHED_EVENT_FEED, "null".to_owned()).await;
+        // Each key is always present after preflight so downstream consumers can
+        // `expect` it.  However, if `run_analysis_cycle` has already hydrated a
+        // key with real enrichment data (non-null JSON), we preserve it instead
+        // of overwriting with `"null"`.
+        seed_if_absent(&context, KEY_CACHED_TRANSCRIPT).await;
+        seed_if_absent(&context, KEY_CACHED_CONSENSUS).await;
+        seed_if_absent(&context, KEY_CACHED_EVENT_FEED).await;
 
         Ok(TaskResult::new(None, NextAction::Continue))
+    }
+}
+
+/// Write `"null"` to a context key only if it is not already set or its current
+/// value is the JSON literal `"null"`.  This preserves enrichment data that
+/// `run_analysis_cycle` may have hydrated before the graph starts.
+async fn seed_if_absent(context: &Context, key: &str) {
+    let existing: Option<String> = context.get(key).await;
+    match existing.as_deref() {
+        None | Some("null") => {
+            context.set(key, "null".to_owned()).await;
+        }
+        Some(_) => {
+            // Already populated with real data — do not overwrite.
+        }
     }
 }
 
@@ -294,7 +311,7 @@ mod tests {
             enable_transcripts: true,
             enable_consensus_estimates: false,
             enable_event_news: false,
-            max_evidence_age_hours: 48,
+            ..DataEnrichmentConfig::default()
         };
         let ctx = run_preflight("AAPL", enrichment)
             .await
@@ -386,6 +403,80 @@ mod tests {
             assert!(
                 val.is_some(),
                 "context key '{key}' must be present after preflight"
+            );
+        }
+    }
+
+    // ── Enrichment hydration preservation tests ────────────────────────────
+
+    #[tokio::test]
+    async fn preflight_preserves_pre_hydrated_consensus_data() {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new("AAPL", "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        // Pre-hydrate consensus cache key with real data.
+        let real_data = r#"{"symbol":"AAPL","eps_estimate":2.5,"revenue_estimate_m":95000.0,"analyst_count":35,"as_of_date":"2026-01-15"}"#;
+        ctx.set(KEY_CACHED_CONSENSUS, real_data.to_owned()).await;
+
+        let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
+        task.run(ctx.clone())
+            .await
+            .expect("preflight should succeed");
+
+        let after: String = ctx.get(KEY_CACHED_CONSENSUS).await.expect("key must exist");
+        assert_eq!(
+            after, real_data,
+            "preflight must not overwrite pre-hydrated enrichment data"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_preserves_pre_hydrated_event_feed_data() {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new("AAPL", "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let real_data = r#"[{"symbol":"AAPL","event_timestamp":"2026-01-14T18:00:00Z","event_type":"earnings_release","headline":"Apple beats Q1","impact":"positive"}]"#;
+        ctx.set(KEY_CACHED_EVENT_FEED, real_data.to_owned()).await;
+
+        let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
+        task.run(ctx.clone())
+            .await
+            .expect("preflight should succeed");
+
+        let after: String = ctx
+            .get(KEY_CACHED_EVENT_FEED)
+            .await
+            .expect("key must exist");
+        assert_eq!(
+            after, real_data,
+            "preflight must not overwrite pre-hydrated event feed data"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_seeds_null_when_no_enrichment_pre_hydrated() {
+        let ctx = run_preflight("MSFT", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        // Without pre-hydration, all enrichment keys should be "null".
+        for key in [
+            KEY_CACHED_TRANSCRIPT,
+            KEY_CACHED_CONSENSUS,
+            KEY_CACHED_EVENT_FEED,
+        ] {
+            let raw: String = ctx.get(key).await.expect("key must be present");
+            assert_eq!(
+                raw, "null",
+                "key '{key}' should be null without pre-hydration"
             );
         }
     }

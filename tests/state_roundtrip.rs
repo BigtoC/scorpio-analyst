@@ -1,7 +1,72 @@
 //! Property-based serialization round-trip tests for foundational state types.
 
 use proptest::prelude::*;
+use scorpio_analyst::data::adapters::{
+    EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
+};
 use scorpio_analyst::state::*;
+
+fn arb_enrichment_status() -> impl Strategy<Value = EnrichmentStatus> {
+    prop_oneof![
+        Just(EnrichmentStatus::Disabled),
+        Just(EnrichmentStatus::NotConfigured),
+        Just(EnrichmentStatus::NotAvailable),
+        "[a-z ]{5,30}".prop_map(EnrichmentStatus::FetchFailed),
+        Just(EnrichmentStatus::Available),
+    ]
+}
+
+fn arb_event_news_evidence() -> impl Strategy<Value = EventNewsEvidence> {
+    (
+        "[A-Z]{1,5}",
+        "2024-0[1-9]-[0-2][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z",
+        "[a-z_]{5,20}",
+        "[A-Za-z ]{5,40}",
+        proptest::option::of(prop::sample::select(vec![
+            "positive".to_owned(),
+            "negative".to_owned(),
+            "neutral".to_owned(),
+        ])),
+    )
+        .prop_map(|(symbol, event_timestamp, event_type, headline, impact)| {
+            EventNewsEvidence {
+                symbol,
+                event_timestamp,
+                event_type,
+                headline,
+                impact,
+            }
+        })
+}
+
+fn arb_consensus_evidence() -> impl Strategy<Value = ConsensusEvidence> {
+    (
+        "[A-Z]{1,5}",
+        arb_opt_f64(),
+        arb_opt_f64(),
+        proptest::option::of(0u32..100u32),
+        "2024-0[1-9]-[0-2][0-9]",
+    )
+        .prop_map(
+            |(symbol, eps_estimate, revenue_estimate_m, analyst_count, as_of_date)| {
+                ConsensusEvidence {
+                    symbol,
+                    eps_estimate,
+                    revenue_estimate_m,
+                    analyst_count,
+                    as_of_date,
+                }
+            },
+        )
+}
+
+fn arb_enrichment_state<T: Strategy>(payload: T) -> impl Strategy<Value = EnrichmentState<T::Value>>
+where
+    T::Value: Clone,
+{
+    (arb_enrichment_status(), proptest::option::of(payload))
+        .prop_map(|(status, payload)| EnrichmentState { status, payload })
+}
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -538,6 +603,10 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
             proptest::option::of(arb_thesis_memory()),
             proptest::option::of(arb_thesis_memory()),
         ),
+        (
+            arb_enrichment_state(proptest::collection::vec(arb_event_news_evidence(), 0..3)),
+            arb_enrichment_state(arb_consensus_evidence()),
+        ),
     )
         .prop_map(
             |(
@@ -563,6 +632,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     token_usage,
                 ),
                 (prior_thesis, current_thesis),
+                (enrichment_event_news, enrichment_consensus),
             )| {
                 TradingState {
                     execution_id: uuid::Uuid::new_v4(),
@@ -578,6 +648,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     evidence_technical,
                     evidence_sentiment,
                     evidence_news,
+                    enrichment_event_news,
+                    enrichment_consensus,
                     data_coverage,
                     provenance_summary,
                     debate_history,
@@ -693,4 +765,77 @@ fn trading_state_without_derived_valuation_deserializes_as_none() {
     let back: TradingState = serde_json::from_value(json).expect("old snapshot must deserialize");
     assert!(back.derived_valuation.is_none());
     assert_eq!(back.asset_symbol, "AAPL");
+}
+
+#[test]
+fn trading_state_with_legacy_null_enrichment_fields_deserializes_to_default_state() {
+    let mut json: serde_json::Value =
+        serde_json::to_value(TradingState::new("AAPL", "2026-03-15")).expect("serialize");
+    let object = json.as_object_mut().expect("json is object");
+    object.insert("enrichment_event_news".to_owned(), serde_json::Value::Null);
+    object.insert("enrichment_consensus".to_owned(), serde_json::Value::Null);
+
+    let back: TradingState =
+        serde_json::from_value(json).expect("legacy null snapshot must deserialize");
+    assert_eq!(
+        back.enrichment_event_news.status,
+        EnrichmentStatus::NotConfigured
+    );
+    assert!(back.enrichment_event_news.payload.is_none());
+    assert_eq!(
+        back.enrichment_consensus.status,
+        EnrichmentStatus::NotConfigured
+    );
+    assert!(back.enrichment_consensus.payload.is_none());
+}
+
+#[test]
+fn trading_state_with_legacy_payload_enrichment_fields_deserializes_as_available() {
+    let mut json: serde_json::Value =
+        serde_json::to_value(TradingState::new("AAPL", "2026-03-15")).expect("serialize");
+    let object = json.as_object_mut().expect("json is object");
+    object.insert(
+        "enrichment_event_news".to_owned(),
+        serde_json::json!([
+            {
+                "symbol": "AAPL",
+                "event_timestamp": "2026-03-14T12:00:00Z",
+                "event_type": "guidance_update",
+                "headline": "Apple raises guidance",
+                "impact": "positive"
+            }
+        ]),
+    );
+    object.insert(
+        "enrichment_consensus".to_owned(),
+        serde_json::json!({
+            "symbol": "AAPL",
+            "eps_estimate": 2.5,
+            "revenue_estimate_m": 95000.0,
+            "analyst_count": 35,
+            "as_of_date": "2026-03-15"
+        }),
+    );
+
+    let back: TradingState =
+        serde_json::from_value(json).expect("legacy payload snapshot must deserialize");
+    assert_eq!(
+        back.enrichment_event_news.status,
+        EnrichmentStatus::Available
+    );
+    assert_eq!(
+        back.enrichment_event_news.payload.as_ref().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        back.enrichment_consensus.status,
+        EnrichmentStatus::Available
+    );
+    assert_eq!(
+        back.enrichment_consensus
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.analyst_count),
+        Some(35)
+    );
 }

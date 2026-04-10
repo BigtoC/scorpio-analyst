@@ -56,13 +56,27 @@ fn providers_config_debug_never_leaks_secrets() {
 
 #[test]
 fn config_debug_does_not_leak_secrets() {
-    let cfg = Config::load_from("config.toml");
-    if let Ok(cfg) = cfg {
-        let debug = format!("{cfg:?}");
-        // Even after loading, no raw env var values should appear
-        assert!(!debug.contains("sk-live"));
-        assert!(!debug.contains("sk-ant"));
-    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+    )
+    .expect("write config");
+    let cfg = Config::load_from(&path).expect("config should load");
+    let debug = format!("{cfg:?}");
+    // Even after loading, no raw env var values should appear
+    assert!(!debug.contains("sk-live"));
+    assert!(!debug.contains("sk-ant"));
 }
 
 // ── Timeout error formatting ───────────────────────────────────────
