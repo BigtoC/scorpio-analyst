@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::data::adapters::{estimates::ConsensusEvidence, events::EventNewsEvidence};
+
 use super::{
     DataCoverageReport, DerivedValuation, EvidenceRecord, ExecutionStatus, FundamentalData,
     MarketVolatilityData, NewsData, ProvenanceSummary, RiskReport, SentimentData, TechnicalData,
@@ -43,6 +45,12 @@ pub struct TradingState {
     pub evidence_technical: Option<EvidenceRecord<TechnicalData>>,
     pub evidence_sentiment: Option<EvidenceRecord<SentimentData>>,
     pub evidence_news: Option<EvidenceRecord<NewsData>>,
+
+    // Enrichment data (hydrated in run_analysis_cycle when enabled)
+    #[serde(default)]
+    pub enrichment_event_news: Option<Vec<EventNewsEvidence>>,
+    #[serde(default)]
+    pub enrichment_consensus: Option<ConsensusEvidence>,
 
     // Phase 1: Run-level coverage and provenance reporting
     pub data_coverage: Option<DataCoverageReport>,
@@ -109,6 +117,8 @@ impl TradingState {
             evidence_technical: None,
             evidence_sentiment: None,
             evidence_news: None,
+            enrichment_event_news: None,
+            enrichment_consensus: None,
             data_coverage: None,
             provenance_summary: None,
             debate_history: Vec::new(),
