@@ -1,7 +1,7 @@
 ---
 title: feat: Add scenario valuation
 type: feat
-status: active
+status: completed
 date: 2026-04-07
 ---
 
@@ -179,7 +179,7 @@ flowchart TB
 - `cargo clippy --all-targets -- -D warnings` passes.
 - Existing `YFinanceClient` unit tests still pass.
 
-- [ ] **Chunk 1: Derived valuation state and proposal schema**
+- [x] **Chunk 1: Derived valuation state and proposal schema**
 
 **Goal:** Define the typed structures and fetch real financial data before touching prompts or reports.
 
@@ -305,7 +305,7 @@ flowchart TB
 **Verification:**
 - Workflow-task tests prove deterministic valuation exists and respects existing degradation rules.
 
-- [ ] **Chunk 4: Trader and fund-manager prompt integration**
+- [x] **Chunk 4: Trader and fund-manager prompt integration**
 
 **Goal:** Make downstream reasoning consume structured valuation instead of prompt-only free-text valuation expectations.
 
@@ -340,7 +340,7 @@ flowchart TB
 **Verification:**
 - Prompt tests prove structured valuation is consumed safely and explicitly.
 
-- [ ] **Chunk 5: Final report and reused-run hardening**
+- [x] **Chunk 5: Final report and reused-run hardening**
 
 **Goal:** Surface valuation in operator output and prevent stale valuation state reuse across cycles.
 
