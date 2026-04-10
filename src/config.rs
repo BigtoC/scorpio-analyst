@@ -917,7 +917,10 @@ asset_symbol = ""
 "#,
         );
         let result = Config::load_from(&path);
-        assert!(result.is_err(), "empty symbol should be rejected by validate()");
+        assert!(
+            result.is_err(),
+            "empty symbol should be rejected by validate()"
+        );
         assert!(
             result.unwrap_err().to_string().contains("invalid symbol"),
             "error should mention invalid symbol"
