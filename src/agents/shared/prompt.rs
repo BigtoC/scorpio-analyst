@@ -256,6 +256,65 @@ pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
     )
 }
 
+/// Render enrichment context (event-news, consensus estimates) for prompts.
+///
+/// Returns an empty string when no enrichment data is present, so callers can
+/// conditionally append without introducing blank sections.
+pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
+    let mut sections = Vec::new();
+
+    if let Some(ref events) = state.enrichment_event_news
+        && !events.is_empty()
+    {
+        let summary: Vec<String> = events
+            .iter()
+            .take(10)
+            .map(|e| {
+                format!(
+                    "  - [{}] {} ({}{})",
+                    e.event_timestamp,
+                    sanitize_prompt_context(&e.headline),
+                    e.event_type,
+                    e.impact
+                        .as_deref()
+                        .map(|i| format!(", impact: {i}"))
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        sections.push(format!(
+            "Event-news enrichment ({} items):\n{}",
+            events.len(),
+            summary.join("\n"),
+        ));
+    }
+
+    if let Some(ref consensus) = state.enrichment_consensus {
+        let eps = consensus
+            .eps_estimate
+            .map(|v| format!("{v:.2}"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let rev = consensus
+            .revenue_estimate_m
+            .map(|v| format!("{v:.0}M"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let analysts = consensus
+            .analyst_count
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "N/A".to_owned());
+        sections.push(format!(
+            "Consensus estimates (as of {}):\n  - EPS estimate: {eps}\n  - Revenue estimate: ${rev}\n  - Analyst count: {analysts}",
+            consensus.as_of_date,
+        ));
+    }
+
+    if sections.is_empty() {
+        String::new()
+    } else {
+        sections.join("\n\n")
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
@@ -453,5 +512,72 @@ mod tests {
         let ctx = build_thesis_memory_context(&state);
         assert!(!ctx.contains("sk-ant-SECRET123"));
         assert!(ctx.contains("[REDACTED]"));
+    }
+
+    // ── Enrichment context tests ─────────────────────────────────────────
+
+    #[test]
+    fn build_enrichment_context_empty_when_no_enrichment() {
+        let state = empty_state();
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.is_empty());
+    }
+
+    #[test]
+    fn build_enrichment_context_includes_event_news() {
+        use crate::data::adapters::events::EventNewsEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_event_news = Some(vec![EventNewsEvidence {
+            symbol: "AAPL".to_owned(),
+            event_timestamp: "2026-01-14T18:00:00Z".to_owned(),
+            event_type: "earnings_release".to_owned(),
+            headline: "Apple beats Q1 expectations".to_owned(),
+            impact: Some("positive".to_owned()),
+        }]);
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Event-news enrichment"));
+        assert!(ctx.contains("Apple beats Q1"));
+        assert!(ctx.contains("earnings_release"));
+        assert!(ctx.contains("impact: positive"));
+    }
+
+    #[test]
+    fn build_enrichment_context_includes_consensus() {
+        use crate::data::adapters::estimates::ConsensusEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_consensus = Some(ConsensusEvidence {
+            symbol: "AAPL".to_owned(),
+            eps_estimate: Some(2.50),
+            revenue_estimate_m: Some(95_000.0),
+            analyst_count: Some(35),
+            as_of_date: "2026-01-15".to_owned(),
+        });
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Consensus estimates"));
+        assert!(ctx.contains("EPS estimate: 2.50"));
+        assert!(ctx.contains("Revenue estimate: $95000M"));
+        assert!(ctx.contains("Analyst count: 35"));
+    }
+
+    #[test]
+    fn build_enrichment_context_handles_missing_consensus_fields() {
+        use crate::data::adapters::estimates::ConsensusEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_consensus = Some(ConsensusEvidence {
+            symbol: "TSLA".to_owned(),
+            eps_estimate: None,
+            revenue_estimate_m: None,
+            analyst_count: None,
+            as_of_date: "2026-01-15".to_owned(),
+        });
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("EPS estimate: N/A"));
+        assert!(ctx.contains("Revenue estimate: $N/A"));
     }
 }
