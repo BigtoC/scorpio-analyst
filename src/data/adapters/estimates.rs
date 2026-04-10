@@ -58,6 +58,7 @@ use crate::data::YFinanceClient;
 /// - Extracts `earnings_estimate.avg` as EPS and `revenue_estimate.avg` as
 ///   revenue (converted from raw to millions).
 /// - Uses the `num_analysts` count from the earnings estimate.
+#[derive(Debug)]
 pub struct YFinanceEstimatesProvider {
     client: YFinanceClient,
 }
@@ -76,7 +77,7 @@ impl EstimatesProvider for YFinanceEstimatesProvider {
         symbol: &str,
         as_of_date: &str,
     ) -> Result<Option<ConsensusEvidence>, TradingError> {
-        let rows = self.client.get_earnings_trend(symbol).await;
+        let rows = self.client.get_earnings_trend_result(symbol).await?;
 
         match rows {
             Some(trend) if !trend.is_empty() => {
@@ -93,9 +94,7 @@ fn normalize_earnings_trend(
     as_of_date: &str,
     rows: &[EarningsTrendRow],
 ) -> ConsensusEvidence {
-    // Take the first row — yfinance-rs returns rows ordered by period,
-    // with the nearest quarter first.
-    let row = &rows[0];
+    let row = select_next_quarter_row(rows).unwrap_or(&rows[0]);
 
     let eps_estimate = row.earnings_estimate.avg.as_ref().map(money_to_f64);
 
@@ -116,9 +115,31 @@ fn normalize_earnings_trend(
     }
 }
 
+fn quarter_period_priority(period: &str) -> Option<u8> {
+    match period.trim().to_ascii_uppercase().as_str() {
+        "+1Q" | "1Q" => Some(0),
+        "0Q" => Some(1),
+        "-1Q" => Some(2),
+        "+2Q" | "2Q" => Some(3),
+        _ => None,
+    }
+}
+
+fn select_next_quarter_row(trend: &[EarningsTrendRow]) -> Option<&EarningsTrendRow> {
+    trend
+        .iter()
+        .filter_map(|row| {
+            quarter_period_priority(&row.period.to_string()).map(|priority| (priority, row))
+        })
+        .min_by_key(|(priority, _)| *priority)
+        .map(|(_, row)| row)
+        .or_else(|| trend.first())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::StubbedFinancialResponses;
 
     #[test]
     fn consensus_evidence_serializes_and_deserializes() {
@@ -205,7 +226,9 @@ mod tests {
         assert_eq!(evidence.as_of_date, "2025-04-01");
         let eps = evidence.eps_estimate.expect("EPS should be present");
         assert!((eps - 2.50).abs() < 0.01, "EPS should be ~2.50, got {eps}");
-        let rev = evidence.revenue_estimate_m.expect("revenue should be present");
+        let rev = evidence
+            .revenue_estimate_m
+            .expect("revenue should be present");
         assert!(
             (rev - 65_000.0).abs() < 1.0,
             "revenue should be ~65000M, got {rev}"
@@ -244,5 +267,59 @@ mod tests {
             (rev - 50_000.0).abs() < 1.0,
             "revenue should be ~50000M, got {rev}"
         );
+    }
+
+    #[test]
+    fn normalize_earnings_trend_prefers_next_quarter_row_over_first_row_position() {
+        let annual = serde_json::json!({
+            "period": "+1Y",
+            "growth": null,
+            "earnings_estimate": {
+                "avg": null,
+                "low": null,
+                "high": null,
+                "year_ago_eps": null,
+                "num_analysts": null,
+                "growth": null
+            },
+            "revenue_estimate": {
+                "avg": null,
+                "low": null,
+                "high": null,
+                "year_ago_revenue": null,
+                "num_analysts": null,
+                "growth": null
+            },
+            "eps_trend": { "current": null, "historical": [] },
+            "eps_revisions": { "historical": [] }
+        });
+        let annual_row: EarningsTrendRow =
+            serde_json::from_value(annual).expect("valid annual row");
+
+        let quarterly_row = make_trend_row(Some(2.75), Some(80_000_000_000.0), Some(28));
+        let rows = vec![annual_row, quarterly_row];
+
+        let evidence = normalize_earnings_trend("AAPL", "2025-04-01", &rows);
+
+        assert_eq!(evidence.eps_estimate, Some(2.75));
+        assert_eq!(evidence.analyst_count, Some(28));
+        assert_eq!(evidence.revenue_estimate_m, Some(80_000.0));
+    }
+
+    #[tokio::test]
+    async fn fetch_consensus_preserves_yahoo_failure_reason() {
+        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            trend: None,
+            trend_error: Some("Yahoo Finance response could not be parsed".to_owned()),
+            ..StubbedFinancialResponses::default()
+        });
+        let provider = YFinanceEstimatesProvider::new(client);
+
+        let err = provider
+            .fetch_consensus("AAPL", "2025-04-01")
+            .await
+            .expect_err("stubbed Yahoo failure should surface as Err");
+
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
     }
 }
