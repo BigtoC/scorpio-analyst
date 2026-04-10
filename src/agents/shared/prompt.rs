@@ -1,4 +1,6 @@
-use crate::{constants::MAX_PROMPT_CONTEXT_CHARS, state::TradingState};
+use crate::{
+    constants::MAX_PROMPT_CONTEXT_CHARS, data::adapters::EnrichmentStatus, state::TradingState,
+};
 
 /// Marker inserted before untrusted model-generated prompt context.
 pub(crate) const UNTRUSTED_CONTEXT_NOTICE: &str =
@@ -258,12 +260,23 @@ pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
 
 /// Render enrichment context (event-news, consensus estimates) for prompts.
 ///
-/// Returns an empty string when no enrichment data is present, so callers can
-/// conditionally append without introducing blank sections.
+/// Always includes enrichment status so downstream agents can distinguish
+/// unavailable, disabled, and failed fetches even when no payload is present.
 pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
     let mut sections = Vec::new();
 
-    if let Some(ref events) = state.enrichment_event_news
+    let event_status = match &state.enrichment_event_news.status {
+        EnrichmentStatus::Disabled => "disabled".to_owned(),
+        EnrichmentStatus::NotConfigured => "not_configured".to_owned(),
+        EnrichmentStatus::NotAvailable => "not_available".to_owned(),
+        EnrichmentStatus::FetchFailed(reason) => {
+            format!("fetch_failed ({})", sanitize_prompt_context(reason))
+        }
+        EnrichmentStatus::Available => "available".to_owned(),
+    };
+    sections.push(format!("Event-news status: {event_status}"));
+
+    if let Some(ref events) = state.enrichment_event_news.payload
         && !events.is_empty()
     {
         let summary: Vec<String> = events
@@ -289,7 +302,18 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
         ));
     }
 
-    if let Some(ref consensus) = state.enrichment_consensus {
+    let consensus_status = match &state.enrichment_consensus.status {
+        EnrichmentStatus::Disabled => "disabled".to_owned(),
+        EnrichmentStatus::NotConfigured => "not_configured".to_owned(),
+        EnrichmentStatus::NotAvailable => "not_available".to_owned(),
+        EnrichmentStatus::FetchFailed(reason) => {
+            format!("fetch_failed ({})", sanitize_prompt_context(reason))
+        }
+        EnrichmentStatus::Available => "available".to_owned(),
+    };
+    sections.push(format!("Consensus estimates status: {consensus_status}"));
+
+    if let Some(ref consensus) = state.enrichment_consensus.payload {
         let eps = consensus
             .eps_estimate
             .map(|v| format!("{v:.2}"))
@@ -308,11 +332,7 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
         ));
     }
 
-    if sections.is_empty() {
-        String::new()
-    } else {
-        sections.join("\n\n")
-    }
+    sections.join("\n\n")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -321,7 +341,10 @@ mod tests {
     use chrono::Utc;
 
     use super::super::prompt::*;
-    use crate::state::TradingState;
+    use crate::{
+        data::adapters::EnrichmentStatus,
+        state::{EnrichmentState, TradingState},
+    };
 
     fn empty_state() -> TradingState {
         TradingState::new("AAPL", "2026-01-15")
@@ -517,10 +540,11 @@ mod tests {
     // ── Enrichment context tests ─────────────────────────────────────────
 
     #[test]
-    fn build_enrichment_context_empty_when_no_enrichment() {
+    fn build_enrichment_context_surfaces_default_statuses_when_no_payload_exists() {
         let state = empty_state();
         let ctx = build_enrichment_context(&state);
-        assert!(ctx.is_empty());
+        assert!(ctx.contains("Event-news status: not_configured"));
+        assert!(ctx.contains("Consensus estimates status: not_configured"));
     }
 
     #[test]
@@ -528,15 +552,19 @@ mod tests {
         use crate::data::adapters::events::EventNewsEvidence;
 
         let mut state = empty_state();
-        state.enrichment_event_news = Some(vec![EventNewsEvidence {
-            symbol: "AAPL".to_owned(),
-            event_timestamp: "2026-01-14T18:00:00Z".to_owned(),
-            event_type: "earnings_release".to_owned(),
-            headline: "Apple beats Q1 expectations".to_owned(),
-            impact: Some("positive".to_owned()),
-        }]);
+        state.enrichment_event_news = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(vec![EventNewsEvidence {
+                symbol: "AAPL".to_owned(),
+                event_timestamp: "2026-01-14T18:00:00Z".to_owned(),
+                event_type: "earnings_release".to_owned(),
+                headline: "Apple beats Q1 expectations".to_owned(),
+                impact: Some("positive".to_owned()),
+            }]),
+        };
 
         let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Event-news status: available"));
         assert!(ctx.contains("Event-news enrichment"));
         assert!(ctx.contains("Apple beats Q1"));
         assert!(ctx.contains("earnings_release"));
@@ -548,15 +576,19 @@ mod tests {
         use crate::data::adapters::estimates::ConsensusEvidence;
 
         let mut state = empty_state();
-        state.enrichment_consensus = Some(ConsensusEvidence {
-            symbol: "AAPL".to_owned(),
-            eps_estimate: Some(2.50),
-            revenue_estimate_m: Some(95_000.0),
-            analyst_count: Some(35),
-            as_of_date: "2026-01-15".to_owned(),
-        });
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: Some(2.50),
+                revenue_estimate_m: Some(95_000.0),
+                analyst_count: Some(35),
+                as_of_date: "2026-01-15".to_owned(),
+            }),
+        };
 
         let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Consensus estimates status: available"));
         assert!(ctx.contains("Consensus estimates"));
         assert!(ctx.contains("EPS estimate: 2.50"));
         assert!(ctx.contains("Revenue estimate: $95000M"));
@@ -568,13 +600,16 @@ mod tests {
         use crate::data::adapters::estimates::ConsensusEvidence;
 
         let mut state = empty_state();
-        state.enrichment_consensus = Some(ConsensusEvidence {
-            symbol: "TSLA".to_owned(),
-            eps_estimate: None,
-            revenue_estimate_m: None,
-            analyst_count: None,
-            as_of_date: "2026-01-15".to_owned(),
-        });
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(ConsensusEvidence {
+                symbol: "TSLA".to_owned(),
+                eps_estimate: None,
+                revenue_estimate_m: None,
+                analyst_count: None,
+                as_of_date: "2026-01-15".to_owned(),
+            }),
+        };
 
         let ctx = build_enrichment_context(&state);
         assert!(ctx.contains("EPS estimate: N/A"));
