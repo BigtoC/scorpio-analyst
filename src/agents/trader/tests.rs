@@ -968,3 +968,293 @@ fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
     assert!(ctx.user_prompt.contains("Data quality snapshot:"));
     assert!(ctx.user_prompt.contains("- required_inputs: unavailable"));
 }
+
+// ── Chunk 4: Valuation prompt integration ─────────────────────────────────────
+
+#[test]
+fn prompt_context_user_prompt_includes_valuation_not_computed_when_no_derived_valuation() {
+    let state = empty_state(); // derived_valuation is None
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        ctx.user_prompt.contains("not computed"),
+        "user prompt must include valuation-absent note: {}",
+        ctx.user_prompt
+    );
+}
+
+#[test]
+fn prompt_context_user_prompt_includes_not_assessed_for_fund_style_asset() {
+    use crate::state::{AssetShape, DerivedValuation, ScenarioValuation};
+
+    let mut state = empty_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::NotAssessed {
+            reason: "fund_style_asset".to_owned(),
+        },
+    });
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        ctx.user_prompt
+            .contains("not assessed for this asset shape"),
+        "user prompt must say 'not assessed for this asset shape' for ETF runs: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        ctx.user_prompt.contains("fund_style_asset"),
+        "user prompt must include the reason: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        ctx.user_prompt.contains("Do not fabricate"),
+        "user prompt must warn against fabrication: {}",
+        ctx.user_prompt
+    );
+}
+
+#[test]
+fn prompt_context_user_prompt_includes_structured_valuation_for_corporate_equity() {
+    use crate::state::{
+        AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, EvEbitdaValuation,
+        ForwardPeValuation, PegValuation, ScenarioValuation,
+    };
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::CorporateEquity,
+        scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 1_200_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 185.42,
+            }),
+            ev_ebitda: Some(EvEbitdaValuation {
+                ev_ebitda_ratio: 22.5,
+                implied_value_per_share: None,
+            }),
+            forward_pe: Some(ForwardPeValuation {
+                forward_eps: 7.25,
+                forward_pe: 26.2,
+            }),
+            peg: Some(PegValuation { peg_ratio: 1.8 }),
+        }),
+    });
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        ctx.user_prompt.contains("pre-computed"),
+        "user prompt must label valuation as pre-computed: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        ctx.user_prompt.contains("185.42"),
+        "user prompt must include DCF intrinsic value: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        ctx.user_prompt.contains("22.5"),
+        "user prompt must include EV/EBITDA ratio: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        ctx.user_prompt.contains("26.2"),
+        "user prompt must include Forward P/E: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        ctx.user_prompt.contains("1.80"),
+        "user prompt must include PEG ratio: {}",
+        ctx.user_prompt
+    );
+}
+
+#[test]
+fn prompt_context_user_prompt_omits_absent_valuation_metrics_for_partial_valuation() {
+    use crate::state::{
+        AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, ScenarioValuation,
+    };
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::CorporateEquity,
+        scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 500_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 142.0,
+            }),
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        }),
+    });
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        ctx.user_prompt.contains("142.00"),
+        "available DCF metric should appear: {}",
+        ctx.user_prompt
+    );
+    // Absent metrics should not appear — the LLM should not see "EV/EBITDA:" with a null
+    // value and hallucinate a number.
+    assert!(
+        !ctx.user_prompt.contains("EV/EBITDA:"),
+        "absent EV/EBITDA should not appear in prompt: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        !ctx.user_prompt.contains("Forward P/E:"),
+        "absent Forward P/E should not appear in prompt: {}",
+        ctx.user_prompt
+    );
+    assert!(
+        !ctx.user_prompt.contains("PEG ratio:"),
+        "absent PEG should not appear in prompt: {}",
+        ctx.user_prompt
+    );
+}
+
+#[test]
+fn system_prompt_instructs_to_use_precomputed_valuation_not_invent_metrics() {
+    assert!(
+        TRADER_SYSTEM_PROMPT.contains("pre-computed deterministic valuation"),
+        "system prompt must reference pre-computed valuation: {}",
+        TRADER_SYSTEM_PROMPT
+    );
+    assert!(
+        TRADER_SYSTEM_PROMPT.contains("Do NOT fabricate"),
+        "system prompt must warn against fabricating metrics: {}",
+        TRADER_SYSTEM_PROMPT
+    );
+    assert!(
+        TRADER_SYSTEM_PROMPT.contains("not applicable"),
+        "system prompt must describe not-assessed ETF path: {}",
+        TRADER_SYSTEM_PROMPT
+    );
+}
+
+#[tokio::test]
+async fn runtime_injects_scenario_valuation_from_state_into_proposal_after_llm() {
+    use crate::state::{
+        AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, ScenarioValuation,
+    };
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::CorporateEquity,
+        scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 1_000_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 175.0,
+            }),
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        }),
+    });
+
+    // LLM returns a proposal without scenario_valuation (as required by validate_trade_proposal).
+    let inference = StubInference::new(vec![Ok(TypedPromptResponse::new(
+        valid_proposal(), // scenario_valuation is None
+        Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            cached_input_tokens: 0,
+        },
+    ))]);
+
+    let agent = trader_agent_for_test(&state);
+    agent
+        .run_with_inference(&mut state, &inference)
+        .await
+        .unwrap();
+
+    let proposal = state.trader_proposal.as_ref().unwrap();
+    assert!(
+        proposal.scenario_valuation.is_some(),
+        "runtime must inject scenario_valuation from state into proposal"
+    );
+    assert_eq!(
+        proposal.scenario_valuation,
+        Some(ScenarioValuation::CorporateEquity(
+            CorporateEquityValuation {
+                dcf: Some(DcfValuation {
+                    free_cash_flow: 1_000_000_000.0,
+                    discount_rate_pct: 10.0,
+                    intrinsic_value_per_share: 175.0,
+                }),
+                ev_ebitda: None,
+                forward_pe: None,
+                peg: None,
+            }
+        )),
+        "injected scenario_valuation must match state.derived_valuation.scenario"
+    );
+}
+
+#[tokio::test]
+async fn runtime_injects_not_assessed_scenario_valuation_for_fund_style_state() {
+    use crate::state::{AssetShape, DerivedValuation, ScenarioValuation};
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::NotAssessed {
+            reason: "fund_style_asset".to_owned(),
+        },
+    });
+
+    let inference = StubInference::new(vec![Ok(TypedPromptResponse::new(
+        valid_proposal(),
+        Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            cached_input_tokens: 0,
+        },
+    ))]);
+
+    let agent = trader_agent_for_test(&state);
+    agent
+        .run_with_inference(&mut state, &inference)
+        .await
+        .unwrap();
+
+    let proposal = state.trader_proposal.as_ref().unwrap();
+    assert_eq!(
+        proposal.scenario_valuation,
+        Some(ScenarioValuation::NotAssessed {
+            reason: "fund_style_asset".to_owned(),
+        }),
+        "fund-style state must produce NotAssessed scenario_valuation in proposal"
+    );
+}
+
+#[tokio::test]
+async fn proposal_scenario_valuation_is_none_when_no_derived_valuation_in_state() {
+    let mut state = populated_state();
+    // derived_valuation is None (default)
+    assert!(state.derived_valuation.is_none());
+
+    let inference = StubInference::new(vec![Ok(TypedPromptResponse::new(
+        valid_proposal(),
+        Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            cached_input_tokens: 0,
+        },
+    ))]);
+
+    let agent = trader_agent_for_test(&state);
+    agent
+        .run_with_inference(&mut state, &inference)
+        .await
+        .unwrap();
+
+    let proposal = state.trader_proposal.as_ref().unwrap();
+    assert!(
+        proposal.scenario_valuation.is_none(),
+        "proposal.scenario_valuation must be None when state has no derived_valuation"
+    );
+}
