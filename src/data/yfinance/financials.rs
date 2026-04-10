@@ -35,6 +35,11 @@ impl YFinanceClient {
     /// Returns `None` on network or parsing failures so the caller can degrade
     /// gracefully without aborting the pipeline.
     pub async fn get_quarterly_cashflow(&self, symbol: &str) -> Option<Vec<CashflowRow>> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.cashflow.clone();
+        }
+
         match self
             .session
             .with_rate_limit(
@@ -54,6 +59,11 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_balance_sheet(&self, symbol: &str) -> Option<Vec<BalanceSheetRow>> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.balance.clone();
+        }
+
         match self
             .session
             .with_rate_limit(
@@ -73,6 +83,11 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_income_stmt(&self, symbol: &str) -> Option<Vec<IncomeStatementRow>> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.income.clone();
+        }
+
         match self
             .session
             .with_rate_limit(
@@ -93,6 +108,11 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_shares(&self, symbol: &str) -> Option<Vec<ShareCount>> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.shares.clone();
+        }
+
         match self
             .session
             .with_rate_limit(FundamentalsBuilder::new(self.session.client(), symbol).shares(true))
@@ -112,6 +132,11 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_earnings_trend(&self, symbol: &str) -> Option<Vec<EarningsTrendRow>> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.trend.clone();
+        }
+
         match self
             .session
             .with_rate_limit(
@@ -138,6 +163,11 @@ impl YFinanceClient {
     /// as proof that the symbol is an equity — absent profile data is not a
     /// discriminating signal for asset shape.
     pub async fn get_profile(&self, symbol: &str) -> Option<Profile> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.profile.clone();
+        }
+
         match self
             .session
             .with_rate_limit(profile::load_profile(self.session.client(), symbol))

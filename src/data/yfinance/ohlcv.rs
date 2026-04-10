@@ -20,6 +20,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfError};
+#[cfg(test)]
+use yfinance_rs::{
+    analysis::EarningsTrendRow,
+    fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
+    profile::Profile,
+};
 
 use super::client::YfSession;
 
@@ -66,6 +72,17 @@ impl Candle {
 /// Cache key: normalized (uppercase) symbol + start date + end date.
 type OhlcvCacheKey = (String, String, String);
 
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub struct StubbedFinancialResponses {
+    pub profile: Option<Profile>,
+    pub cashflow: Option<Vec<CashflowRow>>,
+    pub balance: Option<Vec<BalanceSheetRow>>,
+    pub income: Option<Vec<IncomeStatementRow>>,
+    pub shares: Option<Vec<ShareCount>>,
+    pub trend: Option<Vec<EarningsTrendRow>>,
+}
+
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
 ///
 /// Results of [`get_ohlcv`](YFinanceClient::get_ohlcv) are cached in memory by
@@ -80,6 +97,8 @@ pub struct YFinanceClient {
     /// Shared across all `Clone`s of this client; keyed by the normalized
     /// (uppercase) symbol + ISO-8601 start/end dates.
     cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
+    #[cfg(test)]
+    pub(super) stubbed_financials: Option<Arc<StubbedFinancialResponses>>,
 }
 
 impl std::fmt::Debug for YFinanceClient {
@@ -101,6 +120,8 @@ impl YFinanceClient {
         Self {
             session: YfSession::new(limiter),
             cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(test)]
+            stubbed_financials: None,
         }
     }
 
@@ -114,6 +135,18 @@ impl YFinanceClient {
         Self {
             session: YfSession::from_config(cfg),
             cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(test)]
+            stubbed_financials: None,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_stubbed_financials(responses: StubbedFinancialResponses) -> Self {
+        Self {
+            session: YfSession::default(),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            stubbed_financials: Some(Arc::new(responses)),
         }
     }
 
