@@ -467,14 +467,38 @@ mod tests {
     /// hold this lock for the duration of the test.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Minimum valid TOML: only the fields that have no `serde(default)` and
+    /// are required by `validate()`. All other fields fall through to their
+    /// compiled-in defaults, keeping tests independent of `config.toml`.
+    const MINIMAL_CONFIG_TOML: &str = r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[trading]
+asset_symbol = "AAPL"
+"#;
+
+    /// Write `content` to a temp file and return `(TempDir, path)`.
+    /// The `TempDir` must be kept alive for the duration of the test.
+    fn write_config(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, content).expect("config file should be written");
+        (dir, path)
+    }
+
     #[test]
     fn env_override_uses_double_underscore_separator() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         // SAFETY: serialized by ENV_LOCK; no other thread mutates env vars concurrently
         unsafe {
             std::env::set_var("SCORPIO__LLM__MAX_DEBATE_ROUNDS", "7");
         }
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
         unsafe {
             std::env::remove_var("SCORPIO__LLM__MAX_DEBATE_ROUNDS");
         }
@@ -517,36 +541,53 @@ mod tests {
     #[test]
     fn load_from_defaults_only() {
         let _guard = ENV_LOCK.lock().unwrap();
-        // Load only from the checked-in config.toml without any env overrides
-        let cfg = Config::load_from("config.toml");
-        assert!(
-            cfg.is_ok(),
-            "loading from config.toml should succeed: {cfg:?}"
+        // All values asserted here are either compiled-in defaults or explicit in
+        // this inline TOML. This test is independent of the production config.toml.
+        let (_dir, path) = write_config(
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+analyst_timeout_secs = 3000
+
+[trading]
+asset_symbol = "AAPL"
+
+[rate_limits]
+finnhub_rps = 30
+fred_rps = 2
+yahoo_finance_rps = 30
+
+[providers.openai]
+rpm = 500
+
+[providers.anthropic]
+rpm = 500
+
+[providers.gemini]
+rpm = 500
+
+[providers.copilot]
+rpm = 0
+
+[providers.openrouter]
+rpm = 20
+"#,
         );
-        let cfg = cfg.unwrap();
+        let cfg = Config::load_from(&path).expect("config should load");
         assert_eq!(cfg.llm.max_debate_rounds, 3);
-        assert_eq!(
-            cfg.llm.analyst_timeout_secs, 3000,
-            "analyst_timeout_secs should load from config.toml"
-        );
-        assert_eq!(
-            cfg.llm.valuation_fetch_timeout_secs, 30,
-            "valuation_fetch_timeout_secs should load from config.toml"
-        );
+        assert_eq!(cfg.llm.analyst_timeout_secs, 3000);
+        assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
-        assert_eq!(cfg.rate_limits.fred_rps, 2, "fred_rps default should be 2");
-        assert_eq!(
-            cfg.rate_limits.yahoo_finance_rps, 30,
-            "yahoo_finance_rps should default to 30"
-        );
+        assert_eq!(cfg.rate_limits.fred_rps, 2);
+        assert_eq!(cfg.rate_limits.yahoo_finance_rps, 30);
         assert_eq!(cfg.providers.openai.rpm, 500);
         assert_eq!(cfg.providers.anthropic.rpm, 500);
         assert_eq!(cfg.providers.gemini.rpm, 500);
         assert_eq!(cfg.providers.copilot.rpm, 0);
-        assert_eq!(
-            cfg.providers.openrouter.rpm, 20,
-            "openrouter rpm default should be 20"
-        );
+        assert_eq!(cfg.providers.openrouter.rpm, 20);
     }
 
     #[test]
@@ -659,12 +700,13 @@ asset_symbol = "AAPL"
     #[test]
     fn load_from_reads_openrouter_api_key_from_env() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let saved = std::env::var("SCORPIO_OPENROUTER_API_KEY").ok();
         unsafe {
             std::env::set_var("SCORPIO_OPENROUTER_API_KEY", "test-openrouter-key-from-env");
         }
 
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
 
         unsafe {
             match saved {
@@ -694,12 +736,13 @@ asset_symbol = "AAPL"
     #[test]
     fn env_override_supports_openrouter_rate_limit() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let saved = std::env::var("SCORPIO__PROVIDERS__OPENROUTER__RPM").ok();
         unsafe {
             std::env::set_var("SCORPIO__PROVIDERS__OPENROUTER__RPM", "40");
         }
 
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
 
         unsafe {
             match saved {
@@ -715,7 +758,8 @@ asset_symbol = "AAPL"
     #[test]
     fn storage_config_defaults_to_tilde_path() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let cfg = Config::load_from("config.toml").expect("config should load");
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let cfg = Config::load_from(&path).expect("config should load");
         assert_eq!(
             cfg.storage.snapshot_db_path, "~/.scorpio-analyst/phase_snapshots.db",
             "default snapshot_db_path should be the tilde-prefixed path"
@@ -725,10 +769,11 @@ asset_symbol = "AAPL"
     #[test]
     fn storage_config_can_be_overridden_via_env() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         unsafe {
             std::env::set_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH", "/tmp/custom.db");
         }
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
         unsafe {
             std::env::remove_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH");
         }
@@ -877,7 +922,8 @@ fetch_timeout_secs = 0
     #[test]
     fn config_loads_enrichment_defaults_from_config_toml() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let cfg = Config::load_from("config.toml").expect("config.toml should load");
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let cfg = Config::load_from(&path).expect("config should load");
         assert!(!cfg.enrichment.enable_transcripts);
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
@@ -887,10 +933,11 @@ fetch_timeout_secs = 0
     #[test]
     fn enrichment_env_override_sets_enable_transcripts() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         unsafe {
             std::env::set_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS", "true");
         }
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
         unsafe {
             std::env::remove_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS");
         }
@@ -901,10 +948,11 @@ fetch_timeout_secs = 0
     #[test]
     fn enrichment_env_override_sets_max_evidence_age_hours() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         unsafe {
             std::env::set_var("SCORPIO__ENRICHMENT__MAX_EVIDENCE_AGE_HOURS", "24");
         }
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
         unsafe {
             std::env::remove_var("SCORPIO__ENRICHMENT__MAX_EVIDENCE_AGE_HOURS");
         }
@@ -1037,10 +1085,11 @@ asset_symbol = "nvda"
     #[test]
     fn env_override_honours_yahoo_finance_rps() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         unsafe {
             std::env::set_var("SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS", "5");
         }
-        let result = Config::load_from("config.toml");
+        let result = Config::load_from(&path);
         unsafe {
             std::env::remove_var("SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS");
         }
