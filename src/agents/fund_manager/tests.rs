@@ -803,3 +803,146 @@ fn build_prompt_context_keeps_instruction_like_prior_thesis_out_of_system_prompt
     assert!(!system.contains("Ignore previous instructions"));
     assert!(user.contains("Ignore previous instructions"));
 }
+
+// ── Chunk 4: Valuation prompt integration ─────────────────────────────────────
+
+#[test]
+fn fund_manager_prompt_includes_valuation_not_computed_when_no_derived_valuation() {
+    use super::prompt::build_prompt_context;
+
+    let state = TradingState::new("AAPL", "2026-01-15");
+    let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        user.contains("not computed"),
+        "user prompt must include valuation-absent note when derived_valuation is None: {user}"
+    );
+}
+
+#[test]
+fn fund_manager_prompt_includes_not_assessed_for_fund_style_asset() {
+    use super::prompt::build_prompt_context;
+    use crate::state::{AssetShape, DerivedValuation, ScenarioValuation};
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::NotAssessed {
+            reason: "fund_style_asset".to_owned(),
+        },
+    });
+    let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        user.contains("not assessed for this asset shape"),
+        "user prompt must say 'not assessed for this asset shape' for ETF runs: {user}"
+    );
+    assert!(
+        user.contains("fund_style_asset"),
+        "user prompt must include the reason string: {user}"
+    );
+    assert!(
+        user.contains("Do not fabricate"),
+        "user prompt must warn against fabricating metrics: {user}"
+    );
+}
+
+#[test]
+fn fund_manager_prompt_includes_structured_valuation_for_corporate_equity() {
+    use super::prompt::build_prompt_context;
+    use crate::state::{
+        AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, EvEbitdaValuation,
+        ForwardPeValuation, PegValuation, ScenarioValuation,
+    };
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::CorporateEquity,
+        scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 1_500_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 190.0,
+            }),
+            ev_ebitda: Some(EvEbitdaValuation {
+                ev_ebitda_ratio: 18.0,
+                implied_value_per_share: Some(195.0),
+            }),
+            forward_pe: Some(ForwardPeValuation {
+                forward_eps: 7.50,
+                forward_pe: 25.3,
+            }),
+            peg: Some(PegValuation { peg_ratio: 1.5 }),
+        }),
+    });
+    let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        user.contains("pre-computed"),
+        "user prompt must label valuation as pre-computed: {user}"
+    );
+    assert!(
+        user.contains("190.00"),
+        "DCF intrinsic value must appear: {user}"
+    );
+    assert!(user.contains("18.0"), "EV/EBITDA ratio must appear: {user}");
+    assert!(
+        user.contains("195.00"),
+        "implied value/share must appear: {user}"
+    );
+    assert!(user.contains("25.3"), "Forward P/E must appear: {user}");
+    assert!(user.contains("1.50"), "PEG ratio must appear: {user}");
+}
+
+#[test]
+fn fund_manager_prompt_partial_valuation_surfaces_only_available_metrics() {
+    use super::prompt::build_prompt_context;
+    use crate::state::{
+        AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, ScenarioValuation,
+    };
+
+    let mut state = populated_state();
+    state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::CorporateEquity,
+        scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 900_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 160.0,
+            }),
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        }),
+    });
+    let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(
+        user.contains("160.00"),
+        "DCF intrinsic value must appear when available: {user}"
+    );
+    assert!(
+        !user.contains("EV/EBITDA:"),
+        "absent EV/EBITDA should not appear: {user}"
+    );
+    assert!(
+        !user.contains("Forward P/E:"),
+        "absent Forward P/E should not appear: {user}"
+    );
+    assert!(
+        !user.contains("PEG ratio:"),
+        "absent PEG should not appear: {user}"
+    );
+}
+
+#[test]
+fn fund_manager_system_prompt_references_precomputed_valuation() {
+    use super::prompt::FUND_MANAGER_SYSTEM_PROMPT;
+
+    assert!(
+        FUND_MANAGER_SYSTEM_PROMPT.contains("pre-computed deterministic valuation"),
+        "system prompt must reference pre-computed valuation context: {}",
+        FUND_MANAGER_SYSTEM_PROMPT
+    );
+    assert!(
+        FUND_MANAGER_SYSTEM_PROMPT.contains("not assessed"),
+        "system prompt must describe the not-assessed fallback for ETF/fund assets: {}",
+        FUND_MANAGER_SYSTEM_PROMPT
+    );
+}

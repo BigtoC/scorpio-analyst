@@ -1,8 +1,8 @@
 use crate::{
     agents::shared::{
         UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_evidence_context,
-        build_thesis_memory_context, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+        build_thesis_memory_context, build_valuation_context, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     state::{DebateMessage, RiskReport, TradingState},
@@ -53,8 +53,11 @@ Instructions:
 2. Apply the deterministic safety rule: if BOTH the Conservative and Neutral risk reports clearly \
 flag a material violation (`flags_violation == true`), reject the proposal.
 3. Otherwise, make an evidence-based decision using the full input set.
-4. Ground the decision in the trader's valuation assessment - use it to anchor price levels \
-in `entry_guidance` and calibrate `suggested_position`.
+4. Ground the decision in the pre-computed deterministic valuation provided in the user context \
+(see \"Deterministic scenario valuation\" section). Use those numbers to anchor price levels \
+in `entry_guidance` and calibrate `suggested_position`. If the valuation is `not assessed` \
+(e.g. ETF or fund-style instrument), note this explicitly in `rationale` and anchor price levels \
+on technical signals instead.
 5. Approve only if the proposal's action, target, stop, and confidence are defensible.
 6. If rejecting, make the blocking reason explicit in `rationale`.
 7. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and \
@@ -246,6 +249,11 @@ fn build_user_prompt(
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
+        &build_valuation_context(state),
         MAX_USER_PROMPT_CHARS,
     );
     push_bounded_line(
