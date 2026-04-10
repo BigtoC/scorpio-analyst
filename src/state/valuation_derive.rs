@@ -113,8 +113,9 @@ pub fn derive_valuation(
     // ── 3. Compute each metric ────────────────────────────────────────────────
     let dcf = compute_dcf(cashflow_rows, balance_rows, shares);
     let ev_ebitda = compute_ev_ebitda(balance_rows, income_rows, current_price);
-    let forward_pe = compute_forward_pe(earnings_trend, current_price);
-    let peg = compute_peg(forward_pe.as_ref(), earnings_trend);
+    let forward_row = earnings_trend.and_then(select_forward_eps_row);
+    let forward_pe = compute_forward_pe(forward_row, current_price);
+    let peg = compute_peg(forward_pe.as_ref(), forward_row);
 
     // ── 4. If no metric is computable, emit NotAssessed ───────────────────────
     if dcf.is_none() && ev_ebitda.is_none() && forward_pe.is_none() && peg.is_none() {
@@ -194,10 +195,11 @@ fn compute_ev_ebitda(
     let income_rows = income_rows?;
     let price = current_price.filter(|&p| p > 0.0)?;
 
-    // Most recent balance-sheet row with a share count.
-    let row = balance_rows
-        .iter()
-        .find(|r| r.shares_outstanding.is_some())?;
+    let row = select_latest_balance_row(balance_rows, |row| {
+        row.shares_outstanding.is_some_and(|shares| shares > 0)
+            && row.cash.is_some()
+            && row.long_term_debt.is_some()
+    })?;
 
     let shares = row.shares_outstanding? as f64;
     let cash = row.cash.as_ref().and_then(|m| m.amount().to_f64())?;
@@ -238,14 +240,12 @@ fn compute_ev_ebitda(
 /// Picks the first trend row that carries a non-None, positive `earnings_estimate.avg`
 /// as the forward EPS. Returns `None` when either EPS or price is absent/non-positive.
 fn compute_forward_pe(
-    earnings_trend: Option<&[EarningsTrendRow]>,
+    forward_row: Option<&EarningsTrendRow>,
     current_price: Option<f64>,
 ) -> Option<ForwardPeValuation> {
-    let trend = earnings_trend?;
     let price = current_price.filter(|&p| p > 0.0)?;
 
-    // Prefer annual forward periods (+1y / 0y) before falling back to other rows.
-    let forward_row = select_forward_eps_row(trend)?;
+    let forward_row = forward_row?;
     let forward_eps = forward_row
         .earnings_estimate
         .avg
@@ -272,16 +272,15 @@ fn compute_forward_pe(
 /// Returns `None` when forward P/E is unavailable or growth is absent/non-positive.
 fn compute_peg(
     forward_pe: Option<&ForwardPeValuation>,
-    earnings_trend: Option<&[EarningsTrendRow]>,
+    forward_row: Option<&EarningsTrendRow>,
 ) -> Option<PegValuation> {
     let pe = forward_pe?;
-    let trend = earnings_trend?;
+    let forward_row = forward_row?;
 
-    let growth_row = select_forward_growth_row(trend)?;
-    let growth_decimal = growth_row
+    let growth_decimal = forward_row
         .earnings_estimate
         .growth
-        .or(growth_row.growth)
+        .or(forward_row.growth)
         .filter(|&g| g > 0.0)?;
 
     let growth_pct = growth_decimal * 100.0;
@@ -340,6 +339,17 @@ fn parse_quarter_key(period: &str) -> Option<(i32, u8)> {
     Some((year.parse().ok()?, quarter.parse().ok()?))
 }
 
+fn parse_statement_period_key(period: &str) -> Option<(i32, u8)> {
+    parse_quarter_key(period).or_else(|| {
+        let period = period.trim().to_ascii_uppercase();
+        if is_annual_period(&period) {
+            Some((period.parse().ok()?, 0))
+        } else {
+            None
+        }
+    })
+}
+
 fn is_previous_quarter(current: (i32, u8), next: (i32, u8)) -> bool {
     match current {
         (year, quarter @ 2..=4) => next == (year, quarter - 1),
@@ -376,21 +386,16 @@ fn select_forward_eps_row(trend: &[EarningsTrendRow]) -> Option<&EarningsTrendRo
         .or_else(|| trend.iter().find(|row| row.earnings_estimate.avg.is_some()))
 }
 
-fn select_forward_growth_row(trend: &[EarningsTrendRow]) -> Option<&EarningsTrendRow> {
-    trend
-        .iter()
-        .filter_map(|row| {
-            annual_period_priority(&row.period.to_string())
-                .filter(|_| row.earnings_estimate.growth.or(row.growth).is_some())
-                .map(|priority| (priority, row))
-        })
-        .min_by_key(|(priority, _)| *priority)
+fn select_latest_balance_row(
+    rows: &[BalanceSheetRow],
+    predicate: impl Fn(&BalanceSheetRow) -> bool,
+) -> Option<&BalanceSheetRow> {
+    rows.iter()
+        .filter(|row| predicate(row))
+        .filter_map(|row| parse_statement_period_key(&row.period.to_string()).map(|key| (key, row)))
+        .max_by_key(|(key, _)| *key)
         .map(|(_, row)| row)
-        .or_else(|| {
-            trend
-                .iter()
-                .find(|row| row.earnings_estimate.growth.or(row.growth).is_some())
-        })
+        .or_else(|| rows.iter().find(|row| predicate(row)))
 }
 
 fn get_cashflow_fcf(row: &CashflowRow) -> Option<f64> {
@@ -414,16 +419,21 @@ fn get_shares(
     shares: Option<&[ShareCount]>,
 ) -> Option<u64> {
     if let Some(rows) = balance_rows
-        && let Some(s) = rows
-            .iter()
-            .find_map(|r| r.shares_outstanding)
-            .filter(|&s| s > 0)
+        && let Some(s) = select_latest_balance_row(rows, |row| {
+            row.shares_outstanding.is_some_and(|shares| shares > 0)
+        })
+        .and_then(|row| row.shares_outstanding)
     {
         return Some(s);
     }
 
     shares
-        .and_then(|sc| sc.last())
+        .and_then(|share_counts| {
+            share_counts
+                .iter()
+                .filter(|share_count| share_count.shares > 0)
+                .max_by_key(|share_count| share_count.date)
+        })
         .map(|sc| sc.shares)
         .filter(|&s| s > 0)
 }
