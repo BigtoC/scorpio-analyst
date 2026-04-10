@@ -26,10 +26,12 @@ pub struct TradeProposal {
     /// Deterministic scenario valuation (DCF, EV/EBITDA, Forward P/E, PEG) computed before
     /// this proposal was generated.
     ///
-    /// `None` for pre-feature snapshots or when valuation was not assessed for this asset shape.
-    /// The LLM may leave this field absent; it is populated by the runtime before trader inference.
+    /// `None` for pre-feature snapshots or when valuation was not computed for this run.
+    /// If valuation does not apply to this asset shape, the runtime stores
+    /// `Some(ScenarioValuation::NotAssessed { .. })` instead.
+    /// The LLM may leave this field absent; it is populated by the runtime after trader inference.
     #[schemars(
-        description = "Deterministic scenario valuation computed before this proposal. None for pre-feature snapshots or when valuation was not assessed (e.g. ETF). Omit if not provided."
+        description = "Deterministic scenario valuation computed before this proposal. None for pre-feature snapshots or when valuation was not computed for this run. For assets where valuation does not apply (e.g. ETF), the runtime stores a NotAssessed variant instead. Omit if not provided."
     )]
     #[serde(default)]
     pub scenario_valuation: Option<ScenarioValuation>,
