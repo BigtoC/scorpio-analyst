@@ -267,7 +267,7 @@ flowchart TB
 **Verification:**
 - Developer runs `cargo run --example yfinance_live_test` and sees all checks pass. Failures are printed with the raw error so the root cause is immediately visible without needing `RUST_LOG=debug`.
 
-- [ ] **Chunk 3: Deterministic valuation derivation in the runtime**
+- [x] **Chunk 3: Deterministic valuation derivation in the runtime**
 
 **Goal:** Compute structured valuation using real financial statements before trader inference.
 
