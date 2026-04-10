@@ -536,8 +536,8 @@ mod tests {
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
         assert_eq!(cfg.rate_limits.fred_rps, 2, "fred_rps default should be 2");
         assert_eq!(
-            cfg.rate_limits.yahoo_finance_rps, 10,
-            "yahoo_finance_rps should default to 10"
+            cfg.rate_limits.yahoo_finance_rps, 30,
+            "yahoo_finance_rps should default to 30"
         );
         assert_eq!(cfg.providers.openai.rpm, 500);
         assert_eq!(cfg.providers.anthropic.rpm, 500);
@@ -1026,11 +1026,11 @@ asset_symbol = "nvda"
     }
 
     #[test]
-    fn rate_limit_config_default_has_yahoo_finance_rps_10() {
+    fn rate_limit_config_default_has_yahoo_finance_rps_30() {
         let cfg = RateLimitConfig::default();
         assert_eq!(
-            cfg.yahoo_finance_rps, 10,
-            "default yahoo_finance_rps should be 10"
+            cfg.yahoo_finance_rps, 30,
+            "default yahoo_finance_rps should be 30"
         );
     }
 
