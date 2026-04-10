@@ -18,6 +18,8 @@ use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::symbol::validate_symbol;
+use crate::constants::NEWS_ANALYSIS_DAYS;
 use crate::{
     config::ApiConfig,
     constants::{MACRO_KEYWORD_SCAN_CHARS, NEWS_SNIPPET_MAX_CHARS, NEWS_TITLE_MAX_CHARS},
@@ -28,8 +30,6 @@ use crate::{
         NewsData, TransactionType,
     },
 };
-use crate::constants::NEWS_ANALYSIS_DAYS;
-use super::symbol::validate_symbol;
 
 // ─── Client ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +45,8 @@ pub struct FinnhubClient {
     /// Per-run company news cache.  Shared via `Arc` so cloned clients
     /// (analyst fan-out, enrichment provider) hit the same cache and avoid
     /// duplicate API calls for identical `(symbol, from, to)` queries.
-    news_cache: Arc<tokio::sync::RwLock<HashMap<NewsCacheKey, Vec<finnhub::models::news::CompanyNews>>>>,
+    news_cache:
+        Arc<tokio::sync::RwLock<HashMap<NewsCacheKey, Vec<finnhub::models::news::CompanyNews>>>>,
 }
 
 impl std::fmt::Debug for FinnhubClient {
@@ -191,11 +192,7 @@ impl FinnhubClient {
         to: &str,
     ) -> Result<Vec<finnhub::models::news::CompanyNews>, TradingError> {
         let symbol = validate_symbol(symbol)?;
-        let key: NewsCacheKey = (
-            symbol.to_owned(),
-            from.to_owned(),
-            to.to_owned(),
-        );
+        let key: NewsCacheKey = (symbol.to_owned(), from.to_owned(), to.to_owned());
 
         // Fast path: return cached result if available.
         {
@@ -215,10 +212,7 @@ impl FinnhubClient {
             .map_err(map_finnhub_err)?;
 
         // Store in cache for subsequent callers.
-        self.news_cache
-            .write()
-            .await
-            .insert(key, result.clone());
+        self.news_cache.write().await.insert(key, result.clone());
 
         Ok(result)
     }
@@ -227,9 +221,7 @@ impl FinnhubClient {
     pub async fn get_structured_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
         let symbol = validate_symbol(symbol)?;
         let today = chrono::Utc::now().date_naive();
-        let from = (today - NEWS_ANALYSIS_DAYS)
-            .format("%Y-%m-%d")
-            .to_string();
+        let from = (today - NEWS_ANALYSIS_DAYS).format("%Y-%m-%d").to_string();
         let to = today.format("%Y-%m-%d").to_string();
 
         let raw = self.fetch_company_news(symbol, &from, &to).await?;
