@@ -13,6 +13,7 @@ deep_thinking_model = "gemini-3.1-pro-preview"
 max_debate_rounds = 3
 max_risk_rounds = 2
 analyst_timeout_secs = 3000
+valuation_fetch_timeout_secs = 30
 
 [trading]
 asset_symbol = "NVDA"
