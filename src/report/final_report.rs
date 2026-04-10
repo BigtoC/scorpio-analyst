@@ -3,6 +3,7 @@ use std::fmt::Write;
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
 
+use crate::data::adapters::EnrichmentStatus;
 use crate::state::{
     AgentTokenUsage, Decision, RiskReport, TokenUsageTracker, TradeAction, TradingState,
 };
@@ -320,11 +321,28 @@ fn write_analyst_snapshot(out: &mut String, state: &TradingState) {
 }
 
 fn write_enrichment_summary(out: &mut String, state: &TradingState) {
-    let has_events = state
-        .enrichment_event_news
-        .as_ref()
-        .is_some_and(|v| !v.is_empty());
-    let has_consensus = state.enrichment_consensus.is_some();
+    fn should_render_section<T>(status: &EnrichmentStatus, payload: Option<&T>) -> bool {
+        payload.is_some() || !matches!(status, EnrichmentStatus::NotConfigured)
+    }
+
+    fn format_status(status: &EnrichmentStatus) -> String {
+        match status {
+            EnrichmentStatus::Disabled => "disabled".to_owned(),
+            EnrichmentStatus::NotConfigured => "not_configured".to_owned(),
+            EnrichmentStatus::NotAvailable => "not_available".to_owned(),
+            EnrichmentStatus::FetchFailed(reason) => format!("fetch_failed ({reason})"),
+            EnrichmentStatus::Available => "available".to_owned(),
+        }
+    }
+
+    let has_events = should_render_section(
+        &state.enrichment_event_news.status,
+        state.enrichment_event_news.payload.as_ref(),
+    );
+    let has_consensus = should_render_section(
+        &state.enrichment_consensus.status,
+        state.enrichment_consensus.payload.as_ref(),
+    );
 
     if !has_events && !has_consensus {
         return;
@@ -332,7 +350,16 @@ fn write_enrichment_summary(out: &mut String, state: &TradingState) {
 
     section_header(out, "Enrichment Data");
 
-    if let Some(ref events) = state.enrichment_event_news
+    if has_events {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            "Event-news status:".bold(),
+            format_status(&state.enrichment_event_news.status),
+        );
+    }
+
+    if let Some(ref events) = state.enrichment_event_news.payload
         && !events.is_empty()
     {
         let _ = writeln!(
@@ -358,7 +385,16 @@ fn write_enrichment_summary(out: &mut String, state: &TradingState) {
         }
     }
 
-    if let Some(ref c) = state.enrichment_consensus {
+    if has_consensus {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            "Consensus estimates status:".bold(),
+            format_status(&state.enrichment_consensus.status),
+        );
+    }
+
+    if let Some(ref c) = state.enrichment_consensus.payload {
         let eps = c
             .eps_estimate
             .map(|v| format!("{v:.2}"))
@@ -894,6 +930,31 @@ mod tests {
         assert!(
             !report.contains("Model-authored assessment omitted because deterministic valuation")
         );
+    }
+
+    #[test]
+    fn format_final_report_surfaces_failed_enrichment_status() {
+        use crate::{
+            data::adapters::{EnrichmentStatus, estimates::ConsensusEvidence},
+            state::EnrichmentState,
+        };
+
+        let mut state = minimal_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::FetchFailed("Yahoo Finance timed out".to_owned()),
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: Some(2.50),
+                revenue_estimate_m: Some(95_000.0),
+                analyst_count: Some(35),
+                as_of_date: "2026-04-03".to_owned(),
+            }),
+        };
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Enrichment Data"));
+        assert!(report.contains("Consensus estimates status: fetch_failed"));
+        assert!(report.contains("Yahoo Finance timed out"));
     }
 
     #[test]
