@@ -9,6 +9,11 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
+    data::adapters::{
+        EnrichmentResult,
+        estimates::{ConsensusEvidence, EstimatesProvider, YFinanceEstimatesProvider},
+        events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
+    },
     data::{FinnhubClient, FredClient, YFinanceClient},
     error::TradingError,
     providers::factory::CompletionModelHandle,
@@ -19,9 +24,10 @@ use crate::{
         tasks::{
             AggressiveRiskTask, AnalystSyncTask, BearishResearcherTask, BullishResearcherTask,
             ConservativeRiskTask, DebateModeratorTask, FundManagerTask, FundamentalAnalystTask,
-            KEY_CACHED_NEWS, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
-            KEY_RISK_ROUND, NeutralRiskTask, NewsAnalystTask, PreflightTask, RiskModeratorTask,
-            SentimentAnalystTask, TechnicalAnalystTask, TraderTask,
+            KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS, KEY_DEBATE_ROUND,
+            KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND, NeutralRiskTask,
+            NewsAnalystTask, PreflightTask, RiskModeratorTask, SentimentAnalystTask,
+            TechnicalAnalystTask, TraderTask,
         },
     },
 };
@@ -43,6 +49,8 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.evidence_technical = None;
     state.evidence_sentiment = None;
     state.evidence_news = None;
+    state.enrichment_event_news = None;
+    state.enrichment_consensus = None;
     state.data_coverage = None;
     state.provenance_summary = None;
     state.debate_history.clear();
@@ -242,6 +250,28 @@ pub(super) async fn run_analysis_cycle(
         info!("VIX data unavailable; continuing without volatility context");
     }
 
+    // ── Enrichment hydration (fail-open, timeout-bounded) ─────────────
+    // Results are stored both on TradingState (for downstream agent/report
+    // consumers) and in the context cache keys (for preflight compatibility).
+    let enrichment_cfg = &pipeline.config.enrichment;
+    let fetch_timeout = std::time::Duration::from_secs(enrichment_cfg.fetch_timeout_secs);
+
+    let event_enrichment = if enrichment_cfg.enable_event_news {
+        hydrate_event_news(&pipeline.finnhub, &symbol, &date, fetch_timeout).await
+    } else {
+        EnrichmentResult::NotAvailable
+    };
+
+    let consensus_enrichment = if enrichment_cfg.enable_consensus_estimates {
+        hydrate_consensus(&pipeline.yfinance, &symbol, &date, fetch_timeout).await
+    } else {
+        EnrichmentResult::NotAvailable
+    };
+
+    // Persist enrichment results on state for downstream consumers.
+    initial_state.enrichment_event_news = event_enrichment.into_option();
+    initial_state.enrichment_consensus = consensus_enrichment.into_option();
+
     let cached_news_json = news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
     let graph = Arc::clone(&pipeline.graph);
     let storage = Arc::new(InMemorySessionStorage::new());
@@ -269,6 +299,22 @@ pub(super) async fn run_analysis_cycle(
 
     if let Some(news_json) = cached_news_json {
         session.context.set(KEY_CACHED_NEWS, news_json).await;
+    }
+
+    // ── Write enrichment payloads to context cache keys ──────────────
+    // These are written before save; PreflightTask's `seed_if_absent` will
+    // preserve non-null values rather than overwriting them.
+    if let Some(ref events) = initial_state.enrichment_event_news
+        && let Ok(json) = serde_json::to_string(events)
+    {
+        info!(count = events.len(), "hydrated event-news enrichment");
+        session.context.set(KEY_CACHED_EVENT_FEED, json).await;
+    }
+    if let Some(ref consensus) = initial_state.enrichment_consensus
+        && let Ok(json) = serde_json::to_string(consensus)
+    {
+        info!(symbol = %consensus.symbol, "hydrated consensus-estimates enrichment");
+        session.context.set(KEY_CACHED_CONSENSUS, json).await;
     }
 
     storage
@@ -311,6 +357,71 @@ pub(super) async fn run_analysis_cycle(
 
     info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle complete");
     Ok(final_state)
+}
+
+// ─── Enrichment hydration helpers ────────────────────────────────────────────
+
+/// Fetch event-news enrichment with a timeout boundary.
+async fn hydrate_event_news(
+    finnhub: &FinnhubClient,
+    symbol: &str,
+    target_date: &str,
+    timeout: std::time::Duration,
+) -> EnrichmentResult<Vec<EventNewsEvidence>> {
+    let provider = FinnhubEventNewsProvider::new(finnhub.clone());
+    match tokio::time::timeout(timeout, provider.fetch_event_news(symbol, target_date)).await {
+        Ok(Ok(events)) if events.is_empty() => {
+            info!(symbol, "event-news enrichment: no events found");
+            EnrichmentResult::NotAvailable
+        }
+        Ok(Ok(events)) => {
+            info!(
+                symbol,
+                count = events.len(),
+                "event-news enrichment: available"
+            );
+            EnrichmentResult::Available(events)
+        }
+        Ok(Err(e)) => {
+            info!(symbol, error = %e, "event-news enrichment: fetch failed (fail-open)");
+            EnrichmentResult::FetchFailed(e.to_string())
+        }
+        Err(_) => {
+            info!(symbol, "event-news enrichment: timed out (fail-open)");
+            EnrichmentResult::FetchFailed("enrichment fetch timed out".to_owned())
+        }
+    }
+}
+
+/// Fetch consensus-estimates enrichment with a timeout boundary.
+async fn hydrate_consensus(
+    yfinance: &YFinanceClient,
+    symbol: &str,
+    target_date: &str,
+    timeout: std::time::Duration,
+) -> EnrichmentResult<ConsensusEvidence> {
+    let provider = YFinanceEstimatesProvider::new(yfinance.clone());
+    match tokio::time::timeout(timeout, provider.fetch_consensus(symbol, target_date)).await {
+        Ok(Ok(Some(evidence))) => {
+            info!(symbol, "consensus-estimates enrichment: available");
+            EnrichmentResult::Available(evidence)
+        }
+        Ok(Ok(None)) => {
+            info!(symbol, "consensus-estimates enrichment: no data found");
+            EnrichmentResult::NotAvailable
+        }
+        Ok(Err(e)) => {
+            info!(symbol, error = %e, "consensus-estimates enrichment: fetch failed (fail-open)");
+            EnrichmentResult::FetchFailed(e.to_string())
+        }
+        Err(_) => {
+            info!(
+                symbol,
+                "consensus-estimates enrichment: timed out (fail-open)"
+            );
+            EnrichmentResult::FetchFailed("enrichment fetch timed out".to_owned())
+        }
+    }
 }
 
 async fn run_pipeline_loop(runner: &FlowRunner, session_id: &str) -> Result<(), TradingError> {
