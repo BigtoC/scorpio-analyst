@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt::Debug, future::Future};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -483,40 +484,75 @@ async fn fetch_valuation_inputs(
     symbol: &str,
     fetch_timeout: Duration,
 ) -> ValuationInputs {
-    match timeout(fetch_timeout, async {
-        tokio::join!(
-            yfinance.get_profile(symbol),
+    let (profile, cashflow, balance, income, shares, trend) = tokio::join!(
+        fetch_with_timeout(
+            symbol,
+            "profile",
+            fetch_timeout,
+            yfinance.get_profile(symbol)
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_cashflow",
+            fetch_timeout,
             yfinance.get_quarterly_cashflow(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_balance_sheet",
+            fetch_timeout,
             yfinance.get_quarterly_balance_sheet(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_income_stmt",
+            fetch_timeout,
             yfinance.get_quarterly_income_stmt(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_shares",
+            fetch_timeout,
             yfinance.get_quarterly_shares(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "earnings_trend",
+            fetch_timeout,
             yfinance.get_earnings_trend(symbol),
-        )
-    })
-    .await
-    {
-        Ok((profile, cashflow, balance, income, shares, trend)) => ValuationInputs {
-            profile,
-            cashflow,
-            balance,
-            income,
-            shares,
-            trend,
-        },
+        ),
+    );
+
+    ValuationInputs {
+        profile,
+        cashflow,
+        balance,
+        income,
+        shares,
+        trend,
+    }
+}
+
+async fn fetch_with_timeout<T, F>(
+    symbol: &str,
+    field: &'static str,
+    fetch_timeout: Duration,
+    fetch: F,
+) -> Option<T>
+where
+    T: Debug,
+    F: Future<Output = Option<T>>,
+{
+    match timeout(fetch_timeout, fetch).await {
+        Ok(value) => value,
         Err(_) => {
             warn!(
                 symbol,
-                timeout_secs = fetch_timeout.as_secs(),
+                field,
+                timeout_secs = fetch_timeout.as_secs_f64(),
                 "valuation fetch timed out"
             );
-            ValuationInputs {
-                profile: None,
-                cashflow: None,
-                balance: None,
-                income: None,
-                shares: None,
-                trend: None,
-            }
+            None
         }
     }
 }
@@ -774,5 +810,30 @@ impl Task for AnalystSyncTask {
         info!(phase = 1, phase_name = "analyst_team", "phase complete");
 
         Ok(TaskResult::new(None, NextAction::Continue))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time::sleep;
+
+    use super::fetch_with_timeout;
+
+    #[tokio::test]
+    async fn fetch_with_timeout_preserves_fast_result_when_parallel_peer_times_out() {
+        let timeout = Duration::from_millis(20);
+
+        let (slow, fast) = tokio::join!(
+            fetch_with_timeout::<&'static str, _>("AAPL", "slow", timeout, async {
+                sleep(Duration::from_millis(40)).await;
+                Some("slow")
+            }),
+            fetch_with_timeout::<&'static str, _>("AAPL", "fast", timeout, async { Some("fast") }),
+        );
+
+        assert_eq!(slow, None);
+        assert_eq!(fast, Some("fast"));
     }
 }

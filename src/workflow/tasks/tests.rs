@@ -7,7 +7,8 @@ use super::*;
 use crate::{
     config::LlmConfig,
     state::{
-        AgentTokenUsage, FundamentalData, NewsData, SentimentData, TechnicalData, TradingState,
+        AgentTokenUsage, FundamentalData, NewsData, ScenarioValuation, SentimentData,
+        TechnicalData, TradingState,
     },
     workflow::context_bridge::{
         deserialize_state_from_context, serialize_state_to_context, write_prefixed_result,
@@ -200,7 +201,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);
@@ -333,7 +334,7 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let error = task
         .run(ctx)
         .await
@@ -435,7 +436,7 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let result = task
         .run(ctx.clone())
         .await
@@ -587,7 +588,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
     .await
     .unwrap();
 
-    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);
@@ -761,7 +762,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
             .expect("usage write should succeed");
     }
 
-    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     task.run(ctx.clone()).await.expect("task should succeed");
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
@@ -875,7 +876,7 @@ async fn sentiment_analyst_invalid_cached_news_fails_closed() {
 mod derive_valuation_tests {
     use yfinance_rs::{
         analysis::EarningsTrendRow,
-        fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow},
+        fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
         profile::Profile,
     };
 
@@ -902,6 +903,18 @@ mod derive_valuation_tests {
         .unwrap()
     }
 
+    fn trailing_cashflow_rows_with_fcf() -> Vec<CashflowRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"2025Q4","operating_cashflow":{"amount":"1200000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}},
+                {"period":"2025Q3","operating_cashflow":{"amount":"1100000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"900000000","currency":"USD"},"net_income":{"amount":"850000000","currency":"USD"}},
+                {"period":"2025Q2","operating_cashflow":{"amount":"1300000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"1100000000","currency":"USD"},"net_income":{"amount":"950000000","currency":"USD"}},
+                {"period":"2025Q1","operating_cashflow":{"amount":"1000000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"800000000","currency":"USD"},"net_income":{"amount":"800000000","currency":"USD"}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
     fn balance_sheet_rows_with_shares() -> Vec<BalanceSheetRow> {
         serde_json::from_str(
             r#"[{"period":"2025Q4","total_assets":{"amount":"5000000000","currency":"USD"},"total_liabilities":{"amount":"2000000000","currency":"USD"},"total_equity":{"amount":"3000000000","currency":"USD"},"cash":{"amount":"500000000","currency":"USD"},"long_term_debt":{"amount":"1000000000","currency":"USD"},"shares_outstanding":1000000000}]"#,
@@ -916,9 +929,72 @@ mod derive_valuation_tests {
         .unwrap()
     }
 
+    fn trailing_income_statement_rows() -> Vec<IncomeStatementRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"2025Q4","total_revenue":{"amount":"4000000000","currency":"USD"},"gross_profit":{"amount":"1800000000","currency":"USD"},"operating_income":{"amount":"1200000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}},
+                {"period":"2025Q3","total_revenue":{"amount":"3900000000","currency":"USD"},"gross_profit":{"amount":"1750000000","currency":"USD"},"operating_income":{"amount":"1100000000","currency":"USD"},"net_income":{"amount":"850000000","currency":"USD"}},
+                {"period":"2025Q2","total_revenue":{"amount":"4100000000","currency":"USD"},"gross_profit":{"amount":"1850000000","currency":"USD"},"operating_income":{"amount":"1300000000","currency":"USD"},"net_income":{"amount":"950000000","currency":"USD"}},
+                {"period":"2025Q1","total_revenue":{"amount":"3800000000","currency":"USD"},"gross_profit":{"amount":"1700000000","currency":"USD"},"operating_income":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"800000000","currency":"USD"}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    fn sparse_quarter_cashflow_rows_with_gap() -> Vec<CashflowRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"2025Q4","operating_cashflow":{"amount":"1200000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}},
+                {"period":"2025Q3","operating_cashflow":{"amount":"1100000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"900000000","currency":"USD"},"net_income":{"amount":"850000000","currency":"USD"}},
+                {"period":"2025Q1","operating_cashflow":{"amount":"1000000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"800000000","currency":"USD"},"net_income":{"amount":"800000000","currency":"USD"}},
+                {"period":"2024Q4","operating_cashflow":{"amount":"950000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"750000000","currency":"USD"},"net_income":{"amount":"780000000","currency":"USD"}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    fn sparse_quarter_income_statement_rows_with_gap() -> Vec<IncomeStatementRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"2025Q4","total_revenue":{"amount":"4000000000","currency":"USD"},"gross_profit":{"amount":"1800000000","currency":"USD"},"operating_income":{"amount":"1200000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}},
+                {"period":"2025Q3","total_revenue":{"amount":"3900000000","currency":"USD"},"gross_profit":{"amount":"1750000000","currency":"USD"},"operating_income":{"amount":"1100000000","currency":"USD"},"net_income":{"amount":"850000000","currency":"USD"}},
+                {"period":"2025Q1","total_revenue":{"amount":"3800000000","currency":"USD"},"gross_profit":{"amount":"1700000000","currency":"USD"},"operating_income":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"800000000","currency":"USD"}},
+                {"period":"2024Q4","total_revenue":{"amount":"3750000000","currency":"USD"},"gross_profit":{"amount":"1680000000","currency":"USD"},"operating_income":{"amount":"950000000","currency":"USD"},"net_income":{"amount":"760000000","currency":"USD"}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    fn balance_sheet_rows_missing_cash_and_debt() -> Vec<BalanceSheetRow> {
+        serde_json::from_str(
+            r#"[{"period":"2025Q4","total_assets":{"amount":"5000000000","currency":"USD"},"total_liabilities":{"amount":"2000000000","currency":"USD"},"total_equity":{"amount":"3000000000","currency":"USD"},"cash":null,"long_term_debt":null,"shares_outstanding":1000000000}]"#,
+        )
+        .unwrap()
+    }
+
+    fn quarterly_shares() -> Vec<ShareCount> {
+        serde_json::from_str(
+            r#"[
+                {"date":1735689600,"shares":1000000000},
+                {"date":1743465600,"shares":1000000000}
+            ]"#,
+        )
+        .unwrap()
+    }
+
     fn earnings_trend_rows_with_forward_eps() -> Vec<EarningsTrendRow> {
         serde_json::from_str(
             r#"[{"period":"+1y","growth":0.08,"earnings_estimate":{"avg":{"amount":"7.25","currency":"USD"},"low":null,"high":null,"year_ago_eps":null,"num_analysts":null,"growth":0.08},"revenue_estimate":{"avg":null,"low":null,"high":null,"year_ago_revenue":null,"num_analysts":null,"growth":null},"eps_trend":{"current":null,"historical":[]},"eps_revisions":{"historical":[]}}]"#,
+        )
+        .unwrap()
+    }
+
+    fn mixed_horizon_earnings_trend_rows() -> Vec<EarningsTrendRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"+1q","growth":null,"earnings_estimate":{"avg":{"amount":"2.00","currency":"USD"},"low":null,"high":null,"year_ago_eps":null,"num_analysts":null,"growth":null},"revenue_estimate":{"avg":null,"low":null,"high":null,"year_ago_revenue":null,"num_analysts":null,"growth":null},"eps_trend":{"current":null,"historical":[]},"eps_revisions":{"historical":[]}},
+                {"period":"+1y","growth":0.08,"earnings_estimate":{"avg":{"amount":"8.00","currency":"USD"},"low":null,"high":null,"year_ago_eps":null,"num_analysts":null,"growth":0.08},"revenue_estimate":{"avg":null,"low":null,"high":null,"year_ago_revenue":null,"num_analysts":null,"growth":null},"eps_trend":{"current":null,"historical":[]},"eps_revisions":{"historical":[]}}
+            ]"#,
         )
         .unwrap()
     }
@@ -927,10 +1003,10 @@ mod derive_valuation_tests {
     fn derive_valuation_with_complete_corporate_data_produces_corporate_equity_valuation() {
         let result = derive_valuation(
             Some(company_profile()),
-            Some(&cashflow_rows_with_fcf()),
+            Some(&trailing_cashflow_rows_with_fcf()),
             Some(&balance_sheet_rows_with_shares()),
-            Some(&income_statement_rows()),
-            None,
+            Some(&trailing_income_statement_rows()),
+            Some(&quarterly_shares()),
             Some(&earnings_trend_rows_with_forward_eps()),
             Some(150.0),
         );
@@ -960,6 +1036,227 @@ mod derive_valuation_tests {
                     "forward_eps mismatch"
                 );
                 assert!(fpe.forward_pe > 0.0);
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_requires_four_quarters_for_statement_based_annualization() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&income_statement_rows()),
+            Some(&quarterly_shares()),
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                assert!(
+                    val.dcf.is_none(),
+                    "DCF must stay None until four quarterly cashflow rows are available"
+                );
+                assert!(
+                    val.ev_ebitda.is_none(),
+                    "EV/EBITDA must stay None until four quarterly income rows are available"
+                );
+                assert!(
+                    val.forward_pe.is_some(),
+                    "trend-based metrics should still be available when statement math degrades"
+                );
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_annualizes_trailing_quarterly_cashflow_for_dcf() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&trailing_cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&trailing_income_statement_rows()),
+            Some(&quarterly_shares()),
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                let dcf = val.dcf.expect("expected DCF valuation");
+                assert!(
+                    (dcf.free_cash_flow - 3_800_000_000.0).abs() < 0.01,
+                    "DCF should use trailing-four-quarter FCF, got {}",
+                    dcf.free_cash_flow
+                );
+                assert!(
+                    (dcf.intrinsic_value_per_share - 38.0).abs() < 0.01,
+                    "DCF intrinsic value should reflect annualized FCF, got {}",
+                    dcf.intrinsic_value_per_share
+                );
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_annualizes_trailing_quarterly_operating_income_for_ev_ebitda() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&trailing_cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&trailing_income_statement_rows()),
+            Some(&quarterly_shares()),
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                let ev = val.ev_ebitda.expect("expected EV/EBITDA valuation");
+                assert!(
+                    (ev.ev_ebitda_ratio - 32.71739130434783).abs() < 0.01,
+                    "EV/EBITDA should use trailing-four-quarter operating income, got {}",
+                    ev.ev_ebitda_ratio
+                );
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_rejects_sparse_quarter_series_for_annualized_metrics() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&sparse_quarter_cashflow_rows_with_gap()),
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&sparse_quarter_income_statement_rows_with_gap()),
+            Some(&quarterly_shares()),
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                assert!(
+                    val.dcf.is_none(),
+                    "DCF must degrade when the quarter series is sparse"
+                );
+                assert!(
+                    val.ev_ebitda.is_none(),
+                    "EV/EBITDA must degrade when the quarter series is sparse"
+                );
+                assert!(
+                    val.forward_pe.is_some(),
+                    "trend-based metrics should remain available despite sparse statements"
+                );
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_does_not_coerce_missing_cash_or_debt_to_zero() {
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_missing_cash_and_debt()),
+            Some(&income_statement_rows()),
+            None,
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                assert!(
+                    val.ev_ebitda.is_none(),
+                    "EV/EBITDA must be None when cash/debt inputs are missing"
+                );
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_with_missing_profile_still_computes_trend_based_metrics() {
+        let result = derive_valuation(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&earnings_trend_rows_with_forward_eps()),
+            Some(150.0),
+        );
+
+        assert_eq!(result.asset_shape, AssetShape::CorporateEquity);
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                assert!(
+                    val.forward_pe.is_some(),
+                    "forward_pe should still be computable when profile is missing"
+                );
+            }
+            other => panic!("expected CorporateEquity, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_with_empty_statement_vectors_does_not_force_corporate_shape() {
+        let empty_cashflow: Vec<CashflowRow> = Vec::new();
+        let empty_balance: Vec<BalanceSheetRow> = Vec::new();
+        let empty_income: Vec<IncomeStatementRow> = Vec::new();
+
+        let result = derive_valuation(
+            None,
+            Some(&empty_cashflow),
+            Some(&empty_balance),
+            Some(&empty_income),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(result.asset_shape, AssetShape::Unknown);
+        match result.scenario {
+            ScenarioValuation::NotAssessed { reason } => {
+                assert_eq!(reason, "unknown_asset_shape");
+            }
+            other => panic!("expected NotAssessed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_uses_consistent_annual_horizon_for_forward_pe_and_peg() {
+        let trend = mixed_horizon_earnings_trend_rows();
+        let result = derive_valuation(
+            Some(company_profile()),
+            Some(&trailing_cashflow_rows_with_fcf()),
+            Some(&balance_sheet_rows_with_shares()),
+            Some(&trailing_income_statement_rows()),
+            Some(&quarterly_shares()),
+            Some(&trend),
+            Some(160.0),
+        );
+
+        match result.scenario {
+            ScenarioValuation::CorporateEquity(val) => {
+                let forward_pe = val.forward_pe.expect("expected forward P/E");
+                let peg = val.peg.expect("expected PEG");
+                assert!(
+                    (forward_pe.forward_eps - 8.0).abs() < 0.01,
+                    "forward EPS should use the annual horizon, got {}",
+                    forward_pe.forward_eps
+                );
+                assert!(
+                    (peg.peg_ratio - 2.5).abs() < 0.01,
+                    "PEG should use matching annual EPS and growth, got {}",
+                    peg.peg_ratio
+                );
             }
             other => panic!("expected CorporateEquity, got: {other:?}"),
         }
@@ -1037,6 +1334,29 @@ mod derive_valuation_tests {
             AssetShape::CorporateEquity,
             "absent profile + present cashflow data should yield CorporateEquity shape"
         );
+        match result.scenario {
+            ScenarioValuation::NotAssessed { reason } => {
+                assert_eq!(reason, "insufficient_corporate_fundamentals");
+            }
+            other => panic!(
+                "expected statement-only fallback with incomplete annual inputs to degrade explicitly, got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn derive_valuation_with_only_share_counts_and_no_profile_stays_unknown() {
+        let shares = quarterly_shares();
+
+        let result = derive_valuation(None, None, None, None, Some(&shares), None, None);
+
+        assert_eq!(result.asset_shape, AssetShape::Unknown);
+        match result.scenario {
+            ScenarioValuation::NotAssessed { reason } => {
+                assert_eq!(reason, "unknown_asset_shape");
+            }
+            other => panic!("expected NotAssessed for shares-only fallback, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -1150,16 +1470,19 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
     // None, so derived_valuation will be NotAssessed. The important contract is
     // that derived_valuation is always Some(...) after the task runs and the cycle
     // continues regardless.
-    let task = AnalystSyncTask::new(store, crate::data::YFinanceClient::default());
+    let task = AnalystSyncTask::new(store);
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    let derived = recovered
+        .derived_valuation
+        .as_ref()
+        .expect("derived_valuation must be Some after AnalystSyncTask runs");
     assert!(
-        recovered.derived_valuation.is_some(),
-        "derived_valuation must be Some after AnalystSyncTask runs; \
-         was None — the derivation step was not executed"
+        matches!(derived.scenario, ScenarioValuation::NotAssessed { .. }),
+        "network-unavailable default client should degrade to NotAssessed, got {derived:?}"
     );
 }
 
