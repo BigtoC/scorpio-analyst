@@ -77,7 +77,11 @@ pub fn derive_valuation(
         None => {
             // Data-shape detection: any corporate-equity statement data present
             // is sufficient to assume a corporate equity instrument.
-            if cashflow_rows.is_some() || balance_rows.is_some() || income_rows.is_some() {
+            if has_non_empty_rows(cashflow_rows)
+                || has_non_empty_rows(balance_rows)
+                || has_non_empty_rows(income_rows)
+                || earnings_trend.is_some_and(|rows| !rows.is_empty())
+            {
                 AssetShape::CorporateEquity
             } else {
                 AssetShape::Unknown
@@ -149,11 +153,11 @@ fn compute_dcf(
 ) -> Option<DcfValuation> {
     let cashflow_rows = cashflow_rows?;
 
-    // Most recent non-None, positive FCF.
-    let fcf = cashflow_rows
-        .iter()
-        .find_map(|r| r.free_cash_flow.as_ref())
-        .and_then(|m| m.amount().to_f64())?;
+    let fcf = trailing_quarter_sum(
+        cashflow_rows,
+        |row| row.period.to_string(),
+        get_cashflow_fcf,
+    )?;
 
     if fcf <= 0.0 {
         return None;
@@ -196,16 +200,11 @@ fn compute_ev_ebitda(
         .find(|r| r.shares_outstanding.is_some())?;
 
     let shares = row.shares_outstanding? as f64;
-    let cash = row
-        .cash
-        .as_ref()
-        .and_then(|m| m.amount().to_f64())
-        .unwrap_or(0.0);
+    let cash = row.cash.as_ref().and_then(|m| m.amount().to_f64())?;
     let debt = row
         .long_term_debt
         .as_ref()
-        .and_then(|m| m.amount().to_f64())
-        .unwrap_or(0.0);
+        .and_then(|m| m.amount().to_f64())?;
 
     let market_cap = shares * price;
     let ev = market_cap + debt - cash;
@@ -213,12 +212,14 @@ fn compute_ev_ebitda(
         return None;
     }
 
-    // Most recent non-None, positive operating income (EBITDA proxy).
-    let ebitda = income_rows
-        .iter()
-        .find_map(|r| r.operating_income.as_ref())
-        .and_then(|m| m.amount().to_f64())
-        .filter(|&v| v > 0.0)?;
+    let ebitda = trailing_quarter_sum(
+        income_rows,
+        |row| row.period.to_string(),
+        get_operating_income,
+    )?;
+    if ebitda <= 0.0 {
+        return None;
+    }
 
     let ev_ebitda_ratio = ev / ebitda;
 
@@ -243,10 +244,12 @@ fn compute_forward_pe(
     let trend = earnings_trend?;
     let price = current_price.filter(|&p| p > 0.0)?;
 
-    // Pick the first trend row with a usable forward EPS estimate.
-    let forward_eps = trend
-        .iter()
-        .find_map(|r| r.earnings_estimate.avg.as_ref())
+    // Prefer annual forward periods (+1y / 0y) before falling back to other rows.
+    let forward_row = select_forward_eps_row(trend)?;
+    let forward_eps = forward_row
+        .earnings_estimate
+        .avg
+        .as_ref()
         .and_then(|m| m.amount().to_f64())
         .filter(|&eps| eps > 0.0)?;
 
@@ -274,10 +277,11 @@ fn compute_peg(
     let pe = forward_pe?;
     let trend = earnings_trend?;
 
-    // Prefer per-estimate growth; fall back to row-level growth.
-    let growth_decimal = trend
-        .iter()
-        .find_map(|r| r.earnings_estimate.growth.or(r.growth))
+    let growth_row = select_forward_growth_row(trend)?;
+    let growth_decimal = growth_row
+        .earnings_estimate
+        .growth
+        .or(growth_row.growth)
         .filter(|&g| g > 0.0)?;
 
     let growth_pct = growth_decimal * 100.0;
@@ -287,6 +291,119 @@ fn compute_peg(
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
+
+fn has_non_empty_rows<T>(rows: Option<&[T]>) -> bool {
+    rows.is_some_and(|rows| !rows.is_empty())
+}
+
+fn trailing_quarter_sum<T, FPeriod, FValue>(
+    rows: &[T],
+    mut period_for: FPeriod,
+    mut value_for: FValue,
+) -> Option<f64>
+where
+    FPeriod: FnMut(&T) -> String,
+    FValue: FnMut(&T) -> Option<f64>,
+{
+    let mut quarterly_values: Vec<((i32, u8), &T)> = Vec::new();
+    for row in rows {
+        if let Some(key) = parse_quarter_key(&period_for(row)) {
+            quarterly_values.push((key, row));
+        }
+    }
+
+    if quarterly_values.len() < 4 {
+        return None;
+    }
+
+    quarterly_values.sort_by(|(a, _), (b, _)| b.cmp(a));
+
+    let selected: Vec<_> = quarterly_values.into_iter().take(4).collect();
+    if !selected
+        .windows(2)
+        .all(|pair| is_previous_quarter(pair[0].0, pair[1].0))
+    {
+        return None;
+    }
+
+    let mut sum = 0.0;
+    for ((_, _), row) in selected {
+        sum += value_for(row)?;
+    }
+
+    Some(sum)
+}
+
+fn parse_quarter_key(period: &str) -> Option<(i32, u8)> {
+    let period = period.trim().to_ascii_uppercase();
+    let (year, quarter) = period.split_once('Q')?;
+    Some((year.parse().ok()?, quarter.parse().ok()?))
+}
+
+fn is_previous_quarter(current: (i32, u8), next: (i32, u8)) -> bool {
+    match current {
+        (year, quarter @ 2..=4) => next == (year, quarter - 1),
+        (year, 1) => next == (year - 1, 4),
+        _ => false,
+    }
+}
+
+fn is_annual_period(period: &str) -> bool {
+    let period = period.trim();
+    period.len() == 4 && period.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn annual_period_priority(period: &str) -> Option<u8> {
+    let canonical = period.trim().to_ascii_uppercase();
+    match canonical.as_str() {
+        "1Y" | "+1Y" => Some(0),
+        "0Y" => Some(1),
+        other if is_annual_period(other) => Some(2),
+        _ => None,
+    }
+}
+
+fn select_forward_eps_row(trend: &[EarningsTrendRow]) -> Option<&EarningsTrendRow> {
+    trend
+        .iter()
+        .filter_map(|row| {
+            annual_period_priority(&row.period.to_string())
+                .filter(|_| row.earnings_estimate.avg.is_some())
+                .map(|priority| (priority, row))
+        })
+        .min_by_key(|(priority, _)| *priority)
+        .map(|(_, row)| row)
+        .or_else(|| trend.iter().find(|row| row.earnings_estimate.avg.is_some()))
+}
+
+fn select_forward_growth_row(trend: &[EarningsTrendRow]) -> Option<&EarningsTrendRow> {
+    trend
+        .iter()
+        .filter_map(|row| {
+            annual_period_priority(&row.period.to_string())
+                .filter(|_| row.earnings_estimate.growth.or(row.growth).is_some())
+                .map(|priority| (priority, row))
+        })
+        .min_by_key(|(priority, _)| *priority)
+        .map(|(_, row)| row)
+        .or_else(|| {
+            trend
+                .iter()
+                .find(|row| row.earnings_estimate.growth.or(row.growth).is_some())
+        })
+}
+
+fn get_cashflow_fcf(row: &CashflowRow) -> Option<f64> {
+    row.free_cash_flow
+        .as_ref()
+        .and_then(|money| money.amount().to_f64())
+}
+
+fn get_operating_income(row: &IncomeStatementRow) -> Option<f64> {
+    row.operating_income
+        .as_ref()
+        .and_then(|money| money.amount().to_f64())
+}
 
 /// Resolve shares outstanding.
 ///
