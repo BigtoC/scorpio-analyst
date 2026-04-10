@@ -1,10 +1,17 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use graph_flow::{Context, NextAction, Task, TaskResult};
 use serde::de::DeserializeOwned;
+use tokio::time::timeout;
 use tracing::{error, info, warn};
+use yfinance_rs::{
+    analysis::EarningsTrendRow,
+    fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
+    profile::Profile,
+};
 
 use crate::{
     agents::analyst::{FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst},
@@ -426,20 +433,91 @@ impl Task for TechnicalAnalystTask {
 pub struct AnalystSyncTask {
     snapshot_store: Arc<SnapshotStore>,
     yfinance: YFinanceClient,
+    valuation_fetch_timeout: Duration,
 }
 
 impl AnalystSyncTask {
     /// Create a new `AnalystSyncTask`.
+    #[cfg_attr(not(any(test, feature = "test-helpers")), allow(dead_code))]
+    #[must_use]
+    pub fn new(snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
+        Self::with_yfinance(
+            snapshot_store,
+            YFinanceClient::default(),
+            Duration::from_secs(30),
+        )
+    }
+
+    /// Create a new `AnalystSyncTask` with an explicit Yahoo Finance client.
     ///
     /// `yfinance` is used to fetch financial statement data for deterministic
     /// valuation derivation after the analyst fan-out completes. In tests,
     /// [`YFinanceClient::default`] may be supplied; network-unavailable calls
     /// degrade gracefully to `NotAssessed` without aborting the cycle.
-    pub fn new(snapshot_store: Arc<SnapshotStore>, yfinance: YFinanceClient) -> Arc<Self> {
+    #[must_use]
+    pub fn with_yfinance(
+        snapshot_store: Arc<SnapshotStore>,
+        yfinance: YFinanceClient,
+        valuation_fetch_timeout: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             snapshot_store,
             yfinance,
+            valuation_fetch_timeout,
         })
+    }
+}
+
+#[derive(Debug)]
+struct ValuationInputs {
+    profile: Option<Profile>,
+    cashflow: Option<Vec<CashflowRow>>,
+    balance: Option<Vec<BalanceSheetRow>>,
+    income: Option<Vec<IncomeStatementRow>>,
+    shares: Option<Vec<ShareCount>>,
+    trend: Option<Vec<EarningsTrendRow>>,
+}
+
+async fn fetch_valuation_inputs(
+    yfinance: &YFinanceClient,
+    symbol: &str,
+    fetch_timeout: Duration,
+) -> ValuationInputs {
+    match timeout(fetch_timeout, async {
+        tokio::join!(
+            yfinance.get_profile(symbol),
+            yfinance.get_quarterly_cashflow(symbol),
+            yfinance.get_quarterly_balance_sheet(symbol),
+            yfinance.get_quarterly_income_stmt(symbol),
+            yfinance.get_quarterly_shares(symbol),
+            yfinance.get_earnings_trend(symbol),
+        )
+    })
+    .await
+    {
+        Ok((profile, cashflow, balance, income, shares, trend)) => ValuationInputs {
+            profile,
+            cashflow,
+            balance,
+            income,
+            shares,
+            trend,
+        },
+        Err(_) => {
+            warn!(
+                symbol,
+                timeout_secs = fetch_timeout.as_secs(),
+                "valuation fetch timed out"
+            );
+            ValuationInputs {
+                profile: None,
+                cashflow: None,
+                balance: None,
+                income: None,
+                shares: None,
+                trend: None,
+            }
+        }
     }
 }
 
@@ -621,21 +699,17 @@ impl Task for AnalystSyncTask {
         // All fetchers degrade gracefully to `None` on network failure — the cycle
         // must always continue regardless of availability.
         let symbol = state.asset_symbol.clone();
-        let profile = self.yfinance.get_profile(&symbol).await;
-        let cashflow = self.yfinance.get_quarterly_cashflow(&symbol).await;
-        let balance = self.yfinance.get_quarterly_balance_sheet(&symbol).await;
-        let income = self.yfinance.get_quarterly_income_stmt(&symbol).await;
-        let shares = self.yfinance.get_quarterly_shares(&symbol).await;
-        let trend = self.yfinance.get_earnings_trend(&symbol).await;
+        let valuation_inputs =
+            fetch_valuation_inputs(&self.yfinance, &symbol, self.valuation_fetch_timeout).await;
         let current_price = state.current_price;
 
         state.derived_valuation = Some(derive_valuation(
-            profile,
-            cashflow.as_deref(),
-            balance.as_deref(),
-            income.as_deref(),
-            shares.as_deref(),
-            trend.as_deref(),
+            valuation_inputs.profile,
+            valuation_inputs.cashflow.as_deref(),
+            valuation_inputs.balance.as_deref(),
+            valuation_inputs.income.as_deref(),
+            valuation_inputs.shares.as_deref(),
+            valuation_inputs.trend.as_deref(),
             current_price,
         ));
 
