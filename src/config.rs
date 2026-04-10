@@ -39,10 +39,18 @@ pub struct DataEnrichmentConfig {
     /// Maximum age (hours) of cached evidence before it is considered stale.
     #[serde(default = "default_max_evidence_age_hours")]
     pub max_evidence_age_hours: u32,
+    /// Per-category fetch timeout (seconds) for enrichment network calls.
+    /// Prevents a slow vendor from blocking the entire run.
+    #[serde(default = "default_enrichment_fetch_timeout_secs")]
+    pub fetch_timeout_secs: u64,
 }
 
 fn default_max_evidence_age_hours() -> u32 {
     48
+}
+
+fn default_enrichment_fetch_timeout_secs() -> u64 {
+    120
 }
 
 impl Default for DataEnrichmentConfig {
@@ -52,6 +60,7 @@ impl Default for DataEnrichmentConfig {
             enable_consensus_estimates: false,
             enable_event_news: false,
             max_evidence_age_hours: default_max_evidence_age_hours(),
+            fetch_timeout_secs: default_enrichment_fetch_timeout_secs(),
         }
     }
 }
@@ -270,7 +279,7 @@ fn default_fred_rps() -> u32 {
     2
 }
 fn default_yahoo_finance_rps() -> u32 {
-    10
+    30
 }
 
 impl Default for RateLimitConfig {

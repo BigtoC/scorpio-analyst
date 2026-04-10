@@ -62,3 +62,4 @@ enable_transcripts = false
 enable_consensus_estimates = false
 enable_event_news = false
 max_evidence_age_hours = 48
+fetch_timeout_secs = 120
