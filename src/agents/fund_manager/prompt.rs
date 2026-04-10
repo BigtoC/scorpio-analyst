@@ -57,7 +57,9 @@ flag a material violation (`flags_violation == true`), reject the proposal.
 (see \"Deterministic scenario valuation\" section). Use those numbers to anchor price levels \
 in `entry_guidance` and calibrate `suggested_position`. If the valuation is `not assessed` \
 (e.g. ETF or fund-style instrument), note this explicitly in `rationale` and anchor price levels \
-on technical signals instead.
+on technical signals instead. If valuation is `not computed` or otherwise unavailable for this run, \
+explicitly acknowledge the missing valuation context in `rationale` and rely on the remaining risk, \
+technical, sentiment, news, and trader inputs without inventing valuation floors.
 5. Approve only if the proposal's action, target, stop, and confidence are defensible.
 6. If rejecting, make the blocking reason explicit in `rationale`.
 7. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and \
@@ -169,6 +171,11 @@ fn build_user_prompt(
     );
     push_bounded_line(
         &mut prompt,
+        &build_valuation_context(state),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
         &format!(
             "Trader proposal: {}",
             serialize_prompt_value(&state.trader_proposal)
@@ -249,11 +256,6 @@ fn build_user_prompt(
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
-        MAX_USER_PROMPT_CHARS,
-    );
-    push_bounded_line(
-        &mut prompt,
-        &build_valuation_context(state),
         MAX_USER_PROMPT_CHARS,
     );
     push_bounded_line(
