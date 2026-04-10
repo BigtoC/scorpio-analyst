@@ -234,7 +234,22 @@ async fn evidence_fields_survive_snapshot_round_trip() {
 async fn from_config_uses_expanded_snapshot_db_path() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db_path = dir.path().join("configured.db");
-    let mut config = crate::config::Config::load_from("config.toml").expect("config load");
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+    )
+    .expect("config file should be written");
+    let mut config = crate::config::Config::load_from(&cfg_path).expect("config load");
     config.storage.snapshot_db_path = db_path.to_string_lossy().into_owned();
 
     let store = SnapshotStore::from_config(&config)
