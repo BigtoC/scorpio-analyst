@@ -45,8 +45,8 @@ pub trait EventNewsProvider: Send + Sync {
 
 // ─── Concrete provider: Finnhub ─────────────────────────────────────────────
 
-use chrono::NaiveDate;
 use crate::constants::NEWS_ANALYSIS_DAYS;
+use chrono::NaiveDate;
 
 /// Normalizes Finnhub [`CompanyNews`](finnhub::models::news::CompanyNews)
 /// records into [`EventNewsEvidence`] payloads, filtering by `target_date`.
@@ -56,6 +56,7 @@ use crate::constants::NEWS_ANALYSIS_DAYS;
 /// - Excludes articles published after `as_of_date` (time-authority safety).
 /// - Sanitizes headline/summary text for prompt-injection defense.
 /// - Classifies event type and impact direction via keyword heuristics.
+#[derive(Debug)]
 pub struct FinnhubEventNewsProvider {
     client: crate::data::FinnhubClient,
 }
@@ -95,7 +96,7 @@ impl EventNewsProvider for FinnhubEventNewsProvider {
             .into_iter()
             .filter(|n| n.datetime <= target_end_of_day)
             .map(|n| normalize_company_news(symbol, n))
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         Ok(evidence)
     }
@@ -153,20 +154,23 @@ fn classify_impact(headline: &str) -> Option<String> {
 fn normalize_company_news(
     symbol: &str,
     news: finnhub::models::news::CompanyNews,
-) -> EventNewsEvidence {
+) -> Result<EventNewsEvidence, TradingError> {
     let event_type = classify_event_type(&news.headline, &news.category);
     let impact = classify_impact(&news.headline);
     let ts = chrono::DateTime::from_timestamp(news.datetime, 0)
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_owned());
+        .ok_or_else(|| TradingError::AnalystError {
+            agent: "enrichment".to_owned(),
+            message: format!("invalid Finnhub news timestamp: {}", news.datetime),
+        })?;
 
-    EventNewsEvidence {
+    Ok(EventNewsEvidence {
         symbol: symbol.to_ascii_uppercase(),
         event_timestamp: ts,
         event_type,
         headline: sanitize_text(&news.headline),
         impact,
-    }
+    })
 }
 
 /// Lightweight text sanitization (strips HTML tags, collapses whitespace).
@@ -235,7 +239,7 @@ mod tests {
             url: "https://example.com".to_owned(),
         };
 
-        let evidence = normalize_company_news("GOOGL", news);
+        let evidence = normalize_company_news("GOOGL", news).expect("timestamp should normalize");
         assert_eq!(evidence.symbol, "GOOGL");
         assert_eq!(evidence.event_type, "earnings_release");
         assert_eq!(evidence.impact, Some("positive".to_owned()));
@@ -255,8 +259,27 @@ mod tests {
             summary: "summary".to_owned(),
             url: String::new(),
         };
-        let evidence = normalize_company_news("aapl", news);
+        let evidence = normalize_company_news("aapl", news).expect("timestamp should normalize");
         assert_eq!(evidence.symbol, "AAPL");
+    }
+
+    #[test]
+    fn normalize_rejects_unrepresentable_timestamp() {
+        let news = finnhub::models::news::CompanyNews {
+            category: "company".to_owned(),
+            datetime: i64::MAX,
+            headline: "Timestamp corrupted".to_owned(),
+            id: 1,
+            image: String::new(),
+            related: "AAPL".to_owned(),
+            source: "Test".to_owned(),
+            summary: "summary".to_owned(),
+            url: String::new(),
+        };
+
+        let err = normalize_company_news("AAPL", news).expect_err("invalid timestamp must fail");
+        assert!(matches!(err, TradingError::AnalystError { .. }));
+        assert!(err.to_string().contains("invalid Finnhub news timestamp"));
     }
 
     // ── Classification tests ─────────────────────────────────────────────
