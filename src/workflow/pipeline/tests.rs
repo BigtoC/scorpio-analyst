@@ -208,6 +208,13 @@ fn rejects_invalid_runtime_symbol_before_prefetch() {
     assert!(matches!(err, TradingError::SchemaViolation { .. }));
 }
 
+#[test]
+fn config_loads_default_valuation_fetch_timeout_secs() {
+    let cfg = crate::config::Config::load_from("config.toml").expect("config should load");
+
+    assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
+}
+
 #[tokio::test]
 async fn task_id_constants_match_task_impl_ids() {
     let config = Arc::new(crate::config::Config {
@@ -219,6 +226,7 @@ async fn task_id_constants_match_task_impl_ids() {
             max_debate_rounds: 1,
             max_risk_rounds: 1,
             analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
             retry_max_retries: 1,
             retry_base_delay_ms: 1,
         },
@@ -319,6 +327,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
             max_debate_rounds: 1,
             max_risk_rounds: 1,
             analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
             retry_max_retries: 1,
             retry_base_delay_ms: 1,
         },

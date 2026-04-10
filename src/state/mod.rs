@@ -13,6 +13,7 @@ mod technical;
 mod thesis;
 mod token_usage;
 mod trading_state;
+mod valuation_derive;
 
 pub use derived::*;
 pub use evidence::*;
@@ -29,3 +30,4 @@ pub use technical::*;
 pub use thesis::*;
 pub use token_usage::*;
 pub use trading_state::*;
+pub use valuation_derive::derive_valuation;

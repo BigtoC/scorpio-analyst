@@ -229,7 +229,7 @@ flowchart TB
 **Verification:**
 - State/property tests prove the new structures are additive and validatable.
 
-- [ ] **Chunk 2: Live yfinance-rs API smoke test**
+- [x] **Chunk 2: Live yfinance-rs API smoke test**
 
 **Goal:** Verify that every method in `src/data/yfinance/` makes a successful real network call and returns data in the expected shape before any derivation logic is built on top of it.
 
@@ -267,7 +267,7 @@ flowchart TB
 **Verification:**
 - Developer runs `cargo run --example yfinance_live_test` and sees all checks pass. Failures are printed with the raw error so the root cause is immediately visible without needing `RUST_LOG=debug`.
 
-- [ ] **Chunk 3: Deterministic valuation derivation in the runtime**
+- [x] **Chunk 3: Deterministic valuation derivation in the runtime**
 
 **Goal:** Compute structured valuation using real financial statements before trader inference.
 

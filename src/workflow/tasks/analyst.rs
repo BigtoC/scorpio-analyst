@@ -1,10 +1,18 @@
 use std::sync::Arc;
+use std::time::Duration;
+use std::{fmt::Debug, future::Future};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use graph_flow::{Context, NextAction, Task, TaskResult};
 use serde::de::DeserializeOwned;
+use tokio::time::timeout;
 use tracing::{error, info, warn};
+use yfinance_rs::{
+    analysis::EarningsTrendRow,
+    fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
+    profile::Profile,
+};
 
 use crate::{
     agents::analyst::{FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst},
@@ -14,7 +22,7 @@ use crate::{
     state::{
         AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
         FundamentalData, NewsData, PhaseTokenUsage, ProvenanceSummary, SentimentData,
-        TechnicalData, TradingState,
+        TechnicalData, TradingState, derive_valuation,
     },
     workflow::{
         context_bridge::{
@@ -425,12 +433,127 @@ impl Task for TechnicalAnalystTask {
 /// and returns [`NextAction::Continue`] or [`NextAction::End`] accordingly.
 pub struct AnalystSyncTask {
     snapshot_store: Arc<SnapshotStore>,
+    yfinance: YFinanceClient,
+    valuation_fetch_timeout: Duration,
 }
 
 impl AnalystSyncTask {
     /// Create a new `AnalystSyncTask`.
+    #[cfg_attr(not(any(test, feature = "test-helpers")), allow(dead_code))]
+    #[must_use]
     pub fn new(snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
-        Arc::new(Self { snapshot_store })
+        Self::with_yfinance(
+            snapshot_store,
+            YFinanceClient::default(),
+            Duration::from_secs(30),
+        )
+    }
+
+    /// Create a new `AnalystSyncTask` with an explicit Yahoo Finance client.
+    ///
+    /// `yfinance` is used to fetch financial statement data for deterministic
+    /// valuation derivation after the analyst fan-out completes. In tests,
+    /// [`YFinanceClient::default`] may be supplied; network-unavailable calls
+    /// degrade gracefully to `NotAssessed` without aborting the cycle.
+    #[must_use]
+    pub fn with_yfinance(
+        snapshot_store: Arc<SnapshotStore>,
+        yfinance: YFinanceClient,
+        valuation_fetch_timeout: Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            snapshot_store,
+            yfinance,
+            valuation_fetch_timeout,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ValuationInputs {
+    profile: Option<Profile>,
+    cashflow: Option<Vec<CashflowRow>>,
+    balance: Option<Vec<BalanceSheetRow>>,
+    income: Option<Vec<IncomeStatementRow>>,
+    shares: Option<Vec<ShareCount>>,
+    trend: Option<Vec<EarningsTrendRow>>,
+}
+
+async fn fetch_valuation_inputs(
+    yfinance: &YFinanceClient,
+    symbol: &str,
+    fetch_timeout: Duration,
+) -> ValuationInputs {
+    let (profile, cashflow, balance, income, shares, trend) = tokio::join!(
+        fetch_with_timeout(
+            symbol,
+            "profile",
+            fetch_timeout,
+            yfinance.get_profile(symbol)
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_cashflow",
+            fetch_timeout,
+            yfinance.get_quarterly_cashflow(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_balance_sheet",
+            fetch_timeout,
+            yfinance.get_quarterly_balance_sheet(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_income_stmt",
+            fetch_timeout,
+            yfinance.get_quarterly_income_stmt(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "quarterly_shares",
+            fetch_timeout,
+            yfinance.get_quarterly_shares(symbol),
+        ),
+        fetch_with_timeout(
+            symbol,
+            "earnings_trend",
+            fetch_timeout,
+            yfinance.get_earnings_trend(symbol),
+        ),
+    );
+
+    ValuationInputs {
+        profile,
+        cashflow,
+        balance,
+        income,
+        shares,
+        trend,
+    }
+}
+
+async fn fetch_with_timeout<T, F>(
+    symbol: &str,
+    field: &'static str,
+    fetch_timeout: Duration,
+    fetch: F,
+) -> Option<T>
+where
+    T: Debug,
+    F: Future<Output = Option<T>>,
+{
+    match timeout(fetch_timeout, fetch).await {
+        Ok(value) => value,
+        Err(_) => {
+            warn!(
+                symbol,
+                field,
+                timeout_secs = fetch_timeout.as_secs_f64(),
+                "valuation fetch timed out"
+            );
+            None
+        }
     }
 }
 
@@ -608,6 +731,30 @@ impl Task for AnalystSyncTask {
             providers_used: providers,
         });
 
+        // Derive deterministic valuation from Yahoo Finance financial statements.
+        // All fetchers degrade gracefully to `None` on network failure — the cycle
+        // must always continue regardless of availability.
+        let symbol = state.asset_symbol.clone();
+        let valuation_inputs =
+            fetch_valuation_inputs(&self.yfinance, &symbol, self.valuation_fetch_timeout).await;
+        let current_price = state.current_price;
+
+        state.derived_valuation = Some(derive_valuation(
+            valuation_inputs.profile,
+            valuation_inputs.cashflow.as_deref(),
+            valuation_inputs.balance.as_deref(),
+            valuation_inputs.income.as_deref(),
+            valuation_inputs.shares.as_deref(),
+            valuation_inputs.trend.as_deref(),
+            current_price,
+        ));
+
+        info!(
+            task = "analyst_sync",
+            asset_shape = ?state.derived_valuation.as_ref().map(|d| &d.asset_shape),
+            "deterministic valuation derived"
+        );
+
         let token_usages = vec![
             read_analyst_usage(&context, ANALYST_FUNDAMENTAL, "Fundamental Analyst").await,
             read_analyst_usage(&context, ANALYST_SENTIMENT, "Sentiment Analyst").await,
@@ -663,5 +810,30 @@ impl Task for AnalystSyncTask {
         info!(phase = 1, phase_name = "analyst_team", "phase complete");
 
         Ok(TaskResult::new(None, NextAction::Continue))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time::sleep;
+
+    use super::fetch_with_timeout;
+
+    #[tokio::test]
+    async fn fetch_with_timeout_preserves_fast_result_when_parallel_peer_times_out() {
+        let timeout = Duration::from_millis(20);
+
+        let (slow, fast) = tokio::join!(
+            fetch_with_timeout::<&'static str, _>("AAPL", "slow", timeout, async {
+                sleep(Duration::from_millis(40)).await;
+                Some("slow")
+            }),
+            fetch_with_timeout::<&'static str, _>("AAPL", "fast", timeout, async { Some("fast") }),
+        );
+
+        assert_eq!(slow, None);
+        assert_eq!(fast, Some("fast"));
     }
 }

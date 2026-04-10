@@ -39,6 +39,8 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
+#[cfg(test)]
+pub use yfinance::StubbedFinancialResponses;
 pub use yfinance::{
     Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient, fetch_vix_data, get_latest_close,
 };

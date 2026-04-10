@@ -71,6 +71,8 @@ pub struct LlmConfig {
     pub max_risk_rounds: u32,
     #[serde(default = "default_agent_timeout", alias = "agent_timeout_secs")]
     pub analyst_timeout_secs: u64,
+    #[serde(default = "default_valuation_fetch_timeout")]
+    pub valuation_fetch_timeout_secs: u64,
     /// Maximum number of LLM call retries on transient errors (default: 3).
     #[serde(default = "default_retry_max_retries")]
     pub retry_max_retries: u32,
@@ -107,6 +109,9 @@ fn default_risk_rounds() -> u32 {
 }
 fn default_agent_timeout() -> u64 {
     300
+}
+fn default_valuation_fetch_timeout() -> u64 {
+    30
 }
 fn default_retry_max_retries() -> u32 {
     3
@@ -427,6 +432,7 @@ mod tests {
                 max_debate_rounds: 3,
                 max_risk_rounds: 2,
                 analyst_timeout_secs: 30,
+                valuation_fetch_timeout_secs: 30,
                 retry_max_retries: 3,
                 retry_base_delay_ms: 500,
             },
@@ -510,6 +516,10 @@ mod tests {
             cfg.llm.analyst_timeout_secs, 3000,
             "analyst_timeout_secs should load from config.toml"
         );
+        assert_eq!(
+            cfg.llm.valuation_fetch_timeout_secs, 30,
+            "valuation_fetch_timeout_secs should load from config.toml"
+        );
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
         assert_eq!(cfg.rate_limits.fred_rps, 2, "fred_rps default should be 2");
         assert_eq!(
@@ -590,6 +600,7 @@ deep_thinking_model = "o3"
 max_debate_rounds = 3
 max_risk_rounds = 2
 agent_timeout_secs = 45
+valuation_fetch_timeout_secs = 9
 
 [trading]
 asset_symbol = "AAPL"
@@ -600,6 +611,7 @@ asset_symbol = "AAPL"
         let cfg = Config::load_from(&config_path).expect("legacy timeout alias should load");
 
         assert_eq!(cfg.llm.analyst_timeout_secs, 45);
+        assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 9);
     }
 
     #[test]
@@ -617,6 +629,7 @@ deep_thinking_model = "o3"
 max_debate_rounds = 3
 max_risk_rounds = 2
 analyst_timeout_secs = 60
+valuation_fetch_timeout_secs = 12
 
 [trading]
 asset_symbol = "AAPL"
@@ -627,6 +640,7 @@ asset_symbol = "AAPL"
         let cfg = Config::load_from(&config_path).expect("canonical timeout key should load");
 
         assert_eq!(cfg.llm.analyst_timeout_secs, 60);
+        assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 12);
     }
 
     #[test]

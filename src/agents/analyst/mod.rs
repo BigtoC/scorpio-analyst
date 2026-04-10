@@ -448,6 +448,7 @@ mod tests {
             max_debate_rounds: 3,
             max_risk_rounds: 2,
             analyst_timeout_secs: 60,
+            valuation_fetch_timeout_secs: 30,
             retry_max_retries: 3,
             retry_base_delay_ms: 500,
         };

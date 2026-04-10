@@ -19,7 +19,15 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
-use yfinance_rs::{HistoryBuilder, Interval, YfClient, YfError};
+use yfinance_rs::{HistoryBuilder, Interval, YfError};
+#[cfg(test)]
+use yfinance_rs::{
+    analysis::EarningsTrendRow,
+    fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
+    profile::Profile,
+};
+
+use super::client::YfSession;
 
 use crate::{config::RateLimitConfig, error::TradingError, rate_limit::SharedRateLimiter};
 
@@ -64,6 +72,17 @@ impl Candle {
 /// Cache key: normalized (uppercase) symbol + start date + end date.
 type OhlcvCacheKey = (String, String, String);
 
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub struct StubbedFinancialResponses {
+    pub profile: Option<Profile>,
+    pub cashflow: Option<Vec<CashflowRow>>,
+    pub balance: Option<Vec<BalanceSheetRow>>,
+    pub income: Option<Vec<IncomeStatementRow>>,
+    pub shares: Option<Vec<ShareCount>>,
+    pub trend: Option<Vec<EarningsTrendRow>>,
+}
+
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
 ///
 /// Results of [`get_ohlcv`](YFinanceClient::get_ohlcv) are cached in memory by
@@ -73,11 +92,13 @@ type OhlcvCacheKey = (String, String, String);
 /// than once.
 #[derive(Clone)]
 pub struct YFinanceClient {
-    inner: YfClient,
-    limiter: SharedRateLimiter,
+    /// Shared Yahoo Finance session (HTTP client + rate limiter).
+    pub(super) session: YfSession,
     /// Shared across all `Clone`s of this client; keyed by the normalized
     /// (uppercase) symbol + ISO-8601 start/end dates.
     cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
+    #[cfg(test)]
+    pub(super) stubbed_financials: Option<Arc<StubbedFinancialResponses>>,
 }
 
 impl std::fmt::Debug for YFinanceClient {
@@ -86,7 +107,7 @@ impl std::fmt::Debug for YFinanceClient {
         // lock elsewhere at the same time doesn't deadlock the debug path.
         let cache_len = self.cache.try_read().map(|g| g.len()).unwrap_or(0);
         f.debug_struct("YFinanceClient")
-            .field("limiter", &self.limiter.label())
+            .field("session", &self.session)
             .field("cached_entries", &cache_len)
             .finish()
     }
@@ -97,9 +118,10 @@ impl YFinanceClient {
     #[must_use]
     pub fn new(limiter: SharedRateLimiter) -> Self {
         Self {
-            inner: YfClient::default(),
-            limiter,
+            session: YfSession::new(limiter),
             cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(test)]
+            stubbed_financials: None,
         }
     }
 
@@ -110,9 +132,22 @@ impl YFinanceClient {
     /// `cfg.yahoo_finance_rps == 0` the limiter is disabled (no blocking).
     #[must_use]
     pub fn from_config(cfg: &RateLimitConfig) -> Self {
-        let limiter = SharedRateLimiter::yahoo_finance_from_config(cfg)
-            .unwrap_or_else(|| SharedRateLimiter::disabled("yahoo_finance"));
-        Self::new(limiter)
+        Self {
+            session: YfSession::from_config(cfg),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(test)]
+            stubbed_financials: None,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_stubbed_financials(responses: StubbedFinancialResponses) -> Self {
+        Self {
+            session: YfSession::default(),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            stubbed_financials: Some(Arc::new(responses)),
+        }
     }
 
     /// Fetch daily OHLCV bars for `symbol` between `start` and `end`
@@ -176,8 +211,8 @@ impl YFinanceClient {
                 message: format!("invalid end datetime for {end}"),
             })?;
 
-        self.limiter.acquire().await;
-        let candles = HistoryBuilder::new(&self.inner, symbol)
+        self.session.limiter().acquire().await;
+        let candles = HistoryBuilder::new(self.session.client(), symbol)
             .between(start_dt, end_dt)
             .interval(Interval::D1)
             .fetch()
@@ -221,31 +256,14 @@ impl YFinanceClient {
         );
     }
 
-    /// Expose the underlying `YfClient` to sibling modules in this crate.
-    ///
-    /// Used by [`super::financials`] to build `FundamentalsBuilder` and
-    /// `AnalysisBuilder` without duplicating the inner client.
-    /// TODO: yf_inner should not be here, financials.rs should not import anything from ohlcv.rs
-    pub(crate) fn yf_inner(&self) -> &YfClient {
-        &self.inner
-    }
-
-    pub(crate) async fn with_rate_limit<F, T>(&self, fetch: F) -> T
-    where
-        F: std::future::Future<Output = T>,
-    {
-        self.limiter.acquire().await;
-        fetch.await
-    }
-
     #[cfg(test)]
     fn limiter_label(&self) -> &str {
-        self.limiter.label()
+        self.session.limiter().label()
     }
 
     #[cfg(test)]
     fn limiter_is_enabled(&self) -> bool {
-        self.limiter.is_enabled()
+        self.session.limiter().is_enabled()
     }
 }
 

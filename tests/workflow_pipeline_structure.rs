@@ -700,6 +700,7 @@ async fn analyst_child_deserialization_failure_returns_err() {
         max_debate_rounds: 1,
         max_risk_rounds: 1,
         analyst_timeout_secs: 30,
+        valuation_fetch_timeout_secs: 30,
         retry_max_retries: 1,
         retry_base_delay_ms: 1,
     };

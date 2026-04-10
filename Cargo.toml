@@ -52,6 +52,7 @@ reqwest = { version = "0.13", features = ["json", "query"] }
 finnhub = "0.2.2"
 yfinance-rs = "0.7.2"
 kand = "0.2.2"
+num-traits = "0.2"
 
 # Graph orchestration
 graph-flow = { version = "0.5.0", features = ["rig"] }
