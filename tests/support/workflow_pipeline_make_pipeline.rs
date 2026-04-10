@@ -38,6 +38,7 @@ pub async fn make_pipeline(
             max_debate_rounds,
             max_risk_rounds,
             analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
             retry_max_retries: 1,
             retry_base_delay_ms: 1,
         },
