@@ -46,6 +46,7 @@ pub trait EventNewsProvider: Send + Sync {
 // ─── Concrete provider: Finnhub ─────────────────────────────────────────────
 
 use chrono::NaiveDate;
+use crate::constants::NEWS_ANALYSIS_DAYS;
 
 /// Normalizes Finnhub [`CompanyNews`](finnhub::models::news::CompanyNews)
 /// records into [`EventNewsEvidence`] payloads, filtering by `target_date`.
@@ -74,7 +75,7 @@ impl EventNewsProvider for FinnhubEventNewsProvider {
         as_of_date: &str,
     ) -> Result<Vec<EventNewsEvidence>, TradingError> {
         let target = parse_date(as_of_date)?;
-        let from = target - chrono::Duration::days(30);
+        let from = target - NEWS_ANALYSIS_DAYS;
 
         let from_str = from.format("%Y-%m-%d").to_string();
         let to_str = target.format("%Y-%m-%d").to_string();

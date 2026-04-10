@@ -26,7 +26,7 @@ use crate::{
         NewsData, TransactionType,
     },
 };
-
+use crate::constants::NEWS_ANALYSIS_DAYS;
 use super::symbol::validate_symbol;
 
 // ─── Client ─────────────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ impl FinnhubClient {
         let symbol = validate_symbol(symbol)?;
         self.limiter.acquire().await;
         let today = chrono::Utc::now().date_naive();
-        let from = (today - chrono::Duration::days(30))
+        let from = (today - NEWS_ANALYSIS_DAYS)
             .format("%Y-%m-%d")
             .to_string();
         let to = today.format("%Y-%m-%d").to_string();
