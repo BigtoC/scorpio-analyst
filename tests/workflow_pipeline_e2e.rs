@@ -428,6 +428,17 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
             reason: "stale_reason_from_prior_run".to_owned(),
         },
     });
+    initial_state.trader_proposal = Some(scorpio_analyst::state::TradeProposal {
+        action: scorpio_analyst::state::TradeAction::Hold,
+        target_price: 1.0,
+        stop_loss: 1.0,
+        confidence: 0.1,
+        rationale: "stale proposal".to_owned(),
+        valuation_assessment: Some("stale valuation narrative".to_owned()),
+        scenario_valuation: Some(ScenarioValuation::NotAssessed {
+            reason: "stale_reason_from_prior_run".to_owned(),
+        }),
+    });
 
     let final_state = pipeline
         .run_analysis_cycle(initial_state)
@@ -451,6 +462,20 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
             );
         }
     }
+    let final_proposal = final_state
+        .trader_proposal
+        .as_ref()
+        .expect("final trader proposal must be set");
+    assert_ne!(
+        final_proposal.valuation_assessment.as_deref(),
+        Some("stale valuation narrative")
+    );
+    assert_ne!(
+        final_proposal.scenario_valuation,
+        Some(ScenarioValuation::NotAssessed {
+            reason: "stale_reason_from_prior_run".to_owned(),
+        })
+    );
     // Whether the stub re-populates derived_valuation or not, the pipeline must complete.
     assert!(final_state.final_execution_status.is_some());
 }
