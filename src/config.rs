@@ -411,6 +411,10 @@ impl Config {
                  SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, or SCORPIO_OPENROUTER_API_KEY"
             );
         }
+
+        if self.enrichment.fetch_timeout_secs == 0 {
+            anyhow::bail!("fetch_timeout_secs must be at least 1");
+        }
         Ok(())
     }
 
@@ -732,6 +736,40 @@ asset_symbol = "AAPL"
         assert_eq!(
             cfg.storage.snapshot_db_path, "/tmp/custom.db",
             "env var should override snapshot_db_path"
+        );
+    }
+
+    #[test]
+    fn enrichment_fetch_timeout_secs_must_be_positive() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let config_path = tempdir.path().join("invalid-enrichment-timeout.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+max_debate_rounds = 3
+max_risk_rounds = 2
+analyst_timeout_secs = 60
+valuation_fetch_timeout_secs = 12
+
+[trading]
+asset_symbol = "AAPL"
+
+[enrichment]
+fetch_timeout_secs = 0
+"#,
+        )
+        .expect("config file should be written");
+
+        let err = Config::load_from(&config_path).expect_err("zero timeout should be rejected");
+        assert!(
+            err.to_string()
+                .contains("fetch_timeout_secs must be at least 1"),
+            "unexpected error: {err}"
         );
     }
 
