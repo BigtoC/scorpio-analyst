@@ -169,7 +169,7 @@ impl FinnhubClient {
     }
 
     /// Fetch the last 30 days of company news and map to [`NewsData`].
-    pub async fn get_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
+    pub async fn get_structured_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
         let symbol = validate_symbol(symbol)?;
         self.limiter.acquire().await;
         let today = chrono::Utc::now().date_naive();
@@ -793,7 +793,7 @@ impl Tool for GetNews {
         let client = self.client.as_ref().ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!("FinnhubClient not set on GetNews tool"))
         })?;
-        client.get_news(&args.symbol).await
+        client.get_structured_news(&args.symbol).await
     }
 }
 

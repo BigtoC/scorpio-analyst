@@ -49,7 +49,7 @@ use crate::{
 /// On failure a warning is emitted and `None` is returned — callers fall back
 /// to live tool calls.
 pub async fn prefetch_analyst_news(finnhub: &FinnhubClient, symbol: &str) -> Option<Arc<NewsData>> {
-    match finnhub.get_news(symbol).await {
+    match finnhub.get_structured_news(symbol).await {
         Ok(data) => Some(Arc::new(data)),
         Err(err) => {
             warn!(error = %err, "news pre-fetch failed; analysts will use live tool calls");
