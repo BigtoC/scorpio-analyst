@@ -96,7 +96,7 @@ pub(super) fn build_graph(
     let analyst_sync = AnalystSyncTask::with_yfinance(
         Arc::clone(&snapshot_store),
         yfinance.clone(),
-        std::time::Duration::from_secs(config.llm.analyst_timeout_secs),
+        std::time::Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
     );
     graph.add_task(analyst_sync);
     graph.add_edge(TASKS.analyst_fan_out, TASKS.analyst_sync);
