@@ -17,6 +17,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::DataEnrichmentConfig;
 
+/// Persisted status for an enrichment category.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum EnrichmentStatus {
+    /// Enrichment category is disabled by configuration.
+    Disabled,
+    /// Enrichment category is not configured or intentionally skipped.
+    NotConfigured,
+    /// Provider returned no usable data for the requested scope.
+    NotAvailable,
+    /// Provider fetch failed or timed out.
+    FetchFailed(String),
+    /// Provider returned usable data.
+    Available,
+}
+
 /// Three-state enrichment result that distinguishes "data available" from
 /// "no data exists" from "fetch failed."
 ///
@@ -45,6 +60,15 @@ impl<T> EnrichmentResult<T> {
     /// Returns `true` if the result contains available data.
     pub fn is_available(&self) -> bool {
         matches!(self, Self::Available(_))
+    }
+
+    /// Convert this transient fetch result into a persisted status value.
+    pub fn status(&self) -> EnrichmentStatus {
+        match self {
+            Self::Available(_) => EnrichmentStatus::Available,
+            Self::NotAvailable => EnrichmentStatus::NotAvailable,
+            Self::FetchFailed(reason) => EnrichmentStatus::FetchFailed(reason.clone()),
+        }
     }
 }
 
