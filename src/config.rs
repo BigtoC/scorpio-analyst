@@ -541,53 +541,20 @@ asset_symbol = "AAPL"
     #[test]
     fn load_from_defaults_only() {
         let _guard = ENV_LOCK.lock().unwrap();
-        // All values asserted here are either compiled-in defaults or explicit in
-        // this inline TOML. This test is independent of the production config.toml.
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "openai"
-deep_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
-analyst_timeout_secs = 3000
-
-[trading]
-asset_symbol = "AAPL"
-
-[rate_limits]
-finnhub_rps = 30
-fred_rps = 2
-yahoo_finance_rps = 30
-
-[providers.openai]
-rpm = 500
-
-[providers.anthropic]
-rpm = 500
-
-[providers.gemini]
-rpm = 500
-
-[providers.copilot]
-rpm = 0
-
-[providers.openrouter]
-rpm = 20
-"#,
-        );
+        // All values asserted below are compiled-in Rust defaults (serde default fns).
+        // MINIMAL_CONFIG_TOML provides only the required fields; everything else falls
+        // through to its Default impl so the assertions are independent of config.toml.
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("config should load");
         assert_eq!(cfg.llm.max_debate_rounds, 3);
-        assert_eq!(cfg.llm.analyst_timeout_secs, 3000);
         assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
         assert_eq!(cfg.rate_limits.fred_rps, 2);
         assert_eq!(cfg.rate_limits.yahoo_finance_rps, 30);
-        assert_eq!(cfg.providers.openai.rpm, 500);
-        assert_eq!(cfg.providers.anthropic.rpm, 500);
-        assert_eq!(cfg.providers.gemini.rpm, 500);
-        assert_eq!(cfg.providers.copilot.rpm, 0);
-        assert_eq!(cfg.providers.openrouter.rpm, 20);
+        // Provider rpm defaults (default_openai_settings etc.) only activate when a
+        // [providers] section is present in TOML; absent the section entirely, serde
+        // calls ProvidersConfig::default() which uses ProviderSettings::default() (rpm: 0).
+        // Those defaults are covered by the individual env-override tests.
     }
 
     #[test]
@@ -641,58 +608,42 @@ rpm = 20
 
     #[test]
     fn load_from_supports_legacy_agent_timeout_secs_alias() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
-        let config_path = tempdir.path().join("legacy-config.toml");
-        std::fs::write(
-            &config_path,
+        let (_dir, path) = write_config(
             r#"
 [llm]
 quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
 agent_timeout_secs = 45
 valuation_fetch_timeout_secs = 9
 
 [trading]
 asset_symbol = "AAPL"
 "#,
-        )
-        .expect("legacy config file should be written");
-
-        let cfg = Config::load_from(&config_path).expect("legacy timeout alias should load");
-
+        );
+        let cfg = Config::load_from(&path).expect("legacy timeout alias should load");
         assert_eq!(cfg.llm.analyst_timeout_secs, 45);
         assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 9);
     }
 
     #[test]
     fn load_from_supports_canonical_analyst_timeout_secs_key() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
-        let config_path = tempdir.path().join("canonical-config.toml");
-        std::fs::write(
-            &config_path,
+        let (_dir, path) = write_config(
             r#"
 [llm]
 quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
 analyst_timeout_secs = 60
 valuation_fetch_timeout_secs = 12
 
 [trading]
 asset_symbol = "AAPL"
 "#,
-        )
-        .expect("canonical config file should be written");
-
-        let cfg = Config::load_from(&config_path).expect("canonical timeout key should load");
-
+        );
+        let cfg = Config::load_from(&path).expect("canonical timeout key should load");
         assert_eq!(cfg.llm.analyst_timeout_secs, 60);
         assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 12);
     }
@@ -701,20 +652,14 @@ asset_symbol = "AAPL"
     fn load_from_reads_openrouter_api_key_from_env() {
         let _guard = ENV_LOCK.lock().unwrap();
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
-        let saved = std::env::var("SCORPIO_OPENROUTER_API_KEY").ok();
+        // SAFETY: serialized by ENV_LOCK; no other test sets this var concurrently
         unsafe {
             std::env::set_var("SCORPIO_OPENROUTER_API_KEY", "test-openrouter-key-from-env");
         }
-
         let result = Config::load_from(&path);
-
         unsafe {
-            match saved {
-                Some(value) => std::env::set_var("SCORPIO_OPENROUTER_API_KEY", value),
-                None => std::env::remove_var("SCORPIO_OPENROUTER_API_KEY"),
-            }
+            std::env::remove_var("SCORPIO_OPENROUTER_API_KEY");
         }
-
         let cfg = result.expect("config should load with openrouter key from env");
         assert_eq!(
             cfg.providers
@@ -737,20 +682,14 @@ asset_symbol = "AAPL"
     fn env_override_supports_openrouter_rate_limit() {
         let _guard = ENV_LOCK.lock().unwrap();
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
-        let saved = std::env::var("SCORPIO__PROVIDERS__OPENROUTER__RPM").ok();
+        // SAFETY: serialized by ENV_LOCK; no other test sets this var concurrently
         unsafe {
             std::env::set_var("SCORPIO__PROVIDERS__OPENROUTER__RPM", "40");
         }
-
         let result = Config::load_from(&path);
-
         unsafe {
-            match saved {
-                Some(value) => std::env::set_var("SCORPIO__PROVIDERS__OPENROUTER__RPM", value),
-                None => std::env::remove_var("SCORPIO__PROVIDERS__OPENROUTER__RPM"),
-            }
+            std::env::remove_var("SCORPIO__PROVIDERS__OPENROUTER__RPM");
         }
-
         let cfg = result.expect("config should load with openrouter rpm override");
         assert_eq!(cfg.providers.openrouter.rpm, 40);
     }
@@ -786,20 +725,13 @@ asset_symbol = "AAPL"
 
     #[test]
     fn enrichment_fetch_timeout_secs_must_be_positive() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
-        let config_path = tempdir.path().join("invalid-enrichment-timeout.toml");
-        std::fs::write(
-            &config_path,
+        let (_dir, path) = write_config(
             r#"
 [llm]
 quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
-analyst_timeout_secs = 60
-valuation_fetch_timeout_secs = 12
 
 [trading]
 asset_symbol = "AAPL"
@@ -807,10 +739,8 @@ asset_symbol = "AAPL"
 [enrichment]
 fetch_timeout_secs = 0
 "#,
-        )
-        .expect("config file should be written");
-
-        let err = Config::load_from(&config_path).expect_err("zero timeout should be rejected");
+        );
+        let err = Config::load_from(&path).expect_err("zero timeout should be rejected");
         assert!(
             err.to_string()
                 .contains("fetch_timeout_secs must be at least 1"),
@@ -962,25 +892,8 @@ fetch_timeout_secs = 0
 
     #[test]
     fn config_without_enrichment_section_uses_defaults() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let config_path = tempdir.path().join("no-enrichment.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[llm]
-quick_thinking_provider = "openai"
-deep_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
-
-[trading]
-asset_symbol = "AAPL"
-"#,
-        )
-        .expect("config file");
-        let cfg = Config::load_from(&config_path).expect("should load without enrichment section");
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let cfg = Config::load_from(&path).expect("should load without enrichment section");
         assert!(!cfg.enrichment.enable_transcripts);
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
@@ -991,85 +904,64 @@ asset_symbol = "AAPL"
 
     #[test]
     fn validate_rejects_empty_symbol() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let config_path = tempdir.path().join("empty-symbol.toml");
-        std::fs::write(
-            &config_path,
+        let (_dir, path) = write_config(
             r#"
 [llm]
 quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
 
 [trading]
 asset_symbol = ""
 "#,
-        )
-        .expect("config file");
-        let result = Config::load_from(&config_path);
-        assert!(
-            result.is_err(),
-            "empty symbol should be rejected by validate()"
         );
-        let msg = result.unwrap_err().to_string();
+        let result = Config::load_from(&path);
+        assert!(result.is_err(), "empty symbol should be rejected by validate()");
         assert!(
-            msg.contains("invalid symbol"),
-            "error should mention invalid symbol: {msg}"
+            result.unwrap_err().to_string().contains("invalid symbol"),
+            "error should mention invalid symbol"
         );
     }
 
     #[test]
     fn validate_rejects_symbol_with_semicolons() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let config_path = tempdir.path().join("bad-symbol.toml");
-        std::fs::write(
-            &config_path,
+        let (_dir, path) = write_config(
             r#"
 [llm]
 quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
 
 [trading]
 asset_symbol = "DROP;TABLE"
 "#,
-        )
-        .expect("config file");
-        let result = Config::load_from(&config_path);
-        assert!(result.is_err(), "semicolon in symbol should be rejected");
+        );
+        assert!(
+            Config::load_from(&path).is_err(),
+            "semicolon in symbol should be rejected"
+        );
     }
 
     #[test]
     fn validate_accepts_lowercase_symbol() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let config_path = tempdir.path().join("lower-symbol.toml");
-        std::fs::write(
-            &config_path,
+        let (_dir, path) = write_config(
             r#"
 [llm]
 quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-max_debate_rounds = 3
-max_risk_rounds = 2
 
 [trading]
 asset_symbol = "nvda"
 "#,
-        )
-        .expect("config file");
+        );
         // lowercase is accepted by validate_symbol — normalisation happens at resolve_symbol
-        let result = Config::load_from(&config_path);
         assert!(
-            result.is_ok(),
-            "lowercase symbol should be accepted: {result:?}"
+            Config::load_from(&path).is_ok(),
+            "lowercase symbol should be accepted"
         );
     }
 
