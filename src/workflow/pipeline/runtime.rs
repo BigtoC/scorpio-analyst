@@ -10,14 +10,14 @@ use uuid::Uuid;
 use crate::{
     config::Config,
     data::adapters::{
-        EnrichmentResult,
+        EnrichmentResult, EnrichmentStatus,
         estimates::{ConsensusEvidence, EstimatesProvider, YFinanceEstimatesProvider},
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
     data::{FinnhubClient, FredClient, YFinanceClient},
     error::TradingError,
     providers::factory::CompletionModelHandle,
-    state::TradingState,
+    state::{EnrichmentState, TradingState},
     workflow::{
         SnapshotStore,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
@@ -49,8 +49,8 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.evidence_technical = None;
     state.evidence_sentiment = None;
     state.evidence_news = None;
-    state.enrichment_event_news = None;
-    state.enrichment_consensus = None;
+    state.enrichment_event_news = EnrichmentState::default();
+    state.enrichment_consensus = EnrichmentState::default();
     state.data_coverage = None;
     state.provenance_summary = None;
     state.debate_history.clear();
@@ -269,8 +269,22 @@ pub(super) async fn run_analysis_cycle(
     };
 
     // Persist enrichment results on state for downstream consumers.
-    initial_state.enrichment_event_news = event_enrichment.into_option();
-    initial_state.enrichment_consensus = consensus_enrichment.into_option();
+    initial_state.enrichment_event_news = EnrichmentState {
+        status: if enrichment_cfg.enable_event_news {
+            event_enrichment.status()
+        } else {
+            EnrichmentStatus::Disabled
+        },
+        payload: event_enrichment.into_option(),
+    };
+    initial_state.enrichment_consensus = EnrichmentState {
+        status: if enrichment_cfg.enable_consensus_estimates {
+            consensus_enrichment.status()
+        } else {
+            EnrichmentStatus::Disabled
+        },
+        payload: consensus_enrichment.into_option(),
+    };
 
     let cached_news_json = news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
     let graph = Arc::clone(&pipeline.graph);
@@ -304,13 +318,13 @@ pub(super) async fn run_analysis_cycle(
     // ── Write enrichment payloads to context cache keys ──────────────
     // These are written before save; PreflightTask's `seed_if_absent` will
     // preserve non-null values rather than overwriting them.
-    if let Some(ref events) = initial_state.enrichment_event_news
+    if let Some(ref events) = initial_state.enrichment_event_news.payload
         && let Ok(json) = serde_json::to_string(events)
     {
         info!(count = events.len(), "hydrated event-news enrichment");
         session.context.set(KEY_CACHED_EVENT_FEED, json).await;
     }
-    if let Some(ref consensus) = initial_state.enrichment_consensus
+    if let Some(ref consensus) = initial_state.enrichment_consensus.payload
         && let Ok(json) = serde_json::to_string(consensus)
     {
         info!(symbol = %consensus.symbol, "hydrated consensus-estimates enrichment");
@@ -400,6 +414,19 @@ async fn hydrate_consensus(
     target_date: &str,
     timeout: std::time::Duration,
 ) -> EnrichmentResult<ConsensusEvidence> {
+    if target_date
+        != chrono::Utc::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string()
+    {
+        info!(
+            symbol,
+            target_date, "consensus-estimates enrichment skipped for historical target date"
+        );
+        return EnrichmentResult::NotAvailable;
+    }
+
     let provider = YFinanceEstimatesProvider::new(yfinance.clone());
     match tokio::time::timeout(timeout, provider.fetch_consensus(symbol, target_date)).await {
         Ok(Ok(Some(evidence))) => {
