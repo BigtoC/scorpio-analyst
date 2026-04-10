@@ -360,6 +360,8 @@ mod tests {
             evidence_technical: None,
             evidence_sentiment: None,
             evidence_news: None,
+            enrichment_event_news: None,
+            enrichment_consensus: None,
             data_coverage: None,
             provenance_summary: None,
             prior_thesis: None,
