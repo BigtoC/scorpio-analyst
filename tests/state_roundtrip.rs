@@ -578,6 +578,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     evidence_technical,
                     evidence_sentiment,
                     evidence_news,
+                    enrichment_event_news: None,
+                    enrichment_consensus: None,
                     data_coverage,
                     provenance_summary,
                     debate_history,
