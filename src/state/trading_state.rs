@@ -1,9 +1,11 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::data::adapters::{estimates::ConsensusEvidence, events::EventNewsEvidence};
+use crate::data::adapters::{
+    EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
+};
 
 use super::{
     DataCoverageReport, DerivedValuation, EvidenceRecord, ExecutionStatus, FundamentalData,
@@ -18,6 +20,58 @@ pub struct DebateMessage {
     pub role: String,
     /// The free-text content of the message produced by the LLM agent.
     pub content: String,
+}
+
+/// Persisted enrichment state for a single category.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EnrichmentState<T> {
+    pub status: EnrichmentStatus,
+    pub payload: Option<T>,
+}
+
+impl<'de, T> Deserialize<'de> for EnrichmentState<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct EnrichmentStateFields<T> {
+            status: EnrichmentStatus,
+            payload: Option<T>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum EnrichmentStateRepr<T> {
+            State(EnrichmentStateFields<T>),
+            LegacyPayload(T),
+            Null(()),
+        }
+
+        match EnrichmentStateRepr::deserialize(deserializer)? {
+            EnrichmentStateRepr::State(fields) => Ok(Self {
+                status: fields.status,
+                payload: fields.payload,
+            }),
+            EnrichmentStateRepr::LegacyPayload(payload) => Ok(Self {
+                status: EnrichmentStatus::Available,
+                payload: Some(payload),
+            }),
+            EnrichmentStateRepr::Null(()) => Ok(Self::default()),
+        }
+    }
+}
+
+impl<T> Default for EnrichmentState<T> {
+    fn default() -> Self {
+        Self {
+            status: EnrichmentStatus::NotConfigured,
+            payload: None,
+        }
+    }
 }
 
 /// The unified shared state that flows through every phase of the trading pipeline.
@@ -48,9 +102,9 @@ pub struct TradingState {
 
     // Enrichment data (hydrated in run_analysis_cycle when enabled)
     #[serde(default)]
-    pub enrichment_event_news: Option<Vec<EventNewsEvidence>>,
+    pub enrichment_event_news: EnrichmentState<Vec<EventNewsEvidence>>,
     #[serde(default)]
-    pub enrichment_consensus: Option<ConsensusEvidence>,
+    pub enrichment_consensus: EnrichmentState<ConsensusEvidence>,
 
     // Phase 1: Run-level coverage and provenance reporting
     pub data_coverage: Option<DataCoverageReport>,
@@ -117,8 +171,8 @@ impl TradingState {
             evidence_technical: None,
             evidence_sentiment: None,
             evidence_news: None,
-            enrichment_event_news: None,
-            enrichment_consensus: None,
+            enrichment_event_news: EnrichmentState::default(),
+            enrichment_consensus: EnrichmentState::default(),
             data_coverage: None,
             provenance_summary: None,
             debate_history: Vec::new(),
