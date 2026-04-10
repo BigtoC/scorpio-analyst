@@ -2,7 +2,9 @@
 
 use std::fmt::Write;
 
-use crate::state::{CorporateEquityValuation, DerivedValuation, ScenarioValuation, TradingState};
+use crate::state::{
+    AssetShape, CorporateEquityValuation, DerivedValuation, ScenarioValuation, TradingState,
+};
 
 /// Render the `Scenario Valuation` section into `out`.
 ///
@@ -26,7 +28,7 @@ pub(crate) fn write_scenario_valuation(out: &mut String, state: &TradingState) {
 }
 
 fn write_valuation_body(out: &mut String, dv: &DerivedValuation) {
-    let _ = writeln!(out, "Asset shape: {:?}", dv.asset_shape);
+    let _ = writeln!(out, "Asset shape: {}", asset_shape_label(&dv.asset_shape));
 
     match &dv.scenario {
         ScenarioValuation::NotAssessed { reason } => {
@@ -37,6 +39,14 @@ fn write_valuation_body(out: &mut String, dv: &DerivedValuation) {
             let _ = writeln!(out, "Valuation model: Corporate Equity");
             write_equity_metrics(out, equity);
         }
+    }
+}
+
+fn asset_shape_label(asset_shape: &AssetShape) -> &'static str {
+    match asset_shape {
+        AssetShape::CorporateEquity => "Corporate equity",
+        AssetShape::Fund => "Fund",
+        AssetShape::Unknown => "Unknown",
     }
 }
 
@@ -166,6 +176,7 @@ mod tests {
             out.contains("fund_style_asset"),
             "must include the reason string"
         );
+        assert!(out.contains("Asset shape: Fund"));
     }
 
     #[test]
@@ -189,6 +200,7 @@ mod tests {
         let state = state_with_valuation(full_corporate_valuation());
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
+        assert!(out.contains("Asset shape: Corporate equity"));
         assert!(out.contains("DCF intrinsic value"), "must show DCF metric");
         assert!(out.contains("EV/EBITDA"), "must show EV/EBITDA metric");
         assert!(out.contains("Forward P/E"), "must show forward P/E metric");
