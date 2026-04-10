@@ -257,12 +257,12 @@ pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
 
-    use super::*;
+    use super::super::prompt::*;
+    use crate::state::TradingState;
 
     fn empty_state() -> TradingState {
         TradingState::new("AAPL", "2026-01-15")
@@ -271,46 +271,28 @@ mod tests {
     #[test]
     fn test_authoritative_source_rule_mentions_runtime_evidence() {
         let rule = build_authoritative_source_prompt_rule();
-        assert!(
-            rule.contains("runtime"),
-            "authoritative source rule should mention 'runtime'; got: {rule}"
-        );
-        assert!(
-            !rule.is_empty(),
-            "authoritative source rule must not be empty"
-        );
+        assert!(rule.contains("runtime"));
+        assert!(!rule.is_empty());
     }
 
     #[test]
     fn test_missing_data_rule_mentions_null_or_empty() {
         let rule = build_missing_data_prompt_rule();
-        assert!(
-            rule.contains("null") || rule.contains("[]"),
-            "missing data rule should mention 'null' or '[]'; got: {rule}"
-        );
+        assert!(rule.contains("null") || rule.contains("[]"));
     }
 
     #[test]
     fn test_data_quality_rule_mentions_facts_and_interpretation() {
         let rule = build_data_quality_prompt_rule();
-        assert!(
-            rule.contains("facts") || rule.contains("observed"),
-            "data quality rule should mention 'facts' or 'observed'; got: {rule}"
-        );
-        assert!(
-            rule.contains("interpretation"),
-            "data quality rule should mention 'interpretation'; got: {rule}"
-        );
+        assert!(rule.contains("facts") || rule.contains("observed"));
+        assert!(rule.contains("interpretation"));
     }
 
     #[test]
     fn build_evidence_context_empty_state_returns_non_empty_fallback() {
         let state = empty_state();
         let ctx = build_evidence_context(&state);
-        assert!(
-            !ctx.is_empty(),
-            "build_evidence_context must return non-empty string for empty state"
-        );
+        assert!(!ctx.is_empty());
         assert!(ctx.contains("Typed evidence snapshot:"));
         assert!(ctx.contains("- fundamentals: null"));
         assert!(ctx.contains("- sentiment: null"));
@@ -322,10 +304,7 @@ mod tests {
     fn build_data_quality_context_empty_state_returns_non_empty_fallback() {
         let state = empty_state();
         let ctx = build_data_quality_context(&state);
-        assert!(
-            !ctx.is_empty(),
-            "build_data_quality_context must return non-empty string for empty state"
-        );
+        assert!(!ctx.is_empty());
         assert!(ctx.contains("Data quality snapshot:"));
         assert!(ctx.contains("- required_inputs: unavailable"));
         assert!(ctx.contains("- missing_inputs: unavailable"));
@@ -405,10 +384,7 @@ mod tests {
     fn build_thesis_memory_context_returns_unavailability_when_no_prior_thesis() {
         let state = empty_state();
         let ctx = build_thesis_memory_context(&state);
-        assert!(
-            ctx.contains("No prior thesis memory"),
-            "should indicate absence: {ctx}"
-        );
+        assert!(ctx.contains("No prior thesis memory"));
     }
 
     #[test]
@@ -428,22 +404,10 @@ mod tests {
         });
 
         let ctx = build_thesis_memory_context(&state);
-        assert!(
-            ctx.contains("Buy"),
-            "should include prior action in context"
-        );
-        assert!(
-            ctx.contains("Approved"),
-            "should include prior decision in context"
-        );
-        assert!(
-            ctx.contains("Strong fundamentals"),
-            "should include rationale"
-        );
-        assert!(
-            ctx.contains("historical context") || ctx.contains("Historical thesis"),
-            "should frame as historical reference: {ctx}"
-        );
+        assert!(ctx.contains("Buy"));
+        assert!(ctx.contains("Approved"));
+        assert!(ctx.contains("Strong fundamentals"));
+        assert!(ctx.contains("historical context") || ctx.contains("Historical thesis"));
     }
 
     #[test]
@@ -465,8 +429,7 @@ mod tests {
         let ctx = build_thesis_memory_context(&state);
         assert!(
             ctx.to_lowercase().contains("reference")
-                || ctx.to_lowercase().contains("not authoritative"),
-            "context must frame thesis as reference: {ctx}"
+                || ctx.to_lowercase().contains("not authoritative")
         );
     }
 
@@ -488,13 +451,7 @@ mod tests {
         });
 
         let ctx = build_thesis_memory_context(&state);
-        assert!(
-            !ctx.contains("sk-ant-SECRET123"),
-            "secret-like tokens must be redacted from thesis context"
-        );
-        assert!(
-            ctx.contains("[REDACTED]"),
-            "redacted token marker must appear in output"
-        );
+        assert!(!ctx.contains("sk-ant-SECRET123"));
+        assert!(ctx.contains("[REDACTED]"));
     }
 }

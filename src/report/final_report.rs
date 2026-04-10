@@ -15,6 +15,7 @@ pub fn format_final_report(state: &TradingState) -> String {
     write_executive_summary(&mut out, state);
     write_trader_proposal(&mut out, state);
     write_analyst_snapshot(&mut out, state);
+    super::valuation::write_scenario_valuation(&mut out, state);
     super::coverage::write_data_quality_and_coverage(&mut out, state);
     super::provenance::write_evidence_provenance(&mut out, state);
     write_research_debate(&mut out, state);
@@ -222,10 +223,7 @@ fn write_trader_proposal(out: &mut String, state: &TradingState) {
                 "Stop Loss".to_owned(),
                 format!("{:.2}", proposal.stop_loss),
             ]);
-            let valuation_str = proposal
-                .valuation_assessment
-                .as_deref()
-                .unwrap_or("Not assessed");
+            let valuation_str = trader_valuation_label(proposal);
             table.add_row(vec!["Valuation".to_owned(), valuation_str.to_owned()]);
             let _ = writeln!(out, "{table}");
             let _ = writeln!(out, "\n{} {}", "Rationale:".bold(), proposal.rationale);
@@ -233,6 +231,23 @@ fn write_trader_proposal(out: &mut String, state: &TradingState) {
         None => {
             let _ = writeln!(out, "{}", "Trader proposal: unavailable.".dimmed());
         }
+    }
+}
+
+fn trader_valuation_label(proposal: &crate::state::TradeProposal) -> String {
+    match proposal.scenario_valuation.as_ref() {
+        None => {
+            "Model-authored assessment omitted because deterministic valuation is unavailable in this snapshot"
+                .to_owned()
+        }
+        Some(crate::state::ScenarioValuation::NotAssessed { .. }) => {
+            "Model-authored assessment omitted because deterministic valuation was not assessed for this asset shape"
+                .to_owned()
+        }
+        Some(crate::state::ScenarioValuation::CorporateEquity(_)) => proposal
+            .valuation_assessment
+            .clone()
+            .unwrap_or_else(|| "Not assessed".to_owned()),
     }
 }
 
@@ -522,8 +537,9 @@ fn write_disclaimer(out: &mut String) {
 mod tests {
     use super::*;
     use crate::state::{
-        AgentTokenUsage, Decision, ExecutionStatus, PhaseTokenUsage, TradeAction, TradeProposal,
-        TradingState,
+        AgentTokenUsage, AssetShape, CorporateEquityValuation, DcfValuation, Decision,
+        DerivedValuation, ExecutionStatus, ForwardPeValuation, PhaseTokenUsage, ScenarioValuation,
+        TradeAction, TradeProposal, TradingState,
     };
 
     fn minimal_state() -> TradingState {
@@ -638,6 +654,9 @@ mod tests {
         let analyst_pos = report
             .find("Analyst Evidence Snapshot")
             .expect("Analyst Evidence Snapshot must appear");
+        let valuation_pos = report
+            .find("Scenario Valuation")
+            .expect("Scenario Valuation must appear");
         let coverage_pos = report
             .find("Data Quality and Coverage")
             .expect("Data Quality and Coverage must appear");
@@ -649,8 +668,12 @@ mod tests {
             .expect("Research Debate Summary must appear");
 
         assert!(
-            analyst_pos < coverage_pos,
-            "Analyst Evidence Snapshot must precede Data Quality and Coverage"
+            analyst_pos < valuation_pos,
+            "Analyst Evidence Snapshot must precede Scenario Valuation"
+        );
+        assert!(
+            valuation_pos < coverage_pos,
+            "Scenario Valuation must precede Data Quality and Coverage"
         );
         assert!(
             coverage_pos < provenance_pos,
@@ -659,6 +682,155 @@ mod tests {
         assert!(
             provenance_pos < debate_pos,
             "Evidence Provenance must precede Research Debate Summary"
+        );
+    }
+
+    #[test]
+    fn format_final_report_valuation_shows_not_computed_when_none() {
+        let state = minimal_state(); // derived_valuation is None
+        let report = format_final_report(&state);
+        let val_pos = report
+            .find("Scenario Valuation")
+            .expect("Scenario Valuation section must appear");
+        let after = &report[val_pos..];
+        assert!(
+            after.contains("Not computed"),
+            "must render 'Not computed' when derived_valuation is None"
+        );
+    }
+
+    #[test]
+    fn format_final_report_valuation_renders_metrics_when_present() {
+        let mut state = minimal_state();
+        state.derived_valuation = Some(DerivedValuation {
+            asset_shape: AssetShape::CorporateEquity,
+            scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+                dcf: Some(DcfValuation {
+                    free_cash_flow: 1_200_000_000.0,
+                    discount_rate_pct: 10.0,
+                    intrinsic_value_per_share: 185.42,
+                }),
+                ev_ebitda: None,
+                forward_pe: Some(ForwardPeValuation {
+                    forward_eps: 7.25,
+                    forward_pe: 26.2,
+                }),
+                peg: None,
+            }),
+        });
+        let report = format_final_report(&state);
+        assert!(
+            report.contains("DCF intrinsic value"),
+            "must render DCF intrinsic value in report"
+        );
+        assert!(
+            report.contains("Forward P/E"),
+            "must render Forward P/E in report"
+        );
+    }
+
+    #[test]
+    fn format_final_report_valuation_renders_not_assessed_for_fund() {
+        let mut state = minimal_state();
+        state.derived_valuation = Some(DerivedValuation {
+            asset_shape: AssetShape::Fund,
+            scenario: ScenarioValuation::NotAssessed {
+                reason: "fund_style_asset".to_owned(),
+            },
+        });
+        let report = format_final_report(&state);
+        assert!(
+            report.contains("not assessed"),
+            "must render 'not assessed' for fund-style asset"
+        );
+        assert!(
+            report.contains("fund_style_asset"),
+            "must include the NotAssessed reason"
+        );
+    }
+
+    #[test]
+    fn format_final_report_omits_model_valuation_when_deterministic_valuation_not_computed() {
+        let mut state = minimal_state();
+        state.trader_proposal.as_mut().unwrap().valuation_assessment =
+            Some("Undervalued on a 190 DCF".to_owned());
+
+        let report = format_final_report(&state);
+        assert!(report.contains(
+            "Model-authored assessment omitted because deterministic valuation is unavailable in this snapshot"
+        ));
+        assert!(!report.contains("Undervalued on a 190 DCF"));
+    }
+
+    #[test]
+    fn format_final_report_omits_model_valuation_when_asset_shape_not_assessed() {
+        let mut state = minimal_state();
+        state.trader_proposal.as_mut().unwrap().valuation_assessment =
+            Some("Undervalued on fabricated multiples".to_owned());
+        let scenario = ScenarioValuation::NotAssessed {
+            reason: "fund_style_asset".to_owned(),
+        };
+        state.derived_valuation = Some(DerivedValuation {
+            asset_shape: AssetShape::Fund,
+            scenario: scenario.clone(),
+        });
+        state.trader_proposal.as_mut().unwrap().scenario_valuation = Some(scenario);
+
+        let report = format_final_report(&state);
+        assert!(report.contains(
+            "Model-authored assessment omitted because deterministic valuation was not assessed"
+        ));
+        assert!(!report.contains("Undervalued on fabricated multiples"));
+    }
+
+    #[test]
+    fn format_final_report_preserves_model_valuation_when_corporate_equity_snapshot_exists() {
+        let mut state = minimal_state();
+        let scenario = ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 1_200_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 185.42,
+            }),
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        });
+        state.derived_valuation = Some(DerivedValuation {
+            asset_shape: AssetShape::CorporateEquity,
+            scenario: scenario.clone(),
+        });
+        let proposal = state.trader_proposal.as_mut().unwrap();
+        proposal.valuation_assessment = Some("Undervalued versus DCF anchor".to_owned());
+        proposal.scenario_valuation = Some(scenario);
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Undervalued versus DCF anchor"));
+    }
+
+    #[test]
+    fn format_final_report_uses_not_assessed_fallback_when_corporate_equity_label_is_missing() {
+        let mut state = minimal_state();
+        let scenario = ScenarioValuation::CorporateEquity(CorporateEquityValuation {
+            dcf: Some(DcfValuation {
+                free_cash_flow: 1_200_000_000.0,
+                discount_rate_pct: 10.0,
+                intrinsic_value_per_share: 185.42,
+            }),
+            ev_ebitda: None,
+            forward_pe: None,
+            peg: None,
+        });
+        state.derived_valuation = Some(DerivedValuation {
+            asset_shape: AssetShape::CorporateEquity,
+            scenario: scenario.clone(),
+        });
+        state.trader_proposal.as_mut().unwrap().scenario_valuation = Some(scenario);
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Not assessed"));
+        assert!(
+            !report.contains("Model-authored assessment omitted because deterministic valuation")
         );
     }
 

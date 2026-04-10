@@ -6,6 +6,7 @@
 mod json;
 mod prompt;
 mod usage;
+mod valuation_prompt;
 
 pub(crate) use json::extract_json_object;
 pub(crate) use prompt::{
@@ -15,3 +16,4 @@ pub(crate) use prompt::{
     sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
 };
 pub(crate) use usage::agent_token_usage_from_completion;
+pub(crate) use valuation_prompt::build_valuation_context;

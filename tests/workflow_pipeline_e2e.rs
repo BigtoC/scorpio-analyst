@@ -10,8 +10,9 @@ use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_analyst::{
     error::TradingError,
     state::{
-        DataCoverageReport, Decision, EvidenceKind, EvidenceRecord, EvidenceSource,
-        ExecutionStatus, FundamentalData, ProvenanceSummary, TradingState,
+        AssetShape, DataCoverageReport, Decision, DerivedValuation, EvidenceKind, EvidenceRecord,
+        EvidenceSource, ExecutionStatus, FundamentalData, ProvenanceSummary, ScenarioValuation,
+        TradingState,
     },
 };
 use workflow_pipeline_e2e_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
@@ -405,4 +406,76 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
             .iter()
             .all(|msg| msg.role != "stale")
     );
+}
+
+/// Verify that `derived_valuation` injected into initial state is cleared by
+/// `reset_cycle_outputs` before the pipeline re-derives it for the current run.
+/// This prevents stale valuation from a prior symbol or run from leaking into
+/// the trader and fund-manager prompts.
+#[tokio::test]
+async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
+    let (pipeline, _store, _dir) =
+        make_pipeline("stale-valuation.db", "stale-valuation", 1, 1).await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    // Inject a stale derived_valuation that should NOT survive into the next cycle.
+    let mut initial_state = TradingState::new("AAPL", "2026-03-20");
+    initial_state.derived_valuation = Some(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::NotAssessed {
+            reason: "stale_reason_from_prior_run".to_owned(),
+        },
+    });
+    initial_state.trader_proposal = Some(scorpio_analyst::state::TradeProposal {
+        action: scorpio_analyst::state::TradeAction::Hold,
+        target_price: 1.0,
+        stop_loss: 1.0,
+        confidence: 0.1,
+        rationale: "stale proposal".to_owned(),
+        valuation_assessment: Some("stale valuation narrative".to_owned()),
+        scenario_valuation: Some(ScenarioValuation::NotAssessed {
+            reason: "stale_reason_from_prior_run".to_owned(),
+        }),
+    });
+
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must succeed with stale derived_valuation in initial state");
+
+    // The stale NotAssessed valuation must not survive into the final state.
+    // The stub AnalystTask does not inject derived_valuation, so it ends as None —
+    // which is the correct cycle-safe outcome (reset happened).
+    if let Some(dv) = &final_state.derived_valuation {
+        // If the runtime did re-derive a value, it must NOT be the stale one.
+        assert_ne!(
+            dv.asset_shape,
+            AssetShape::Fund,
+            "stale Fund shape from prior run must not persist after reset"
+        );
+        if let ScenarioValuation::NotAssessed { reason } = &dv.scenario {
+            assert_ne!(
+                reason, "stale_reason_from_prior_run",
+                "stale NotAssessed reason must not persist after reset"
+            );
+        }
+    }
+    let final_proposal = final_state
+        .trader_proposal
+        .as_ref()
+        .expect("final trader proposal must be set");
+    assert_ne!(
+        final_proposal.valuation_assessment.as_deref(),
+        Some("stale valuation narrative")
+    );
+    assert_ne!(
+        final_proposal.scenario_valuation,
+        Some(ScenarioValuation::NotAssessed {
+            reason: "stale_reason_from_prior_run".to_owned(),
+        })
+    );
+    // Whether the stub re-populates derived_valuation or not, the pipeline must complete.
+    assert!(final_state.final_execution_status.is_some());
 }

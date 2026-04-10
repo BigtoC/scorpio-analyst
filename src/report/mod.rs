@@ -1,5 +1,6 @@
 mod coverage;
 mod final_report;
 mod provenance;
+mod valuation;
 
 pub use final_report::format_final_report;
