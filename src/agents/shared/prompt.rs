@@ -1,7 +1,4 @@
-use crate::{
-    constants::MAX_PROMPT_CONTEXT_CHARS,
-    state::{ScenarioValuation, TradingState},
-};
+use crate::{constants::MAX_PROMPT_CONTEXT_CHARS, state::TradingState};
 
 /// Marker inserted before untrusted model-generated prompt context.
 pub(crate) const UNTRUSTED_CONTEXT_NOTICE: &str =
@@ -259,93 +256,13 @@ pub(crate) fn build_data_quality_context(state: &TradingState) -> String {
     )
 }
 
-/// Render a prompt-safe deterministic valuation context block for downstream agents.
-///
-/// Surfaces the pre-computed [`ScenarioValuation`] stored on `state.derived_valuation` so
-/// trader and fund-manager prompts ground their reasoning in hard numbers rather than
-/// asking the LLM to invent or recall valuation metrics.
-///
-/// # Fallback behaviour
-///
-/// | State                                   | Rendered text                                     |
-/// |-----------------------------------------|---------------------------------------------------|
-/// | `derived_valuation` is `None`           | Explicit "not computed" message                   |
-/// | `ScenarioValuation::NotAssessed`        | Explicit "not assessed for this asset shape" text |
-/// | `ScenarioValuation::CorporateEquity`    | Numbered list of available metrics                |
-/// | All corporate metrics are `None`        | Explicit "no metrics computable" fallback         |
-pub(crate) fn build_valuation_context(state: &TradingState) -> String {
-    let Some(dv) = &state.derived_valuation else {
-        return "Deterministic scenario valuation: not computed for this run. \
-                Do not fabricate valuation metrics."
-            .to_owned();
-    };
-
-    match &dv.scenario {
-        ScenarioValuation::NotAssessed { reason } => {
-            let safe_reason = sanitize_prompt_context(reason);
-            format!(
-                "Deterministic scenario valuation: not assessed for this asset shape.\n\
-                 Reason: {safe_reason}\n\
-                 Valuation metrics are not applicable for this instrument. \
-                 Do not fabricate DCF, EV/EBITDA, Forward P/E, or PEG values."
-            )
-        }
-
-        ScenarioValuation::CorporateEquity(equity) => {
-            let mut lines: Vec<String> = Vec::new();
-
-            if let Some(dcf) = &equity.dcf {
-                lines.push(format!(
-                    "  - DCF intrinsic value: ${:.2}/share \
-                     (trailing FCF: {:.0}, discount rate: {:.1}%)",
-                    dcf.intrinsic_value_per_share, dcf.free_cash_flow, dcf.discount_rate_pct,
-                ));
-            }
-
-            if let Some(ev) = &equity.ev_ebitda {
-                let implied_note = ev
-                    .implied_value_per_share
-                    .map(|v| format!(", implied/share: ${v:.2}"))
-                    .unwrap_or_default();
-                lines.push(format!(
-                    "  - EV/EBITDA: {:.1}x{}",
-                    ev.ev_ebitda_ratio, implied_note,
-                ));
-            }
-
-            if let Some(fpe) = &equity.forward_pe {
-                lines.push(format!(
-                    "  - Forward P/E: {:.1}x (forward EPS: ${:.2})",
-                    fpe.forward_pe, fpe.forward_eps,
-                ));
-            }
-
-            if let Some(peg) = &equity.peg {
-                lines.push(format!("  - PEG ratio: {:.2}", peg.peg_ratio));
-            }
-
-            if lines.is_empty() {
-                "Deterministic scenario valuation: corporate equity path — \
-                 no metrics computable from available inputs. \
-                 Do not fabricate valuation figures."
-                    .to_owned()
-            } else {
-                format!(
-                    "Deterministic scenario valuation (corporate equity, pre-computed):\n{}",
-                    lines.join("\n"),
-                )
-            }
-        }
-    }
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
 
-    use super::*;
+    use super::super::prompt::*;
+    use crate::state::TradingState;
 
     fn empty_state() -> TradingState {
         TradingState::new("AAPL", "2026-01-15")
@@ -354,46 +271,28 @@ mod tests {
     #[test]
     fn test_authoritative_source_rule_mentions_runtime_evidence() {
         let rule = build_authoritative_source_prompt_rule();
-        assert!(
-            rule.contains("runtime"),
-            "authoritative source rule should mention 'runtime'; got: {rule}"
-        );
-        assert!(
-            !rule.is_empty(),
-            "authoritative source rule must not be empty"
-        );
+        assert!(rule.contains("runtime"));
+        assert!(!rule.is_empty());
     }
 
     #[test]
     fn test_missing_data_rule_mentions_null_or_empty() {
         let rule = build_missing_data_prompt_rule();
-        assert!(
-            rule.contains("null") || rule.contains("[]"),
-            "missing data rule should mention 'null' or '[]'; got: {rule}"
-        );
+        assert!(rule.contains("null") || rule.contains("[]"));
     }
 
     #[test]
     fn test_data_quality_rule_mentions_facts_and_interpretation() {
         let rule = build_data_quality_prompt_rule();
-        assert!(
-            rule.contains("facts") || rule.contains("observed"),
-            "data quality rule should mention 'facts' or 'observed'; got: {rule}"
-        );
-        assert!(
-            rule.contains("interpretation"),
-            "data quality rule should mention 'interpretation'; got: {rule}"
-        );
+        assert!(rule.contains("facts") || rule.contains("observed"));
+        assert!(rule.contains("interpretation"));
     }
 
     #[test]
     fn build_evidence_context_empty_state_returns_non_empty_fallback() {
         let state = empty_state();
         let ctx = build_evidence_context(&state);
-        assert!(
-            !ctx.is_empty(),
-            "build_evidence_context must return non-empty string for empty state"
-        );
+        assert!(!ctx.is_empty());
         assert!(ctx.contains("Typed evidence snapshot:"));
         assert!(ctx.contains("- fundamentals: null"));
         assert!(ctx.contains("- sentiment: null"));
@@ -405,10 +304,7 @@ mod tests {
     fn build_data_quality_context_empty_state_returns_non_empty_fallback() {
         let state = empty_state();
         let ctx = build_data_quality_context(&state);
-        assert!(
-            !ctx.is_empty(),
-            "build_data_quality_context must return non-empty string for empty state"
-        );
+        assert!(!ctx.is_empty());
         assert!(ctx.contains("Data quality snapshot:"));
         assert!(ctx.contains("- required_inputs: unavailable"));
         assert!(ctx.contains("- missing_inputs: unavailable"));
@@ -488,10 +384,7 @@ mod tests {
     fn build_thesis_memory_context_returns_unavailability_when_no_prior_thesis() {
         let state = empty_state();
         let ctx = build_thesis_memory_context(&state);
-        assert!(
-            ctx.contains("No prior thesis memory"),
-            "should indicate absence: {ctx}"
-        );
+        assert!(ctx.contains("No prior thesis memory"));
     }
 
     #[test]
@@ -511,22 +404,10 @@ mod tests {
         });
 
         let ctx = build_thesis_memory_context(&state);
-        assert!(
-            ctx.contains("Buy"),
-            "should include prior action in context"
-        );
-        assert!(
-            ctx.contains("Approved"),
-            "should include prior decision in context"
-        );
-        assert!(
-            ctx.contains("Strong fundamentals"),
-            "should include rationale"
-        );
-        assert!(
-            ctx.contains("historical context") || ctx.contains("Historical thesis"),
-            "should frame as historical reference: {ctx}"
-        );
+        assert!(ctx.contains("Buy"));
+        assert!(ctx.contains("Approved"));
+        assert!(ctx.contains("Strong fundamentals"));
+        assert!(ctx.contains("historical context") || ctx.contains("Historical thesis"));
     }
 
     #[test]
@@ -548,8 +429,7 @@ mod tests {
         let ctx = build_thesis_memory_context(&state);
         assert!(
             ctx.to_lowercase().contains("reference")
-                || ctx.to_lowercase().contains("not authoritative"),
-            "context must frame thesis as reference: {ctx}"
+                || ctx.to_lowercase().contains("not authoritative")
         );
     }
 
@@ -571,183 +451,7 @@ mod tests {
         });
 
         let ctx = build_thesis_memory_context(&state);
-        assert!(
-            !ctx.contains("sk-ant-SECRET123"),
-            "secret-like tokens must be redacted from thesis context"
-        );
-        assert!(
-            ctx.contains("[REDACTED]"),
-            "redacted token marker must appear in output"
-        );
-    }
-
-    // ── build_valuation_context ───────────────────────────────────────────────
-
-    #[test]
-    fn build_valuation_context_no_derived_valuation_returns_not_computed_message() {
-        let state = empty_state();
-        let ctx = build_valuation_context(&state);
-        assert!(
-            ctx.contains("not computed"),
-            "absent derived_valuation should say 'not computed': {ctx}"
-        );
-        assert!(
-            ctx.contains("Do not fabricate"),
-            "absent derived_valuation should warn against fabrication: {ctx}"
-        );
-    }
-
-    #[test]
-    fn build_valuation_context_not_assessed_fund_style_includes_explicit_message() {
-        use crate::state::{AssetShape, DerivedValuation, ScenarioValuation};
-
-        let mut state = empty_state();
-        state.derived_valuation = Some(DerivedValuation {
-            asset_shape: AssetShape::Fund,
-            scenario: ScenarioValuation::NotAssessed {
-                reason: "fund_style_asset".to_owned(),
-            },
-        });
-        let ctx = build_valuation_context(&state);
-        assert!(
-            ctx.contains("not assessed for this asset shape"),
-            "fund-style NotAssessed should say 'not assessed for this asset shape': {ctx}"
-        );
-        assert!(
-            ctx.contains("fund_style_asset"),
-            "reason should appear in context: {ctx}"
-        );
-        assert!(
-            ctx.contains("Do not fabricate"),
-            "should warn against fabricating metrics: {ctx}"
-        );
-    }
-
-    #[test]
-    fn build_valuation_context_not_assessed_unknown_shape_includes_reason() {
-        use crate::state::{AssetShape, DerivedValuation, ScenarioValuation};
-
-        let mut state = empty_state();
-        state.derived_valuation = Some(DerivedValuation {
-            asset_shape: AssetShape::Unknown,
-            scenario: ScenarioValuation::NotAssessed {
-                reason: "unknown_asset_shape".to_owned(),
-            },
-        });
-        let ctx = build_valuation_context(&state);
-        assert!(
-            ctx.contains("not assessed"),
-            "should say not assessed: {ctx}"
-        );
-        assert!(
-            ctx.contains("unknown_asset_shape"),
-            "reason should appear: {ctx}"
-        );
-    }
-
-    #[test]
-    fn build_valuation_context_corporate_equity_with_all_metrics_renders_each() {
-        use crate::state::{
-            AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation,
-            EvEbitdaValuation, ForwardPeValuation, PegValuation, ScenarioValuation,
-        };
-
-        let mut state = empty_state();
-        state.derived_valuation = Some(DerivedValuation {
-            asset_shape: AssetShape::CorporateEquity,
-            scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
-                dcf: Some(DcfValuation {
-                    free_cash_flow: 1_200_000_000.0,
-                    discount_rate_pct: 10.0,
-                    intrinsic_value_per_share: 185.42,
-                }),
-                ev_ebitda: Some(EvEbitdaValuation {
-                    ev_ebitda_ratio: 22.5,
-                    implied_value_per_share: Some(192.0),
-                }),
-                forward_pe: Some(ForwardPeValuation {
-                    forward_eps: 7.25,
-                    forward_pe: 26.2,
-                }),
-                peg: Some(PegValuation { peg_ratio: 1.8 }),
-            }),
-        });
-        let ctx = build_valuation_context(&state);
-        assert!(
-            ctx.contains("pre-computed"),
-            "should say pre-computed: {ctx}"
-        );
-        assert!(
-            ctx.contains("185.42"),
-            "DCF intrinsic value should appear: {ctx}"
-        );
-        assert!(ctx.contains("22.5"), "EV/EBITDA ratio should appear: {ctx}");
-        assert!(
-            ctx.contains("192.00"),
-            "implied value/share should appear: {ctx}"
-        );
-        assert!(ctx.contains("26.2"), "Forward P/E should appear: {ctx}");
-        assert!(ctx.contains("7.25"), "forward EPS should appear: {ctx}");
-        assert!(ctx.contains("1.80"), "PEG ratio should appear: {ctx}");
-    }
-
-    #[test]
-    fn build_valuation_context_corporate_equity_partial_surfaces_available_metrics_only() {
-        use crate::state::{
-            AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, ScenarioValuation,
-        };
-
-        let mut state = empty_state();
-        state.derived_valuation = Some(DerivedValuation {
-            asset_shape: AssetShape::CorporateEquity,
-            scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
-                dcf: Some(DcfValuation {
-                    free_cash_flow: 500_000_000.0,
-                    discount_rate_pct: 10.0,
-                    intrinsic_value_per_share: 142.0,
-                }),
-                ev_ebitda: None,
-                forward_pe: None,
-                peg: None,
-            }),
-        });
-        let ctx = build_valuation_context(&state);
-        assert!(ctx.contains("142.00"), "DCF value should appear: {ctx}");
-        assert!(
-            !ctx.contains("EV/EBITDA"),
-            "absent EV/EBITDA should not appear: {ctx}"
-        );
-        assert!(
-            !ctx.contains("Forward P/E"),
-            "absent Forward P/E should not appear: {ctx}"
-        );
-        assert!(!ctx.contains("PEG"), "absent PEG should not appear: {ctx}");
-    }
-
-    #[test]
-    fn build_valuation_context_corporate_equity_all_none_metrics_returns_fallback() {
-        use crate::state::{
-            AssetShape, CorporateEquityValuation, DerivedValuation, ScenarioValuation,
-        };
-
-        let mut state = empty_state();
-        state.derived_valuation = Some(DerivedValuation {
-            asset_shape: AssetShape::CorporateEquity,
-            scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
-                dcf: None,
-                ev_ebitda: None,
-                forward_pe: None,
-                peg: None,
-            }),
-        });
-        let ctx = build_valuation_context(&state);
-        assert!(
-            ctx.contains("no metrics computable"),
-            "all-None metrics should say 'no metrics computable': {ctx}"
-        );
-        assert!(
-            ctx.contains("Do not fabricate"),
-            "should warn against fabrication: {ctx}"
-        );
+        assert!(!ctx.contains("sk-ant-SECRET123"));
+        assert!(ctx.contains("[REDACTED]"));
     }
 }
