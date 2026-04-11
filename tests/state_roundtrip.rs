@@ -665,6 +665,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     token_usage,
                     derived_valuation: None,
                     analysis_pack_name: None,
+                    analysis_runtime_policy: None,
                 }
             },
         )
