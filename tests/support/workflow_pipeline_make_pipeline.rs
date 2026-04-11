@@ -54,6 +54,7 @@ pub async fn make_pipeline(
         providers: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
     };
 
     let finnhub = FinnhubClient::for_test();

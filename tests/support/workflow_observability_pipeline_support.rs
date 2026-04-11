@@ -42,6 +42,7 @@ fn obs_test_config() -> Config {
         providers: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
     }
 }
 
