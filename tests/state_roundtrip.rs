@@ -664,6 +664,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     current_thesis,
                     token_usage,
                     derived_valuation: None,
+                    analysis_pack_name: None,
+                    analysis_runtime_policy: None,
                 }
             },
         )
@@ -838,4 +840,19 @@ fn trading_state_with_legacy_payload_enrichment_fields_deserializes_as_available
             .and_then(|payload| payload.analyst_count),
         Some(35)
     );
+}
+
+#[test]
+fn trading_state_without_analysis_pack_name_deserializes_as_none() {
+    let state = TradingState::new("AAPL", "2026-03-15");
+    let mut json: serde_json::Value = serde_json::to_value(&state).expect("serialize");
+    json.as_object_mut()
+        .expect("json is object")
+        .remove("analysis_pack_name");
+    let back: TradingState = serde_json::from_value(json).expect("old snapshot must deserialize");
+    assert!(
+        back.analysis_pack_name.is_none(),
+        "pre-pack snapshots should have analysis_pack_name = None"
+    );
+    assert_eq!(back.asset_symbol, "AAPL");
 }

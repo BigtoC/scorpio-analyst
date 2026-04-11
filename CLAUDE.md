@@ -215,10 +215,13 @@ SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run            # Quick test (1 debate ro
 
 ### Common Development Tasks
 
-- **Adding a new agent**: Implement agent in `src/agents/<role>/`, add phase task in `src/workflow/tasks/`
-- **Adding a new data source**: Implement client in `src/data/`, expose as rig tool via `#[tool]` macro
-- **Adding an indicator**: Add math function to `src/indicators/core_math.rs`, expose via tool struct in `tools.rs`
-- **Adding a provider**: Extend `ProviderId` enum in `src/providers/mod.rs`, add case in `factory::create_completion_model()`
+| Task              | Files to touch                                                                                             |
+|-------------------|------------------------------------------------------------------------------------------------------------|
+| New agent         | `src/agents/<role>/`, `src/workflow/tasks/`                                                                |
+| New data source   | `src/data/`, expose via `#[tool]` macro                                                                    |
+| New indicator     | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                                                  |
+| New LLM provider  | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/`                        |
+| New analysis pack | Add `PackId` variant in `src/analysis_packs/manifest.rs`, add match arm in `src/analysis_packs/builtin.rs` |
 
 ## CI/CD
 

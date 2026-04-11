@@ -1,5 +1,6 @@
 #![allow(clippy::absurd_extreme_comparisons)]
 
+pub mod analysis_packs;
 pub mod config;
 pub mod constants;
 pub mod error;

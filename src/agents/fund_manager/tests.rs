@@ -66,6 +66,7 @@ fn sample_config() -> Config {
         providers: sample_providers_config(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
     }
 }
 
@@ -747,6 +748,20 @@ fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
     assert!(user.contains("- fundamentals: null"));
     assert!(user.contains("Data quality snapshot:"));
     assert!(user.contains("- required_inputs: unavailable"));
+}
+
+#[test]
+fn build_prompt_context_user_prompt_includes_pack_context() {
+    use super::prompt::build_prompt_context;
+    use crate::state::TradingState;
+
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    state.analysis_pack_name = Some("baseline".to_owned());
+    state.analysis_runtime_policy = crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+    let (_system, user) = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+    assert!(user.contains("Analysis strategy: Balanced Institutional"));
+    assert!(user.contains("Emphasis:"));
 }
 
 #[test]

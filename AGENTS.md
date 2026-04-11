@@ -69,20 +69,23 @@ API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`.
 
 ## Adding things
 
-| Task             | Files to touch                                                                      |
-|------------------|-------------------------------------------------------------------------------------|
-| New agent        | `src/agents/<role>/`, `src/workflow/tasks/`                                         |
-| New data source  | `src/data/`, expose via `#[tool]` macro                                             |
-| New indicator    | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                           |
-| New LLM provider | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/` |
+| Task              | Files to touch                                                                                             |
+|-------------------|------------------------------------------------------------------------------------------------------------|
+| New agent         | `src/agents/<role>/`, `src/workflow/tasks/`                                                                |
+| New data source   | `src/data/`, expose via `#[tool]` macro                                                                    |
+| New indicator     | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                                                  |
+| New LLM provider  | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/`                        |
+| New analysis pack | Add `PackId` variant in `src/analysis_packs/manifest.rs`, add match arm in `src/analysis_packs/builtin.rs` |
 
 ## Coding conventions
 
 Detailed Rust conventions are in `.github/instructions/rust.instructions.md`. Non-obvious points:
 - `lib.rs` allows `clippy::absurd_extreme_comparisons` globally
 - Error handling: `thiserror` for `TradingError` variants, `anyhow` for context propagation within tasks
-- Module refactoring: use Facade pattern in `mod.rs`, re-export only the public API. Split files >300 lines.
+- Module refactoring: use Facade pattern in `mod.rs`, re-export only the public API. Split files mixing multiple concerns or exceeding ~500 lines.
 - All public types must derive `Debug`
+- Performance optimization: prioritize `O`-complexity before micro-optimizing. Use pre-allocation (`with_capacity`) and avoid unnecessary cloning.
+- Eliminate unnecessary wrapper functions that simply call another function without adding logic.
 
 ## Knowledge Consolidation
 

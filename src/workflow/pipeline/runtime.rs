@@ -8,6 +8,7 @@ use tracing::{error, info, instrument};
 use uuid::Uuid;
 
 use crate::{
+    analysis_packs::resolve_runtime_policy,
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
@@ -67,6 +68,8 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.prior_thesis = None;
     state.current_thesis = None;
     state.derived_valuation = None;
+    state.analysis_pack_name = None;
+    state.analysis_runtime_policy = None;
     state.token_usage = Default::default();
 }
 
@@ -81,7 +84,11 @@ pub(super) fn build_graph(
 ) -> Arc<Graph> {
     let graph = Arc::new(Graph::new("trading_pipeline"));
 
-    let preflight = PreflightTask::new(config.enrichment.clone(), Arc::clone(&snapshot_store));
+    let preflight = PreflightTask::with_pack(
+        config.enrichment.clone(),
+        Arc::clone(&snapshot_store),
+        config.analysis_pack.clone(),
+    );
     graph.add_task(Arc::new(preflight));
 
     let fan_out = FanOutTask::new(
@@ -203,6 +210,19 @@ pub(super) async fn run_analysis_cycle(
     initial_state.execution_id = Uuid::new_v4();
     initial_state.asset_symbol = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
 
+    let runtime_policy =
+        resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {
+            TradingError::Config(anyhow::anyhow!(
+                "analysis pack resolution failed for '{}': {cause}",
+                pipeline.config.analysis_pack
+            ))
+        })?;
+
+    // Persist pack metadata and the resolved runtime policy on state so all
+    // downstream consumers can read the same typed policy surface.
+    initial_state.analysis_pack_name = Some(pipeline.config.analysis_pack.clone());
+    initial_state.analysis_runtime_policy = Some(runtime_policy.clone());
+
     let symbol = initial_state.asset_symbol.clone();
     let date = initial_state.target_date.clone();
     let execution_id = initial_state.execution_id.to_string();
@@ -254,15 +274,16 @@ pub(super) async fn run_analysis_cycle(
     // Results are stored both on TradingState (for downstream agent/report
     // consumers) and in the context cache keys (for preflight compatibility).
     let enrichment_cfg = &pipeline.config.enrichment;
+    let enrichment_intent = &runtime_policy.enrichment_intent;
     let fetch_timeout = std::time::Duration::from_secs(enrichment_cfg.fetch_timeout_secs);
 
-    let event_enrichment = if enrichment_cfg.enable_event_news {
+    let event_enrichment = if enrichment_intent.event_news {
         hydrate_event_news(&pipeline.finnhub, &symbol, &date, fetch_timeout).await
     } else {
         EnrichmentResult::NotAvailable
     };
 
-    let consensus_enrichment = if enrichment_cfg.enable_consensus_estimates {
+    let consensus_enrichment = if enrichment_intent.consensus_estimates {
         hydrate_consensus(&pipeline.yfinance, &symbol, &date, fetch_timeout).await
     } else {
         EnrichmentResult::NotAvailable
@@ -270,7 +291,7 @@ pub(super) async fn run_analysis_cycle(
 
     // Persist enrichment results on state for downstream consumers.
     initial_state.enrichment_event_news = EnrichmentState {
-        status: if enrichment_cfg.enable_event_news {
+        status: if enrichment_intent.event_news {
             event_enrichment.status()
         } else {
             EnrichmentStatus::Disabled
@@ -278,7 +299,7 @@ pub(super) async fn run_analysis_cycle(
         payload: event_enrichment.into_option(),
     };
     initial_state.enrichment_consensus = EnrichmentState {
-        status: if enrichment_cfg.enable_consensus_estimates {
+        status: if enrichment_intent.consensus_estimates {
             consensus_enrichment.status()
         } else {
             EnrichmentStatus::Disabled

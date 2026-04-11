@@ -285,6 +285,8 @@ mod tests {
             current_thesis: None,
             token_usage: TokenUsageTracker::default(),
             derived_valuation: None,
+            analysis_pack_name: None,
+            analysis_runtime_policy: None,
         }
     }
 

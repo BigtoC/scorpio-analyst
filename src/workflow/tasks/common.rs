@@ -56,6 +56,11 @@ pub const KEY_CACHED_CONSENSUS: &str = "cached_consensus";
 /// preflight.  Stage 1 value is the JSON literal `null`.
 pub const KEY_CACHED_EVENT_FEED: &str = "cached_event_feed";
 
+/// Context key for the pack-derived [`RuntimePolicy`] written by [`PreflightTask`].
+///
+/// Value: JSON-serialised [`crate::analysis_packs::RuntimePolicy`].
+pub const KEY_RUNTIME_POLICY: &str = "runtime_policy";
+
 pub(super) const ANALYST_PREFIX: &str = "analyst";
 pub(super) const OK_SUFFIX: &str = "ok";
 pub(super) const ERR_SUFFIX: &str = "err";

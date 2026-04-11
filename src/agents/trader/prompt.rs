@@ -1,9 +1,9 @@
 use crate::{
     agents::shared::{
         UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-        build_evidence_context, build_thesis_memory_context, build_valuation_context,
-        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
-        serialize_prompt_value,
+        build_evidence_context, build_pack_context, build_thesis_memory_context,
+        build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
+        sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     state::TradingState,
 };
@@ -122,9 +122,15 @@ pub(super) fn build_prompt_context(
     } else {
         format!("\n\n{enrichment}")
     };
+    let pack = build_pack_context(state);
+    let pack_section = if pack.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{pack}")
+    };
 
     let user_prompt = format!(
-        "Produce a TradeProposal JSON for {} as of {}.\n\nPast learnings: {}\n\n{}\n\n{}\n\n{}{}",
+        "Produce a TradeProposal JSON for {} as of {}.\n\nPast learnings: {}\n\n{}\n\n{}\n\n{}{}{}",
         symbol,
         target_date,
         build_thesis_memory_context(state),
@@ -132,6 +138,7 @@ pub(super) fn build_prompt_context(
         build_evidence_context(state),
         build_data_quality_context(state),
         enrichment_section,
+        pack_section,
     );
 
     PromptContext {
