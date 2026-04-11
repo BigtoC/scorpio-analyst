@@ -436,6 +436,7 @@ mod tests {
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
             derived_valuation: None,
+            analysis_pack_name: None,
         };
 
         let context = build_analyst_context(&state);

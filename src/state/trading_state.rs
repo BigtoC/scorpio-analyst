@@ -141,6 +141,12 @@ pub struct TradingState {
     #[serde(default)]
     pub derived_valuation: Option<DerivedValuation>,
 
+    // Analysis pack metadata: lightweight pack name persisted for forward
+    // compatibility. Full version tracking deferred to a follow-on slice.
+    // `None` for old snapshots or runs before pack extraction.
+    #[serde(default)]
+    pub analysis_pack_name: Option<String>,
+
     // Token accounting
     pub token_usage: TokenUsageTracker,
 }
@@ -186,6 +192,7 @@ impl TradingState {
             prior_thesis: None,
             current_thesis: None,
             derived_valuation: None,
+            analysis_pack_name: None,
             token_usage: TokenUsageTracker::default(),
         }
     }

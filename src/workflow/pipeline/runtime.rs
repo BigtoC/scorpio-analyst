@@ -67,6 +67,7 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.prior_thesis = None;
     state.current_thesis = None;
     state.derived_valuation = None;
+    state.analysis_pack_name = None;
     state.token_usage = Default::default();
 }
 
@@ -81,7 +82,11 @@ pub(super) fn build_graph(
 ) -> Arc<Graph> {
     let graph = Arc::new(Graph::new("trading_pipeline"));
 
-    let preflight = PreflightTask::new(config.enrichment.clone(), Arc::clone(&snapshot_store));
+    let preflight = PreflightTask::with_pack(
+        config.enrichment.clone(),
+        Arc::clone(&snapshot_store),
+        config.analysis_pack.clone(),
+    );
     graph.add_task(Arc::new(preflight));
 
     let fan_out = FanOutTask::new(
@@ -202,6 +207,9 @@ pub(super) async fn run_analysis_cycle(
     reset_cycle_outputs(&mut initial_state);
     initial_state.execution_id = Uuid::new_v4();
     initial_state.asset_symbol = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
+
+    // Persist lightweight pack name for forward-compatible snapshot metadata.
+    initial_state.analysis_pack_name = Some(pipeline.config.analysis_pack.clone());
 
     let symbol = initial_state.asset_symbol.clone();
     let date = initial_state.target_date.clone();

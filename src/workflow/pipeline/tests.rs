@@ -256,6 +256,7 @@ async fn task_id_constants_match_task_impl_ids() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
     });
     let snapshot_store = Arc::new(SnapshotStore::new(None).await.expect("snapshot store"));
     let finnhub = crate::data::FinnhubClient::for_test();
@@ -357,6 +358,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
     };
     let snapshot_store = SnapshotStore::new(None).await.expect("snapshot store");
     let pipeline = crate::workflow::TradingPipeline::new(
