@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment, builtin::resolve_pack,
-    manifest::AnalysisPackManifest,
+    AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
+    builtin::resolve_pack,
 };
 
 /// Typed runtime policy derived from a resolved analysis pack.

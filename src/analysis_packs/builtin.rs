@@ -3,9 +3,7 @@
 //! First-slice: only compile-time built-in packs. External manifests or
 //! hybrid loading can follow in a later slice if needed.
 
-use super::manifest::{
-    AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
-};
+use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
 
 /// Resolve a [`PackId`] into its full [`AnalysisPackManifest`].
 ///

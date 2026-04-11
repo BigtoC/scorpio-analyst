@@ -6,9 +6,9 @@
 //!
 //! First-slice: built-in packs only, selected by config/env.
 
-pub mod builtin;
-pub mod manifest;
-pub mod selection;
+mod builtin;
+mod manifest;
+mod selection;
 
 pub use builtin::resolve_pack;
 pub use manifest::{
