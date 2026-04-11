@@ -1,6 +1,11 @@
 # Scorpio Analyst — default configuration
 # Override with .env or environment variables (prefix: SCORPIO__, e.g. SCORPIO__LLM__MAX_DEBATE_ROUNDS=5)
 
+# Analysis pack selection (built-in packs only).
+# Available: "baseline" (balanced institutional strategy).
+# Override: SCORPIO__ANALYSIS_PACK=baseline
+analysis_pack = "baseline"
+
 [llm]
 #quick_thinking_provider = "openrouter"
 #quick_thinking_model = "openrouter/free"
@@ -63,3 +68,4 @@ enable_consensus_estimates = false
 enable_event_news = false
 max_evidence_age_hours = 48
 fetch_timeout_secs = 120
+

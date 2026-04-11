@@ -19,6 +19,14 @@ pub struct Config {
     pub rate_limits: RateLimitConfig,
     #[serde(default)]
     pub enrichment: DataEnrichmentConfig,
+    /// Selected analysis pack identifier (default: "baseline").
+    /// Override: `SCORPIO__ANALYSIS_PACK=baseline`
+    #[serde(default = "default_analysis_pack")]
+    pub analysis_pack: String,
+}
+
+fn default_analysis_pack() -> String {
+    "baseline".to_owned()
 }
 
 /// Enrichment feature flags and evidence staleness ceiling.
@@ -415,6 +423,12 @@ impl Config {
         if self.enrichment.fetch_timeout_secs == 0 {
             anyhow::bail!("fetch_timeout_secs must be at least 1");
         }
+
+        // Validate analysis pack selection before any analysis starts (R6).
+        self.analysis_pack
+            .parse::<crate::analysis_packs::PackId>()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
         Ok(())
     }
 
@@ -459,6 +473,7 @@ mod tests {
             storage: StorageConfig::default(),
             rate_limits: RateLimitConfig::default(),
             enrichment: DataEnrichmentConfig::default(),
+            analysis_pack: default_analysis_pack(),
         }
     }
 
@@ -992,6 +1007,97 @@ asset_symbol = "nvda"
         assert_eq!(
             cfg.rate_limits.yahoo_finance_rps, 5,
             "SCORPIO__RATE_LIMITS__YAHOO_FINANCE_RPS env var should override the config value"
+        );
+    }
+
+    // ── Analysis pack selection tests ────────────────────────────────────
+
+    #[test]
+    fn config_defaults_to_baseline_pack() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let cfg = Config::load_from(&path).expect("config should load");
+        assert_eq!(
+            cfg.analysis_pack, "baseline",
+            "default analysis_pack should be 'baseline'"
+        );
+    }
+
+    #[test]
+    fn config_rejects_unknown_pack_id() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(
+            r#"
+analysis_pack = "turbo_momentum"
+
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+        );
+        let err = Config::load_from(&path).expect_err("unknown pack should be rejected");
+        assert!(
+            err.to_string().contains("unknown analysis pack"),
+            "error should mention unknown pack: {err}"
+        );
+    }
+
+    #[test]
+    fn config_accepts_explicit_baseline_pack() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(
+            r#"
+analysis_pack = "baseline"
+
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[trading]
+asset_symbol = "AAPL"
+"#,
+        );
+        let cfg = Config::load_from(&path).expect("explicit baseline should load");
+        assert_eq!(cfg.analysis_pack, "baseline");
+    }
+
+    #[test]
+    fn config_analysis_pack_overridable_via_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        // SAFETY: serialized by ENV_LOCK
+        unsafe {
+            std::env::set_var("SCORPIO__ANALYSIS_PACK", "baseline");
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__ANALYSIS_PACK");
+        }
+        let cfg = result.expect("env override for analysis_pack should load");
+        assert_eq!(cfg.analysis_pack, "baseline");
+    }
+
+    #[test]
+    fn config_analysis_pack_env_override_rejects_unknown() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        unsafe {
+            std::env::set_var("SCORPIO__ANALYSIS_PACK", "nonexistent_pack");
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__ANALYSIS_PACK");
+        }
+        assert!(
+            result.is_err(),
+            "env-overridden unknown pack should be rejected"
         );
     }
 }
