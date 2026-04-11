@@ -146,10 +146,12 @@ fn write_header(out: &mut String, state: &TradingState) {
             .bold()
             .on_bright_black()
     );
+    let strategy_raw = state.analysis_pack_name.as_deref().unwrap_or("default");
+    let strategy_label: String = strategy_raw.chars().filter(|c| !c.is_control()).collect();
     let _ = writeln!(
         out,
-        "As of: {}  |  Execution ID: {}",
-        state.target_date, state.execution_id
+        "As of: {}  |  Execution ID: {}  |  Strategy: {}",
+        state.target_date, state.execution_id, strategy_label
     );
 
     if let Some(proposal) = &state.trader_proposal {
