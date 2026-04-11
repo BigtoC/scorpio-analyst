@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::analysis_packs::RuntimePolicy;
 use crate::data::adapters::{
     EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
 };
@@ -147,6 +148,11 @@ pub struct TradingState {
     #[serde(default)]
     pub analysis_pack_name: Option<String>,
 
+    // Resolved pack-derived runtime policy. This is the authoritative policy
+    // surface for downstream prompt, enrichment, and coverage consumers.
+    #[serde(default)]
+    pub analysis_runtime_policy: Option<RuntimePolicy>,
+
     // Token accounting
     pub token_usage: TokenUsageTracker,
 }
@@ -193,6 +199,7 @@ impl TradingState {
             current_thesis: None,
             derived_valuation: None,
             analysis_pack_name: None,
+            analysis_runtime_policy: None,
             token_usage: TokenUsageTracker::default(),
         }
     }
