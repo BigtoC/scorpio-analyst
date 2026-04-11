@@ -5,6 +5,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
+    analysis_packs::resolve_runtime_policy,
     config::LlmConfig,
     state::{
         AgentTokenUsage, FundamentalData, NewsData, ScenarioValuation, SentimentData,
@@ -248,6 +249,117 @@ async fn analyst_sync_all_succeed_returns_continue() {
         provenance.providers_used,
         vec!["finnhub", "fred", "yfinance"],
         "providers_used must be sorted and deduplicated"
+    );
+}
+
+#[tokio::test]
+async fn analyst_sync_derives_required_inputs_from_runtime_policy() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let mut state = sample_state();
+    state.analysis_runtime_policy =
+        Some(resolve_runtime_policy("baseline").expect("baseline policy"));
+    seed_state(&ctx, &state).await;
+
+    for analyst_key in [
+        common::ANALYST_FUNDAMENTAL,
+        common::ANALYST_SENTIMENT,
+        common::ANALYST_NEWS,
+        common::ANALYST_TECHNICAL,
+    ] {
+        ctx.set(
+            format!(
+                "{}.{}.{}",
+                common::ANALYST_PREFIX,
+                analyst_key,
+                common::OK_SUFFIX
+            ),
+            true,
+        )
+        .await;
+    }
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let task = AnalystSyncTask::new(store);
+    task.run(ctx.clone()).await.expect("task should succeed");
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    assert_eq!(
+        recovered.data_coverage.unwrap().required_inputs,
+        vec!["fundamentals", "sentiment", "news", "technical"],
+        "coverage required_inputs should come from runtime policy"
     );
 }
 

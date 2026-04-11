@@ -47,10 +47,6 @@ const PROVIDER_FRED: &str = "fred";
 /// Fixed provider for technical data in Stage 1.
 const PROVIDER_YFINANCE: &str = "yfinance";
 
-/// Required analyst input labels in the fixed Stage 1 order used by
-/// [`DataCoverageReport`].
-const REQUIRED_INPUTS: &[&str] = &["fundamentals", "sentiment", "news", "technical"];
-
 /// Build a single-provider [`EvidenceSource`] with Stage 1 defaults.
 fn stage1_source(provider: &str, datasets: Vec<String>) -> EvidenceSource {
     EvidenceSource {
@@ -76,6 +72,31 @@ async fn read_cached_news(
         })
     })
     .transpose()
+}
+
+fn required_inputs_for_state(state: &TradingState) -> Vec<String> {
+    state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| policy.required_inputs.clone())
+        .unwrap_or_else(|| {
+            vec![
+                "fundamentals".to_owned(),
+                "sentiment".to_owned(),
+                "news".to_owned(),
+                "technical".to_owned(),
+            ]
+        })
+}
+
+fn input_missing(state: &TradingState, input: &str) -> bool {
+    match input {
+        "fundamentals" => state.evidence_fundamental.is_none(),
+        "sentiment" => state.evidence_sentiment.is_none(),
+        "news" => state.evidence_news.is_none(),
+        "technical" => state.evidence_technical.is_none(),
+        _ => false,
+    }
 }
 
 /// Runs the phase-1 fundamental analyst child task.
@@ -693,20 +714,17 @@ impl Task for AnalystSyncTask {
             )));
         }
 
-        // Derive DataCoverageReport from presence/absence of typed evidence fields.
-        let missing_inputs: Vec<String> = [
-            (REQUIRED_INPUTS[0], state.evidence_fundamental.is_none()),
-            (REQUIRED_INPUTS[1], state.evidence_sentiment.is_none()),
-            (REQUIRED_INPUTS[2], state.evidence_news.is_none()),
-            (REQUIRED_INPUTS[3], state.evidence_technical.is_none()),
-        ]
-        .into_iter()
-        .filter(|&(_, missing)| missing)
-        .map(|(label, _)| label.to_owned())
-        .collect();
+        // Derive DataCoverageReport from the resolved runtime policy and the
+        // presence/absence of the corresponding typed evidence fields.
+        let required_inputs = required_inputs_for_state(&state);
+        let missing_inputs: Vec<String> = required_inputs
+            .iter()
+            .filter(|input| input_missing(&state, input))
+            .cloned()
+            .collect();
 
         state.data_coverage = Some(DataCoverageReport {
-            required_inputs: REQUIRED_INPUTS.iter().map(|s| s.to_string()).collect(),
+            required_inputs,
             missing_inputs,
         });
 

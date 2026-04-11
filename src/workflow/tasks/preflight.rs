@@ -59,6 +59,7 @@ impl PreflightTask {
     /// Convenience constructor for tests; production code should use
     /// [`Self::with_pack`] to propagate the config-selected pack.
     #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
     pub fn new(
         enrichment: crate::config::DataEnrichmentConfig,
         snapshot_store: Arc<SnapshotStore>,
@@ -154,15 +155,6 @@ impl Task for PreflightTask {
         })?;
         context.set(KEY_RESOLVED_INSTRUMENT, instrument_json).await;
 
-        // ── Write required coverage inputs (fixed ordered list) ───────────
-        let required_inputs: Vec<&str> = vec!["fundamentals", "sentiment", "news", "technical"];
-        let inputs_json = serde_json::to_string(&required_inputs).map_err(|e| {
-            graph_flow::GraphError::TaskExecutionFailed(format!(
-                "PreflightTask: orchestration corruption: required_coverage_inputs serialization failed: {e}"
-            ))
-        })?;
-        context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
-
         // ── Resolve analysis pack into runtime policy ─────────────────────
         let runtime_policy =
             crate::analysis_packs::resolve_runtime_policy(&self.pack_id).map_err(|e| {
@@ -171,6 +163,25 @@ impl Task for PreflightTask {
                 ))
             })?;
         debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
+
+        state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
+        state.analysis_runtime_policy = Some(runtime_policy.clone());
+
+        serialize_state_to_context(&state, &context)
+            .await
+            .map_err(|e| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "PreflightTask: orchestration corruption: state serialization failed after runtime policy hydration: {e}"
+                ))
+            })?;
+
+        // ── Write required coverage inputs from runtime policy ────────────
+        let inputs_json = serde_json::to_string(&runtime_policy.required_inputs).map_err(|e| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: orchestration corruption: required_coverage_inputs serialization failed: {e}"
+            ))
+        })?;
+        context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
 
         let policy_json = serde_json::to_string(&runtime_policy).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
