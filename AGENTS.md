@@ -69,12 +69,13 @@ API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`.
 
 ## Adding things
 
-| Task             | Files to touch                                                                      |
-|------------------|-------------------------------------------------------------------------------------|
-| New agent        | `src/agents/<role>/`, `src/workflow/tasks/`                                         |
-| New data source  | `src/data/`, expose via `#[tool]` macro                                             |
-| New indicator    | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                           |
-| New LLM provider | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/` |
+| Task              | Files to touch                                                                                             |
+|-------------------|------------------------------------------------------------------------------------------------------------|
+| New agent         | `src/agents/<role>/`, `src/workflow/tasks/`                                                                |
+| New data source   | `src/data/`, expose via `#[tool]` macro                                                                    |
+| New indicator     | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                                                  |
+| New LLM provider  | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/`                        |
+| New analysis pack | Add `PackId` variant in `src/analysis_packs/manifest.rs`, add match arm in `src/analysis_packs/builtin.rs` |
 
 ## Coding conventions
 
