@@ -335,6 +335,35 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
     sections.join("\n\n")
 }
 
+/// Build pack-derived analysis emphasis context for prompt injection.
+///
+/// When a pack is active, returns the pack's analysis emphasis as a prompt
+/// directive. When no pack metadata is present (old snapshots), returns an
+/// empty string so downstream consumers degrade gracefully.
+///
+/// Ready for use by analyst/researcher agents; will be wired into agent
+/// prompts when pack-aware prompt composition is activated.
+#[allow(dead_code)] // API ready for agent prompt wiring in a follow-on slice
+pub(crate) fn build_pack_context(state: &TradingState) -> String {
+    match &state.analysis_pack_name {
+        Some(pack_name) => {
+            let policy = crate::analysis_packs::resolve_runtime_policy(pack_name);
+            match policy {
+                Ok(p) => {
+                    format!(
+                        "Analysis strategy: {} ({})\nEmphasis: {}",
+                        p.report_strategy_label,
+                        sanitize_prompt_context(pack_name),
+                        sanitize_prompt_context(&p.analysis_emphasis),
+                    )
+                }
+                Err(_) => String::new(),
+            }
+        }
+        None => String::new(),
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
@@ -614,5 +643,43 @@ mod tests {
         let ctx = build_enrichment_context(&state);
         assert!(ctx.contains("EPS estimate: N/A"));
         assert!(ctx.contains("Revenue estimate: $N/A"));
+    }
+
+    // ── Pack context tests ──────────────────────────────────────────────
+
+    #[test]
+    fn build_pack_context_returns_empty_when_no_pack_metadata() {
+        let state = empty_state();
+        let ctx = build_pack_context(&state);
+        assert!(
+            ctx.is_empty(),
+            "old snapshots without pack metadata should produce empty context"
+        );
+    }
+
+    #[test]
+    fn build_pack_context_returns_emphasis_for_baseline_pack() {
+        let mut state = empty_state();
+        state.analysis_pack_name = Some("baseline".to_owned());
+        let ctx = build_pack_context(&state);
+        assert!(
+            ctx.contains("Balanced Institutional"),
+            "context should include the pack strategy label: {ctx}"
+        );
+        assert!(
+            ctx.contains("Emphasis:"),
+            "context should include the emphasis section: {ctx}"
+        );
+    }
+
+    #[test]
+    fn build_pack_context_returns_empty_for_unknown_pack() {
+        let mut state = empty_state();
+        state.analysis_pack_name = Some("nonexistent".to_owned());
+        let ctx = build_pack_context(&state);
+        assert!(
+            ctx.is_empty(),
+            "unknown pack should degrade to empty context"
+        );
     }
 }
