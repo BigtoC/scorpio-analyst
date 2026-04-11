@@ -32,7 +32,7 @@ use crate::{
 
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_PROVIDER_CAPABILITIES,
-    KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+    KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_RUNTIME_POLICY,
 };
 
 const TASK_ID: &str = "preflight";
@@ -49,17 +49,33 @@ const THESIS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 pub struct PreflightTask {
     enrichment: crate::config::DataEnrichmentConfig,
     snapshot_store: Arc<SnapshotStore>,
+    /// The analysis pack identifier resolved from config.
+    pack_id: String,
 }
 
 impl PreflightTask {
-    /// Create a new `PreflightTask` using the checked-in enrichment config.
+    /// Create a new `PreflightTask` with baseline pack defaults.
+    ///
+    /// Convenience constructor for tests; production code should use
+    /// [`Self::with_pack`] to propagate the config-selected pack.
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn new(
         enrichment: crate::config::DataEnrichmentConfig,
         snapshot_store: Arc<SnapshotStore>,
     ) -> Self {
+        Self::with_pack(enrichment, snapshot_store, "baseline".to_owned())
+    }
+
+    /// Create a new `PreflightTask` with a specific pack selection.
+    pub fn with_pack(
+        enrichment: crate::config::DataEnrichmentConfig,
+        snapshot_store: Arc<SnapshotStore>,
+        pack_id: String,
+    ) -> Self {
         Self {
             enrichment,
             snapshot_store,
+            pack_id,
         }
     }
 }
@@ -147,6 +163,22 @@ impl Task for PreflightTask {
         })?;
         context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
 
+        // ── Resolve analysis pack into runtime policy ─────────────────────
+        let runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy(&self.pack_id).map_err(|e| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "PreflightTask: pack resolution failed: {e}"
+                ))
+            })?;
+        debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
+
+        let policy_json = serde_json::to_string(&runtime_policy).map_err(|e| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: orchestration corruption: RuntimePolicy serialization failed: {e}"
+            ))
+        })?;
+        context.set(KEY_RUNTIME_POLICY, policy_json).await;
+
         // ── Seed typed null placeholders for cache keys ───────────────────
         // Each key is always present after preflight so downstream consumers can
         // `expect` it.  However, if `run_analysis_cycle` has already hydrated a
@@ -198,6 +230,7 @@ mod tests {
     };
 
     use super::PreflightTask;
+    use crate::workflow::tasks::common::KEY_RUNTIME_POLICY;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -606,5 +639,89 @@ mod tests {
             msg.contains("thesis memory lookup failed"),
             "unexpected error: {msg}"
         );
+    }
+
+    // ── Runtime policy context key tests ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn preflight_writes_runtime_policy_to_context() {
+        let ctx = run_preflight("AAPL", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let json: String = ctx
+            .get(KEY_RUNTIME_POLICY)
+            .await
+            .expect("runtime_policy key must be present after preflight");
+        let policy: crate::analysis_packs::RuntimePolicy =
+            serde_json::from_str(&json).expect("RuntimePolicy deserialization");
+        assert_eq!(
+            policy.pack_id,
+            crate::analysis_packs::PackId::Baseline,
+            "default preflight should resolve baseline pack"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_runtime_policy_has_baseline_required_inputs() {
+        let ctx = run_preflight("MSFT", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let json: String = ctx.get(KEY_RUNTIME_POLICY).await.unwrap();
+        let policy: crate::analysis_packs::RuntimePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            policy.required_inputs,
+            vec!["fundamentals", "sentiment", "news", "technical"]
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_with_invalid_pack_fails_before_analysis() {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new("AAPL", "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let task = PreflightTask::with_pack(
+            DataEnrichmentConfig::default(),
+            store,
+            "nonexistent_pack".to_owned(),
+        );
+        let result = task.run(ctx).await;
+        assert!(
+            result.is_err(),
+            "invalid pack must fail before analysis starts (R6)"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("pack resolution failed"),
+            "error should mention pack resolution: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_all_seven_context_keys_present_after_run() {
+        let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        for key in [
+            KEY_RESOLVED_INSTRUMENT,
+            KEY_PROVIDER_CAPABILITIES,
+            KEY_REQUIRED_COVERAGE_INPUTS,
+            KEY_CACHED_TRANSCRIPT,
+            KEY_CACHED_CONSENSUS,
+            KEY_CACHED_EVENT_FEED,
+            KEY_RUNTIME_POLICY,
+        ] {
+            let val: Option<String> = ctx.get(key).await;
+            assert!(
+                val.is_some(),
+                "context key '{key}' must be present after preflight"
+            );
+        }
     }
 }
