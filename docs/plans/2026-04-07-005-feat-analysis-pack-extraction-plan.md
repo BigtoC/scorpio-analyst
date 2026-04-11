@@ -120,7 +120,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Chunk 1: Pack schema and baseline built-ins**
+- [x] **Chunk 1: Pack schema and baseline built-ins**
 
 **Goal:** Define the analysis-pack contract and a baseline pack that preserves current behavior.
 
@@ -161,7 +161,7 @@ flowchart TB
 **Verification:**
 - Config/pack tests prove a baseline pack can represent current behavior safely.
 
-- [ ] **Chunk 2: Runtime hydration and startup propagation**
+- [x] **Chunk 2: Runtime hydration and startup propagation**
 
 **Goal:** Resolve the selected pack into typed runtime policy before analysis begins.
 
@@ -203,7 +203,7 @@ flowchart TB
 **Verification:**
 - Startup tests prove packs are resolved once and normalized into typed runtime policy.
 
-- [ ] **Chunk 3: Pack-aware prompt, report, and persistence behavior**
+- [x] **Chunk 3: Pack-aware prompt, report, and persistence behavior**
 
 **Goal:** Make pack selection meaningfully shape shared consumers while keeping execution topology unchanged.
 
