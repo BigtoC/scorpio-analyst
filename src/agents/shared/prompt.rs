@@ -345,21 +345,13 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
 /// prompts when pack-aware prompt composition is activated.
 #[allow(dead_code)] // API ready for agent prompt wiring in a follow-on slice
 pub(crate) fn build_pack_context(state: &TradingState) -> String {
-    match &state.analysis_pack_name {
-        Some(pack_name) => {
-            let policy = crate::analysis_packs::resolve_runtime_policy(pack_name);
-            match policy {
-                Ok(p) => {
-                    format!(
-                        "Analysis strategy: {} ({})\nEmphasis: {}",
-                        p.report_strategy_label,
-                        sanitize_prompt_context(pack_name),
-                        sanitize_prompt_context(&p.analysis_emphasis),
-                    )
-                }
-                Err(_) => String::new(),
-            }
-        }
+    match &state.analysis_runtime_policy {
+        Some(policy) => format!(
+            "Analysis strategy: {} ({})\nEmphasis: {}",
+            sanitize_prompt_context(&policy.report_strategy_label),
+            sanitize_prompt_context(policy.pack_id.as_str()),
+            sanitize_prompt_context(&policy.analysis_emphasis),
+        ),
         None => String::new(),
     }
 }
@@ -371,6 +363,7 @@ mod tests {
 
     use super::super::prompt::*;
     use crate::{
+        analysis_packs::resolve_runtime_policy,
         data::adapters::EnrichmentStatus,
         state::{EnrichmentState, TradingState},
     };
@@ -661,6 +654,7 @@ mod tests {
     fn build_pack_context_returns_emphasis_for_baseline_pack() {
         let mut state = empty_state();
         state.analysis_pack_name = Some("baseline".to_owned());
+        state.analysis_runtime_policy = resolve_runtime_policy("baseline").ok();
         let ctx = build_pack_context(&state);
         assert!(
             ctx.contains("Balanced Institutional"),
