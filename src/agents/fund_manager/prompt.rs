@@ -1,9 +1,9 @@
 use crate::{
     agents::shared::{
         UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-        build_evidence_context, build_thesis_memory_context, build_valuation_context,
-        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
-        serialize_prompt_value,
+        build_evidence_context, build_pack_context, build_thesis_memory_context,
+        build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
+        sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     state::{DebateMessage, RiskReport, TradingState},
@@ -269,6 +269,10 @@ fn build_user_prompt(
         &build_data_quality_context(state),
         MAX_USER_PROMPT_CHARS,
     );
+    let pack_context = build_pack_context(state);
+    if !pack_context.is_empty() {
+        push_bounded_line(&mut prompt, &pack_context, MAX_USER_PROMPT_CHARS);
+    }
     push_bounded_line(
         &mut prompt,
         &build_enrichment_context(state),
