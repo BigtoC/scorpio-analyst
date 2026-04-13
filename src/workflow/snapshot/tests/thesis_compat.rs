@@ -1,5 +1,4 @@
 use super::{in_memory_store, sample_thesis};
-use crate::error::TradingError;
 use crate::state::TradingState;
 use crate::workflow::snapshot::SnapshotPhase;
 
@@ -102,7 +101,10 @@ async fn load_prior_thesis_skips_rows_from_future_schema_versions() {
 }
 
 #[tokio::test]
-async fn load_prior_thesis_returns_storage_error_for_malformed_supported_payload() {
+async fn load_prior_thesis_skips_undeserializable_payload_and_returns_none() {
+    // Rows whose JSON cannot be deserialized (e.g. due to schema evolution or
+    // actual corruption) are skipped with a warning rather than hard-failing the
+    // pipeline, so a stale incompatible snapshot never blocks a new analysis run.
     let store = in_memory_store().await;
     let state = TradingState::new("AAPL", "2026-04-07");
 
@@ -127,7 +129,10 @@ async fn load_prior_thesis_returns_storage_error_for_malformed_supported_payload
 
     let result = store.load_prior_thesis_for_symbol("AAPL", 30).await;
 
-    assert!(matches!(result, Err(TradingError::Storage(_))));
+    assert!(
+        matches!(result, Ok(None)),
+        "undeserializable row should be skipped, not hard-failed: {result:?}"
+    );
 }
 
 #[tokio::test]

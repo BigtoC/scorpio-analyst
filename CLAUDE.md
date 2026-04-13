@@ -120,6 +120,15 @@ src/
   into a `TokenUsageTracker` on `TradingState`. Providers that don't expose authoritative counts (e.g. Copilot via ACP)
   record documented unavailable metadata. Per-phase and per-agent breakdowns are displayed after every run.
 - **Phase snapshots**: Each pipeline phase persists its output to SQLite (`SnapshotStore`) for audit trail and recovery.
+- **TradingState schema evolution**: `TradingState` is serialized into `phase_snapshots.trading_state_json`. Old snapshots
+  may not deserialize with a newer struct. Rules:
+  - Every new field on `TradingState` **must** carry `#[serde(default)]`; omitting it makes all existing snapshots
+    unreadable.
+  - When a field is **renamed**, **removed**, or has its **type changed** in a backward-incompatible way, bump
+    `THESIS_MEMORY_SCHEMA_VERSION` in `src/workflow/snapshot/thesis.rs`. The thesis lookup skips rows whose version
+    exceeds the constant, so bumping it explicitly retires incompatible data instead of silently failing at runtime.
+  - The thesis lookup degrades gracefully (warn + skip) when deserialization fails, so a stale snapshot never crashes the
+    pipeline. But relying on that for every deploy is a smell — `#[serde(default)]` + version bumps are the real fix.
 - **Phased UI**: Phase 1 = CLI (`clap`); Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop
   app (`gpui`, behind `--features gui`). All phases share the same core `lib.rs`.
 
