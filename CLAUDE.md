@@ -120,7 +120,7 @@ src/
   into a `TokenUsageTracker` on `TradingState`. Providers that don't expose authoritative counts (e.g. Copilot via ACP)
   record documented unavailable metadata. Per-phase and per-agent breakdowns are displayed after every run.
 - **Phase snapshots**: Each pipeline phase persists its output to SQLite (`SnapshotStore`) for audit trail and recovery.
-I tr- **TradingState schema evolution**: `TradingState` is serialized into `phase_snapshots.trading_state_json`. Old snapshots
+- **TradingState schema evolution**: `TradingState` is serialized into `phase_snapshots.trading_state_json`. Old snapshots
   may not deserialize with a newer struct. Rules:
   - Every new field on `TradingState` **must** carry `#[serde(default)]`; omitting it makes all existing snapshots
     unreadable.
