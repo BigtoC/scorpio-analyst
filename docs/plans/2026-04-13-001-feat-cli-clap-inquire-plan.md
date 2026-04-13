@@ -77,7 +77,7 @@ The spec (`docs/superpowers/specs/2026-04-10-cli-design.md`) pins the solution: 
 ### External References
 
 - [clap 4 derive tutorial](https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html) — canonical `#[derive(Parser)]` + `#[derive(Subcommand)]` pattern. Clap exits with code 2 on parse failure (stderr) and 0 on `--help` / `--version` (stdout); no custom handling needed.
-- [inquire 0.7 docs](https://docs.rs/inquire/0.7) — `Password`, `Text`, `Select`, `MultiSelect` with `.prompt_skippable()` for ESC-aware cancellation. `OperationCanceled` = ESC; `OperationInterrupted` = Ctrl-C. The `macros` feature (optional) provides `required!()`; we will use closure-style validators to avoid an extra feature flag.
+- [inquire 0.9 docs](https://docs.rs/inquire/0.9) — `Password`, `Text`, `Select`, `MultiSelect` with `.prompt_skippable()` for ESC-aware cancellation. `OperationCanceled` = ESC; `OperationInterrupted` = Ctrl-C. The `macros` feature (optional) provides `required!()`; we will use closure-style validators to avoid an extra feature flag.
 - [secrecy 0.10 — `SecretString` serialization](https://docs.rs/secrecy/0.10/secrecy/) — with the `serde` feature, `SecretString` implements `Deserialize` but **not** `Serialize` (because `String` does not implement `SerializableSecret`). **This is a deviation from the spec**, which implies the `serde` feature enables both. See "Key Technical Decisions" below.
 - [tempfile `NamedTempFile::persist`](https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html) — standard atomic-rename pattern. Must be created in the same directory as the target (same filesystem requirement).
 - [std::os::unix::fs::PermissionsExt](https://doc.rust-lang.org/std/os/unix/fs/trait.PermissionsExt.html) — chmod 600 after persist, gated by `#[cfg(unix)]`.
@@ -331,7 +331,7 @@ fetch_timeout_secs         = 120
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add dependencies and promote `tempfile`**
+- [x] **Unit 1: Add dependencies and promote `tempfile`**
 
 **Goal:** Introduce the new crates required by the CLI without any behavioural changes. Keep the workspace building green.
 
@@ -344,7 +344,7 @@ fetch_timeout_secs         = 120
 
 **Approach:**
 - Add `clap = { version = "4", features = ["derive"] }` to `[dependencies]`.
-- Add `inquire = "0.7"` (no extra features — validators will be closures).
+- Add `inquire = "0.9"` (no extra features — validators will be closures).
 - Add `toml = "1"` (needed for `to_string_pretty` in `save_user_config`).
 - Promote `tempfile = "3"` from `[dev-dependencies]` to `[dependencies]`. Keep the entry in `[dev-dependencies]` if cargo requires (it does not — a main-dep is visible to tests).
 - Leave `secrecy = { version = "0.10", features = ["serde"] }` unchanged.
