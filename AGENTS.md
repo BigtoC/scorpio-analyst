@@ -64,6 +64,10 @@ API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`.
 - **State passing**: Agents read/write typed fields on `TradingState` via `graph_flow::Context`, not chat buffers. Adding a new data field means updating `TradingState` and the relevant state module in `src/state/`.
 - **Concurrency**: Per-field `Arc<RwLock<Option<T>>>` locking on `TradingState`. Never hold `std::sync::Mutex` across `.await` -- use `tokio::sync::RwLock`.
 - **SQLite snapshots**: `migrations/0001_create_phase_snapshots.sql` is applied programmatically by `SnapshotStore::new`. No separate migration CLI step.
+- **TradingState schema evolution**: `TradingState` is serialized into `phase_snapshots.trading_state_json`. Every new
+  field **must** have `#[serde(default)]` or existing snapshots will fail to deserialize. When a field is renamed,
+  removed, or its type changes incompatibly, bump `THESIS_MEMORY_SCHEMA_VERSION` in
+  `src/workflow/snapshot/thesis.rs` — this explicitly retires old rows rather than silently skipping them at runtime.
 - **Custom Copilot provider**: `src/providers/copilot.rs` + `src/providers/acp.rs` implement a custom `rig` provider over JSON-RPC 2.0/NDJSON via `copilot --acp --stdio`.
 - **Dual-tier models**: `ModelTier::QuickThinking` (analysts) vs `ModelTier::DeepThinking` (researchers, trader, risk, fund manager). Configured in `config.toml` under `[llm]`.
 
