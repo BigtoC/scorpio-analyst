@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use chrono::Utc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     error::TradingError,
@@ -22,9 +22,8 @@ impl SnapshotStore {
     /// Legacy rows that predate thesis-memory metadata (`symbol IS NULL`) are
     /// still considered by extracting `asset_symbol` from `trading_state_json`.
     /// Rows from unsupported schema versions are skipped as incompatible.
-    /// Malformed payloads for otherwise-supported rows are treated as hard
-    /// storage failures so snapshot corruption is not silently masked as an
-    /// absent thesis.
+    /// Rows that fail deserialization due to schema evolution are skipped with a
+    /// warning — struct changes between code versions are not treated as corruption.
     ///
     /// # Errors
     ///
@@ -68,13 +67,18 @@ impl SnapshotStore {
                 continue;
             }
 
-            let state: TradingState = serde_json::from_str(&state_json)
-                .with_context(|| {
-                    format!(
-                        "failed to deserialize TradingState during prior-thesis lookup for symbol={symbol} schema_version={schema_version}"
-                    )
-                })
-                .map_err(TradingError::Storage)?;
+            let state: TradingState = match serde_json::from_str(&state_json) {
+                Ok(s) => s,
+                Err(err) => {
+                    warn!(
+                        symbol,
+                        schema_version,
+                        %err,
+                        "prior-thesis snapshot failed to deserialize (schema evolution); skipping"
+                    );
+                    continue;
+                }
+            };
 
             if let Some(thesis) = state.current_thesis {
                 return Ok(Some(thesis));
