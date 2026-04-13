@@ -218,6 +218,117 @@ src/
 └── (everything else unchanged)
 ```
 
+### Config File Schema
+
+There are two distinct TOML shapes in this plan: the **user config file** written by `scorpio setup`, and the **runtime Config** assembled at startup.
+
+#### `~/.scorpio-analyst/config.toml` (written by `scorpio setup`, type: `PartialConfig`)
+
+Flat TOML — no section headers. Fields not yet configured are absent (serialised via `#[serde(skip_serializing_if = "Option::is_none")]`). The wizard is the only writer; hand-editing is supported but not documented.
+
+```toml
+# Data API keys (Step 1 & 2)
+finnhub_api_key    = "ct_abc123..."
+fred_api_key       = "abc456..."
+
+# LLM provider keys (Step 3 — at least one required)
+openai_api_key     = "sk-..."
+anthropic_api_key  = "sk-ant-..."
+gemini_api_key     = "AIza..."
+openrouter_api_key = "or-..."
+
+# Provider/model routing (Step 4 — constrained to providers with saved keys)
+quick_thinking_provider = "openai"       # one of: openai | anthropic | gemini | openrouter
+quick_thinking_model    = "gpt-4o-mini"
+deep_thinking_provider  = "openai"       # one of: openai | anthropic | gemini | openrouter
+deep_thinking_model     = "o3"
+```
+
+> **Minimum viable file** (only `finnhub_api_key` + one LLM key + routing is set; everything else is absent):
+> ```toml
+> finnhub_api_key         = "ct_..."
+> openai_api_key          = "sk-..."
+> quick_thinking_provider = "openai"
+> quick_thinking_model    = "gpt-4o-mini"
+> deep_thinking_provider  = "openai"
+> deep_thinking_model     = "o3"
+> ```
+
+File is created with `0o600` permissions on Unix (world-unreadable). On Windows a one-time warning is emitted.
+
+#### Runtime `Config` (assembled in `Config::load()`, type: `Config`)
+
+Produced by the six-step merge: user file → synthesised nested TOML → `config` builder + env vars → manual secret injection. All the existing sections survive unchanged, **except `trading.asset_symbol` is removed** (now a CLI argument).
+
+```toml
+# No [trading].asset_symbol — symbol is passed as `scorpio analyze <SYMBOL>`
+# Backtest-only fields remain optional
+[trading]
+# backtest_start = "2024-01-01"   # optional
+# backtest_end   = "2024-12-31"   # optional
+
+[llm]
+quick_thinking_provider      = "openai"       # from PartialConfig (or SCORPIO__LLM__QUICK_THINKING_PROVIDER)
+deep_thinking_provider       = "openai"       # from PartialConfig (or env)
+quick_thinking_model         = "gpt-4o-mini"  # from PartialConfig (or env)
+deep_thinking_model          = "o3"           # from PartialConfig (or env)
+max_debate_rounds            = 3              # compiled default
+max_risk_rounds              = 2              # compiled default
+analyst_timeout_secs         = 300            # compiled default
+valuation_fetch_timeout_secs = 30             # compiled default
+retry_max_retries            = 3              # compiled default
+retry_base_delay_ms          = 500            # compiled default
+
+[api]
+# All secrets injected from PartialConfig or env vars; never written to this section.
+# Env vars (highest precedence, override PartialConfig): SCORPIO_OPENAI_API_KEY,
+# SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, SCORPIO_OPENROUTER_API_KEY,
+# SCORPIO_FINNHUB_API_KEY, SCORPIO_FRED_API_KEY
+
+[providers.openai]
+rpm = 500
+# base_url = "..."   # optional override
+
+[providers.anthropic]
+rpm = 500
+
+[providers.gemini]
+rpm = 500
+
+[providers.copilot]
+rpm = 0   # Copilot uses ACP; not available in the wizard (no API-key concept)
+
+[providers.openrouter]
+rpm = 20
+
+[rate_limits]
+finnhub_rps       = 30
+fred_rps          = 2
+yahoo_finance_rps = 30
+
+[storage]
+snapshot_db_path = "~/.scorpio-analyst/phase_snapshots.db"
+
+[enrichment]
+enable_transcripts         = false
+enable_consensus_estimates = false
+enable_event_news          = false
+max_evidence_age_hours     = 48
+fetch_timeout_secs         = 120
+```
+
+#### Change summary vs. today
+
+| Field                      | Before                        | After                                                       |
+|----------------------------|-------------------------------|-------------------------------------------------------------|
+| `trading.asset_symbol`     | Config file required field    | **Removed** — CLI argument `scorpio analyze <SYMBOL>`       |
+| API keys                   | Env vars only                 | `~/.scorpio-analyst/config.toml` **or** env vars (env wins) |
+| LLM routing                | Project `config.toml`         | `~/.scorpio-analyst/config.toml` **or** env vars            |
+| Project `config.toml`      | Consulted by `Config::load()` | **Ignored** (stays on disk; inert)                          |
+| `SCORPIO__*` env overrides | Work for all fields           | Unchanged — still override any non-secret field             |
+
+---
+
 ## Implementation Units
 
 - [ ] **Unit 1: Add dependencies and promote `tempfile`**
