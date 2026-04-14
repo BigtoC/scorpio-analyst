@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer};
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub llm: LlmConfig,
+    #[serde(default)]
     pub trading: TradingConfig,
     #[serde(default)]
     pub api: ApiConfig,
@@ -138,9 +139,10 @@ fn default_retry_base_delay_ms() -> u64 {
 }
 
 /// Trading-specific parameters.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `asset_symbol` has been removed — the symbol is now a CLI argument to `scorpio analyze`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct TradingConfig {
-    pub asset_symbol: String,
     #[serde(default)]
     pub backtest_start: Option<String>,
     #[serde(default)]
@@ -362,12 +364,110 @@ fn secret_display(opt: &Option<SecretString>) -> &str {
 }
 
 impl Config {
-    /// Load configuration using the 3-tier pipeline:
-    /// 1. `config.toml` (defaults)
-    /// 2. `.env` via dotenvy (local overrides)
-    /// 3. Environment variables (CI/CD overrides)
+    /// Load configuration from the user-level config file (`~/.scorpio-analyst/config.toml`).
+    ///
+    /// Precedence (highest wins): env vars > user file > compiled defaults.
     pub fn load() -> Result<Self> {
-        Self::load_from("config.toml")
+        Self::load_from_user_path(crate::cli::setup::config_file::user_config_path())
+    }
+
+    /// Load configuration from the user-level config file path.
+    ///
+    /// 6-step merge: dotenvy → flat `PartialConfig` → synthesised nested TOML (non-secrets
+    /// only) → `config` crate pipeline with env-var overlay → manual secret injection (file
+    /// then env, env wins) → validate.
+    pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Self> {
+        use crate::cli::setup::config_file::{PartialConfig, load_user_config_at};
+
+        // Step 1: populate process env from .env if present.
+        let _ = dotenvy::dotenv();
+
+        // Step 2: deserialise flat PartialConfig from disk (or default if missing).
+        let partial: PartialConfig = load_user_config_at(path)?;
+
+        // Step 3: synthesise nested TOML for non-secret PartialConfig fields.
+        let nested_toml = partial_to_nested_toml_non_secrets(&partial);
+
+        // Step 4: config crate pipeline — file values first, env vars overlay.
+        let mut cfg: Config = config::Config::builder()
+            .add_source(
+                config::File::from_str(&nested_toml, config::FileFormat::Toml).required(false),
+            )
+            .add_source(
+                config::Environment::with_prefix("SCORPIO")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()
+            .context("failed to build configuration")?
+            .try_deserialize()
+            .context("failed to deserialize configuration")?;
+
+        // Step 5a: inject secrets from PartialConfig fields.
+        if let Some(k) = &partial.openai_api_key {
+            cfg.providers.openai.api_key = Some(SecretString::from(k.clone()));
+        }
+        if let Some(k) = &partial.anthropic_api_key {
+            cfg.providers.anthropic.api_key = Some(SecretString::from(k.clone()));
+        }
+        if let Some(k) = &partial.gemini_api_key {
+            cfg.providers.gemini.api_key = Some(SecretString::from(k.clone()));
+        }
+        if let Some(k) = &partial.openrouter_api_key {
+            cfg.providers.openrouter.api_key = Some(SecretString::from(k.clone()));
+        }
+        if let Some(k) = &partial.finnhub_api_key {
+            cfg.api.finnhub_api_key = Some(SecretString::from(k.clone()));
+        }
+        if let Some(k) = &partial.fred_api_key {
+            cfg.api.fred_api_key = Some(SecretString::from(k.clone()));
+        }
+
+        // Step 5b: env var secrets override file secrets (env wins); warn on collision.
+        macro_rules! inject_env_override {
+            ($field:expr, $env:literal, $name:literal) => {
+                if let Some(key) = secret_from_env($env) {
+                    if $field.is_some() {
+                        tracing::warn!(
+                            provider = $name,
+                            env_var = $env,
+                            "env var overrides user config file secret"
+                        );
+                    }
+                    $field = Some(key);
+                }
+            };
+        }
+        inject_env_override!(
+            cfg.providers.openai.api_key,
+            "SCORPIO_OPENAI_API_KEY",
+            "openai"
+        );
+        inject_env_override!(
+            cfg.providers.anthropic.api_key,
+            "SCORPIO_ANTHROPIC_API_KEY",
+            "anthropic"
+        );
+        inject_env_override!(
+            cfg.providers.gemini.api_key,
+            "SCORPIO_GEMINI_API_KEY",
+            "gemini"
+        );
+        inject_env_override!(
+            cfg.providers.openrouter.api_key,
+            "SCORPIO_OPENROUTER_API_KEY",
+            "openrouter"
+        );
+        inject_env_override!(
+            cfg.api.finnhub_api_key,
+            "SCORPIO_FINNHUB_API_KEY",
+            "finnhub"
+        );
+        inject_env_override!(cfg.api.fred_api_key, "SCORPIO_FRED_API_KEY", "fred");
+
+        // Step 6: validate.
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     /// Load from a specific config file path (useful for testing).
@@ -406,11 +506,7 @@ impl Config {
     fn validate(&self) -> Result<()> {
         // Provider name validity is enforced at deserialization time via
         // `#[serde(deserialize_with = "deserialize_provider_name")]`.
-
-        // Validate asset symbol format using the shared data-layer validator.
-        // This runs before any LLM or API client is constructed.
-        crate::data::symbol::validate_symbol(&self.trading.asset_symbol)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        // Symbol validation has moved to the `cli::analyze` handler (Unit 6).
 
         // Check that at least one LLM key is available
         if !self.has_any_llm_key() {
@@ -440,6 +536,34 @@ impl Config {
     }
 }
 
+/// Synthesise a nested TOML string from the non-secret fields of a `PartialConfig`.
+///
+/// Only `Some` fields are emitted. The resulting string is fed into `config::File::from_str`
+/// so it must match the `Config` serde shape. Secrets are **excluded** — `Config`'s secret
+/// fields carry `#[serde(skip)]` and would be silently dropped by the pipeline anyway.
+fn partial_to_nested_toml_non_secrets(
+    partial: &crate::cli::setup::config_file::PartialConfig,
+) -> String {
+    let mut llm = String::new();
+    if let Some(p) = &partial.quick_thinking_provider {
+        llm.push_str(&format!("quick_thinking_provider = \"{p}\"\n"));
+    }
+    if let Some(m) = &partial.quick_thinking_model {
+        llm.push_str(&format!("quick_thinking_model = \"{m}\"\n"));
+    }
+    if let Some(p) = &partial.deep_thinking_provider {
+        llm.push_str(&format!("deep_thinking_provider = \"{p}\"\n"));
+    }
+    if let Some(m) = &partial.deep_thinking_model {
+        llm.push_str(&format!("deep_thinking_model = \"{m}\"\n"));
+    }
+    if llm.is_empty() {
+        String::new()
+    } else {
+        format!("[llm]\n{llm}")
+    }
+}
+
 fn secret_from_env(key: &str) -> Option<SecretString> {
     std::env::var(key).ok().map(SecretString::from)
 }
@@ -463,11 +587,7 @@ mod tests {
                 retry_max_retries: 3,
                 retry_base_delay_ms: 500,
             },
-            trading: TradingConfig {
-                asset_symbol: "AAPL".to_owned(),
-                backtest_start: None,
-                backtest_end: None,
-            },
+            trading: TradingConfig::default(),
             api,
             providers: ProvidersConfig::default(),
             storage: StorageConfig::default(),
@@ -491,9 +611,6 @@ quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "AAPL"
 "#;
 
     /// Write `content` to a temp file and return `(TempDir, path)`.
@@ -632,9 +749,6 @@ quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
 agent_timeout_secs = 45
 valuation_fetch_timeout_secs = 9
-
-[trading]
-asset_symbol = "AAPL"
 "#,
         );
         let cfg = Config::load_from(&path).expect("legacy timeout alias should load");
@@ -653,9 +767,6 @@ quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
 analyst_timeout_secs = 60
 valuation_fetch_timeout_secs = 12
-
-[trading]
-asset_symbol = "AAPL"
 "#,
         );
         let cfg = Config::load_from(&path).expect("canonical timeout key should load");
@@ -747,9 +858,6 @@ quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "AAPL"
 
 [enrichment]
 fetch_timeout_secs = 0
@@ -915,74 +1023,6 @@ fetch_timeout_secs = 0
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
     }
 
-    // ── Symbol validation in Config::validate() tests ─────────────────────
-
-    #[test]
-    fn validate_rejects_empty_symbol() {
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "openai"
-deep_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = ""
-"#,
-        );
-        let result = Config::load_from(&path);
-        assert!(
-            result.is_err(),
-            "empty symbol should be rejected by validate()"
-        );
-        assert!(
-            result.unwrap_err().to_string().contains("invalid symbol"),
-            "error should mention invalid symbol"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_symbol_with_semicolons() {
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "openai"
-deep_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "DROP;TABLE"
-"#,
-        );
-        assert!(
-            Config::load_from(&path).is_err(),
-            "semicolon in symbol should be rejected"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_lowercase_symbol() {
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "openai"
-deep_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "nvda"
-"#,
-        );
-        // lowercase is accepted by validate_symbol — normalisation happens at resolve_symbol
-        assert!(
-            Config::load_from(&path).is_ok(),
-            "lowercase symbol should be accepted"
-        );
-    }
-
     #[test]
     fn rate_limit_config_default_has_yahoo_finance_rps_30() {
         let cfg = RateLimitConfig::default();
@@ -1035,9 +1075,6 @@ quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "AAPL"
 "#,
         );
         let err = Config::load_from(&path).expect_err("unknown pack should be rejected");
@@ -1059,9 +1096,6 @@ quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "AAPL"
 "#,
         );
         let cfg = Config::load_from(&path).expect("explicit baseline should load");
@@ -1100,4 +1134,152 @@ asset_symbol = "AAPL"
             "env-overridden unknown pack should be rejected"
         );
     }
+
+    // ── Config::load_from_user_path tests ────────────────────────────────────
+
+    #[test]
+    fn load_from_user_path_populates_llm_routing_from_partial_config() {
+        use crate::cli::setup::config_file::{PartialConfig, save_user_config_at};
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("anthropic".into()),
+            deep_thinking_model: Some("claude-opus-4-5".into()),
+            openai_api_key: Some("sk-test".into()),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+        let cfg = Config::load_from_user_path(&path).expect("should load from user path");
+        assert_eq!(cfg.llm.quick_thinking_provider, "openai");
+        assert_eq!(cfg.llm.deep_thinking_provider, "anthropic");
+        assert_eq!(cfg.llm.quick_thinking_model, "gpt-4o-mini");
+        assert_eq!(cfg.llm.deep_thinking_model, "claude-opus-4-5");
+    }
+
+    #[test]
+    fn load_from_user_path_missing_file_succeeds_with_env_vars() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.toml");
+        unsafe {
+            std::env::set_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER", "openai");
+            std::env::set_var("SCORPIO__LLM__DEEP_THINKING_PROVIDER", "openai");
+            std::env::set_var("SCORPIO__LLM__QUICK_THINKING_MODEL", "gpt-4o-mini");
+            std::env::set_var("SCORPIO__LLM__DEEP_THINKING_MODEL", "o3");
+        }
+        let result = Config::load_from_user_path(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER");
+            std::env::remove_var("SCORPIO__LLM__DEEP_THINKING_PROVIDER");
+            std::env::remove_var("SCORPIO__LLM__QUICK_THINKING_MODEL");
+            std::env::remove_var("SCORPIO__LLM__DEEP_THINKING_MODEL");
+        }
+        result.expect("missing file should succeed when env vars provide LLM routing");
+    }
+
+    #[test]
+    fn load_from_user_path_env_override_wins_over_file_value() {
+        use crate::cli::setup::config_file::{PartialConfig, save_user_config_at};
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            openai_api_key: Some("sk-file".into()),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+        unsafe {
+            std::env::set_var("SCORPIO__LLM__MAX_DEBATE_ROUNDS", "9");
+        }
+        let result = Config::load_from_user_path(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__LLM__MAX_DEBATE_ROUNDS");
+        }
+        let cfg = result.expect("config should load");
+        assert_eq!(
+            cfg.llm.max_debate_rounds, 9,
+            "env override must win over compiled default"
+        );
+    }
+
+    #[test]
+    fn load_from_user_path_env_secret_overrides_file_secret() {
+        use crate::cli::setup::config_file::{PartialConfig, save_user_config_at};
+        use secrecy::ExposeSecret;
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            openai_api_key: Some("sk-from-file".into()),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+        unsafe {
+            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-from-env");
+        }
+        let result = Config::load_from_user_path(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO_OPENAI_API_KEY");
+        }
+        let cfg = result.expect("config should load");
+        assert_eq!(
+            cfg.providers
+                .openai
+                .api_key
+                .as_ref()
+                .map(|s| s.expose_secret()),
+            Some("sk-from-env"),
+            "env var secret must win over file secret"
+        );
+    }
+
+    #[test]
+    fn load_from_user_path_no_trading_section_gives_default_trading_config() {
+        use crate::cli::setup::config_file::{PartialConfig, save_user_config_at};
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+        let cfg = Config::load_from_user_path(&path).expect("config should load");
+        assert_eq!(
+            cfg.trading,
+            TradingConfig::default(),
+            "no trading section should yield TradingConfig::default()"
+        );
+    }
+
+    // ── Symbol validation stubs (relocated to Unit 6 — cli::analyze tests) ──
+
+    /// Symbol-validation tests for `Config::validate()` were removed in Unit 3
+    /// because `asset_symbol` moved from config to a CLI argument.
+    /// They are re-homed in Unit 6 as `cli::analyze` tests.
+    #[test]
+    #[ignore = "relocated to cli::analyze tests in Unit 6"]
+    fn validate_rejects_empty_symbol() {}
+
+    #[test]
+    #[ignore = "relocated to cli::analyze tests in Unit 6"]
+    fn validate_rejects_symbol_with_semicolons() {}
+
+    #[test]
+    #[ignore = "relocated to cli::analyze tests in Unit 6"]
+    fn validate_accepts_lowercase_symbol() {}
 }
