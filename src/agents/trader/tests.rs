@@ -46,11 +46,7 @@ fn sample_providers_config() -> ProvidersConfig {
 fn sample_config() -> Config {
     Config {
         llm: sample_llm_config(),
-        trading: TradingConfig {
-            asset_symbol: "AAPL".to_owned(),
-            backtest_start: None,
-            backtest_end: None,
-        },
+        trading: TradingConfig::default(),
         api: Default::default(),
         storage: Default::default(),
         providers: sample_providers_config(),

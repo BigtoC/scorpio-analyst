@@ -42,11 +42,7 @@ pub async fn make_pipeline(
             retry_max_retries: 1,
             retry_base_delay_ms: 1,
         },
-        trading: TradingConfig {
-            asset_symbol: "AAPL".to_owned(),
-            backtest_start: None,
-            backtest_end: None,
-        },
+        trading: TradingConfig::default(),
         api: ApiConfig {
             ..ApiConfig::default()
         },
