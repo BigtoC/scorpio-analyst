@@ -100,7 +100,10 @@ fn main() {
             };
             let yfinance = YFinanceClient::from_config(&cfg.rate_limits);
 
-            let symbol = cfg.trading.asset_symbol.clone();
+            // TODO(Unit-6): symbol will be provided as a CLI argument by `scorpio analyze`.
+            // Temporarily read from env var so the binary stays runnable during transition.
+            let symbol =
+                std::env::var("SCORPIO_ASSET_SYMBOL").unwrap_or_else(|_| "AAPL".to_owned());
             let target_date = Local::now().format("%Y-%m-%d").to_string();
 
             tracing::info!(
