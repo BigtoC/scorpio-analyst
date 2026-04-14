@@ -1,1 +1,1 @@
-// Populated by add-cli
+pub mod setup;
