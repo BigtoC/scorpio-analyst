@@ -3,6 +3,23 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub(crate) enum UserConfigFileError {
+    #[error("failed to read config file: {path}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse config file: {path}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 /// Flat representation of `~/.scorpio-analyst/config.toml` written by `scorpio setup`.
 ///
@@ -76,8 +93,24 @@ impl std::fmt::Debug for PartialConfig {
 
 /// Returns the canonical path for the user-level config file:
 /// `~/.scorpio-analyst/config.toml`.
-pub fn user_config_path() -> PathBuf {
-    crate::config::expand_path("~/.scorpio-analyst/config.toml")
+pub fn user_config_path() -> anyhow::Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "HOME environment variable is not set; cannot resolve ~/.scorpio-analyst/config.toml"
+            )
+        })?;
+
+    let home = PathBuf::from(home);
+    if !home.is_absolute() {
+        anyhow::bail!(
+            "HOME must be an absolute path for secret config storage; got: {}",
+            home.display()
+        );
+    }
+
+    Ok(home.join(".scorpio-analyst/config.toml"))
 }
 
 /// Load [`PartialConfig`] from `path`.
@@ -90,17 +123,24 @@ pub fn load_user_config_at(path: impl AsRef<Path>) -> anyhow::Result<PartialConf
     if !path.exists() {
         return Ok(PartialConfig::default());
     }
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read config file: {}", path.display()))?;
-    toml::from_str(&content)
-        .with_context(|| format!("failed to parse config file: {}", path.display()))
+    let content = std::fs::read_to_string(path).map_err(|source| UserConfigFileError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    toml::from_str(&content).map_err(|source| {
+        UserConfigFileError::Parse {
+            path: path.to_path_buf(),
+            source,
+        }
+        .into()
+    })
 }
 
 /// Load [`PartialConfig`] from the default user config path.
 ///
 /// Thin wrapper around [`load_user_config_at`] using [`user_config_path`].
 pub fn load_user_config() -> anyhow::Result<PartialConfig> {
-    load_user_config_at(user_config_path())
+    load_user_config_at(user_config_path()?)
 }
 
 /// Write `cfg` atomically to `path`, creating parent directories as needed.
@@ -156,7 +196,7 @@ pub(crate) fn save_user_config_at(
 ///
 /// Thin wrapper around [`save_user_config_at`] using [`user_config_path`].
 pub fn save_user_config(cfg: &PartialConfig) -> anyhow::Result<()> {
-    save_user_config_at(cfg, user_config_path())
+    save_user_config_at(cfg, user_config_path()?)
 }
 
 #[cfg(test)]
@@ -279,6 +319,50 @@ mod tests {
 
         let config_path = home.path().join(".scorpio-analyst/config.toml");
         assert!(config_path.exists(), "config dir + file should be created");
+    }
+
+    #[test]
+    fn save_user_config_errors_when_home_is_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved_home = std::env::var("HOME").ok();
+        unsafe { std::env::remove_var("HOME") };
+
+        let result = save_user_config(&full_partial_config());
+
+        unsafe {
+            match saved_home {
+                Some(ref value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let err = result.expect_err("missing HOME should fail closed for secret config writes");
+        assert!(
+            err.to_string().contains("HOME") || err.to_string().contains("home"),
+            "error should explain HOME/path resolution failure: {err:#}"
+        );
+    }
+
+    #[test]
+    fn save_user_config_errors_when_home_is_relative() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", ".") };
+
+        let result = save_user_config(&full_partial_config());
+
+        unsafe {
+            match saved_home {
+                Some(ref value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let err = result.expect_err("relative HOME should fail closed for secret config writes");
+        assert!(
+            err.to_string().contains("HOME") || err.to_string().contains("relative"),
+            "error should explain HOME/path resolution failure: {err:#}"
+        );
     }
 
     #[test]
