@@ -4,10 +4,10 @@
 //! a user-facing config-not-found guard, and moves symbol validation here from
 //! the now-removed `Config::validate()`.
 
+use anyhow::Context;
 use chrono::Local;
 use figlet_rs::Toilet;
 
-use crate::cli::setup::config_file::user_config_path;
 use crate::config::Config;
 use crate::data::{FinnhubClient, FredClient, YFinanceClient};
 use crate::providers::ModelTier;
@@ -17,8 +17,7 @@ use crate::state::TradingState;
 use crate::workflow::{SnapshotStore, TradingPipeline};
 
 /// Error message printed when the user config is missing or incomplete.
-const CONFIG_MISSING_MSG: &str =
-    "✗ Config not found or incomplete. Run `scorpio setup` to configure your API keys and providers.";
+const CONFIG_MISSING_MSG: &str = "✗ Config not found or incomplete. Run `scorpio setup` to configure your API keys and providers.";
 
 /// Run the full 5-phase analysis pipeline for `symbol`.
 ///
@@ -36,19 +35,7 @@ pub fn run(symbol: &str) -> anyhow::Result<()> {
         println!("{}", figure.as_str());
     }
 
-    // Load config — distinguish missing file from malformed config.
-    let cfg = if !user_config_path().exists() {
-        eprintln!("{CONFIG_MISSING_MSG}");
-        anyhow::bail!(CONFIG_MISSING_MSG);
-    } else {
-        match Config::load() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("{CONFIG_MISSING_MSG}");
-                return Err(e.context(CONFIG_MISSING_MSG));
-            }
-        }
-    };
+    let cfg = load_analysis_config()?;
 
     // Validate symbol (re-homed from Config::validate() in Unit 3).
     let symbol = match crate::data::symbol::validate_symbol(symbol) {
@@ -174,6 +161,12 @@ pub fn run(symbol: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn load_analysis_config() -> anyhow::Result<Config> {
+    let cfg = Config::load().map_err(|e| e.context(CONFIG_MISSING_MSG))?;
+    cfg.is_analysis_ready().context(CONFIG_MISSING_MSG)?;
+    Ok(cfg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,12 +191,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn run_env_only_config_does_not_fail_with_config_not_found() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER", "openai");
+            std::env::set_var("SCORPIO__LLM__DEEP_THINKING_PROVIDER", "openai");
+            std::env::set_var("SCORPIO__LLM__QUICK_THINKING_MODEL", "gpt-4o-mini");
+            std::env::set_var("SCORPIO__LLM__DEEP_THINKING_MODEL", "o3");
+            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-env-test");
+            std::env::set_var("SCORPIO_FINNHUB_API_KEY", "fh-env-test");
+            std::env::set_var("SCORPIO_FRED_API_KEY", "fred-env-test");
+        }
+
+        let result = run("AAPL");
+
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER");
+            std::env::remove_var("SCORPIO__LLM__DEEP_THINKING_PROVIDER");
+            std::env::remove_var("SCORPIO__LLM__QUICK_THINKING_MODEL");
+            std::env::remove_var("SCORPIO__LLM__DEEP_THINKING_MODEL");
+            std::env::remove_var("SCORPIO_OPENAI_API_KEY");
+            std::env::remove_var("SCORPIO_FINNHUB_API_KEY");
+            std::env::remove_var("SCORPIO_FRED_API_KEY");
+        }
+
+        match result {
+            Ok(()) => {}
+            Err(err) => assert!(
+                !err.to_string().contains("Config not found or incomplete"),
+                "env-only config should get past config-not-found gate; got: {err}"
+            ),
+        }
+    }
+
     // ── Symbol validation (re-homed from Config::validate() in Unit 3) ───────
 
     fn write_minimal_config(dir: &tempfile::TempDir) {
         use crate::cli::setup::config_file::{PartialConfig, save_user_config_at};
         let config_path = dir.path().join(".scorpio-analyst/config.toml");
         let partial = PartialConfig {
+            finnhub_api_key: Some("fh-test".into()),
+            fred_api_key: Some("fred-test".into()),
             quick_thinking_provider: Some("openai".into()),
             quick_thinking_model: Some("gpt-4o-mini".into()),
             deep_thinking_provider: Some("openai".into()),

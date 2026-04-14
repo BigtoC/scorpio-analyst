@@ -55,8 +55,7 @@ mod tests {
         assert!(
             matches!(
                 err.kind(),
-                ErrorKind::MissingSubcommand
-                    | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                ErrorKind::MissingSubcommand | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
             ),
             "expected missing-subcommand-style error, got: {:?}",
             err.kind()
