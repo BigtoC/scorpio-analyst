@@ -78,7 +78,7 @@ The spec (`docs/superpowers/specs/2026-04-10-cli-design.md`) pins the solution: 
 ### External References
 
 - [clap 4 derive tutorial](https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html) — canonical `#[derive(Parser)]` + `#[derive(Subcommand)]` pattern. Clap exits with code 2 on parse failure (stderr) and 0 on `--help` / `--version` (stdout); no custom handling needed.
-- [inquire 0.9 docs](https://docs.rs/inquire/0.9) — `Password`, `Text`, `Select`, `MultiSelect` with `.prompt_skippable()` for ESC-aware cancellation. `OperationCanceled` = ESC; `OperationInterrupted` = Ctrl-C. The `macros` feature (optional) provides `required!()`; we will use closure-style validators to avoid an extra feature flag.
+- [inquire 0.9 docs](https://docs.rs/inquire/0.9) — `Password`, `Text`, `Select`, and `Confirm` expose the prompt/cancellation behavior we need. `OperationCanceled` = ESC; `OperationInterrupted` = Ctrl-C. The `macros` feature (optional) provides `required!()`; we will use closure-style validators to avoid an extra feature flag.
 - [secrecy 0.10 — `SecretString` serialization](https://docs.rs/secrecy/0.10/secrecy/) — with the `serde` feature, `SecretString` implements `Deserialize` but **not** `Serialize` (because `String` does not implement `SerializableSecret`). **This is a deviation from the spec**, which implies the `serde` feature enables both. See "Key Technical Decisions" below.
 - [tempfile `NamedTempFile::persist`](https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html) — standard atomic-rename pattern. Must be created in the same directory as the target (same filesystem requirement).
 - [std::os::unix::fs::PermissionsExt](https://doc.rust-lang.org/std/os/unix/fs/trait.PermissionsExt.html) — chmod 600 after persist, gated by `#[cfg(unix)]`.
@@ -392,17 +392,20 @@ fetch_timeout_secs         = 120
 - Define `PartialConfig` as `#[derive(Default, Serialize, Deserialize)]` plus a hand-rolled `impl Debug` that redacts any field whose name ends in `_api_key`. All fields `Option<String>` to sidestep `SecretString`'s non-`Serialize` constraint. The custom `Debug` is defensive — no current caller emits `{:?}` on `PartialConfig`, but the pattern mirrors the existing `ApiConfig` / `ProviderSettings` redacting `Debug` impls in `src/config.rs` and closes the door on future logging leaks. The cost is ~15 lines of code.
   - Fields: `finnhub_api_key`, `fred_api_key`, `openai_api_key`, `anthropic_api_key`, `gemini_api_key`, `openrouter_api_key`, `quick_thinking_provider`, `quick_thinking_model`, `deep_thinking_provider`, `deep_thinking_model` — matching the spec's struct shape but with `Option<String>` in place of `Option<SecretString>`.
   - Every field tagged `#[serde(skip_serializing_if = "Option::is_none", default)]` so the written TOML omits unset keys rather than writing empty strings.
-- `pub fn user_config_path() -> PathBuf` — returns `expand_path("~/.scorpio-analyst/config.toml")`.
+- `pub fn user_config_path() -> anyhow::Result<PathBuf>` — resolves `~/.scorpio-analyst/config.toml` only when `HOME` is available. If `HOME` is unset, return a clear error for `setup`; `analyze` can still proceed through env-only config because it does not require a file path to exist.
 - `pub fn load_user_config_at(path: impl AsRef<Path>) -> anyhow::Result<PartialConfig>` — the primary loader. If file missing, `Ok(PartialConfig::default())`; otherwise read + `toml::from_str`. Add context on parse failure.
-- `pub fn load_user_config() -> anyhow::Result<PartialConfig>` — thin wrapper: `load_user_config_at(user_config_path())`. Unit 3 will call `load_user_config_at` with an explicit path for testability; Unit 5's orchestrator uses the default-path wrapper.
+- `pub fn try_load_user_config_at(path: impl AsRef<Path>) -> anyhow::Result<Option<PartialConfig>>` (or equivalent result enum) — loader variant for callers that need to distinguish `missing`, `loaded`, and `malformed` without string-matching error text.
+- `pub fn load_user_config() -> anyhow::Result<PartialConfig>` — thin wrapper over `user_config_path()?` + `load_user_config_at(...)`.
+- `pub fn try_load_user_config() -> anyhow::Result<Option<PartialConfig>>` — thin wrapper over `user_config_path()?` + `try_load_user_config_at(...)`.
 - `pub fn save_user_config(cfg: &PartialConfig) -> anyhow::Result<()>`:
   1. `std::fs::create_dir_all(path.parent())`.
   2. Serialize via `toml::to_string_pretty`.
   3. Create `NamedTempFile::new_in(parent_dir)`, write bytes, call `sync_all()`.
   4. **Set `0o600` on the temp file's path BEFORE `persist`** (fixes the race window flagged in review — if we chmod after `persist`, the file is briefly world-readable between rename and chmod). Use `std::fs::set_permissions(tmp.path(), Permissions::from_mode(0o600))` gated by `#[cfg(unix)]`. After this, `persist` atomically installs a file that already has the correct mode.
   5. `persist(&path)` (atomic rename). The target inherits the 0o600 permissions set in step 4.
-  6. **On Windows (`#[cfg(windows)]`):** no ACL is applied and the file inherits NTFS defaults. Emit a one-time `tracing::warn!` describing the limitation on first setup run, and the wizard itself (in `setup::run`) prints `"⚠ Warning: Windows does not enforce file permissions on this config file. Other users on this machine may be able to read your API keys."` to stderr after a successful save. Document this in the plan's Operational Notes as a known gap; a future unit can add DPAPI integration if needed.
+  6. **On Windows (`#[cfg(windows)]`):** reject secret-file writes with a clear error that tells the user to configure `SCORPIO_*` env vars instead. This change does not ship plaintext secret persistence on Windows.
   7. Surface any step's error with `anyhow::Context`; leave original file untouched on any failure. **Context strings must never include raw secret values or TOML content** — include only the target file path and the underlying `io::Error`. This applies to every `anyhow::Context` call in `config_file.rs`.
+- `setup::run` handles malformed user config explicitly before Step 1: print the parse error plus path, ask whether to move the file to `config.toml.bak.<timestamp>` and start fresh, then continue with `PartialConfig::default()` on confirmation. Declining leaves the file untouched and exits 0.
 
 **Execution note:** Start with failing unit tests for the `load → modify → save → load` round-trip before writing the implementation. Test-first gives us coverage of the `None` / `Some` serialization edges at the same time.
 
@@ -416,9 +419,13 @@ fetch_timeout_secs         = 120
 - *Edge case:* `load_user_config()` returns `PartialConfig::default()` when the file is missing.
 - *Edge case:* `load_user_config()` on a zero-byte file returns `PartialConfig::default()` (toml parses empty input as an empty table).
 - *Error path:* `load_user_config()` on a syntactically invalid TOML file returns a descriptive `anyhow::Error` (assert the error message mentions the file path).
+- *Recovery path:* malformed config + user accepts backup/replace → original file moved aside and wizard starts from `PartialConfig::default()`.
+- *Recovery path:* malformed config + user declines backup/replace → wizard exits 0 without modifying files.
 - *Error path:* `save_user_config` against an unwritable parent directory (simulated via `tempfile::tempdir()` + chmod 0) returns an error; any pre-existing file at the target path is unchanged.
 - *Integration:* first `save_user_config` call creates `~/.scorpio-analyst/` when absent (use a `TempDir` rooted elsewhere and override `HOME` via `ENV_LOCK`, mirroring `expand_path_tilde_prefix` test).
 - *Integration (`#[cfg(unix)]`):* after `save_user_config`, `fs::metadata(path).permissions().mode() & 0o777 == 0o600`.
+- *Error path:* `user_config_path()` returns a clear error when `HOME` is unset.
+- *Platform path:* `save_user_config` on Windows returns a clear "use env vars" error instead of writing secrets to disk.
 - *Redaction:* `format!("{:?}", PartialConfig { finnhub_api_key: Some("secret".into()), .. })` contains neither `"secret"` nor the field's plain value; it shows `"[REDACTED]"` or `"<not set>"`.
 
 **Verification:**
@@ -430,7 +437,7 @@ fetch_timeout_secs         = 120
 
 - [x] **Unit 3: `Config::load()` reads user path; remove `asset_symbol`**
 
-**Goal:** Repoint the production config loader at `~/.scorpio-analyst/config.toml`, merge `PartialConfig` with env vars + compiled defaults, and drop `asset_symbol` from the config schema.
+**Goal:** Repoint the production config loader at `~/.scorpio-analyst/config.toml` as the default user-file source, merge `PartialConfig` with env vars + compiled defaults, and drop `asset_symbol` from the config schema.
 
 **Requirements:** R2, R9, R10, R11
 
@@ -451,19 +458,22 @@ fetch_timeout_secs         = 120
 - Remove `asset_symbol: String` from `TradingConfig`.
 - Add `#[derive(Default)]` to `TradingConfig` and `#[serde(default)]` on `Config::trading`.
 - In `Config::validate()`, remove the `validate_symbol` call (the only remaining validations stay: `fetch_timeout_secs > 0`, `analysis_pack` parse). The `crate::data::symbol` import becomes unused — drop it.
-- Rework `Config::load()` into two layers:
-  - `Config::load()` → `Config::load_from_user_path(user_config_path())`.
-  - `Config::load_from_user_path(path: impl AsRef<Path>)` — the pipeline below is ordered, each step has one purpose, and the structural fix from the P0 review finding is baked in:
+- Rework `Config::load()` into three layers:
+  - `Config::load()` → attempt `user_config_path()`. If `HOME` is available, call `Config::load_from_user_path(path)`. If `HOME` is unavailable, fall back to `Config::load_effective_runtime(PartialConfig::default())` so env-only operation still works.
+  - `Config::load_from_user_path(path: impl AsRef<Path>)` — the pipeline below is ordered, each step has one purpose, and the structural fix from review is baked in:
     1. `dotenvy::dotenv().ok()` — populate process env from `.env` if present.
     2. `let partial = load_user_config_at(path)?` — deserialize flat `PartialConfig` (with `Option<String>` fields) from disk.
-    3. **Synthesize nested TOML for `PartialConfig`'s non-secret fields only** via a new private helper `partial_to_nested_toml_non_secrets(&PartialConfig) -> String`. Emits `[llm] quick_thinking_provider = "…"`, `[llm] quick_thinking_model = "…"`, `[llm] deep_thinking_provider = "…"`, `[llm] deep_thinking_model = "…"`, skipping any `None` field. Output matches `Config`'s serde shape so `config::File::from_str` can ingest it. Secrets are **deliberately excluded** — `Config`'s secret fields are `#[serde(skip)]` and would be dropped by deserialization even if we wrote them into the synthesised TOML.
-    4. Build the config crate pipeline:
+    3. Delegate to `Config::load_effective_runtime(partial)`.
+  - `Config::load_effective_runtime(partial: PartialConfig)` — single source of truth for the merged runtime config used by `analyze` and Step 5 health checks:
+    1. **Synthesize nested TOML for `PartialConfig`'s non-secret fields only** via a new private helper `partial_to_nested_toml_non_secrets(&PartialConfig) -> String`. Emits `[llm] quick_thinking_provider = "…"`, `[llm] quick_thinking_model = "…"`, `[llm] deep_thinking_provider = "…"`, `[llm] deep_thinking_model = "…"`, skipping any `None` field. Output matches `Config`'s serde shape so `config::File::from_str` can ingest it. Secrets are **deliberately excluded** — `Config`'s secret fields are `#[serde(skip)]` and would be dropped by deserialization even if we wrote them into the synthesised TOML.
+    2. Build the config crate pipeline:
        `config::Config::builder().add_source(config::File::from_str(&nested_toml, config::FileFormat::Toml)).add_source(config::Environment::with_prefix("SCORPIO").separator("__").try_parsing(true)).build()?.try_deserialize::<Config>()?`
        This produces a `Config` with non-secret fields set from `PartialConfig` and then overlaid by env vars (env wins for any overlapping key, preserving the existing `SCORPIO__*` override contract).
-    5. **Manual secret injection, two ordered passes:**
-       - Pass 5a: for each secret field in `PartialConfig` that is `Some(v)`, write `SecretString::from(v)` to the matching nested path on `Config` (e.g., `cfg.providers.openai.api_key = partial.openai_api_key.map(SecretString::from);`).
-       - Pass 5b: for each secret env var (`SCORPIO_OPENAI_API_KEY`, `SCORPIO_ANTHROPIC_API_KEY`, `SCORPIO_GEMINI_API_KEY`, `SCORPIO_OPENROUTER_API_KEY`, `SCORPIO_FINNHUB_API_KEY`, `SCORPIO_FRED_API_KEY`), if set, overwrite the corresponding `Config` field via `secret_from_env`. **Env wins.** When an env-supplied secret overwrites a file-supplied one, emit `tracing::warn!` with the provider name (no key value) so users debugging stale shell profiles see a signal.
-    6. `cfg.validate()?` — run remaining validators (`fetch_timeout_secs > 0`, `analysis_pack` parse).
+    3. **Manual secret injection, two ordered passes:**
+       - Pass 3a: for each secret field in `PartialConfig` that is `Some(v)`, write `SecretString::from(v)` to the matching nested path on `Config` (e.g., `cfg.providers.openai.api_key = partial.openai_api_key.map(SecretString::from);`).
+       - Pass 3b: for each secret env var (`SCORPIO_OPENAI_API_KEY`, `SCORPIO_ANTHROPIC_API_KEY`, `SCORPIO_GEMINI_API_KEY`, `SCORPIO_OPENROUTER_API_KEY`, `SCORPIO_FINNHUB_API_KEY`, `SCORPIO_FRED_API_KEY`), if set, overwrite the corresponding `Config` field via `secret_from_env`. **Env wins.** When an env-supplied secret overwrites a file-supplied one, emit `tracing::warn!` with the provider name (no key value) so users debugging stale shell profiles see a signal.
+    4. `cfg.validate()?` — run remaining validators (`fetch_timeout_secs > 0`, `analysis_pack` parse).
+    5. Add `cfg.is_analysis_ready()` (or equivalent helper) that asserts the merged runtime config can construct both quick/deep completion handles plus the Finnhub and FRED clients. This is the definition of "complete" for R2.
   - `Config::load_from(path)` remains a test seam. After refactor, it takes a nested TOML file path (the existing test-suite shape) and feeds through the same `config::Config::builder().add_source(File::from(path)) + Environment` chain, plus pass 5b only (file secrets are irrelevant because legacy test TOML never contained secrets — they were `#[serde(skip)]` fields). Existing env-override tests remain unchanged.
 - Remove `asset_symbol` from every test fixture constructing `TradingConfig { ... }` (six locations — see §Files). No replacement field is needed.
 - Remove the `[trading]\nasset_symbol = "AAPL"` block from the two inline TOML fixtures added to the file list above (`tests/foundation_edge_cases.rs` line 71, `src/workflow/snapshot/tests/core_roundtrip.rs` line 248). Both files drive `Config::load_from` with a literal TOML string and will otherwise carry an unknown field once `TradingConfig::asset_symbol` is gone.
@@ -481,9 +491,11 @@ fetch_timeout_secs         = 120
 **Test scenarios:**
 - *Happy path:* load a `PartialConfig` written to a temp path + `Config::load_from_user_path(path)` returns a valid `Config` with those keys populated.
 - *Happy path:* missing user config file → `Config::load_from_user_path` still returns `Ok` when env vars provide minimum required fields (`quick_thinking_provider`, `deep_thinking_model`, etc.).
+- *Happy path:* `Config::load()` with `HOME` unset still returns `Ok` when env vars provide a complete runtime config.
 - *Edge case:* `SCORPIO__LLM__MAX_DEBATE_ROUNDS=7` env override wins over user file value.
 - *Edge case:* `SCORPIO_OPENAI_API_KEY` env var wins over `openai_api_key` in user file (precedence test).
 - *Edge case:* `Config` loaded with no `[trading]` section has `TradingConfig::default()` (backtest fields `None`).
+- *Edge case:* `Config::is_analysis_ready()` fails when Finnhub or FRED key is missing, or when quick/deep provider routing cannot construct completion handles.
 - *Error path:* `Config::load_from_user_path` returns a descriptive error when `analysis_pack` is set to an unknown value (existing behaviour preserved).
 - *Error path:* `Config::load_from_user_path` returns a descriptive error when `enrichment.fetch_timeout_secs = 0` (existing behaviour preserved).
 - *Removed:* `validate_rejects_empty_symbol`, `validate_rejects_symbol_with_semicolons`, `validate_accepts_lowercase_symbol` — deleted here, re-added as Unit 6 tests on the `analyze` handler.
@@ -519,20 +531,21 @@ fetch_timeout_secs         = 120
       ```
     - Prompt: `inquire::Password::new("Finnhub API key:")` with `PasswordDisplayMode::Masked`. When `partial.finnhub_api_key` is `Some(_)`, append `.with_help_message("[already set — press Enter to keep]")`. When `None`, attach a closure validator that returns `Validation::Invalid("Value is required".into())` on empty input (spec: "rejects empty string on first-time setup").
     - Delegates to `apply_optional_secret(partial, "finnhub_api_key", user_input)`.
-  - `step2_fred_api_key(partial)` mirrors Step 1 with `"FRED API key:"` prompt and preamble:
+- `step2_fred_api_key(partial)` mirrors Step 1 with `"FRED API key:"` prompt and preamble:
+- `step2_fred_api_key(partial)` mirrors Step 1 with `"FRED API key:"` prompt and preamble, but **does not** reject empty input on first-time setup. `FRED` remains optional at wizard time; missing-key readiness is enforced by `analyze`'s completeness check.
     ```
     FRED provides macro indicators (CPI, inflation, interest rates).
     Get your free key at: https://fredaccount.stlouisfed.org/apikeys
     ```
   - `step3_llm_provider_keys(partial)`:
-    - Sequential loop — presents one provider at a time rather than a `MultiSelect` upfront. This lets the user stop after their first key instead of pre-selecting everything at once.
+    - Sequential loop — presents one provider at a time. This lets the user stop after their first key instead of choosing every provider up front.
     - Loop body:
-      1. Build `available`: all `WIZARD_PROVIDERS` entries that are NOT yet configured in `partial` (key field is `None`). If `available` is empty (all four providers already have keys), break — Step 3 is done.
+      1. Build `available`: all `WIZARD_PROVIDERS` entries. Providers with existing keys are labeled `"<provider> [already set]"` so reruns can replace them explicitly.
       2. `Select::new("Select an LLM provider to configure:", available)` with the cursor defaulting to index 0. Returns the chosen `ProviderId`.
-      3. `Password::new(&format!("{} API key:", provider))` with `PasswordDisplayMode::Masked`. Since the provider was drawn from the unconfigured pool, no "[already set]" help message is shown; attach the non-empty closure validator (`"Value is required"`).
+      3. `Password::new(&format!("{} API key:", provider))` with `PasswordDisplayMode::Masked`. If the chosen provider already has a key, show `"[already set — press Enter to keep]"`; otherwise attach the non-empty closure validator (`"Value is required"`).
       4. Apply via `apply_optional_secret`.
       5. If `validate_step3_result(partial).is_ok()` (≥1 key is now saved) AND there are still unconfigured providers remaining, prompt `Confirm::new("Do you want to add another provider key?").with_default(false).prompt()`. If the user answers No (or presses Enter accepting the default), break out of the loop.
-      6. If `validate_step3_result(partial).is_err()` (still no keys), print `"✗ At least one LLM provider is required."` to stdout and continue the loop (do not offer the "more keys?" prompt yet — the minimum is not met).
+      6. If `validate_step3_result(partial).is_err()` (still no keys), print `"✗ At least one LLM provider is required."` to stdout immediately before re-showing the provider `Select` (do not offer the "more keys?" prompt yet — the minimum is not met).
     - ESC or Ctrl-C on the `Select`, `Password`, or `Confirm` prompt surfaces `OperationCanceled` / `OperationInterrupted` → wizard cancels (same as all other steps).
   - `step4_provider_routing(partial)`:
     - Quick-thinking provider: `Select::new("Quick-thinking provider (used by analyst agents):", eligible_providers)` where `eligible_providers = providers_with_keys(partial)`. Starting cursor set to the index of `partial.quick_thinking_provider` if present.
@@ -541,9 +554,9 @@ fetch_timeout_secs         = 120
     - Delegates to `apply_provider_routing(partial, quick, deep)`.
   - `step5_health_check(partial)`:
     - Before the call, print `println!("Sending \"Hello\" to deep-thinking provider ({provider} / {model})...", provider = partial.deep_thinking_provider, model = partial.deep_thinking_model)` to stdout.
-    - Builds an `LlmConfig`/`ProvidersConfig`/`ProviderRateLimiters` ad hoc from `partial`, calls `create_completion_model(DeepThinking, ...)`, `build_agent(&handle, "")` (empty system prompt — the health check must not leak trading-domain context), `prompt_with_retry("Hello", Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS), &RetryPolicy::default())` inside a `tokio::runtime::Builder::new_current_thread()` block_on.
+    - Builds the **effective runtime config** via `Config::load_effective_runtime(partial.clone())`, then uses that merged config to call `create_completion_model(DeepThinking, ...)`, `build_agent(&handle, "")` (empty system prompt — the health check must not leak trading-domain context), `prompt_with_retry("Hello", Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS), &RetryPolicy::default())` inside a `tokio::runtime::Builder::new_current_thread()` block_on.
     - On success, print `"✓ Health check passed."` to stdout, return `Ok(true)`.
-    - On failure, print `"✗ Health check failed: {err}"` to stderr, then `inquire::Confirm::new("Save config anyway?").with_default(false).prompt()`. Return `Ok(true)` if user confirms (save despite failure), `Ok(false)` if user declines (bail without saving).
+    - On failure, print a **sanitized** `"✗ Health check failed: {message}"` to stderr, then offer `Confirm::new("Retry health check?").with_default(true)` first. If the user declines retry, prompt `Confirm::new("Save config anyway?").with_default(false).prompt()`. Return `Ok(true)` if user confirms (save despite failure), `Ok(false)` if user declines (bail without saving).
 - Pure helpers (all `pub(super)`):
   - `apply_optional_secret(partial, field, user_input)` — maps `(partial, "finnhub_api_key", "")` → leave unchanged; `(partial, "finnhub_api_key", "abc")` → set `Some("abc")`. Semantics are intentionally permissive; empty-input rejection is enforced at the interactive validator layer, not here.
   - `apply_llm_provider_keys` is **removed** — the sequential loop in `step3_llm_provider_keys` calls `apply_optional_secret` directly for each (provider, key) pair. Providers never selected are simply never touched, so no "deselected = keep" bookkeeping helper is needed.
@@ -551,7 +564,7 @@ fetch_timeout_secs         = 120
   - `validate_step3_result(partial) -> Result<(), &'static str>` — returns `Err("At least one LLM provider is required.")` when all four LLM key fields are `None`.
   - `providers_with_keys(partial) -> Vec<ProviderId>` — helper for step 4's filter; preserves declaration order of `WIZARD_PROVIDERS`.
 - **Reuse `ProviderId` from `src/providers/mod.rs`** — do not introduce a second enum. Define a local `const WIZARD_PROVIDERS: &[ProviderId] = &[ProviderId::OpenAI, ProviderId::Anthropic, ProviderId::Gemini, ProviderId::OpenRouter];` (Copilot is intentionally excluded — it has no API-key concept). `ProviderId` already implements `Display` in `src/providers/mod.rs`, so this unit can reuse it directly without any enum or trait changes.
-- **Use `inquire::Password::prompt()` (not `prompt_skippable`) for all Password prompts.** Spec treats ESC and Ctrl-C identically as "Setup cancelled." `prompt()` surfaces ESC as `OperationCanceled` and Ctrl-C as `OperationInterrupted`, both of which the Unit 5 cancellation wrapper maps to `"Setup cancelled."` + `Ok(())`. The "press Enter to keep existing value" UX is preserved at the apply-helper layer: pressing Enter alone produces an empty string (`Ok("")`), which `apply_optional_secret` maps to "keep existing" when the current value is `Some`. Consequences: (a) ESC cancels the entire wizard, matching the spec; (b) users cannot ESC past the Step 3 MultiSelect, eliminating the infinite-loop risk flagged in review; (c) the closure validator for first-time Steps 1/2 enforces non-empty input so new users cannot skip mandatory keys.
+- **Use `inquire::Password::prompt()` (not `prompt_skippable`) for all Password prompts.** Spec treats ESC and Ctrl-C identically as "Setup cancelled." `prompt()` surfaces ESC as `OperationCanceled` and Ctrl-C as `OperationInterrupted`, both of which the Unit 5 cancellation wrapper maps to `"Setup cancelled."` + `Ok(())`. The "press Enter to keep existing value" UX is preserved at the apply-helper layer: pressing Enter alone produces an empty string (`Ok("")`), which `apply_optional_secret` maps to "keep existing" when the current value is `Some`. Consequences: (a) ESC cancels the entire wizard, matching the spec; (b) users cannot ESC past the Step 3 provider selector, eliminating the old loop-hole review concern; (c) the closure validator for first-time Steps 1/2 enforces non-empty input so new users cannot skip mandatory keys.
 - Apply the same `prompt()` (non-skippable) policy to `Select`, `Text`, and `Confirm` calls for consistency.
 
 **Execution note:** Test-first on the `apply_*` helpers and `validate_step3_result`. The interactive `stepN_*` wrappers are covered by manual QA and a single integration smoke check in Unit 5.
@@ -579,7 +592,7 @@ fetch_timeout_secs         = 120
 
 - [x] **Unit 5: Setup orchestrator + cancellation handling**
 
-**Goal:** Wire the five steps together, handle ESC/Ctrl-C, and persist the final `PartialConfig`.
+**Goal:** Wire the five steps together, handle ESC/Ctrl-C, recover from malformed user config, and persist the final `PartialConfig`.
 
 **Requirements:** R3, R4, R5, R6, R7, R8
 
@@ -591,12 +604,13 @@ fetch_timeout_secs         = 120
 
 **Approach:**
 - Replace the Unit 2 stub with `pub fn run() -> anyhow::Result<()>`:
-  1. Load `PartialConfig` via `load_user_config()`.
+  1. Resolve `user_config_path()?` and attempt `try_load_user_config()`. If the file is malformed, print the parse error plus path and offer to back it up to `config.toml.bak.<timestamp>` and continue from defaults. Declining exits 0 without modifying files.
   2. Sequentially invoke `step1_*` → `step4_*`. Each call is wrapped in the cancellation helper described below.
   3. Call `step5_health_check(&mut partial) -> Ok(should_save: bool)` (contract: returns `Ok(true)` when the user wants the config saved — either because the health check passed or because they confirmed "Save anyway?"; returns `Ok(false)` only when the health check failed and the user declined to save).
   4. If `should_save == false`, `println!("Config not saved.");` and return `Ok(())` (exit 0).
   5. Otherwise `save_user_config(&partial)?;` then `println!("✓ Config saved to {}", user_config_path().display());` and return `Ok(())`.
 - **Cancellation helper.** Each step invocation is wrapped in a helper that catches `InquireError::OperationCanceled` (ESC) and `InquireError::OperationInterrupted` (Ctrl-C), prints `"Setup cancelled."` to **stdout** (println!, not eprintln! — this is a user-initiated exit 0, not an error), and returns the orchestrator via `?`-style early return with `Ok(())`. The helper is extractable as a small pure fn — see Unit 5 test scenarios.
+- **Cancellation scope.** R8 applies to prompt boundaries. During the in-flight Step 5 network call, Ctrl-C follows normal process interruption semantics; once control returns to an `inquire` prompt, ESC / Ctrl-C again map to `"Setup cancelled."` + exit 0.
 - **Output channel policy:** all user-facing status messages (`"Setup cancelled."`, `"Config not saved."`, `"✓ Config saved to …"`, Step 3's `"✗ At least one LLM provider is required."`, Step 5's `"Sending …"` and `"✓ Health check passed."`) are stdout (`println!`). Only true error diagnostics (`analyze` failures, unhandled `anyhow::Error` propagation to the top-level `main`) go to stderr via `eprintln!`. Step 5's `"✗ Health check failed: …"` goes to stderr because it describes an external failure that the user may want to copy/paste or grep.
 - Re-export at `cli::setup::run` so the top-level dispatcher can call `cli::setup::run()`.
 
@@ -619,7 +633,7 @@ fetch_timeout_secs         = 120
 
 - [x] **Unit 6: `analyze` subcommand handler**
 
-**Goal:** Extract today's `main.rs` body into `cli::analyze::run(symbol: &str)` and gate it on a present/complete user config.
+**Goal:** Extract today's `main.rs` body into `cli::analyze::run(symbol: &str)` and gate it on a complete effective runtime config.
 
 **Requirements:** R1, R2, R10
 
@@ -633,11 +647,11 @@ fetch_timeout_secs         = 120
 **Approach:**
 - `pub fn run(symbol: &str) -> anyhow::Result<()>`:
   1. ASCII banner (moved from `main.rs`).
-  2. `Config::load()` — on error, print `"✗ Config not found or incomplete. Run \`scorpio setup\` to configure your API keys and providers."` to stderr and return `Err(...)` so the caller can exit 1. (Rationale: returning the error keeps `main.rs` as the single `exit(1)` site.)
+  2. `Config::load()` — if load or readiness fails, return an error whose `Display` is exactly `"✗ Config not found or incomplete. Run \`scorpio setup\` to configure your API keys and providers."`. `analyze::run` does **not** print this message itself; `main.rs` remains the single error-printing site.
   3. Validate the symbol with `crate::data::symbol::validate_symbol`. On error, print the underlying message to stderr and return `Err(...)`.
   4. Build the tokio runtime + run the identical sequence that lives in `main.rs` today (Copilot preflight, snapshot store, rate limiters, completion-model handles, data clients, `TradingState::new(&symbol, &target_date)`, `TradingPipeline::new(...)`, `pipeline.run_analysis_cycle`, `format_final_report`).
   5. Replace the `cfg.trading.asset_symbol.clone()` line with the passed-in `symbol` argument.
-- Add a small helper that distinguishes "config missing" from "config malformed" so the error message is accurate (check `user_config_path()` existence before calling `Config::load()`).
+- Add a small helper that maps any load/readiness failure into the exact R2 user-facing error while preserving the underlying cause via `context(...)` for debugging.
 
 **Execution note:** Lift-and-shift; behaviour must be byte-identical to today's pipeline. A visual diff before/after `pipeline.run_analysis_cycle` is the primary check.
 
@@ -719,13 +733,13 @@ fetch_timeout_secs         = 120
 
 **Approach:**
 - Purely documentation. No behavioural changes beyond the comment addition in `config.toml`.
-- Verify `grep -rn "trading.asset_symbol" docs/ src/` returns zero results (all references should have been killed in Units 3 and 6).
+- Verify `grep -rn "trading.asset_symbol\|trading\.asset_symbol" src/ tests/ README.md config.toml` returns zero results. Historical plan/spec artifacts under `docs/plans/` and `docs/superpowers/specs/` are excluded from this gate.
 
 **Test scenarios:**
 - Test expectation: none — documentation-only. Verification via visual review and the `grep` check.
 
 **Verification:**
-- `grep -rn "trading.asset_symbol\|trading\.asset_symbol" docs/ src/ tests/` returns zero hits.
+- `grep -rn "trading.asset_symbol\|trading\.asset_symbol" src/ tests/ README.md config.toml` returns zero hits.
 - `CLAUDE.md` renders cleanly; links are intact.
 
 ## System-Wide Impact
@@ -733,17 +747,18 @@ fetch_timeout_secs         = 120
 - **Interaction graph:**
   - `src/main.rs` → `cli::analyze::run` / `cli::setup::run` (new dispatch edge).
   - `cli::analyze::run` consumes everything `main.rs` currently consumes: `Config::load`, `preflight_copilot_if_configured`, `SnapshotStore::from_config`, `ProviderRateLimiters::from_config`, `create_completion_model`, `FinnhubClient`, `FredClient`, `YFinanceClient`, `TradingState::new`, `TradingPipeline::new`, `pipeline.run_analysis_cycle`, `format_final_report`.
-  - `cli::setup::steps::step5_health_check` consumes `create_completion_model` + `build_agent` + `prompt_with_retry` — the same code paths the pipeline exercises for every LLM call.
-- **Error propagation:** `cli::analyze::run` returns `anyhow::Result<()>` and the dispatcher exits 1 on error. The spec's "Config not found" phrasing is emitted from `analyze::run` and surfaced as the `anyhow` error's `Display`. Clap handles its own exit 2 on parse failure.
+  - `cli::setup::steps::step5_health_check` consumes `Config::load_effective_runtime` + `create_completion_model` + `build_agent` + `prompt_with_retry` — the same code paths the pipeline exercises for every LLM call.
+- **Error propagation:** `cli::analyze::run` returns `anyhow::Result<()>` and the dispatcher exits 1 on error. `analyze::run` maps load/readiness failures into the exact R2 message, but `main.rs` remains the single stderr-printing site. Clap handles its own exit 2 on parse failure.
 - **State lifecycle risks:**
   - Brief plaintext window for API keys in `PartialConfig::Option<String>` between TOML deserialize and `SecretString` promotion. Documented in `PartialConfig` rustdoc; no persistence of plaintext beyond the return scope.
   - Atomic write is guarded against partial-write visibility via `NamedTempFile::persist`; crash before persist leaves the original file untouched.
-  - On Unix, `0o600` is applied to the temp file before `persist`, so the old post-rename permission race is closed. The remaining cross-platform gap is Windows, where the file inherits default NTFS ACLs.
+  - On Unix, `0o600` is applied to the temp file before `persist`, so the old post-rename permission race is closed.
+  - On Windows, this change does not write secret-bearing config files; users must rely on env vars.
 - **API surface parity:** the public `scorpio-analyst` CLI gains two subcommands. No other consumers (Python bindings, HTTP server, etc.) exist today.
 - **Integration coverage:**
   - `cli::analyze::run` end-to-end (needs a live run or a mocked LLM/data stack); covered by manual QA and existing `tests/` integration suites which construct pipelines directly.
   - Setup wizard end-to-end — manual QA only; no CI automation for interactive `inquire` prompts.
-  - `Config::load_from_user_path` + `PartialConfig` round-trip — fully unit-testable with `tempfile`.
+  - `Config::load_from_user_path` + `Config::load_effective_runtime` + `PartialConfig` round-trip — fully unit-testable with `tempfile`.
 - **Unchanged invariants:**
   - `TradingState.asset_symbol` field on the runtime state stays intact (explicit spec callout).
   - `.env` precedence: `SCORPIO_OPENAI_API_KEY` env var still overrides any value in the user config file.
@@ -757,10 +772,12 @@ fetch_timeout_secs         = 120
 | Risk                                                                                                                                                                                              | Mitigation                                                                                                                                                                                                                                                                                                                               |
 |---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `SecretString` is not `Serialize` — a direct port of the spec's `Option<SecretString>` field shape won't compile.                                                                                 | Use `Option<String>` in `PartialConfig`; document the plaintext window in rustdoc; promote to `SecretString` at merge time in `Config::load_from_user_path`. Key Technical Decision above.                                                                                                                                               |
-| Removing `asset_symbol` cascades into 6 test-fixture files and 3 `Config::validate()` tests. Missing a site breaks CI.                                                                            | `cargo build` fails immediately if any reference is missed; grep check in Unit 8 (`trading.asset_symbol`) is the belt-and-braces.                                                                                                                                                                                                        |
+| Removing `asset_symbol` cascades into 6 test-fixture files and 3 `Config::validate()` tests. Missing a site breaks CI.                                                                            | `cargo build` fails immediately if any reference is missed; Unit 8's grep check is scoped to live implementation surfaces (`src/`, `tests/`, `README.md`, `config.toml`) rather than historical planning docs.                                                                                                                             |
 | `PartialConfig` is flat but `Config` is nested; naive `toml::to_string_pretty` + `config::File::from_str` round-trip fails to populate nested fields and silently drops `#[serde(skip)]` secrets. | Unit 3 explicitly synthesises nested TOML for non-secret fields only (via `partial_to_nested_toml_non_secrets`) and injects secrets manually in two passes (PartialConfig-then-env). See Unit 3 Approach step 5 for the exact sequence.                                                                                                  |
 | `inquire 0.9` ESC behaviour: `prompt_skippable()` converts ESC to `Ok(None)`, which contradicts the spec's "ESC and Ctrl-C both = Setup cancelled."                                               | Use `prompt()` (non-skippable) for all Password/Select/Text/Confirm prompts. The "Enter to keep existing" UX is preserved at the `apply_*` helper layer: empty input on `Password::prompt()` yields `Ok("")`, which maps to "keep existing" when the current value is `Some`. This also eliminates the infinite-loop ESC risk in Step 3. |
-| Cross-platform file permissions (`0o600`) only meaningful on Unix.                                                                                                                                | `#[cfg(unix)]` guard around `set_permissions` (called **before** `persist` to eliminate the race window). On Windows, the file inherits NTFS defaults; wizard emits a one-line stderr warning on first save so users on multi-user systems see the gap. Documented as a known limitation in Operational Notes.                           |
+| Cross-platform file permissions (`0o600`) only meaningful on Unix.                                                                                                                                | `#[cfg(unix)]` guard around `set_permissions` (called **before** `persist` to eliminate the race window). On Windows, this change refuses to persist secret-bearing config files and directs users to env vars instead.                                                                                                                   |
+| `HOME` may be unset, making `~/.scorpio-analyst/config.toml` ambiguous for secret storage.                                                                                                        | `user_config_path()` returns an error for `setup` when `HOME` is unavailable. `analyze` still supports env-only operation and does not silently fall back to writing secrets under the current working directory.                                                                                                                          |
+| A malformed user config could otherwise brick the guided recovery path.                                                                                                                            | `setup` detects parse failures separately, offers backup-and-start-fresh, and only exits without changes if the user declines recovery.                                                                                                                                                                                                   |
 | Health check blocks the wizard for up to 50 minutes per attempt if `cfg.llm.analyst_timeout_secs` is reused (default 3000 s × 3 retries ≈ 150 min).                                               | Use a dedicated `const HEALTH_CHECK_TIMEOUT_SECS: u64 = 30` in `cli::setup::steps`; `RetryPolicy::default()` still applies but with a wizard-appropriate per-attempt budget.                                                                                                                                                             |
 | Env-var stale-key override: a stale `SCORPIO_*_API_KEY` in the shell profile silently wins over the key just saved via `scorpio setup`.                                                           | `tracing::warn!` in `Config::load_from_user_path` step 5b when env overrides file. Users running `RUST_LOG=warn` or higher see the override; debugging guide note in Operational Notes.                                                                                                                                                  |
 | `PartialConfig` holds plaintext secrets for the full wizard session (minutes possible), broader than today's 1-line `secret_from_env` window.                                                     | Accepted residual risk. Mitigations: `PartialConfig` is never logged (redacting `Debug`); it is file-scoped in `cli::setup` with no external callers; drop happens at wizard exit. `anyhow::Context` strings must not include `PartialConfig` values or TOML content — enforced at implementation review.                                |
@@ -772,15 +789,16 @@ fetch_timeout_secs         = 120
 ## Documentation / Operational Notes
 
 - **Rollout:** single-PR drop. No feature flag — the new CLI supersedes the old behaviour atomically.
-- **User migration:** existing users will hit `✗ Config not found or incomplete` on first run after upgrade. The message tells them to run `scorpio setup`. Add a short note in the PR description (and CHANGELOG if/when we have one) calling this out.
+- **User migration:** existing users can keep running `analyze` through env vars alone, or move to the guided `scorpio setup` path for a persistent home-directory config. Add a short note in the PR description (and CHANGELOG if/when we have one) explaining both paths.
 - **Docs:**
   - `config.toml` (project root) gains a deprecation comment in Unit 8.
   - A solutions doc for the `SecretString` serialization decision is deferred to `/ce:compound` after implementation (captured as Unit 8 optional deliverable).
 - **Known limitations surfaced in review (to be documented in the PR description / README):**
   - **Key removal.** The wizard does not offer a "remove this key" option; deselecting a provider in Step 3 leaves the old key on disk (per spec). Users who want to revoke a stored key must edit `~/.scorpio-analyst/config.toml` manually. A future `scorpio config clear-keys` subcommand is a natural follow-up but out of scope here.
-  - **Windows file permissions.** On Windows, `~/.scorpio-analyst/config.toml` is stored with default NTFS ACLs — no chmod equivalent is applied. Any local user who can enumerate the home directory can read the file. The wizard emits a one-line stderr warning on Windows after save. A future unit could add DPAPI-based protection.
+  - **Windows persistence.** On Windows, this change does not persist secret-bearing config files. Users must configure `SCORPIO_*` env vars instead. A future unit could add DPAPI- or Credential-Manager-based storage.
   - **CWD `.env` loading.** `dotenvy::dotenv().ok()` loads `.env` from the current working directory. Running `scorpio` from a directory controlled by another user (or containing a stale project `.env`) means env vars can silently override the saved config — including secret keys. This preserves existing behaviour; users should avoid running `scorpio` from untrusted directories. A follow-up could pin the dotenv search path to `~/.scorpio-analyst/.env` instead of CWD.
   - **Stale env-var override.** If the user sets an API key via `scorpio setup` but also has a stale `SCORPIO_*_API_KEY` in their shell profile, the env var wins silently. Step 5b of `Config::load_from_user_path` emits `tracing::warn!` on override, visible when `RUST_LOG=warn` or higher.
+  - **Prompt-boundary cancellation.** ESC / Ctrl-C are normalized to `"Setup cancelled."` at prompt boundaries. During the in-flight Step 5 network call, normal process interruption semantics apply.
 - **Monitoring:** no production monitoring implications — this is a CLI binary, not a service.
 
 ## Sources & References
