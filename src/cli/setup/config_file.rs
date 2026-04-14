@@ -109,7 +109,10 @@ pub fn load_user_config() -> anyhow::Result<PartialConfig> {
 /// an existing config. On Unix, `0o600` permissions are set on the temp file
 /// *before* the rename to close the race window.
 /// Context strings in errors contain only the file path and the underlying I/O error.
-pub(crate) fn save_user_config_at(cfg: &PartialConfig, path: impl AsRef<Path>) -> anyhow::Result<()> {
+pub(crate) fn save_user_config_at(
+    cfg: &PartialConfig,
+    path: impl AsRef<Path>,
+) -> anyhow::Result<()> {
     let path = path.as_ref();
     let parent = path.parent().ok_or_else(|| {
         anyhow::anyhow!("config path has no parent directory: {}", path.display())
