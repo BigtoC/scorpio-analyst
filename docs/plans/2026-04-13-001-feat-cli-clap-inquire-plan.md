@@ -159,7 +159,7 @@ The spec (`docs/superpowers/specs/2026-04-10-cli-design.md`) pins the solution: 
 flowchart LR
     A[main] --> B[init_tracing]
     B --> C[clap parse]
-    C -->|Subcommand::Analyze {symbol}| D[cli::analyze::run]
+    C -->|Subcommand::Analyze symbol| D[cli::analyze::run]
     C -->|Subcommand::Setup| E[cli::setup::run]
     C -->|help / parse error| F[clap exits 0/2]
     D --> D1[banner]
@@ -513,10 +513,15 @@ fetch_timeout_secs         = 120
     Get your free key at: https://fredaccount.stlouisfed.org/apikeys
     ```
   - `step3_llm_provider_keys(partial)`:
-    - Prompt header: `"Which LLM providers do you want to configure?"`.
-    - `MultiSelect::new("Which LLM providers do you want to configure?", WIZARD_PROVIDERS.iter().map(|p| p.to_string()).collect())` with `.with_default(&pre_checked_indices)` where `pre_checked_indices` contains the positions of providers that already have a key in `partial`.
-    - For each selected provider, prompt `Password::new(&format!("{} API key:", provider))` with the same "[already set — press Enter to keep]" help message when applicable.
-    - After apply, if `validate_step3_result(partial).is_err()`, print `"✗ At least one LLM provider is required."` to stdout and loop. (ESC on the MultiSelect or any Password prompt surfaces `OperationCanceled` → wizard cancels; see Decision on `prompt()` vs `prompt_skippable()` above — this prevents infinite-loop ESC scenarios.)
+    - Sequential loop — presents one provider at a time rather than a `MultiSelect` upfront. This lets the user stop after their first key instead of pre-selecting everything at once.
+    - Loop body:
+      1. Build `available`: all `WIZARD_PROVIDERS` entries that are NOT yet configured in `partial` (key field is `None`). If `available` is empty (all four providers already have keys), break — Step 3 is done.
+      2. `Select::new("Select an LLM provider to configure:", available)` with the cursor defaulting to index 0. Returns the chosen `ProviderId`.
+      3. `Password::new(&format!("{} API key:", provider))` with `PasswordDisplayMode::Masked`. Since the provider was drawn from the unconfigured pool, no "[already set]" help message is shown; attach the non-empty closure validator (`"Value is required"`).
+      4. Apply via `apply_optional_secret`.
+      5. If `validate_step3_result(partial).is_ok()` (≥1 key is now saved) AND there are still unconfigured providers remaining, prompt `Confirm::new("Do you want to add another provider key?").with_default(false).prompt()`. If the user answers No (or presses Enter accepting the default), break out of the loop.
+      6. If `validate_step3_result(partial).is_err()` (still no keys), print `"✗ At least one LLM provider is required."` to stdout and continue the loop (do not offer the "more keys?" prompt yet — the minimum is not met).
+    - ESC or Ctrl-C on the `Select`, `Password`, or `Confirm` prompt surfaces `OperationCanceled` / `OperationInterrupted` → wizard cancels (same as all other steps).
   - `step4_provider_routing(partial)`:
     - Quick-thinking provider: `Select::new("Quick-thinking provider (used by analyst agents):", eligible_providers)` where `eligible_providers = providers_with_keys(partial)`. Starting cursor set to the index of `partial.quick_thinking_provider` if present.
     - Quick-thinking model: `Text::new("Quick-thinking model:")` with `.with_initial_value(&partial.quick_thinking_model.clone().unwrap_or_default())` (empty string when `None` — the user must type a value; non-empty validator enforces this). Attach a closure validator: `if input.trim().is_empty() { Invalid("Model name must not be empty".into()) } else { Valid }`.
@@ -529,7 +534,7 @@ fetch_timeout_secs         = 120
     - On failure, print `"✗ Health check failed: {err}"` to stderr, then `inquire::Confirm::new("Save config anyway?").with_default(false).prompt()`. Return `Ok(true)` if user confirms (save despite failure), `Ok(false)` if user declines (bail without saving).
 - Pure helpers (all `pub(super)`):
   - `apply_optional_secret(partial, field, user_input)` — maps `(partial, "finnhub_api_key", "")` → leave unchanged; `(partial, "finnhub_api_key", "abc")` → set `Some("abc")`. Semantics are intentionally permissive; empty-input rejection is enforced at the interactive validator layer, not here.
-  - `apply_llm_provider_keys(partial, selected: &[ProviderId], inputs: &[(ProviderId, String)])` — for each (provider, input), apply `apply_optional_secret` semantics; providers NOT in `selected` retain their existing key untouched (spec: "Providers that are deselected are left untouched in config").
+  - `apply_llm_provider_keys` is **removed** — the sequential loop in `step3_llm_provider_keys` calls `apply_optional_secret` directly for each (provider, key) pair. Providers never selected are simply never touched, so no "deselected = keep" bookkeeping helper is needed.
   - `apply_provider_routing(partial, quick: (ProviderId, String), deep: (ProviderId, String))` — writes all four routing fields.
   - `validate_step3_result(partial) -> Result<(), &'static str>` — returns `Err("At least one LLM provider is required.")` when all four LLM key fields are `None`.
   - `providers_with_keys(partial) -> Vec<ProviderId>` — helper for step 4's filter; preserves declaration order of `WIZARD_PROVIDERS`.
@@ -546,8 +551,6 @@ fetch_timeout_secs         = 120
 
 **Test scenarios:**
 - *Happy path — `apply_optional_secret`:* `("", None)` → `None`; `("abc", None)` → `Some("abc")`; `("", Some("old"))` → `Some("old")`; `("new", Some("old"))` → `Some("new")`.
-- *Happy path — `apply_llm_provider_keys`:* selected=[OpenAI, Anthropic], inputs=[(OpenAI,"a"),(Anthropic,"b")] → both keys set; pre-existing `gemini_api_key=Some("g")` remains `Some("g")`; pre-existing `openrouter_api_key=None` remains `None`.
-- *Edge case — `apply_llm_provider_keys`:* deselecting a provider keeps its existing key untouched (spec invariant).
 - *Edge case — `apply_provider_routing`:* writes all four fields in a single call; partial updates are not supported.
 - *Error path — `validate_step3_result`:* all four key fields `None` → `Err`.
 - *Error path — `validate_step3_result`:* any single key field `Some(...)` → `Ok(())`.
