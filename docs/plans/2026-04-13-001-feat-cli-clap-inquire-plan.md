@@ -362,7 +362,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 2: `PartialConfig` + atomic config file IO**
+- [x] **Unit 2: `PartialConfig` + atomic config file IO**
 
 **Goal:** Create the data type that the wizard round-trips through `~/.scorpio-analyst/config.toml`, with atomic writes and (on Unix) 0o600 permissions.
 
@@ -416,7 +416,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 3: `Config::load()` reads user path; remove `asset_symbol`**
+- [x] **Unit 3: `Config::load()` reads user path; remove `asset_symbol`**
 
 **Goal:** Repoint the production config loader at `~/.scorpio-analyst/config.toml`, merge `PartialConfig` with env vars + compiled defaults, and drop `asset_symbol` from the config schema.
 
@@ -484,7 +484,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 4: Setup wizard step functions**
+- [x] **Unit 4: Setup wizard step functions**
 
 **Goal:** Implement the five interactive steps as split interactive / pure-helper pairs so the logic portions are unit-tested.
 
