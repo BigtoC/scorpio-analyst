@@ -368,27 +368,37 @@ impl Config {
     ///
     /// Precedence (highest wins): env vars > user file > compiled defaults.
     pub fn load() -> Result<Self> {
-        Self::load_from_user_path(crate::cli::setup::config_file::user_config_path())
+        match crate::cli::setup::config_file::user_config_path() {
+            Ok(path) => Self::load_from_user_path(path),
+            Err(_) => Self::load_effective_runtime(
+                crate::cli::setup::config_file::PartialConfig::default(),
+            ),
+        }
     }
 
     /// Load configuration from the user-level config file path.
     ///
-    /// 6-step merge: dotenvy → flat `PartialConfig` → synthesised nested TOML (non-secrets
-    /// only) → `config` crate pipeline with env-var overlay → manual secret injection (file
-    /// then env, env wins) → validate.
+    /// Loads flat `PartialConfig` from disk, then delegates to
+    /// [`Config::load_effective_runtime`] for the shared env/file/default merge.
     pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Self> {
         use crate::cli::setup::config_file::{PartialConfig, load_user_config_at};
 
-        // Step 1: populate process env from .env if present.
+        let partial: PartialConfig = load_user_config_at(path)?;
+        Self::load_effective_runtime(partial)
+    }
+
+    /// Build the effective runtime config from in-memory wizard/file values.
+    ///
+    /// Precedence (highest wins): env vars > `partial` > compiled defaults.
+    pub fn load_effective_runtime(
+        partial: crate::cli::setup::config_file::PartialConfig,
+    ) -> Result<Self> {
+        // Populate process env from .env if present so setup health checks and analyze
+        // share the same effective runtime config.
         let _ = dotenvy::dotenv();
 
-        // Step 2: deserialise flat PartialConfig from disk (or default if missing).
-        let partial: PartialConfig = load_user_config_at(path)?;
+        let nested_toml = partial_to_nested_toml_non_secrets(&partial)?;
 
-        // Step 3: synthesise nested TOML for non-secret PartialConfig fields.
-        let nested_toml = partial_to_nested_toml_non_secrets(&partial);
-
-        // Step 4: config crate pipeline — file values first, env vars overlay.
         let mut cfg: Config = config::Config::builder()
             .add_source(
                 config::File::from_str(&nested_toml, config::FileFormat::Toml).required(false),
@@ -403,7 +413,7 @@ impl Config {
             .try_deserialize()
             .context("failed to deserialize configuration")?;
 
-        // Step 5a: inject secrets from PartialConfig fields.
+        // Inject secrets from PartialConfig first.
         if let Some(k) = &partial.openai_api_key {
             cfg.providers.openai.api_key = Some(SecretString::from(k.clone()));
         }
@@ -423,7 +433,7 @@ impl Config {
             cfg.api.fred_api_key = Some(SecretString::from(k.clone()));
         }
 
-        // Step 5b: env var secrets override file secrets (env wins); warn on collision.
+        // Env var secrets override file secrets (env wins); warn on collision.
         macro_rules! inject_env_override {
             ($field:expr, $env:literal, $name:literal) => {
                 if let Some(key) = secret_from_env($env) {
@@ -465,7 +475,6 @@ impl Config {
         );
         inject_env_override!(cfg.api.fred_api_key, "SCORPIO_FRED_API_KEY", "fred");
 
-        // Step 6: validate.
         cfg.validate()?;
         Ok(cfg)
     }
@@ -528,6 +537,41 @@ impl Config {
         Ok(())
     }
 
+    /// Return `Ok(())` when the effective runtime config can execute an analysis run.
+    pub fn is_analysis_ready(&self) -> Result<()> {
+        let rate_limiters = crate::rate_limit::ProviderRateLimiters::from_config(&self.providers);
+
+        crate::providers::factory::create_completion_model(
+            crate::providers::ModelTier::QuickThinking,
+            &self.llm,
+            &self.providers,
+            &rate_limiters,
+        )
+        .map_err(|e| anyhow::anyhow!("quick-thinking provider is not ready: {e}"))?;
+
+        crate::providers::factory::create_completion_model(
+            crate::providers::ModelTier::DeepThinking,
+            &self.llm,
+            &self.providers,
+            &rate_limiters,
+        )
+        .map_err(|e| anyhow::anyhow!("deep-thinking provider is not ready: {e}"))?;
+
+        let finnhub_limiter =
+            crate::rate_limit::SharedRateLimiter::finnhub_from_config(&self.rate_limits)
+                .unwrap_or_else(|| crate::rate_limit::SharedRateLimiter::disabled("finnhub"));
+        crate::data::FinnhubClient::new(&self.api, finnhub_limiter)
+            .map_err(|e| anyhow::anyhow!("finnhub client is not ready: {e}"))?;
+
+        let fred_limiter =
+            crate::rate_limit::SharedRateLimiter::fred_from_config(&self.rate_limits)
+                .unwrap_or_else(|| crate::rate_limit::SharedRateLimiter::disabled("fred"));
+        crate::data::FredClient::new(&self.api, fred_limiter)
+            .map_err(|e| anyhow::anyhow!("fred client is not ready: {e}"))?;
+
+        Ok(())
+    }
+
     fn has_any_llm_key(&self) -> bool {
         self.providers.openai.api_key.is_some()
             || self.providers.anthropic.api_key.is_some()
@@ -543,25 +587,41 @@ impl Config {
 /// fields carry `#[serde(skip)]` and would be silently dropped by the pipeline anyway.
 fn partial_to_nested_toml_non_secrets(
     partial: &crate::cli::setup::config_file::PartialConfig,
-) -> String {
-    let mut llm = String::new();
+) -> Result<String> {
+    let mut root = toml::map::Map::new();
+    let mut llm = toml::map::Map::new();
+
     if let Some(p) = &partial.quick_thinking_provider {
-        llm.push_str(&format!("quick_thinking_provider = \"{p}\"\n"));
+        llm.insert(
+            "quick_thinking_provider".to_owned(),
+            toml::Value::String(p.clone()),
+        );
     }
     if let Some(m) = &partial.quick_thinking_model {
-        llm.push_str(&format!("quick_thinking_model = \"{m}\"\n"));
+        llm.insert(
+            "quick_thinking_model".to_owned(),
+            toml::Value::String(m.clone()),
+        );
     }
     if let Some(p) = &partial.deep_thinking_provider {
-        llm.push_str(&format!("deep_thinking_provider = \"{p}\"\n"));
+        llm.insert(
+            "deep_thinking_provider".to_owned(),
+            toml::Value::String(p.clone()),
+        );
     }
     if let Some(m) = &partial.deep_thinking_model {
-        llm.push_str(&format!("deep_thinking_model = \"{m}\"\n"));
+        llm.insert(
+            "deep_thinking_model".to_owned(),
+            toml::Value::String(m.clone()),
+        );
     }
-    if llm.is_empty() {
-        String::new()
-    } else {
-        format!("[llm]\n{llm}")
+
+    if !llm.is_empty() {
+        root.insert("llm".to_owned(), toml::Value::Table(llm));
     }
+
+    toml::to_string(&toml::Value::Table(root))
+        .context("failed to serialize non-secret partial config")
 }
 
 fn secret_from_env(key: &str) -> Option<SecretString> {
@@ -1263,6 +1323,31 @@ deep_thinking_model = "o3"
             cfg.trading,
             TradingConfig::default(),
             "no trading section should yield TradingConfig::default()"
+        );
+    }
+
+    #[test]
+    fn partial_to_nested_toml_non_secrets_escapes_quotes_and_newlines() {
+        let partial = crate::cli::setup::config_file::PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt\"4o\nmini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            ..Default::default()
+        };
+
+        let nested = partial_to_nested_toml_non_secrets(&partial)
+            .expect("non-secret partial config should serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("generated TOML should parse");
+
+        assert_eq!(
+            parsed["llm"]["quick_thinking_model"].as_str(),
+            Some("gpt\"4o\nmini"),
+            "model value should round-trip as inert data, not new TOML syntax"
+        );
+        assert!(
+            parsed.get("storage").is_none(),
+            "model content must not escape into unrelated config sections"
         );
     }
 
