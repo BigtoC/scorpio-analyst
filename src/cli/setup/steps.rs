@@ -30,7 +30,7 @@ pub const WIZARD_PROVIDERS: &[ProviderId] = &[
 
 // ── Step 1: Finnhub API key ───────────────────────────────────────────────────
 
-pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> anyhow::Result<()> {
+pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     println!(
         "Finnhub provides fundamental data, earnings, and company news.\n\
          Get your free key at: https://finnhub.io/dashboard"
@@ -49,14 +49,14 @@ pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> anyhow::Result<()> 
             }
         });
     }
-    let input = prompt.prompt().map_err(|e| anyhow::anyhow!(e))?;
+    let input = prompt.prompt()?;
     partial.finnhub_api_key = apply_optional_secret(&input, existing);
     Ok(())
 }
 
 // ── Step 2: FRED API key ──────────────────────────────────────────────────────
 
-pub fn step2_fred_api_key(partial: &mut PartialConfig) -> anyhow::Result<()> {
+pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     println!(
         "FRED provides macro indicators (CPI, inflation, interest rates).\n\
          Get your free key at: https://fredaccount.stlouisfed.org/apikeys"
@@ -75,14 +75,14 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> anyhow::Result<()> {
             }
         });
     }
-    let input = prompt.prompt().map_err(|e| anyhow::anyhow!(e))?;
+    let input = prompt.prompt()?;
     partial.fred_api_key = apply_optional_secret(&input, existing);
     Ok(())
 }
 
 // ── Step 3: LLM provider keys ─────────────────────────────────────────────────
 
-pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> anyhow::Result<()> {
+pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     loop {
         // Build the list of providers not yet configured.
         let available: Vec<ProviderId> = WIZARD_PROVIDERS
@@ -100,8 +100,7 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> anyhow::Result<()
             "Select an LLM provider to configure:",
             available.iter().map(|p| p.to_string()).collect(),
         )
-        .prompt()
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .prompt()?;
 
         // Map the display string back to a ProviderId.
         let chosen = available
@@ -118,8 +117,7 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> anyhow::Result<()
                     Ok(Validation::Valid)
                 }
             })
-            .prompt()
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .prompt()?;
 
         set_provider_key(partial, chosen, apply_optional_secret(&input, None));
 
@@ -142,8 +140,7 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> anyhow::Result<()
 
         let add_more = inquire::Confirm::new("Do you want to add another provider key?")
             .with_default(false)
-            .prompt()
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .prompt()?;
 
         if !add_more {
             break;
@@ -154,7 +151,7 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> anyhow::Result<()
 
 // ── Step 4: Provider routing ──────────────────────────────────────────────────
 
-pub fn step4_provider_routing(partial: &mut PartialConfig) -> anyhow::Result<()> {
+pub fn step4_provider_routing(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     let eligible = providers_with_keys(partial);
     let eligible_names: Vec<String> = eligible.iter().map(|p| p.to_string()).collect();
 
@@ -170,8 +167,7 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> anyhow::Result<()>
         eligible_names.clone(),
     )
     .with_starting_cursor(qt_default_idx)
-    .prompt()
-    .map_err(|e| anyhow::anyhow!(e))?;
+    .prompt()?;
 
     let qt_model = inquire::Text::new("Quick-thinking model:")
         .with_initial_value(partial.quick_thinking_model.as_deref().unwrap_or(""))
@@ -182,8 +178,7 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> anyhow::Result<()>
                 Ok(Validation::Valid)
             }
         })
-        .prompt()
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .prompt()?;
 
     // Deep-thinking provider
     let dt_default_idx = partial
@@ -197,8 +192,7 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> anyhow::Result<()>
         eligible_names,
     )
     .with_starting_cursor(dt_default_idx)
-    .prompt()
-    .map_err(|e| anyhow::anyhow!(e))?;
+    .prompt()?;
 
     let dt_model = inquire::Text::new("Deep-thinking model:")
         .with_initial_value(partial.deep_thinking_model.as_deref().unwrap_or(""))
@@ -209,8 +203,7 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> anyhow::Result<()>
                 Ok(Validation::Valid)
             }
         })
-        .prompt()
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .prompt()?;
 
     let qt_id = eligible
         .iter()
