@@ -565,7 +565,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 5: Setup orchestrator + cancellation handling**
+- [x] **Unit 5: Setup orchestrator + cancellation handling**
 
 **Goal:** Wire the five steps together, handle ESC/Ctrl-C, and persist the final `PartialConfig`.
 
@@ -605,7 +605,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 6: `analyze` subcommand handler**
+- [x] **Unit 6: `analyze` subcommand handler**
 
 **Goal:** Extract today's `main.rs` body into `cli::analyze::run(symbol: &str)` and gate it on a present/complete user config.
 
@@ -647,7 +647,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 7: Thin `main.rs` clap dispatcher + `Cli` struct**
+- [x] **Unit 7: Thin `main.rs` clap dispatcher + `Cli` struct**
 
 **Goal:** Replace `src/main.rs` with a minimal clap entry point that dispatches to `cli::analyze::run` or `cli::setup::run`.
 
@@ -690,7 +690,7 @@ fetch_timeout_secs         = 120
 
 ---
 
-- [ ] **Unit 8: Cleanup, docs, and deprecation note**
+- [x] **Unit 8: Cleanup, docs, and deprecation note**
 
 **Goal:** Polish — update any docs that referenced `cfg.trading.asset_symbol`, confirm `config.toml` is harmless, and capture solutions-style learnings.
 
