@@ -30,6 +30,7 @@ pub const WIZARD_PROVIDERS: &[ProviderId] = &[
 
 // ── Step 1: Finnhub API key ───────────────────────────────────────────────────
 
+/// Prompt for the Finnhub API key, preserving an existing saved value on empty input.
 pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     println!(
         "Finnhub provides fundamental data, earnings, and company news.\n\
@@ -40,7 +41,8 @@ pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> Result<(), inquire:
         inquire::Password::new("Finnhub API key:").with_display_mode(PasswordDisplayMode::Masked);
     if existing.is_some() {
         prompt = prompt.with_help_message("[already set — press Enter to keep]");
-    } else {
+    }
+    if secret_step_requires_input(existing.as_deref(), true) {
         prompt = prompt.with_validator(|input: &str| {
             if input.is_empty() {
                 Ok(Validation::Invalid("Value is required".into()))
@@ -56,6 +58,7 @@ pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> Result<(), inquire:
 
 // ── Step 2: FRED API key ──────────────────────────────────────────────────────
 
+/// Prompt for the optional FRED API key, preserving an existing saved value on empty input.
 pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     println!(
         "FRED provides macro indicators (CPI, inflation, interest rates).\n\
@@ -66,7 +69,8 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
         inquire::Password::new("FRED API key:").with_display_mode(PasswordDisplayMode::Masked);
     if existing.is_some() {
         prompt = prompt.with_help_message("[already set — press Enter to keep]");
-    } else {
+    }
+    if secret_step_requires_input(existing.as_deref(), false) {
         prompt = prompt.with_validator(|input: &str| {
             if input.is_empty() {
                 Ok(Validation::Invalid("Value is required".into()))
@@ -82,44 +86,36 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
 
 // ── Step 3: LLM provider keys ─────────────────────────────────────────────────
 
+/// Prompt for one or more LLM provider keys, requiring at least one configured provider.
 pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     loop {
-        // Build the list of providers not yet configured.
-        let available: Vec<ProviderId> = WIZARD_PROVIDERS
-            .iter()
-            .copied()
-            .filter(|p| provider_key(partial, *p).is_none())
-            .collect();
-
-        // All providers already have keys — nothing more to do.
-        if available.is_empty() {
-            break;
-        }
-
         let provider = inquire::Select::new(
             "Select an LLM provider to configure:",
-            available.iter().map(|p| p.to_string()).collect(),
+            provider_choices(partial),
         )
         .prompt()?;
 
-        // Map the display string back to a ProviderId.
-        let chosen = available
-            .into_iter()
-            .find(|p| p.to_string() == provider)
-            .expect("selected provider must be in available list");
+        let chosen = provider.provider;
+        let existing = provider_key(partial, chosen).map(str::to_owned);
 
-        let input = inquire::Password::new(&format!("{chosen} API key:"))
-            .with_display_mode(PasswordDisplayMode::Masked)
-            .with_validator(|s: &str| {
+        let prompt_label = format!("{chosen} API key:");
+        let mut prompt =
+            inquire::Password::new(&prompt_label).with_display_mode(PasswordDisplayMode::Masked);
+        if existing.is_some() {
+            prompt = prompt.with_help_message("[already set — press Enter to keep]");
+        }
+        if secret_step_requires_input(existing.as_deref(), true) {
+            prompt = prompt.with_validator(|s: &str| {
                 if s.is_empty() {
                     Ok(Validation::Invalid("Value is required".into()))
                 } else {
                     Ok(Validation::Valid)
                 }
-            })
-            .prompt()?;
+            });
+        }
+        let input = prompt.prompt()?;
 
-        set_provider_key(partial, chosen, apply_optional_secret(&input, None));
+        set_provider_key(partial, chosen, apply_optional_secret(&input, existing));
 
         if validate_step3_result(partial).is_err() {
             // Haven't met the minimum yet — loop without asking "more?".
@@ -145,15 +141,19 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
         if !add_more {
             break;
         }
+
+        if providers_with_keys(partial).len() == WIZARD_PROVIDERS.len() {
+            break;
+        }
     }
     Ok(())
 }
 
 // ── Step 4: Provider routing ──────────────────────────────────────────────────
 
+/// Prompt for quick/deep provider routing using only providers that have saved keys.
 pub fn step4_provider_routing(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     let eligible = providers_with_keys(partial);
-    let eligible_names: Vec<String> = eligible.iter().map(|p| p.to_string()).collect();
 
     // Quick-thinking provider
     let qt_default_idx = partial
@@ -162,9 +162,9 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> Result<(), inquire
         .and_then(|name| eligible.iter().position(|p| p.as_str() == name))
         .unwrap_or(0);
 
-    let qt_provider_str = inquire::Select::new(
+    let qt_provider = inquire::Select::new(
         "Quick-thinking provider (used by analyst agents):",
-        eligible_names.clone(),
+        eligible.clone(),
     )
     .with_starting_cursor(qt_default_idx)
     .prompt()?;
@@ -187,9 +187,9 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> Result<(), inquire
         .and_then(|name| eligible.iter().position(|p| p.as_str() == name))
         .unwrap_or(0);
 
-    let dt_provider_str = inquire::Select::new(
+    let dt_provider = inquire::Select::new(
         "Deep-thinking provider (used by researcher, trader, and risk agents):",
-        eligible_names,
+        eligible,
     )
     .with_starting_cursor(dt_default_idx)
     .prompt()?;
@@ -205,18 +205,7 @@ pub fn step4_provider_routing(partial: &mut PartialConfig) -> Result<(), inquire
         })
         .prompt()?;
 
-    let qt_id = eligible
-        .iter()
-        .find(|p| p.to_string() == qt_provider_str)
-        .copied()
-        .expect("selected quick-thinking provider must be in eligible list");
-    let dt_id = eligible
-        .iter()
-        .find(|p| p.to_string() == dt_provider_str)
-        .copied()
-        .expect("selected deep-thinking provider must be in eligible list");
-
-    apply_provider_routing(partial, (qt_id, qt_model), (dt_id, dt_model));
+    apply_provider_routing(partial, (qt_provider, qt_model), (dt_provider, dt_model));
     Ok(())
 }
 
@@ -232,57 +221,29 @@ pub fn step5_health_check(partial: &PartialConfig) -> anyhow::Result<bool> {
     let deep_model = partial.deep_thinking_model.as_deref().unwrap_or("");
     println!("Sending \"Hello\" to deep-thinking provider ({deep_provider} / {deep_model})...");
 
-    let llm = crate::config::LlmConfig {
-        quick_thinking_provider: partial.quick_thinking_provider.clone().unwrap_or_default(),
-        deep_thinking_provider: deep_provider.to_owned(),
-        quick_thinking_model: partial.quick_thinking_model.clone().unwrap_or_default(),
-        deep_thinking_model: deep_model.to_owned(),
-        max_debate_rounds: 1,
-        max_risk_rounds: 1,
-        analyst_timeout_secs: HEALTH_CHECK_TIMEOUT_SECS,
-        valuation_fetch_timeout_secs: HEALTH_CHECK_TIMEOUT_SECS,
-        retry_max_retries: 1,
-        retry_base_delay_ms: 500,
-    };
+    let cfg = effective_runtime_config_for_setup(partial)?;
 
-    let providers = build_providers_config_from_partial(partial);
-    let rate_limiters = crate::rate_limit::ProviderRateLimiters::from_config(&providers);
-
-    let handle = crate::providers::factory::create_completion_model(
-        ModelTier::DeepThinking,
-        &llm,
-        &providers,
-        &rate_limiters,
-    )
-    .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
-
-    let agent = crate::providers::factory::build_agent(&handle, "");
-
-    let result = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to build runtime for health check")?
-        .block_on(crate::providers::factory::prompt_with_retry(
-            &agent,
-            "Hello",
-            Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
-            &RetryPolicy::default(),
-        ));
-
-    match result {
-        Ok(_) => {
-            println!("✓ Health check passed.");
-            Ok(true)
-        }
-        Err(e) => {
-            eprintln!("✗ Health check failed: {e}");
-            let save_anyway = inquire::Confirm::new("Save config anyway?")
+    run_health_check_loop(
+        || run_single_health_check(&cfg),
+        |error| {
+            eprintln!(
+                "✗ Health check failed: {}",
+                crate::providers::factory::sanitize_error_summary(&error.to_string())
+            );
+        },
+        || {
+            inquire::Confirm::new("Retry health check?")
+                .with_default(true)
+                .prompt()
+                .map_err(anyhow::Error::from)
+        },
+        || {
+            inquire::Confirm::new("Save config anyway?")
                 .with_default(false)
                 .prompt()
-                .map_err(|e| anyhow::anyhow!(e))?;
-            Ok(save_anyway)
-        }
-    }
+                .map_err(anyhow::Error::from)
+        },
+    )
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -334,7 +295,76 @@ pub(super) fn providers_with_keys(partial: &PartialConfig) -> Vec<ProviderId> {
         .collect()
 }
 
+fn provider_choices(partial: &PartialConfig) -> Vec<ProviderChoice> {
+    WIZARD_PROVIDERS
+        .iter()
+        .copied()
+        .map(|provider| ProviderChoice {
+            provider,
+            label: if provider_key(partial, provider).is_some() {
+                format!("{provider} [already set]")
+            } else {
+                provider.to_string()
+            },
+        })
+        .collect()
+}
+
+pub(super) const fn secret_step_requires_input(
+    existing: Option<&str>,
+    required_on_first_run: bool,
+) -> bool {
+    existing.is_none() && required_on_first_run
+}
+
+pub(super) fn effective_runtime_config_for_setup(
+    partial: &PartialConfig,
+) -> anyhow::Result<crate::config::Config> {
+    crate::config::Config::load_effective_runtime(partial.clone())
+}
+
+pub(super) fn run_health_check_loop<Run, Report, Retry, Save>(
+    mut run_check: Run,
+    mut report_failure: Report,
+    mut should_retry: Retry,
+    mut should_save_anyway: Save,
+) -> anyhow::Result<bool>
+where
+    Run: FnMut() -> anyhow::Result<()>,
+    Report: FnMut(&anyhow::Error),
+    Retry: FnMut() -> anyhow::Result<bool>,
+    Save: FnMut() -> anyhow::Result<bool>,
+{
+    loop {
+        match run_check() {
+            Ok(()) => {
+                println!("✓ Health check passed.");
+                return Ok(true);
+            }
+            Err(error) => {
+                report_failure(&error);
+                if should_retry()? {
+                    continue;
+                }
+                return should_save_anyway();
+            }
+        }
+    }
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProviderChoice {
+    provider: ProviderId,
+    label: String,
+}
+
+impl std::fmt::Display for ProviderChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
 
 fn provider_key(partial: &PartialConfig, provider: ProviderId) -> Option<&str> {
     match provider {
@@ -356,22 +386,51 @@ fn set_provider_key(partial: &mut PartialConfig, provider: ProviderId, value: Op
     }
 }
 
-fn build_providers_config_from_partial(partial: &PartialConfig) -> crate::config::ProvidersConfig {
-    use secrecy::SecretString;
-    let mut providers = crate::config::ProvidersConfig::default();
-    if let Some(k) = &partial.openai_api_key {
-        providers.openai.api_key = Some(SecretString::from(k.clone()));
-    }
-    if let Some(k) = &partial.anthropic_api_key {
-        providers.anthropic.api_key = Some(SecretString::from(k.clone()));
-    }
-    if let Some(k) = &partial.gemini_api_key {
-        providers.gemini.api_key = Some(SecretString::from(k.clone()));
-    }
-    if let Some(k) = &partial.openrouter_api_key {
-        providers.openrouter.api_key = Some(SecretString::from(k.clone()));
-    }
-    providers
+fn preflight_analysis_runtime_for_setup_with_runtime(
+    cfg: &crate::config::Config,
+    rate_limiters: &crate::rate_limit::ProviderRateLimiters,
+    runtime: &tokio::runtime::Runtime,
+) -> anyhow::Result<()> {
+    cfg.is_analysis_ready()
+        .context("effective runtime config is not ready for analysis")?;
+
+    runtime
+        .block_on(crate::providers::factory::preflight_copilot_if_configured(
+            &cfg.llm,
+            &cfg.providers,
+            rate_limiters,
+        ))
+        .map_err(|e| anyhow::anyhow!("failed to preflight configured Copilot provider: {e}"))
+}
+
+fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
+    let rate_limiters = crate::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build runtime for health check")?;
+
+    preflight_analysis_runtime_for_setup_with_runtime(cfg, &rate_limiters, &runtime)?;
+
+    let handle = crate::providers::factory::create_completion_model(
+        ModelTier::DeepThinking,
+        &cfg.llm,
+        &cfg.providers,
+        &rate_limiters,
+    )
+    .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
+
+    let agent = crate::providers::factory::build_agent(&handle, "");
+
+    runtime
+        .block_on(crate::providers::factory::prompt_with_retry(
+            &agent,
+            "Hello",
+            Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+            &RetryPolicy::default(),
+        ))
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -379,6 +438,9 @@ fn build_providers_config_from_partial(partial: &PartialConfig) -> crate::config
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn partial_with_openai() -> PartialConfig {
         PartialConfig {
@@ -502,6 +564,189 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(providers_with_keys(&p), WIZARD_PROVIDERS.to_vec());
+    }
+
+    #[test]
+    fn provider_labels_include_already_set_marker_on_rerun() {
+        let p = PartialConfig {
+            openai_api_key: Some("o".into()),
+            ..Default::default()
+        };
+
+        let labels: Vec<String> = provider_choices(&p)
+            .into_iter()
+            .map(|choice| choice.to_string())
+            .collect();
+
+        assert!(
+            labels.contains(&"openai [already set]".to_owned()),
+            "rerun choices should keep already-configured providers selectable"
+        );
+        assert!(
+            labels.contains(&"anthropic".to_owned()),
+            "unset providers should still be available"
+        );
+    }
+
+    #[test]
+    fn required_secret_step_requires_input_on_first_run() {
+        assert!(secret_step_requires_input(None, true));
+    }
+
+    #[test]
+    fn optional_secret_step_does_not_require_input_on_first_run() {
+        assert!(!secret_step_requires_input(None, false));
+    }
+
+    #[test]
+    fn effective_runtime_config_for_setup_uses_env_secret_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            openai_api_key: Some("sk-from-file".into()),
+            finnhub_api_key: Some("fh-file".into()),
+            fred_api_key: Some("fred-file".into()),
+            ..Default::default()
+        };
+
+        unsafe {
+            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-from-env");
+        }
+
+        let cfg = effective_runtime_config_for_setup(&partial).expect("merged config should load");
+
+        unsafe {
+            std::env::remove_var("SCORPIO_OPENAI_API_KEY");
+        }
+
+        assert_eq!(
+            cfg.providers
+                .openai
+                .api_key
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+            Some("sk-from-env")
+        );
+    }
+
+    #[test]
+    fn run_single_health_check_requires_same_analysis_readiness_as_analyze() {
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            openai_api_key: Some("sk-from-file".into()),
+            ..Default::default()
+        };
+
+        let cfg = effective_runtime_config_for_setup(&partial).expect("merged config should load");
+        let err = run_single_health_check(&cfg)
+            .expect_err("health check should fail when analyze readiness fails");
+
+        assert!(
+            err.to_string().contains("quick-thinking provider")
+                || err.to_string().contains("not ready for analysis"),
+            "analysis-readiness failure should be surfaced before probe: {err}"
+        );
+    }
+
+    #[test]
+    fn run_single_health_check_rejects_copilot_provider_that_fails_preflight() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let copilot_path = std::env::current_exe().expect("current test binary path");
+        let saved_copilot_path = std::env::var_os("SCORPIO_COPILOT_CLI_PATH");
+
+        unsafe {
+            std::env::set_var("SCORPIO_COPILOT_CLI_PATH", &copilot_path);
+        }
+
+        let partial = PartialConfig {
+            finnhub_api_key: Some("fh-test".into()),
+            fred_api_key: Some("fred-test".into()),
+            openai_api_key: Some("sk-openai".into()),
+            quick_thinking_provider: Some("copilot".into()),
+            quick_thinking_model: Some("o3".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("gpt-4o-mini".into()),
+            ..Default::default()
+        };
+
+        let cfg = effective_runtime_config_for_setup(&partial).expect("merged config should load");
+        let err = run_single_health_check(&cfg)
+            .expect_err("copilot preflight mismatch should fail before the probe");
+
+        unsafe {
+            match saved_copilot_path {
+                Some(ref value) => std::env::set_var("SCORPIO_COPILOT_CLI_PATH", value),
+                None => std::env::remove_var("SCORPIO_COPILOT_CLI_PATH"),
+            }
+        }
+
+        assert!(
+            err.to_string().to_ascii_lowercase().contains("copilot"),
+            "copilot preflight failure should be surfaced: {err:#}"
+        );
+    }
+
+    #[test]
+    fn run_health_check_loop_retries_then_succeeds() {
+        let mut attempts = 0;
+
+        let should_save = run_health_check_loop(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    anyhow::bail!("transient failure")
+                }
+                Ok(())
+            },
+            |_err| {},
+            || Ok(true),
+            || Ok(false),
+        )
+        .expect("retry flow should succeed");
+
+        assert!(should_save);
+        assert_eq!(
+            attempts, 2,
+            "health check should retry once before succeeding"
+        );
+    }
+
+    #[test]
+    fn run_health_check_loop_can_save_anyway_after_failure() {
+        let mut attempts = 0;
+
+        let should_save = run_health_check_loop(
+            || {
+                attempts += 1;
+                anyhow::bail!("persistent failure")
+            },
+            |_err| {},
+            || Ok(false),
+            || Ok(true),
+        )
+        .expect("save-anyway flow should succeed");
+
+        assert!(should_save);
+        assert_eq!(attempts, 1, "declining retry should skip additional probes");
+    }
+
+    #[test]
+    fn run_health_check_loop_can_abort_after_failure() {
+        let should_save = run_health_check_loop(
+            || anyhow::bail!("persistent failure"),
+            |_err| {},
+            || Ok(false),
+            || Ok(false),
+        )
+        .expect("abort flow should succeed");
+
+        assert!(!should_save);
     }
 
     // ── ProviderId Display ────────────────────────────────────────────────────
