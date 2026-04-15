@@ -55,7 +55,7 @@ jobs:
             os: ubuntu-latest
             archive_ext: tar.gz
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             archive_ext: tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -68,12 +68,6 @@ jobs:
       - name: Install Protobuf compiler (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install cross-compilation toolchain (aarch64 Linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Install Protobuf compiler (Windows)
         if: runner.os == 'Windows'
@@ -94,8 +88,7 @@ jobs:
 
       - name: Strip binary (Linux / macOS)
         if: runner.os != 'Windows'
-        run: |
-          strip "target/${{ matrix.target }}/release/scorpio-analyst" || true
+        run: strip "target/${{ matrix.target }}/release/scorpio-analyst" || true
 
       - name: Package binary (Linux / macOS)
         if: runner.os != 'Windows'
