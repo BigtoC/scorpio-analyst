@@ -38,7 +38,8 @@ pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> Result<(), inquire:
     );
     let existing = partial.finnhub_api_key.clone();
     let mut prompt =
-        inquire::Password::new("Finnhub API key:").with_display_mode(PasswordDisplayMode::Masked);
+        inquire::Password::new("Finnhub API key:").with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation();
     if existing.is_some() {
         prompt = prompt.with_help_message("[already set — press Enter to keep]");
     }
@@ -66,7 +67,8 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
     );
     let existing = partial.fred_api_key.clone();
     let mut prompt =
-        inquire::Password::new("FRED API key:").with_display_mode(PasswordDisplayMode::Masked);
+        inquire::Password::new("FRED API key:").with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation();
     if existing.is_some() {
         prompt = prompt.with_help_message("[already set — press Enter to keep]");
     }
@@ -100,7 +102,8 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
 
         let prompt_label = format!("{chosen} API key:");
         let mut prompt =
-            inquire::Password::new(&prompt_label).with_display_mode(PasswordDisplayMode::Masked);
+            inquire::Password::new(&prompt_label).with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation();
         if existing.is_some() {
             prompt = prompt.with_help_message("[already set — press Enter to keep]");
         }
@@ -429,15 +432,19 @@ fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
             )
             .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
 
-            let agent = crate::providers::factory::build_agent(&handle, "");
-
             runtime
-                .block_on(crate::providers::factory::prompt_with_retry(
-                    &agent,
-                    "Hello",
-                    Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
-                    &RetryPolicy::default(),
-                ))
+                .block_on(async {
+                    // build_agent calls ToolServer::new().run() → tokio::spawn internally,
+                    // so it must be called from within a live Tokio runtime context.
+                    let agent = crate::providers::factory::build_agent(&handle, "");
+                    crate::providers::factory::prompt_with_retry(
+                        &agent,
+                        "Hello",
+                        Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                        &RetryPolicy::default(),
+                    )
+                    .await
+                })
                 .map(|_| ())
                 .map_err(|e| anyhow::anyhow!(e))
         },
