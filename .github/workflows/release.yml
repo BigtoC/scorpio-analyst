@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Cargo.toml version matches release tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Enforce vx.x.x format
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '$TAG' does not match the required format vx.x.x"
+            exit 1
+          fi
+
+          EXPECTED="${TAG#v}"
+          CARGO_VERSION=$(grep -m 1 '^version' Cargo.toml | cut -d '"' -f2)
+
+          echo "Tag version:   $EXPECTED"
+          echo "Cargo version: $CARGO_VERSION"
+
+          if [ "$CARGO_VERSION" != "$EXPECTED" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match release tag ($TAG). Bump the version in Cargo.toml before releasing."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_ext: zip
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Protobuf compiler (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install cross-compilation toolchain (aarch64 Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Install Protobuf compiler (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc --no-progress
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          strip "target/${{ matrix.target }}/release/scorpio-analyst" || true
+
+      - name: Package binary (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          ARCHIVE="scorpio-analyst-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" scorpio-analyst
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "scorpio-analyst-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target\${{ matrix.target }}\release\scorpio-analyst.exe" -DestinationPath $archive
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE }}

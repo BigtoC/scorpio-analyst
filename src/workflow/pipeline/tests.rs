@@ -220,9 +220,6 @@ quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "AAPL"
 "#,
     )
     .expect("write config");
@@ -246,11 +243,7 @@ async fn task_id_constants_match_task_impl_ids() {
             retry_max_retries: 1,
             retry_base_delay_ms: 1,
         },
-        trading: crate::config::TradingConfig {
-            asset_symbol: "AAPL".to_owned(),
-            backtest_start: None,
-            backtest_end: None,
-        },
+        trading: crate::config::TradingConfig::default(),
         api: Default::default(),
         providers: Default::default(),
         storage: Default::default(),
@@ -348,11 +341,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
             retry_max_retries: 1,
             retry_base_delay_ms: 1,
         },
-        trading: crate::config::TradingConfig {
-            asset_symbol: "AAPL".to_owned(),
-            backtest_start: None,
-            backtest_end: None,
-        },
+        trading: crate::config::TradingConfig::default(),
         api: Default::default(),
         providers: Default::default(),
         storage: Default::default(),

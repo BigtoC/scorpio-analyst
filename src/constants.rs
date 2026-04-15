@@ -29,3 +29,7 @@ pub const TRADER_MAX_TURNS: usize = 100;
 
 /// News analysis
 pub const NEWS_ANALYSIS_DAYS: TimeDelta = chrono::Duration::days(30);
+
+/// Health check timeout in seconds. Kept short so a failure surfaces quickly
+/// at the end of the wizard rather than blocking for the full pipeline timeout.
+pub const HEALTH_CHECK_TIMEOUT_SECS: u64 = 30;

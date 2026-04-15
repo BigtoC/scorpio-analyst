@@ -243,9 +243,6 @@ quick_thinking_provider = "openai"
 deep_thinking_provider = "openai"
 quick_thinking_model = "gpt-4o-mini"
 deep_thinking_model = "o3"
-
-[trading]
-asset_symbol = "AAPL"
 "#,
     )
     .expect("config file should be written");

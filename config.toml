@@ -1,4 +1,14 @@
-# Scorpio Analyst — default configuration
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  DEPRECATED — this file is no longer read by `scorpio`.                 ║
+# ║                                                                          ║
+# ║  Run `scorpio setup` to create ~/.scorpio-analyst/config.toml, which    ║
+# ║  is the sole user-level config source as of the CLI rewrite (Unit 3).   ║
+# ║                                                                          ║
+# ║  The file is kept on disk so existing workspaces are not disrupted.      ║
+# ║  It will be removed in a future cleanup commit.                          ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# Scorpio Analyst — default configuration (INERT — see note above)
 # Override with .env or environment variables (prefix: SCORPIO__, e.g. SCORPIO__LLM__MAX_DEBATE_ROUNDS=5)
 
 # Analysis pack selection (built-in packs only).
