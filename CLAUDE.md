@@ -42,11 +42,11 @@ layer:
 
 ```
 src/
-├── main.rs                    # CLI entrypoint (config → tracing → pipeline → report)
+├── main.rs                    # Thin clap dispatcher → cli::analyze or cli::setup
 ├── lib.rs                     # Public module exports
-├── config.rs                  # Configuration loading (TOML + env)
+├── config.rs                  # Configuration loading (PartialConfig merge + env)
 ├── error.rs                   # TradingError enum + RetryPolicy
-├── constants.rs               # Constants
+├── constants.rs               # Constants (HEALTH_CHECK_TIMEOUT_SECS, etc.)
 ├── observability.rs           # Tracing/logging setup
 ├── rate_limit.rs              # Governor-based rate limiting
 │
@@ -100,7 +100,13 @@ src/
 │   └── acp.rs                 # Agent Client Protocol (JSON-RPC 2.0/NDJSON)
 │
 ├── report/                    # Final report formatting
-├── cli/                       # CLI module
+├── cli/                       # CLI module (clap + inquire)
+│   ├── mod.rs                 # Cli + Commands structs; clap derive
+│   ├── analyze.rs             # scorpio analyze <SYMBOL>: banner → config → validate → pipeline
+│   └── setup/
+│       ├── mod.rs             # Wizard orchestrator, handle_cancellation, run()
+│       ├── steps.rs           # Interactive step fns (1-5) + pure helpers
+│       └── config_file.rs     # PartialConfig, load/save user config (atomic, 0o600)
 └── backtest/                  # Backtesting framework (skeleton)
 ```
 
@@ -129,8 +135,7 @@ src/
     exceeds the constant, so bumping it explicitly retires incompatible data instead of silently failing at runtime.
   - The thesis lookup degrades gracefully (warn + skip) when deserialization fails, so a stale snapshot never crashes the
     pipeline. But relying on that for every deploy is a smell — `#[serde(default)]` + version bumps are the real fix.
-- **Phased UI**: Phase 1 = CLI (`clap`); Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop
-  app (`gpui`, behind `--features gui`). All phases share the same core `lib.rs`.
+- **Phased UI**: Phase 1 = CLI (`clap` + `inquire`) — **done**; `scorpio analyze <SYMBOL>` runs the pipeline, `scorpio setup` is an interactive wizard that writes `~/.scorpio-analyst/config.toml`. Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop app (`gpui`, behind `--features gui`). All phases share the same core `lib.rs`.
 
 ### Crate Dependencies
 
@@ -139,13 +144,17 @@ src/
 | `rig-core` 0.32                    | LLM provider abstraction (OpenAI, Anthropic, Gemini, custom Copilot)               |
 | `graph-flow` 0.5 (feature `"rig"`) | Stateful directed graph orchestration (LangGraph equivalent)                       |
 | `schemars` 1                       | JSON schema generation for `#[tool]` macros                                        |
+| `clap` 4 (feature `"derive"`)      | CLI argument parsing (`scorpio analyze <SYMBOL>`, `scorpio setup`)                 |
+| `inquire` 0.9                      | Interactive setup wizard prompts (Password, Select, Confirm)                       |
+| `toml` 1                           | Serialise `PartialConfig` to `~/.scorpio-analyst/config.toml`                      |
+| `tempfile` 3                       | Atomic config writes (`NamedTempFile` + rename)                                    |
 | `finnhub` 0.2                      | Corporate fundamentals, earnings, news, insider transactions                       |
 | `yfinance-rs` 0.7                  | Historical OHLCV pricing data                                                      |
 | `kand` 0.2                         | Technical indicators (RSI, MACD, ATR, Bollinger, SMA, EMA, VWMA) in pure Rust f64  |
 | `tokio` 1 (full)                   | Async runtime                                                                      |
 | `serde` / `serde_json`             | State serialization                                                                |
 | `thiserror` 2 / `anyhow` 1         | Error handling (thiserror for typed domain errors, anyhow for context propagation) |
-| `governor` 0.8                     | Global rate limiting (shared via `Arc` across concurrent agents)                   |
+| `governor` 0.10                    | Global rate limiting (shared via `Arc` across concurrent agents)                   |
 | `tracing` / `tracing-subscriber`   | Structured observability (json + env-filter features)                              |
 | `secrecy` 0.10                     | API key management (zeroed on drop, excluded from Debug/logs)                      |
 | `config` 0.15 / `dotenvy` 0.15     | TOML config loading + .env file support                                            |
@@ -159,7 +168,7 @@ src/
 | `futures` 0.3                      | Async combinators                                                                  |
 | `nonzero_ext` 0.3                  | Non-zero integer utilities                                                         |
 
-**Dev dependencies:** `proptest` 1, `mockall` 0.13, `pretty_assertions` 1, `tempfile` 3, `paft-money` 0.7, `rust_decimal` 1.
+**Dev dependencies:** `proptest` 1, `mockall` 0.13, `pretty_assertions` 1, `paft-money` 0.7, `rust_decimal` 1.
 
 ## Work Mode
 > Based on the complexity of the tasks, choose the appropriate work mode
@@ -201,9 +210,14 @@ When to invoke `/ce:compound`:
 
 ### Configuration Loading Order
 
-1. `config.toml` — non-sensitive defaults (checked in)
-2. `.env` via `dotenvy` — local secrets (git-ignored)
-3. Environment variables — CI/CD overrides (prefix: `SCORPIO__`, e.g. `SCORPIO__LLM__MAX_DEBATE_ROUNDS=5`)
+**Precedence (highest wins):** env vars > user file > compiled defaults.
+
+1. `~/.scorpio-analyst/config.toml` — written by `scorpio setup`; flat `PartialConfig` (API keys + routing). Created with `0o600` permissions.
+2. `.env` via `dotenvy` — local env overrides (git-ignored), loaded before the config crate pipeline.
+3. `SCORPIO__*` environment variables — CI/CD overrides (double-underscore separator, e.g. `SCORPIO__LLM__MAX_DEBATE_ROUNDS=5`). Wins over the user file on any overlapping field.
+4. `SCORPIO_*_API_KEY` env vars — secret injection; always override the corresponding key from the user file (with a `tracing::warn!` on collision).
+
+The project-level `config.toml` at the repo root is **not read at runtime** — it is inert and kept only to avoid disrupting existing workspaces. See the deprecation notice inside the file itself.
 
 ### Error Handling Pattern
 
@@ -217,20 +231,25 @@ When to invoke `/ce:compound`:
 ### Running & Debugging
 
 ```bash
-RUST_LOG=debug cargo run                              # Full trace output
-SCORPIO__TRADING__ASSET_SYMBOL=AAPL cargo run          # Override ticker
-SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run            # Quick test (1 debate round)
+cargo run -- setup                                    # Interactive wizard → ~/.scorpio-analyst/config.toml
+cargo run -- analyze AAPL                             # Run pipeline for AAPL
+cargo run -- analyze AAPL -- --help                   # Show analyze flags
+RUST_LOG=debug cargo run -- analyze AAPL              # Full trace output
+SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -- analyze AAPL   # Quick test (1 debate round)
+cargo run -- --version                                # Print version
 ```
 
 ### Common Development Tasks
 
-| Task              | Files to touch                                                                                             |
-|-------------------|------------------------------------------------------------------------------------------------------------|
-| New agent         | `src/agents/<role>/`, `src/workflow/tasks/`                                                                |
-| New data source   | `src/data/`, expose via `#[tool]` macro                                                                    |
-| New indicator     | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                                                  |
-| New LLM provider  | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/`                        |
-| New analysis pack | Add `PackId` variant in `src/analysis_packs/manifest.rs`, add match arm in `src/analysis_packs/builtin.rs` |
+| Task                  | Files to touch                                                                                                                                                   |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| New agent             | `src/agents/<role>/`, `src/workflow/tasks/`                                                                                                                      |
+| New data source       | `src/data/`, expose via `#[tool]` macro                                                                                                                          |
+| New indicator         | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                                                                                                        |
+| New LLM provider      | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/`                                                                              |
+| New analysis pack     | Add `PackId` variant in `src/analysis_packs/manifest.rs`, add match arm in `src/analysis_packs/builtin.rs`                                                       |
+| New CLI subcommand    | Add variant to `Commands` in `src/cli/mod.rs`, create `src/cli/<name>.rs`, dispatch in `main.rs`                                                                 |
+| New wizard config key | Add field to `PartialConfig` in `src/cli/setup/config_file.rs`, add step in `src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `src/config.rs` |
 
 ## CI/CD
 
