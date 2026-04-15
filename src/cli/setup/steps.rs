@@ -342,7 +342,7 @@ where
                 }
                 should_save_anyway()
             }
-        }
+        };
     }
 }
 
@@ -397,6 +397,18 @@ fn preflight_analysis_runtime_for_setup_with_runtime(
         .map_err(|e| anyhow::anyhow!("failed to preflight configured Copilot provider: {e}"))
 }
 
+fn check_selected_model_tiers<I, Check>(tiers: I, mut check: Check) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = ModelTier>,
+    Check: FnMut(ModelTier) -> anyhow::Result<()>,
+{
+    for tier in tiers {
+        check(tier).with_context(|| format!("{tier} model health check failed"))?;
+    }
+
+    Ok(())
+}
+
 fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
     let rate_limiters = crate::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -406,25 +418,30 @@ fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
 
     preflight_analysis_runtime_for_setup_with_runtime(cfg, &rate_limiters, &runtime)?;
 
-    let handle = crate::providers::factory::create_completion_model(
-        ModelTier::DeepThinking,
-        &cfg.llm,
-        &cfg.providers,
-        &rate_limiters,
+    check_selected_model_tiers(
+        [ModelTier::QuickThinking, ModelTier::DeepThinking],
+        |tier| {
+            let handle = crate::providers::factory::create_completion_model(
+                tier,
+                &cfg.llm,
+                &cfg.providers,
+                &rate_limiters,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
+
+            let agent = crate::providers::factory::build_agent(&handle, "");
+
+            runtime
+                .block_on(crate::providers::factory::prompt_with_retry(
+                    &agent,
+                    "Hello",
+                    Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                    &RetryPolicy::default(),
+                ))
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!(e))
+        },
     )
-    .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
-
-    let agent = crate::providers::factory::build_agent(&handle, "");
-
-    runtime
-        .block_on(crate::providers::factory::prompt_with_retry(
-            &agent,
-            "Hello",
-            Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
-            &RetryPolicy::default(),
-        ))
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!(e))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -686,6 +703,49 @@ mod tests {
         assert!(
             err.to_string().to_ascii_lowercase().contains("copilot"),
             "copilot preflight failure should be surfaced: {err:#}"
+        );
+    }
+
+    #[test]
+    fn check_selected_model_tiers_runs_quick_then_deep() {
+        let mut seen = Vec::new();
+
+        check_selected_model_tiers(
+            [ModelTier::QuickThinking, ModelTier::DeepThinking],
+            |tier| {
+                seen.push(tier);
+                Ok(())
+            },
+        )
+        .expect("both tier checks should succeed");
+
+        assert_eq!(
+            seen,
+            vec![ModelTier::QuickThinking, ModelTier::DeepThinking]
+        );
+    }
+
+    #[test]
+    fn check_selected_model_tiers_stops_after_quick_failure() {
+        let mut seen = Vec::new();
+
+        let err = check_selected_model_tiers(
+            [ModelTier::QuickThinking, ModelTier::DeepThinking],
+            |tier| {
+                seen.push(tier);
+                match tier {
+                    ModelTier::QuickThinking => anyhow::bail!("quick tier failed"),
+                    ModelTier::DeepThinking => Ok(()),
+                }
+            },
+        )
+        .expect_err("quick-tier failure should abort later checks");
+
+        assert_eq!(seen, vec![ModelTier::QuickThinking]);
+        assert!(
+            err.to_string()
+                .contains("quick-thinking model health check failed"),
+            "tier failure should be annotated: {err:#}"
         );
     }
 
