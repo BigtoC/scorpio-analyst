@@ -37,9 +37,9 @@ pub fn step1_finnhub_api_key(partial: &mut PartialConfig) -> Result<(), inquire:
          Get your free key at: https://finnhub.io/dashboard"
     );
     let existing = partial.finnhub_api_key.clone();
-    let mut prompt =
-        inquire::Password::new("Finnhub API key:").with_display_mode(PasswordDisplayMode::Masked)
-            .without_confirmation();
+    let mut prompt = inquire::Password::new("Finnhub API key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation();
     if existing.is_some() {
         prompt = prompt.with_help_message("[already set — press Enter to keep]");
     }
@@ -66,9 +66,9 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
          Get your free key at: https://fredaccount.stlouisfed.org/apikeys"
     );
     let existing = partial.fred_api_key.clone();
-    let mut prompt =
-        inquire::Password::new("FRED API key:").with_display_mode(PasswordDisplayMode::Masked)
-            .without_confirmation();
+    let mut prompt = inquire::Password::new("FRED API key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation();
     if existing.is_some() {
         prompt = prompt.with_help_message("[already set — press Enter to keep]");
     }
@@ -101,8 +101,8 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
         let existing = provider_key(partial, chosen).map(str::to_owned);
 
         let prompt_label = format!("{chosen} API key:");
-        let mut prompt =
-            inquire::Password::new(&prompt_label).with_display_mode(PasswordDisplayMode::Masked)
+        let mut prompt = inquire::Password::new(&prompt_label)
+            .with_display_mode(PasswordDisplayMode::Masked)
             .without_confirmation();
         if existing.is_some() {
             prompt = prompt.with_help_message("[already set — press Enter to keep]");
