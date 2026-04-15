@@ -28,7 +28,15 @@ Add two entries to the build matrix:
   archive_ext: tar.gz
 ```
 
-No other changes needed — the existing strip and package steps are already gated on `runner.os != 'Windows'` and work for macOS.
+Add one macOS-specific prerequisite step before `cargo build`:
+
+```yaml
+- name: Install Protobuf compiler (macOS)
+  if: runner.os == 'macOS'
+  run: brew install protobuf
+```
+
+The existing strip and package steps are already gated on `runner.os != 'Windows'` and work for macOS.
 
 ## `install.sh` (Linux + macOS)
 
@@ -43,19 +51,20 @@ curl -fsSL https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install
 1. Detect OS via `uname -s`, arch via `uname -m`
 2. Map to release target string (see table below)
 3. Fetch latest release tag from GitHub API (`/releases/latest`)
-4. Download `scorpio-analyst-{VERSION}-{TARGET}.tar.gz` to a temp dir
-5. Extract, move binary to `~/.local/bin/scorpio`, `chmod +x`
-6. Warn if `~/.local/bin` is not in `$PATH`
-7. Clean up temp dir on exit (trap)
+4. Create `~/.local/bin` if it does not exist
+5. Download `scorpio-analyst-{VERSION}-{TARGET}.tar.gz` to a temp dir
+6. Extract, move binary to `~/.local/bin/scorpio`, `chmod +x`
+7. Warn if `~/.local/bin` is not in `$PATH`
+8. Clean up temp dir on exit (trap)
 
 **Platform mapping:**
 
-| OS | Arch (`uname -m`) | Target |
-|----|-------------------|--------|
-| Linux | `x86_64` | `x86_64-unknown-linux-gnu` |
-| Linux | `aarch64` | `aarch64-unknown-linux-gnu` |
-| macOS | `arm64` | `aarch64-apple-darwin` |
-| macOS | `x86_64` | `x86_64-apple-darwin` |
+| OS    | Arch (`uname -m`) | Target                      |
+|-------|-------------------|-----------------------------|
+| Linux | `x86_64`          | `x86_64-unknown-linux-gnu`  |
+| Linux | `aarch64`         | `aarch64-unknown-linux-gnu` |
+| macOS | `arm64`           | `aarch64-apple-darwin`      |
+| macOS | `x86_64`          | `x86_64-apple-darwin`       |
 
 **Error handling:**
 - Unsupported OS or arch → print message and exit 1
@@ -73,11 +82,12 @@ iwr https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install.ps1 | 
 
 **Logic:**
 1. Fetch latest release tag from GitHub API
-2. Download `scorpio-analyst-{VERSION}-x86_64-pc-windows-msvc.zip` to a temp dir
-3. Extract, rename `scorpio-analyst.exe` → `scorpio.exe`
-4. Move to `%USERPROFILE%\.local\bin\`
-5. Permanently add that dir to the user `PATH` env var if not already present
-6. Clean up temp dir
+2. Create `%USERPROFILE%\.local\bin\` if it does not exist
+3. Download `scorpio-analyst-{VERSION}-x86_64-pc-windows-msvc.zip` to a temp dir
+4. Extract, rename `scorpio-analyst.exe` → `scorpio.exe`
+5. Move to `%USERPROFILE%\.local\bin\`
+6. Permanently add that dir to the user `PATH` env var if not already present
+7. Clean up temp dir
 
 **Error handling:**
 - `$ErrorActionPreference = "Stop"` — any failure exits immediately
@@ -85,10 +95,10 @@ iwr https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install.ps1 | 
 
 ## Install Location
 
-| Platform | Path |
-|----------|------|
-| Linux / macOS | `~/.local/bin/scorpio` |
-| Windows | `%USERPROFILE%\.local\bin\scorpio.exe` |
+| Platform      | Path                                   |
+|---------------|----------------------------------------|
+| Linux / macOS | `~/.local/bin/scorpio`                 |
+| Windows       | `%USERPROFILE%\.local\bin\scorpio.exe` |
 
 ## Binary Naming
 
