@@ -221,7 +221,7 @@ pub fn step5_health_check(partial: &PartialConfig) -> anyhow::Result<bool> {
     let deep_model = partial.deep_thinking_model.as_deref().unwrap_or("");
     println!("Sending \"Hello\" to deep-thinking provider ({deep_provider} / {deep_model})...");
 
-    let cfg = effective_runtime_config_for_setup(partial)?;
+    let cfg = crate::config::Config::load_effective_runtime(partial.clone())?;
 
     run_health_check_loop(
         || run_single_health_check(&cfg),
@@ -317,12 +317,6 @@ pub(super) const fn secret_step_requires_input(
     existing.is_none() && required_on_first_run
 }
 
-pub(super) fn effective_runtime_config_for_setup(
-    partial: &PartialConfig,
-) -> anyhow::Result<crate::config::Config> {
-    crate::config::Config::load_effective_runtime(partial.clone())
-}
-
 pub(super) fn run_health_check_loop<Run, Report, Retry, Save>(
     mut run_check: Run,
     mut report_failure: Report,
@@ -336,17 +330,17 @@ where
     Save: FnMut() -> anyhow::Result<bool>,
 {
     loop {
-        match run_check() {
+        return match run_check() {
             Ok(()) => {
                 println!("✓ Health check passed.");
-                return Ok(true);
+                Ok(true)
             }
             Err(error) => {
                 report_failure(&error);
                 if should_retry()? {
                     continue;
                 }
-                return should_save_anyway();
+                should_save_anyway()
             }
         }
     }
@@ -599,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_runtime_config_for_setup_uses_env_secret_overrides() {
+    fn load_effective_runtime_uses_env_secret_overrides() {
         let _guard = ENV_LOCK.lock().unwrap();
         let partial = PartialConfig {
             quick_thinking_provider: Some("openai".into()),
@@ -616,7 +610,8 @@ mod tests {
             std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-from-env");
         }
 
-        let cfg = effective_runtime_config_for_setup(&partial).expect("merged config should load");
+        let cfg = crate::config::Config::load_effective_runtime(partial.clone())
+            .expect("merged config should load");
 
         unsafe {
             std::env::remove_var("SCORPIO_OPENAI_API_KEY");
@@ -643,7 +638,8 @@ mod tests {
             ..Default::default()
         };
 
-        let cfg = effective_runtime_config_for_setup(&partial).expect("merged config should load");
+        let cfg = crate::config::Config::load_effective_runtime(partial.clone())
+            .expect("merged config should load");
         let err = run_single_health_check(&cfg)
             .expect_err("health check should fail when analyze readiness fails");
 
@@ -675,7 +671,8 @@ mod tests {
             ..Default::default()
         };
 
-        let cfg = effective_runtime_config_for_setup(&partial).expect("merged config should load");
+        let cfg = crate::config::Config::load_effective_runtime(partial.clone())
+            .expect("merged config should load");
         let err = run_single_health_check(&cfg)
             .expect_err("copilot preflight mismatch should fail before the probe");
 
