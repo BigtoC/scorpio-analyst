@@ -8,18 +8,22 @@ $InstallDir = Join-Path $env:USERPROFILE ".local\bin"
 # --- Fetch latest release tag ---
 $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
 $Version = $Release.tag_name
+if (-not $Version) {
+    Write-Error "Could not determine latest release version. Check https://github.com/$Repo/releases"
+}
 
 Write-Host "Installing scorpio $Version for $Target..."
 
 $Archive = "scorpio-analyst-$Version-$Target.zip"
 $Url     = "https://github.com/$Repo/releases/download/$Version/$Archive"
 $Tmp     = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
-New-Item -ItemType Directory -Path $Tmp | Out-Null
 
 try {
+    New-Item -ItemType Directory -Path $Tmp | Out-Null
+
     # --- Download ---
     Write-Host "Downloading $Url..."
-    Invoke-WebRequest -Uri $Url -OutFile (Join-Path $Tmp $Archive)
+    Invoke-WebRequest -Uri $Url -OutFile (Join-Path $Tmp $Archive) -UseBasicParsing
     Expand-Archive -Path (Join-Path $Tmp $Archive) -DestinationPath $Tmp -Force
 
     # --- Install ---
@@ -34,8 +38,10 @@ try {
 
     # --- PATH ---
     $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($CurrentPath -notlike "*$InstallDir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$CurrentPath;$InstallDir", "User")
+    $PathParts = ($CurrentPath -split ';') | Where-Object { $_ -ne '' }
+    if ($InstallDir -notin $PathParts) {
+        $NewPath = ($PathParts + $InstallDir) -join ';'
+        [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
         Write-Host ""
         Write-Host "NOTE: Added $InstallDir to your PATH."
         Write-Host "Restart your terminal for the change to take effect."
