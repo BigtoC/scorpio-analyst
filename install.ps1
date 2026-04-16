@@ -10,6 +10,7 @@ $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest
 $Version = $Release.tag_name
 if (-not $Version) {
     Write-Error "Could not determine latest release version. Check https://github.com/$Repo/releases"
+    exit 1
 }
 
 Write-Host "Installing scorpio $Version for $Target..."
