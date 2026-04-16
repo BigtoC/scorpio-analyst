@@ -60,6 +60,12 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive_ext: zip
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive_ext: tar.gz
 
     steps:
       - name: Check out repository
@@ -72,6 +78,10 @@ jobs:
       - name: Install Protobuf compiler (Windows)
         if: runner.os == 'Windows'
         run: choco install protoc --no-progress
+
+      - name: Install Protobuf compiler (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
