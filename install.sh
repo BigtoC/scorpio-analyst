@@ -2,83 +2,120 @@
 set -euo pipefail
 
 REPO="BigtoC/scorpio-analyst"
-BINARY_NAME="scorpio"
 INSTALL_DIR="$HOME/.local/bin"
+TMP=$(mktemp -d)
 
-# --- Detect platform ---
+cleanup() {
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+
+CURL_OPTS=(
+  --fail
+  --silent
+  --show-error
+  --location
+  --connect-timeout 10
+  --max-time 60
+  --retry 3
+  --retry-delay 2
+  --retry-all-errors
+)
+
+require_tool() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required tool: $1" >&2
+    exit 1
+  fi
+}
+
+unsupported_platform() {
+  echo "Unsupported OS or architecture: $(uname -s)/$(uname -m)" >&2
+  exit 1
+}
+
+latest_asset_missing() {
+  echo "Latest release does not include ${TARGET} yet." >&2
+  exit 1
+}
+
+for tool in curl tar sed; do
+  require_tool "$tool"
+done
+
 OS=$(uname -s)
 ARCH=$(uname -m)
 
 case "$OS" in
   Linux)
     case "$ARCH" in
-      x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
+      x86_64) TARGET="x86_64-unknown-linux-gnu" ;;
       aarch64) TARGET="aarch64-unknown-linux-gnu" ;;
-      *)
-        echo "Unsupported Linux architecture: $ARCH" >&2
-        exit 1
-        ;;
+      *) unsupported_platform ;;
     esac
     ;;
   Darwin)
     case "$ARCH" in
-      arm64)  TARGET="aarch64-apple-darwin" ;;
+      arm64) TARGET="aarch64-apple-darwin" ;;
       x86_64) TARGET="x86_64-apple-darwin" ;;
-      *)
-        echo "Unsupported macOS architecture: $ARCH" >&2
-        exit 1
-        ;;
+      *) unsupported_platform ;;
     esac
     ;;
   *)
-    echo "Unsupported OS: $OS" >&2
-    echo "For Windows, run in PowerShell:" >&2
-    echo "  iex (iwr -useb 'https://raw.githubusercontent.com/$REPO/main/install.ps1')" >&2
-    exit 1
+    unsupported_platform
     ;;
 esac
 
-# --- Fetch latest release tag ---
-API_RESPONSE=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")
-VERSION=$(echo "$API_RESPONSE" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-
+VERSION=$(curl "${CURL_OPTS[@]}" "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 if [ -z "$VERSION" ]; then
-  echo "Failed to determine latest release version. Check https://github.com/$REPO/releases" >&2
+  echo "Failed to resolve latest release tag." >&2
   exit 1
 fi
 
-echo "Installing $BINARY_NAME $VERSION for $TARGET..."
+ARCHIVE="scorpio-${TARGET}.tar.gz"
+BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
+ARCHIVE_URL="$BASE_URL/$ARCHIVE"
 
-# --- Download ---
-ARCHIVE="scorpio-analyst-${VERSION}-${TARGET}.tar.gz"
-URL="https://github.com/$REPO/releases/download/$VERSION/$ARCHIVE"
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+PROBE_OPTS=()
+for opt in "${CURL_OPTS[@]}"; do
+  if [ "$opt" != "--fail" ]; then
+    PROBE_OPTS+=("$opt")
+  fi
+done
 
-echo "Downloading $URL..."
-curl -fsSL "$URL" -o "$TMP/$ARCHIVE"
+probe_status=$(curl "${PROBE_OPTS[@]}" --head --write-out '%{http_code}' --output /dev/null "$ARCHIVE_URL") || probe_status="curl_error"
+
+if [ "$probe_status" = "404" ]; then
+  latest_asset_missing
+fi
+if [ "$probe_status" != "200" ]; then
+  echo "Failed to access release archive: $ARCHIVE_URL" >&2
+  exit 1
+fi
+
+echo "Installing scorpio ${VERSION} for ${TARGET}..."
+echo "Downloading $ARCHIVE_URL..."
+
+curl "${CURL_OPTS[@]}" "$ARCHIVE_URL" -o "$TMP/$ARCHIVE"
+
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-
-# --- Install ---
-if [ ! -f "$TMP/scorpio-analyst" ]; then
-  echo "Extraction failed: scorpio-analyst not found in archive." >&2
+if [ ! -f "$TMP/scorpio" ]; then
+  echo "Expected scorpio binary missing from archive." >&2
   exit 1
 fi
+
 mkdir -p "$INSTALL_DIR"
-mv "$TMP/scorpio-analyst" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+mv "$TMP/scorpio" "$INSTALL_DIR/scorpio"
+chmod +x "$INSTALL_DIR/scorpio"
 
-echo ""
-echo "Installed: $INSTALL_DIR/$BINARY_NAME"
-echo "Version:   $VERSION"
+echo "Installed: $HOME/.local/bin/scorpio"
 
-# --- PATH hint ---
-case ":${PATH}:" in
+case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
-    echo ""
+    echo
     echo "NOTE: $INSTALL_DIR is not in your PATH."
-    echo "Add the following line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+    echo "Add the following line to your shell profile:"
     echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
     ;;
 esac
