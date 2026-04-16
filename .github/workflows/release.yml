@@ -100,22 +100,75 @@ jobs:
         if: runner.os != 'Windows'
         run: strip "target/${{ matrix.target }}/release/scorpio-analyst" || true
 
+      - name: Stage binary (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p release-stage
+          cp "target/${{ matrix.target }}/release/scorpio-analyst" "release-stage/scorpio"
+
+      - name: Stage binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-stage | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\scorpio-analyst.exe" "release-stage\scorpio.exe"
+
       - name: Package binary (Linux / macOS)
         if: runner.os != 'Windows'
         run: |
-          ARCHIVE="scorpio-analyst-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
-          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" scorpio-analyst
+          ARCHIVE="scorpio-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C release-stage scorpio
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $archive = "scorpio-analyst-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target\${{ matrix.target }}\release\scorpio-analyst.exe" -DestinationPath $archive
+          $archive = "scorpio-${{ matrix.target }}.zip"
+          Compress-Archive -Path "release-stage\scorpio.exe" -DestinationPath $archive
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Upload binary to release
+      - name: Upload release archive
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ARCHIVE }}
+          files: |
+            ${{ env.ARCHIVE }}
+
+  publish_and_verify_release_assets:
+    name: Publish installer scripts and verify release assets
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Upload installer scripts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            install.sh
+            install.ps1
+
+      - name: Verify all expected release assets exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" --repo BigtoC/scorpio-analyst --json assets --jq '.assets[].name' > assets.txt
+          cat <<'EOF' > expected.txt
+          install.sh
+          install.ps1
+          scorpio-x86_64-unknown-linux-gnu.tar.gz
+          scorpio-aarch64-unknown-linux-gnu.tar.gz
+          scorpio-aarch64-apple-darwin.tar.gz
+          scorpio-x86_64-apple-darwin.tar.gz
+          scorpio-x86_64-pc-windows-msvc.zip
+          EOF
+          missing=0
+          while IFS= read -r asset; do
+            if ! grep -Fxq "$asset" assets.txt; then
+              echo "::error::Missing release asset: $asset"
+              missing=1
+            fi
+          done < expected.txt
+          test "$missing" -eq 0
