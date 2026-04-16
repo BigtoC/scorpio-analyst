@@ -64,7 +64,7 @@ jobs:
             os: macos-latest
             archive_ext: tar.gz
           - target: x86_64-apple-darwin
-            os: macos-13  # macos-latest is now Apple Silicon; macos-13 is the last x86_64 runner
+            os: macos-15-intel  # macos-latest is Apple Silicon; use a supported Intel runner for x86_64 builds
             archive_ext: tar.gz
 
     steps:
