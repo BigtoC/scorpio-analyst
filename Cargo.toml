@@ -1,6 +1,6 @@
 [package]
 name = "scorpio-analyst"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Rust-native multi-agent LLM-powered financial trading system"
 license = "MIT"
@@ -8,7 +8,7 @@ repository = "https://github.com/BigtoC/scorpio-analyst"
 
 [dependencies]
 # LLM framework
-rig-core = "0.32"
+rig-core = "0.32.0"
 schemars = { version = "1", features = ["chrono04"] }
 
 # Serialization

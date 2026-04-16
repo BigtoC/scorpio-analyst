@@ -94,9 +94,34 @@ Scorpio-Analyst is designed with a phased user interface approach to provide bot
 *   **Phase 2**: An interactive Terminal User Interface (TUI) for a rich, conversational experience.
 *   **Phase 3**: A high-performance, GPU-accelerated native desktop application.
 
-## Getting Started (MVP)
+## Getting Started
 
-### Prerequisites
+### Install
+
+**macOS / Linux**
+```sh
+curl -fsSL https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install.sh | sh
+```
+
+**Windows (PowerShell)**
+```powershell
+iex (iwr -useb 'https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install.ps1')
+```
+
+The script auto-detects your OS and architecture, downloads the latest release binary from GitHub, and installs it to `~/.local/bin/scorpio` (or `%USERPROFILE%\.local\bin\scorpio.exe` on Windows). If that directory is not in your `PATH`, the script prints the line to add to your shell profile.
+
+> **Build from source:** If you prefer to compile locally, see the [Prerequisites](#prerequisites) section below and run `cargo build --release`.
+
+### Quick start
+
+```sh
+scorpio setup          # interactive wizard — configure API keys and LLM provider
+scorpio analyze AAPL   # run the full 5-phase analysis pipeline
+```
+
+---
+
+### Prerequisites (build from source)
 
 - Rust 1.93+ (`rustup update stable`)
 - API keys for at least one LLM provider
