@@ -9,14 +9,14 @@ Enable the CLI to detect new versions from GitHub releases and notify users on e
 
 ## Decisions
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| When to check | Every CLI invocation | User always knows when updates are available |
-| Network failure | Silent skip | Never block or annoy the user due to connectivity |
-| Blocking behavior | Non-blocking background task | Zero added latency to normal CLI usage |
-| Notice style | Colored box (npm-style) | Visually distinct, hard to miss |
-| Upgrade mechanism | `self_update` crate (v0.44+) | Actively maintained, batteries-included GitHub release updater |
-| Self-update command | `scorpio upgrade` | Users can update without leaving the CLI |
+| Decision            | Choice                       | Rationale                                                      |
+|---------------------|------------------------------|----------------------------------------------------------------|
+| When to check       | Every CLI invocation         | User always knows when updates are available                   |
+| Network failure     | Silent skip                  | Never block or annoy the user due to connectivity              |
+| Blocking behavior   | Non-blocking background task | Zero added latency to normal CLI usage                         |
+| Notice style        | Colored box (npm-style)      | Visually distinct, hard to miss                                |
+| Upgrade mechanism   | `self_update` crate (v0.44+) | Actively maintained, batteries-included GitHub release updater |
+| Self-update command | `scorpio upgrade`            | Users can update without leaving the CLI                       |
 
 ## Version Check (Background, Non-Blocking)
 
@@ -40,7 +40,7 @@ Printed to **stderr** (so piped stdout is clean), using the existing `colored` c
 ```
 ╭──────────────────────────────────────────────────╮
 │                                                  │
-│   Update available: v0.2.0 → v0.3.0             │
+│   Update available: v0.2.0 → v0.3.0              │
 │   Run `scorpio upgrade` to update                │
 │                                                  │
 ╰──────────────────────────────────────────────────╯
@@ -84,6 +84,7 @@ Examples:
 - `scorpio-aarch64-unknown-linux-gnu.tar.gz`
 - `scorpio-aarch64-apple-darwin.tar.gz`
 - `scorpio-x86_64-apple-darwin.tar.gz`
+- `scorpio-x86_64-pc-windows-msvc.zip`
 
 The CI release workflow must produce archives matching this pattern. This is already aligned with the targets in `install.sh`.
 
@@ -91,8 +92,10 @@ The CI release workflow must produce archives matching this pattern. This is alr
 
 - `archive-tar` — for `.tar.gz` assets (Linux/macOS)
 - `compression-flate2` — gzip decompression
+- `archive-zip` — for `.zip` assets (Windows)
+- `compression-zip-deflate` — ZIP decompression
 
-If Windows `.zip` assets are added later, also enable `archive-zip` + `compression-zip-deflate`.
+Windows is part of the shared release asset contract now, so ZIP support is required rather than deferred.
 
 ## Source Layout
 
@@ -106,11 +109,11 @@ Contains all version-check and upgrade logic:
 
 ### Modified files
 
-| File | Change |
-|------|--------|
-| `src/cli/mod.rs` | Add `pub mod update;`, add `Upgrade` variant to `Commands`, add `--no-update-check` global flag |
-| `src/main.rs` | Convert to `#[tokio::main] async`, spawn background version check via oneshot, await result after subcommand dispatch, print notice if applicable |
-| `Cargo.toml` | Add `self_update = { version = "0.44", default-features = false, features = ["archive-tar", "compression-flate2"] }` |
+| File             | Change                                                                                                                                            |
+|------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `src/cli/mod.rs` | Add `pub mod update;`, add `Upgrade` variant to `Commands`, add `--no-update-check` global flag                                                   |
+| `src/main.rs`    | Convert to `#[tokio::main] async`, spawn background version check via oneshot, await result after subcommand dispatch, print notice if applicable |
+| `Cargo.toml`     | Add `self_update = { version = "0.44", default-features = false, features = ["archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"] }` |
 
 ### Untouched files
 
