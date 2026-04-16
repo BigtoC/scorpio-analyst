@@ -5,7 +5,7 @@
 
 ## Goal
 
-Allow users to install the `scorpio` CLI from a single curl/iwr command against the latest GitHub release, on all supported platforms.
+Allow users to install the `scorpio` CLI from a single curl-based command against the latest GitHub release, on all supported platforms.
 
 ## Scope
 
@@ -77,8 +77,10 @@ curl -fsSL https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install
 
 **User command:**
 ```powershell
-iwr https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install.ps1 | iex
+curl.exe -fsSL https://raw.githubusercontent.com/BigtoC/scorpio-analyst/main/install.ps1 | powershell -NoLogo -NoProfile -NonInteractive -Command -
 ```
+
+Use `curl.exe` rather than `curl` so the command works consistently in both `cmd.exe` and PowerShell without hitting the `curl` alias.
 
 **Logic:**
 1. Fetch latest release tag from GitHub API
