@@ -6,17 +6,17 @@
 
 **Architecture:** Three independent changes: (1) extend the release matrix in CI to build macOS binaries, (2) write a POSIX-compatible `install.sh` that detects OS/arch and installs for Linux and macOS, (3) write `install.ps1` for Windows. Scripts fetch the latest GitHub release tag via the API, download the right archive, and drop the renamed binary into `~/.local/bin` (or `%USERPROFILE%\.local\bin` on Windows).
 
-**Tech Stack:** Bash (POSIX-compatible `sh` shebang), PowerShell 5+, GitHub Actions YAML, GitHub Releases API.
+**Tech Stack:** Bash (`#!/usr/bin/env bash`), PowerShell 5+, GitHub Actions YAML, GitHub Releases API.
 
 ---
 
 ## File Map
 
-| Action | Path | Responsibility |
-|--------|------|----------------|
+| Action | Path                            | Responsibility                                 |
+|--------|---------------------------------|------------------------------------------------|
 | Modify | `.github/workflows/release.yml` | Add macOS matrix entries + macOS Protobuf step |
-| Create | `install.sh` | Unix installer (Linux + macOS) |
-| Create | `install.ps1` | Windows installer |
+| Create | `install.sh`                    | Unix installer (Linux + macOS)                 |
+| Create | `install.ps1`                   | Windows installer                              |
 
 ---
 
