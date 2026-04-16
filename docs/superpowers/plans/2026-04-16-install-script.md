@@ -425,10 +425,7 @@ CHECKSUM_BYTES=$(wc -c < "$TMP/$ARCHIVE.sha256" | tr -d ' ')
 test "$CHECKSUM_BYTES" -eq 65 || { echo "Invalid checksum file format." >&2; exit 1; }
 EXPECTED_HASH=$(head -c 64 "$TMP/$ARCHIVE.sha256")
 LAST_BYTE=$(tail -c 1 "$TMP/$ARCHIVE.sha256")
-case "$EXPECTED_HASH" in
-  [0-9a-f][0-9a-f]*) ;;
-  *) echo "Invalid checksum file format." >&2; exit 1 ;;
-esac
+printf '%s' "$EXPECTED_HASH" | grep -Eq '^[0-9a-f]{64}$' || { echo "Invalid checksum file format." >&2; exit 1; }
 test ${#EXPECTED_HASH} -eq 64 || { echo "Invalid checksum file format." >&2; exit 1; }
 test -z "$LAST_BYTE" || { echo "Invalid checksum file format." >&2; exit 1; }
 
@@ -721,7 +718,7 @@ git commit -m "docs: publish signed installer commands"
 - [x] RSA signature verification before checksum verification → Task 2 Step 8 and Task 3 Step 8
 - [x] Bounded timeout/retry behavior for API and downloads → Task 2 Step 4 and Task 3 Step 4
 - [x] Windows x86_64-only detection → Task 3 Step 5
-- [x] Archive contains `scorpio` / `scorpio.exe` directly after packaging rename → Task 1 Step 4 and Tasks 2-3 install steps
+- [x] Archive contains `scorpio` / `scorpio.exe` directly after packaging rename → Task 1 Step 5 and Tasks 2-3 install steps
 - [x] README publishes the final installer commands only after rollout is ready → Task 4
 
 **No placeholders detected.**
