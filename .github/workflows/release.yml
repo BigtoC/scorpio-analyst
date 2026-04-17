@@ -128,11 +128,37 @@ jobs:
           Compress-Archive -Path "release-stage\scorpio.exe" -DestinationPath $archive
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Upload release archive
+      # Sidecars are consumed by `scorpio upgrade`, which verifies downloaded
+      # archives before replacing the binary. Keep the line format identical
+      # to `sha256sum --check` so operators can validate manually too.
+      - name: Generate SHA-256 sidecar (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          cat "${ARCHIVE}.sha256"
+
+      - name: Generate SHA-256 sidecar (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # shasum emits "{hex}  {filename}" — identical shape to sha256sum.
+          shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          cat "${ARCHIVE}.sha256"
+
+      - name: Generate SHA-256 sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = $env:ARCHIVE
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
+          "{0}  {1}" -f $hash, $archive | Out-File -FilePath "$archive.sha256" -Encoding ascii -NoNewline
+          Get-Content "$archive.sha256"
+
+      - name: Upload release archive and sidecar
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
 
   publish_and_verify_release_assets:
     name: Publish installer scripts and verify release assets
@@ -159,10 +185,15 @@ jobs:
           install.sh
           install.ps1
           scorpio-x86_64-unknown-linux-gnu.tar.gz
+          scorpio-x86_64-unknown-linux-gnu.tar.gz.sha256
           scorpio-aarch64-unknown-linux-gnu.tar.gz
+          scorpio-aarch64-unknown-linux-gnu.tar.gz.sha256
           scorpio-aarch64-apple-darwin.tar.gz
+          scorpio-aarch64-apple-darwin.tar.gz.sha256
           scorpio-x86_64-apple-darwin.tar.gz
+          scorpio-x86_64-apple-darwin.tar.gz.sha256
           scorpio-x86_64-pc-windows-msvc.zip
+          scorpio-x86_64-pc-windows-msvc.zip.sha256
           EOF
           missing=0
           while IFS= read -r asset; do
