@@ -1,6 +1,6 @@
 [package]
 name = "scorpio-analyst"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Rust-native multi-agent LLM-powered financial trading system"
 license = "MIT"
@@ -44,7 +44,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 inquire = "0.9"
 
 # File utilities
@@ -69,12 +69,21 @@ async-trait = "0.1"
 # Phase snapshot persistence
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 
+# Self-update and release verification
+self_update = { version = "0.44", default-features = false, features = ["reqwest", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate", "rustls"] }
+semver = "1"
+sha2 = "0.11"
+hex = "0.4"
+
 [dev-dependencies]
 proptest = "1"
 mockall = "0.13"
 pretty_assertions = "1"
 paft-money = "0.7"
 rust_decimal = "1"
+flate2 = "1.1"
+tar = "0.4"
+zip = "8"
 
 [features]
 default = []
