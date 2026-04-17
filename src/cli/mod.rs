@@ -2,7 +2,7 @@ pub mod analyze;
 pub mod setup;
 pub mod update;
 
-use clap::builder::BoolishValueParser;
+use clap::builder::FalseyValueParser;
 use clap::{Parser, Subcommand};
 
 /// Scorpio Analyst — multi-agent LLM-powered financial analysis.
@@ -12,13 +12,13 @@ pub struct Cli {
     /// Suppress the background release check.
     ///
     /// Also controlled by `SCORPIO_NO_UPDATE_CHECK=1|true|yes|on` (and false-ish
-    /// equivalents). Uses clap's `BoolishValueParser` so CI-style values like
-    /// `yes` and `on` parse without producing a hard CLI error.
+    /// equivalents). Uses clap's `FalseyValueParser` so any non-false-ish env
+    /// value enables suppression instead of producing a hard CLI error.
     #[arg(
         long,
         global = true,
         env = "SCORPIO_NO_UPDATE_CHECK",
-        value_parser = BoolishValueParser::new(),
+        value_parser = FalseyValueParser::new(),
         default_value_t = false
     )]
     pub no_update_check: bool,
@@ -32,7 +32,7 @@ pub struct Cli {
 pub enum Commands {
     /// Run the full 5-phase analysis pipeline for a ticker symbol.
     Analyze {
-        /// Ticker symbol to analyse (e.g. AAPL, NVDA, BTC-USD).
+        /// Ticker symbol to analyze (e.g. AAPL, NVDA, BTC-USD).
         #[arg(value_name = "SYMBOL")]
         symbol: String,
     },
@@ -125,8 +125,8 @@ mod tests {
             res
         }
 
-        // Truthy values accepted by BoolishValueParser (npm-style matrix).
-        for val in ["1", "true", "yes", "on", "y"] {
+        // Truthy values accepted by FalseyValueParser (npm-style matrix).
+        for val in ["1", "true", "yes", "on", "y", "enabled"] {
             let cli = parse_with_env(val).unwrap_or_else(|e| panic!("val={val}: {e}"));
             assert!(cli.no_update_check, "val={val} should enable suppression");
         }
@@ -140,8 +140,9 @@ mod tests {
             );
         }
 
-        // Non-boolish values produce a hard parse error (documents the boundary).
-        let err = parse_with_env("enabled").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+        // Arbitrary non-false-ish values also enable suppression instead of
+        // turning a malformed env var into a CLI parse failure.
+        let cli = parse_with_env("random").unwrap_or_else(|e| panic!("val=random: {e}"));
+        assert!(cli.no_update_check);
     }
 }
