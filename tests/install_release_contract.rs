@@ -25,6 +25,14 @@ fn release_workflow_publishes_archive_only_installer_assets() {
         "scorpio-aarch64-apple-darwin.tar.gz",
         "scorpio-x86_64-apple-darwin.tar.gz",
         "scorpio-x86_64-pc-windows-msvc.zip",
+        // SHA-256 sidecars are consumed by `scorpio upgrade` to verify downloaded
+        // archives before replacing the binary. The install scripts remain
+        // archive-only; sidecar verification is a CLI-upgrade-only contract.
+        "scorpio-x86_64-unknown-linux-gnu.tar.gz.sha256",
+        "scorpio-aarch64-unknown-linux-gnu.tar.gz.sha256",
+        "scorpio-aarch64-apple-darwin.tar.gz.sha256",
+        "scorpio-x86_64-apple-darwin.tar.gz.sha256",
+        "scorpio-x86_64-pc-windows-msvc.zip.sha256",
     ] {
         assert!(
             workflow.contains(required),
@@ -33,10 +41,11 @@ fn release_workflow_publishes_archive_only_installer_assets() {
     }
 
     for forbidden in [
-        ".sha256",
+        // `.sha256.sig` was the OpenSSL-signed checksum — that signing flow
+        // was removed and is not being reintroduced. Unsigned `.sha256`
+        // sidecars are published instead.
         ".sha256.sig",
         "Install OpenSSL (Windows)",
-        "Generate checksum",
         "Sign checksum",
         "Upload signed release assets",
     ] {
