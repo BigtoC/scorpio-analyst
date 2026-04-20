@@ -108,7 +108,19 @@ mkdir -p "$INSTALL_DIR"
 mv "$TMP/scorpio" "$INSTALL_DIR/scorpio"
 chmod +x "$INSTALL_DIR/scorpio"
 
+if [ ! -x "$INSTALL_DIR/scorpio" ]; then
+  echo "Installed binary is not executable: $INSTALL_DIR/scorpio" >&2
+  exit 1
+fi
+
+if ! "$INSTALL_DIR/scorpio" -h >/dev/null 2>&1; then
+  echo "Installed binary failed to run: $INSTALL_DIR/scorpio" >&2
+  exit 1
+fi
+
 echo "Installed: $HOME/.local/bin/scorpio"
+echo "Run 'scorpio -h' to get started."
+echo "Run 'which scorpio' to confirm it is on your PATH."
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;

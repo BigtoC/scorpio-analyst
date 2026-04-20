@@ -80,7 +80,20 @@ try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Move-Item -Force (Join-Path $Tmp "scorpio.exe") (Join-Path $InstallDir "scorpio.exe")
 
+    $InstalledBinary = Join-Path $InstallDir "scorpio.exe"
+    if (-not (Test-Path $InstalledBinary -PathType Leaf)) {
+        throw "Installed binary missing after move: $InstalledBinary"
+    }
+
+    try {
+        & $InstalledBinary -h *> $null
+    } catch {
+        throw "Installed binary failed to run: $InstalledBinary`n$($_.Exception.Message)"
+    }
+
     Write-Host "Installed: $InstallDir\scorpio.exe"
+    Write-Host "Run 'scorpio -h' to get started."
+    Write-Host "Run 'Get-Command scorpio' to confirm it is on your PATH."
 
     $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $PathParts = @()
