@@ -107,6 +107,44 @@ impl RiskAgentCore {
     }
 }
 
+// ─── Dual-risk tri-state signal ───────────────────────────────────────────────
+
+/// Tri-state signal summarising whether both Conservative and Neutral risk agents
+/// flagged a material violation.
+///
+/// Used by the Risk Moderator to record the escalation status and by the Fund Manager
+/// to enforce the rationale first-line contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DualRiskStatus {
+    /// Both reports exist and both have `flags_violation == true`.
+    Present,
+    /// Both reports exist but not both flag a violation.
+    Absent,
+    /// Either report (or both) is missing.
+    Unknown,
+}
+
+impl DualRiskStatus {
+    pub(crate) fn from_reports(
+        conservative: Option<&RiskReport>,
+        neutral: Option<&RiskReport>,
+    ) -> Self {
+        match (conservative, neutral) {
+            (Some(con), Some(neu)) if con.flags_violation && neu.flags_violation => Self::Present,
+            (Some(_), Some(_)) => Self::Absent,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub(crate) fn as_prompt_value(self) -> &'static str {
+        match self {
+            Self::Present => "present",
+            Self::Absent => "absent",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 /// Validate a risk report text field (assessment or recommended_adjustments entry).
@@ -135,7 +173,7 @@ pub(super) fn validate_risk_text(context: &str, content: &str) -> Result<(), Tra
 /// Validate a moderator plain-text synthesis output.
 pub(super) fn validate_moderator_output(
     content: &str,
-    expect_both_violation: bool,
+    status: DualRiskStatus,
 ) -> Result<(), TradingError> {
     if content.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
@@ -155,7 +193,7 @@ pub(super) fn validate_moderator_output(
             message: "RiskModerator: output contains disallowed control characters".to_owned(),
         });
     }
-    let expected_sentence = expected_moderator_violation_sentence(expect_both_violation);
+    let expected_sentence = expected_moderator_violation_sentence(status);
     if !content
         .to_ascii_lowercase()
         .contains(&expected_sentence.to_ascii_lowercase())
@@ -295,12 +333,14 @@ pub(super) fn redact_risk_report_for_storage(mut report: RiskReport) -> RiskRepo
     report
 }
 
-/// Exact sentence the moderator must include to record the dual-violation status.
-pub(super) fn expected_moderator_violation_sentence(expect_both_violation: bool) -> &'static str {
-    if expect_both_violation {
-        "Violation status: Conservative and Neutral both flag a material violation."
-    } else {
-        "Violation status: Conservative and Neutral do not both flag a material violation."
+/// Exact sentence the moderator must include to record the dual-risk escalation status.
+pub(super) fn expected_moderator_violation_sentence(status: DualRiskStatus) -> &'static str {
+    match status {
+        DualRiskStatus::Present => "Violation status: dual-risk escalation present.",
+        DualRiskStatus::Absent => "Violation status: dual-risk escalation absent.",
+        DualRiskStatus::Unknown => {
+            "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report."
+        }
     }
 }
 
@@ -314,7 +354,7 @@ mod tests {
 
     use super::*;
     use crate::config::LlmConfig;
-    use crate::state::TradingState;
+    use crate::state::{RiskLevel, RiskReport, TradingState};
 
     fn sample_llm_config() -> LlmConfig {
         LlmConfig {
@@ -423,7 +463,7 @@ mod tests {
     #[test]
     fn validate_moderator_output_rejects_empty() {
         assert!(matches!(
-            validate_moderator_output("", true),
+            validate_moderator_output("", DualRiskStatus::Absent),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
@@ -431,7 +471,7 @@ mod tests {
     #[test]
     fn validate_moderator_output_rejects_control_char() {
         assert!(matches!(
-            validate_moderator_output("bad\x00output", true),
+            validate_moderator_output("bad\x00output", DualRiskStatus::Absent),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
@@ -440,8 +480,22 @@ mod tests {
     fn validate_moderator_output_accepts_valid() {
         assert!(
             validate_moderator_output(
-                "Violation status: Conservative and Neutral both flag a material violation.",
-                true,
+                "Violation status: dual-risk escalation present. Evidence is strong.",
+                DualRiskStatus::Present,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_moderator_output(
+                "Violation status: dual-risk escalation absent. Only conservative flagged.",
+                DualRiskStatus::Absent,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_moderator_output(
+                "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report. Proceeding.",
+                DualRiskStatus::Unknown,
             )
             .is_ok()
         );
@@ -450,7 +504,127 @@ mod tests {
     #[test]
     fn validate_moderator_output_rejects_missing_required_violation_sentence() {
         assert!(matches!(
-            validate_moderator_output("Short summary without required sentence.", true),
+            validate_moderator_output("Short summary without required sentence.", DualRiskStatus::Present),
+            Err(TradingError::SchemaViolation { .. })
+        ));
+    }
+
+    // ── DualRiskStatus tri-state tests ────────────────────────────────────
+
+    fn violation_report(level: RiskLevel) -> RiskReport {
+        RiskReport {
+            risk_level: level,
+            assessment: "Violation detected.".to_owned(),
+            recommended_adjustments: vec![],
+            flags_violation: true,
+        }
+    }
+
+    fn no_violation_report(level: RiskLevel) -> RiskReport {
+        RiskReport {
+            risk_level: level,
+            assessment: "No violation.".to_owned(),
+            recommended_adjustments: vec![],
+            flags_violation: false,
+        }
+    }
+
+    #[test]
+    fn dual_risk_status_is_present_when_both_reports_flag_violation() {
+        let con = violation_report(RiskLevel::Conservative);
+        let neu = violation_report(RiskLevel::Neutral);
+        assert_eq!(
+            DualRiskStatus::from_reports(Some(&con), Some(&neu)),
+            DualRiskStatus::Present
+        );
+    }
+
+    #[test]
+    fn dual_risk_status_is_absent_when_both_reports_exist_but_not_both_flagged() {
+        let con_flag = violation_report(RiskLevel::Conservative);
+        let neu_no = no_violation_report(RiskLevel::Neutral);
+        assert_eq!(
+            DualRiskStatus::from_reports(Some(&con_flag), Some(&neu_no)),
+            DualRiskStatus::Absent
+        );
+
+        let con_no = no_violation_report(RiskLevel::Conservative);
+        let neu_flag = violation_report(RiskLevel::Neutral);
+        assert_eq!(
+            DualRiskStatus::from_reports(Some(&con_no), Some(&neu_flag)),
+            DualRiskStatus::Absent
+        );
+
+        let con_no2 = no_violation_report(RiskLevel::Conservative);
+        let neu_no2 = no_violation_report(RiskLevel::Neutral);
+        assert_eq!(
+            DualRiskStatus::from_reports(Some(&con_no2), Some(&neu_no2)),
+            DualRiskStatus::Absent
+        );
+    }
+
+    #[test]
+    fn dual_risk_status_is_unknown_when_either_report_is_missing() {
+        let report = violation_report(RiskLevel::Conservative);
+        assert_eq!(
+            DualRiskStatus::from_reports(None, None),
+            DualRiskStatus::Unknown
+        );
+        assert_eq!(
+            DualRiskStatus::from_reports(Some(&report), None),
+            DualRiskStatus::Unknown
+        );
+        assert_eq!(
+            DualRiskStatus::from_reports(None, Some(&report)),
+            DualRiskStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn expected_moderator_violation_sentence_is_tri_state() {
+        assert_eq!(
+            expected_moderator_violation_sentence(DualRiskStatus::Present),
+            "Violation status: dual-risk escalation present."
+        );
+        assert_eq!(
+            expected_moderator_violation_sentence(DualRiskStatus::Absent),
+            "Violation status: dual-risk escalation absent."
+        );
+        assert_eq!(
+            expected_moderator_violation_sentence(DualRiskStatus::Unknown),
+            "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report."
+        );
+    }
+
+    #[test]
+    fn validate_moderator_output_accepts_unknown_sentence() {
+        let content = "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report. Proceeding with reduced confidence.";
+        assert!(validate_moderator_output(content, DualRiskStatus::Unknown).is_ok());
+    }
+
+    #[test]
+    fn validate_moderator_output_rejects_wrong_sentence_for_present() {
+        let content = "Violation status: dual-risk escalation absent. This is wrong for Present.";
+        assert!(matches!(
+            validate_moderator_output(content, DualRiskStatus::Present),
+            Err(TradingError::SchemaViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_moderator_output_rejects_wrong_sentence_for_absent() {
+        let content = "Violation status: dual-risk escalation present. This is wrong for Absent.";
+        assert!(matches!(
+            validate_moderator_output(content, DualRiskStatus::Absent),
+            Err(TradingError::SchemaViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_moderator_output_rejects_wrong_sentence_for_unknown() {
+        let content = "Violation status: dual-risk escalation present. This is wrong for Unknown.";
+        assert!(matches!(
+            validate_moderator_output(content, DualRiskStatus::Unknown),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
