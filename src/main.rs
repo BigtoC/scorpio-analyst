@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use scorpio_analyst::cli::update::{
-    check_latest_version, run_upgrade, show_update_notice_with_tty,
+    NoticeOutcome, check_latest_version, run_upgrade, show_update_notice_with_tty,
 };
 use scorpio_analyst::cli::{Cli, Commands};
 use scorpio_analyst::observability::init_tracing;
@@ -21,12 +21,13 @@ async fn main() {
     init_tracing();
     let cli = Cli::parse();
 
-    // Capture upgrade-guard before `cli.command` is moved by the dispatch match.
+    // Capture command-shape guards before `cli.command` is moved by dispatch.
     let is_upgrade = matches!(cli.command, Commands::Upgrade);
+    let is_analyze = matches!(cli.command, Commands::Analyze { .. });
 
     // Background update check (non-blocking, fire-and-forget). Gated by the
     // `--no-update-check` flag / `SCORPIO_NO_UPDATE_CHECK` env var.
-    let update_rx = if cli.no_update_check {
+    let mut update_rx = if cli.no_update_check {
         None
     } else {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -36,6 +37,35 @@ async fn main() {
         });
         Some(rx)
     };
+
+    // For `analyze`, show the banner + update notice BEFORE the minutes-long
+    // pipeline starts so the user can Ctrl-C and upgrade first if they want.
+    // The notice is also cached so it can be re-printed after the final
+    // report, giving the user a second reminder once the run completes.
+    // If the grace window expires before the background check finishes (cold
+    // DNS / slow network), the receiver is returned to `update_rx` so the
+    // post-command block below gets a second chance.
+    let mut cached_notice: Option<String> = None;
+    if is_analyze {
+        scorpio_analyst::cli::analyze::print_banner();
+        if let Some(rx) = update_rx.take() {
+            match show_update_notice_with_tty(
+                rx,
+                CURRENT_VERSION,
+                io::stderr().is_terminal(),
+                UPDATE_NOTICE_GRACE,
+            )
+            .await
+            {
+                NoticeOutcome::Ready(notice) => {
+                    eprintln!("{notice}");
+                    cached_notice = Some(notice);
+                }
+                NoticeOutcome::Resolved => {}
+                NoticeOutcome::Pending(rx) => update_rx = Some(rx),
+            }
+        }
+    }
 
     // Dispatch. Existing synchronous subcommands build their own tokio
     // runtime internally; calling them from async context would panic, so
@@ -61,21 +91,37 @@ async fn main() {
         0
     };
 
-    // Post-command notice. Skip for `Upgrade` so we don't tell the user to
-    // run `scorpio upgrade` immediately after they just did. Rendered even
-    // on the error path so users notice a stale binary regardless of whether
-    // their subcommand succeeded.
-    if !is_upgrade
-        && let Some(rx) = update_rx
-        && let Some(notice) = show_update_notice_with_tty(
-            rx,
-            CURRENT_VERSION,
-            io::stderr().is_terminal(),
-            UPDATE_NOTICE_GRACE,
-        )
-        .await
-    {
-        eprintln!("{notice}");
+    // Post-command notice. Three cases:
+    //   - `analyze` hit pre-dispatch: replay the cached notice after the
+    //     final report so users see it at both ends of a long run.
+    //   - `analyze` whose pre-dispatch timed out: retry now that the pipeline
+    //     has had minutes to run.
+    //   - `setup`: the normal post-dispatch path.
+    // `upgrade` is skipped so we don't tell the user to run `scorpio upgrade`
+    // immediately after they just did. Rendered even on the error path so
+    // users notice a stale binary regardless of whether the subcommand
+    // succeeded.
+    if !is_upgrade {
+        let end_notice = if let Some(n) = cached_notice {
+            Some(n)
+        } else if let Some(rx) = update_rx {
+            match show_update_notice_with_tty(
+                rx,
+                CURRENT_VERSION,
+                io::stderr().is_terminal(),
+                UPDATE_NOTICE_GRACE,
+            )
+            .await
+            {
+                NoticeOutcome::Ready(n) => Some(n),
+                NoticeOutcome::Resolved | NoticeOutcome::Pending(_) => None,
+            }
+        } else {
+            None
+        };
+        if let Some(notice) = end_notice {
+            eprintln!("{notice}");
+        }
     }
 
     if exit_code != 0 {
