@@ -407,10 +407,6 @@ pub fn format_update_notice(current: &str, latest: &str) -> String {
     format!("{top}\n{title_row}\n{versions_row}\n{hint_row}\n{bottom}")
 }
 
-fn format_plain_update_notice(current: &str, latest: &str) -> String {
-    format!("Update available: {current} -> {latest}\nRun `scorpio upgrade` to install.")
-}
-
 /// Approximate display width: one column per Unicode scalar value. Good enough
 /// for ASCII + the arrow `→` used in our notice.
 fn display_width(s: &str) -> usize {
@@ -462,7 +458,18 @@ async fn check_latest_version_with<U: Updater>(updater: U) -> Option<String> {
     }
 }
 
-// ── try_show_update_notice_with_tty ────────────────────────────────────
+// ── notice dispatch ────────────────────────────────────────────────────
+
+/// Pick between the boxed/colored notice (TTY) and the plain-text notice
+/// (redirected stderr). Shared by the sync `try_*` and async `show_*`
+/// dispatchers so both paths render identically.
+fn format_notice_for_tty(current: &str, latest: &str, stderr_is_terminal: bool) -> String {
+    if stderr_is_terminal {
+        format_update_notice(current, latest)
+    } else {
+        format!("Update available: {current} -> {latest}\nRun `scorpio upgrade` to install.")
+    }
+}
 
 /// Best-effort non-blocking drain of the background update-check result.
 ///
@@ -482,14 +489,32 @@ pub fn try_show_update_notice_with_tty(
     // Consume the Receiver by value so callers can't reuse it.
     let mut rx = rx;
     match rx.try_recv() {
-        Ok(Some(latest)) => Some(if stderr_is_terminal {
-            format_update_notice(current, &latest)
-        } else {
-            format_plain_update_notice(current, &latest)
-        }),
+        Ok(Some(latest)) => Some(format_notice_for_tty(current, &latest, stderr_is_terminal)),
         Ok(None)
         | Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => None,
+    }
+}
+
+/// Awaits the background update-check result up to `grace`, then dispatches.
+///
+/// Preferred over [`try_show_update_notice_with_tty`] for fast subcommands that
+/// would otherwise race the background HTTP call. The grace window is bounded
+/// so even if the check is hung, the user never waits more than `grace` for
+/// the post-command notice.
+///
+/// Returns `None` on timeout, sender-dropped, or up-to-date — matching the
+/// sync dispatcher's "best-effort, silent on miss" contract.
+pub async fn show_update_notice_with_tty(
+    rx: tokio::sync::oneshot::Receiver<Option<String>>,
+    current: &str,
+    stderr_is_terminal: bool,
+    grace: Duration,
+) -> Option<String> {
+    match tokio::time::timeout(grace, rx).await {
+        Ok(Ok(Some(latest))) => Some(format_notice_for_tty(current, &latest, stderr_is_terminal)),
+        // Up-to-date, sender dropped (background task panicked), or timeout.
+        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => None,
     }
 }
 
@@ -1229,6 +1254,73 @@ mod tests {
             let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
             drop(tx); // background task panicked before sending
             assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
+        }
+    }
+
+    // ── show_update_notice_with_tty (async, with grace window) ─────
+
+    mod async_notice_dispatch {
+        use super::*;
+
+        #[tokio::test]
+        async fn returns_notice_when_sender_beats_grace() {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tx.send(Some("0.3.0".into())).unwrap();
+            let got = show_update_notice_with_tty(rx, "0.2.1", true, Duration::from_millis(500))
+                .await
+                .expect("expected Some");
+            assert!(got.contains("0.2.1") && got.contains("0.3.0"));
+            assert!(got.contains('╭')); // boxed form on tty
+        }
+
+        #[tokio::test]
+        async fn waits_for_late_sender_within_grace() {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let _ = tx.send(Some("0.3.0".into()));
+            });
+            let got = show_update_notice_with_tty(rx, "0.2.1", false, Duration::from_millis(500))
+                .await
+                .expect("expected Some after sender delay within grace");
+            // Non-tty plain form.
+            assert!(got.contains("Update available"));
+            assert!(got.contains("0.2.1") && got.contains("0.3.0"));
+            assert!(!got.contains('╭'));
+        }
+
+        #[tokio::test]
+        async fn returns_none_on_grace_timeout() {
+            // Sender exists but never sends; we must not hang past `grace`.
+            let (_tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+            let started = std::time::Instant::now();
+            let got =
+                show_update_notice_with_tty(rx, "0.2.1", true, Duration::from_millis(50)).await;
+            let elapsed = started.elapsed();
+            assert!(got.is_none());
+            // Loose upper bound — generous for loaded CI runners.
+            assert!(
+                elapsed < Duration::from_millis(500),
+                "timeout should fire promptly, elapsed={elapsed:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn returns_none_when_sender_reports_up_to_date() {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tx.send(None).unwrap();
+            let got =
+                show_update_notice_with_tty(rx, "0.2.1", true, Duration::from_millis(500)).await;
+            assert!(got.is_none());
+        }
+
+        #[tokio::test]
+        async fn returns_none_when_sender_dropped() {
+            let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+            drop(tx);
+            let got =
+                show_update_notice_with_tty(rx, "0.2.1", true, Duration::from_millis(500)).await;
+            assert!(got.is_none());
         }
     }
 

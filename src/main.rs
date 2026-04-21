@@ -1,14 +1,20 @@
 use std::io::{self, IsTerminal};
+use std::time::Duration;
 
 use clap::Parser;
 use scorpio_analyst::cli::update::{
-    check_latest_version, run_upgrade, try_show_update_notice_with_tty,
+    check_latest_version, run_upgrade, show_update_notice_with_tty,
 };
 use scorpio_analyst::cli::{Cli, Commands};
 use scorpio_analyst::observability::init_tracing;
 
 /// Current scorpio version, embedded at build time from `Cargo.toml`.
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Post-command grace window for the background update check. Small enough
+/// that users don't feel lag when the check has genuinely failed, large enough
+/// to catch typical GitHub API responses on fast-exiting subcommands.
+const UPDATE_NOTICE_GRACE: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() {
@@ -48,18 +54,31 @@ async fn main() {
         Commands::Upgrade => run_upgrade().await,
     };
 
-    if let Err(e) = result {
+    let exit_code = if let Err(e) = result {
         eprintln!("{e:#}");
-        std::process::exit(1);
-    }
+        1
+    } else {
+        0
+    };
 
     // Post-command notice. Skip for `Upgrade` so we don't tell the user to
-    // run `scorpio upgrade` immediately after they just did.
+    // run `scorpio upgrade` immediately after they just did. Rendered even
+    // on the error path so users notice a stale binary regardless of whether
+    // their subcommand succeeded.
     if !is_upgrade
         && let Some(rx) = update_rx
-        && let Some(notice) =
-            try_show_update_notice_with_tty(rx, CURRENT_VERSION, io::stderr().is_terminal())
+        && let Some(notice) = show_update_notice_with_tty(
+            rx,
+            CURRENT_VERSION,
+            io::stderr().is_terminal(),
+            UPDATE_NOTICE_GRACE,
+        )
+        .await
     {
         eprintln!("{notice}");
+    }
+
+    if exit_code != 0 {
+        std::process::exit(exit_code);
     }
 }
