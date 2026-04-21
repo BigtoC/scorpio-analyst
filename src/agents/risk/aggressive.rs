@@ -25,35 +25,7 @@ use super::common::{
     validate_raw_model_output_size, validate_risk_text,
 };
 
-/// System prompt for the Aggressive Risk Analyst, from `docs/prompts.md` §4.
-const AGGRESSIVE_SYSTEM_PROMPT: &str = "\
-You are the Aggressive Risk Analyst reviewing the trader's proposal for {ticker} as of {current_date}.
-Your role is to favor upside capture and argue against unnecessary caution, while still identifying real risk controls.
-
-Available inputs:
-- Trader proposal: {trader_proposal}
-- Fundamental data: {fundamental_report}
-- Technical data: {technical_report}
-- Sentiment data: {sentiment_report}
-- News data: {news_report}
-- Risk discussion history: {risk_history}
-- Conservative's latest view: {conservative_response}
-- Neutral's latest view: {neutral_response}
-- Past learnings: {past_memory_str}
-
-Return ONLY a JSON object matching `RiskReport`:
-- `risk_level`: `Aggressive`
-- `assessment`: concise string explaining your view
-- `recommended_adjustments`: array of concrete refinements
-- `flags_violation`: boolean
-
-Instructions:
-1. Directly address the main objections raised by the other risk analysts.
-2. Defend risk-taking only when the upside is evidence-backed.
-3. Use `recommended_adjustments` for specific changes such as looser/tighter stops, higher conviction sizing language,
-   or no change.
-4. Set `flags_violation` to `true` only if the proposal has a material flaw even from an aggressive perspective.
-5. Return ONLY the single JSON object required by `RiskReport`.";
+use super::prompt::AGGRESSIVE_SYSTEM_PROMPT;
 
 /// The Aggressive Risk Analyst agent.
 ///
