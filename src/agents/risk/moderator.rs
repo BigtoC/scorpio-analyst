@@ -18,7 +18,7 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context,
+    DualRiskStatus, RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context,
     expected_moderator_violation_sentence, format_risk_history, redact_text_for_storage,
     sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
     validate_moderator_output,
@@ -44,8 +44,7 @@ Available inputs:
 Instructions:
 1. Identify the main agreement points and the true blockers.
 2. Call out whether the trader's proposal is adequately defended on target, stop, and confidence.
-3. Explicitly note whether Conservative and Neutral both flag a material violation, because the Fund Manager uses that as
-   a deterministic rejection rule.
+3. Explicitly note the dual-risk escalation status for downstream Fund Manager review.
 4. Keep the output concise and suitable for storage as a plain-text risk discussion note.
 5. Do not output JSON and do not make the final execution decision.
 
@@ -150,15 +149,11 @@ fn build_moderator_prompt(state: &TradingState) -> String {
     let analyst_context = build_analyst_context(state);
     let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
     let target_date = sanitize_date_for_prompt(&state.target_date);
-    let expect_both_violation = state
-        .conservative_risk_report
-        .as_ref()
-        .is_some_and(|r| r.flags_violation)
-        && state
-            .neutral_risk_report
-            .as_ref()
-            .is_some_and(|r| r.flags_violation);
-    let violation_status = expected_moderator_violation_sentence(expect_both_violation);
+    let dual_risk_status = DualRiskStatus::from_reports(
+        state.conservative_risk_report.as_ref(),
+        state.neutral_risk_report.as_ref(),
+    );
+    let violation_status = expected_moderator_violation_sentence(dual_risk_status);
 
     format!(
         "Synthesise the risk discussion for {} as of {}.\n\n{}\n\n{}\n\nRequired sentence to include verbatim:\n{}\n\nTrader proposal:\n{}\n\nAggressive risk report:\n{}\n\nNeutral risk report:\n{}\n\nConservative risk report:\n{}\n\nRisk discussion history:\n{}",
@@ -183,15 +178,11 @@ fn build_moderator_result(
     started_at: Instant,
     rate_limit_wait_ms: u64,
 ) -> Result<(String, AgentTokenUsage), TradingError> {
-    let expect_both_violation = state
-        .conservative_risk_report
-        .as_ref()
-        .is_some_and(|r| r.flags_violation)
-        && state
-            .neutral_risk_report
-            .as_ref()
-            .is_some_and(|r| r.flags_violation);
-    validate_moderator_output(&output, expect_both_violation)?;
+    let dual_risk_status = DualRiskStatus::from_reports(
+        state.conservative_risk_report.as_ref(),
+        state.neutral_risk_report.as_ref(),
+    );
+    validate_moderator_output(&output, dual_risk_status)?;
     let output = redact_text_for_storage(&output);
     let token_usage = agent_token_usage_from_completion(
         "Risk Moderator",
@@ -302,11 +293,11 @@ mod tests {
     }
 
     fn valid_synthesis() -> &'static str {
-        "Violation status: Conservative and Neutral do not both flag a material violation. The proposal's stop-loss is too wide. Aggressive disagrees but evidence for upside is thin."
+        "Violation status: dual-risk escalation absent. The conservative reviewer flagged concerns but neutral did not. The proposal's stop-loss is too wide."
     }
 
     fn valid_dual_violation_synthesis() -> &'static str {
-        "Violation status: Conservative and Neutral both flag a material violation. The proposal's stop-loss is too wide. Aggressive disagrees but evidence for upside is thin."
+        "Violation status: dual-risk escalation present. Both conservative and neutral reviewers flagged a material violation. The proposal's stop-loss is too wide."
     }
 
     fn mock_usage(total: u64) -> rig::completion::Usage {
@@ -448,7 +439,8 @@ mod tests {
     #[test]
     fn build_moderator_result_redacts_secret_from_stored_output() {
         let (synthesis, _) = build_moderator_result(
-            "Violation status: Conservative and Neutral do not both flag a material violation. api_key=abcd1234 token=qwerty".to_owned(),
+            "Violation status: dual-risk escalation absent. api_key=abcd1234 token=qwerty"
+                .to_owned(),
             &sample_state(),
             "o3",
             mock_usage(10),
@@ -458,6 +450,28 @@ mod tests {
         .unwrap();
         assert!(!synthesis.contains("abcd1234"));
         assert!(!synthesis.contains("qwerty"));
+    }
+
+    #[test]
+    fn risk_moderator_prompt_drift_guard_forbids_deterministic_phrases() {
+        let forbidden = [
+            "must reject",
+            "automatic rejection",
+            "deterministic rejection",
+            "deterministic reject",
+            "deterministic safety rule",
+            "required to reject",
+            "mandatory rejection",
+            "presumptive rejection",
+        ];
+
+        let lower_prompt = RISK_MODERATOR_SYSTEM_PROMPT.to_ascii_lowercase();
+        for phrase in &forbidden {
+            assert!(
+                !lower_prompt.contains(phrase),
+                "RISK_MODERATOR_SYSTEM_PROMPT must not contain \"{phrase}\""
+            );
+        }
     }
 
     #[test]

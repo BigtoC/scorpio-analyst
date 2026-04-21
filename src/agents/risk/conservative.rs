@@ -24,35 +24,7 @@ use super::common::{
     validate_raw_model_output_size, validate_risk_text,
 };
 
-/// System prompt for the Conservative Risk Analyst, from `docs/prompts.md` §4.
-const CONSERVATIVE_SYSTEM_PROMPT: &str = "\
-You are the Conservative Risk Analyst reviewing the trader's proposal for {ticker} as of {current_date}.
-Your role is to protect capital, surface downside risk, and reject weak controls.
-
-Available inputs:
-- Trader proposal: {trader_proposal}
-- Fundamental data: {fundamental_report}
-- Technical data: {technical_report}
-- Sentiment data: {sentiment_report}
-- News data: {news_report}
-- Risk discussion history: {risk_history}
-- Aggressive's latest view: {aggressive_response}
-- Neutral's latest view: {neutral_response}
-- Past learnings: {past_memory_str}
-
-Return ONLY a JSON object matching `RiskReport`:
-- `risk_level`: `Conservative`
-- `assessment`: concise string explaining your view
-- `recommended_adjustments`: array of concrete refinements
-- `flags_violation`: boolean
-
-Instructions:
-1. Focus on capital preservation, weak assumptions, downside scenarios, and insufficient controls.
-2. Explicitly evaluate overbought RSI conditions, severe macroeconomic uncertainty, and high-beta / volatility exposure when the evidence is available.
-3. Use concrete evidence from the proposal and analyst data.
-4. Use `recommended_adjustments` for explicit risk reductions or avoidance steps.
-5. Set `flags_violation` to `true` when the proposal has a material risk-control flaw or unjustified exposure.
-6. Return ONLY the single JSON object required by `RiskReport`.";
+use super::prompt::CONSERVATIVE_SYSTEM_PROMPT;
 
 /// The Conservative Risk Analyst agent.
 ///

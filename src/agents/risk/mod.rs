@@ -26,7 +26,9 @@ mod common;
 mod conservative;
 mod moderator;
 mod neutral;
+mod prompt;
 
+pub(crate) use self::common::DualRiskStatus;
 pub use aggressive::AggressiveRiskAgent;
 pub use conservative::ConservativeRiskAgent;
 pub use moderator::RiskModerator;
@@ -581,8 +583,7 @@ mod tests {
                 return Err(TradingError::Rig("moderator failed".to_owned()));
             }
             Ok((
-                "Violation status: Conservative and Neutral both flag a material violation. Proceed with caution."
-                    .to_owned(),
+                "Violation status: dual-risk escalation present. Proceed with caution.".to_owned(),
                 AgentTokenUsage::unavailable("Risk Moderator", "o3", 1),
             ))
         }

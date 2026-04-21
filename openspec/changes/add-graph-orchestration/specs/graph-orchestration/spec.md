@@ -347,11 +347,11 @@ The system MUST implement `FundManagerTask` implementing graph-flow's `Task` tra
 - **THEN** the Fund Manager agent writes an `ExecutionStatus` to `TradingState`, the final phase snapshot is
   saved, and the task returns `NextAction::End` to terminate the pipeline
 
-#### Scenario: Deterministic Rejection Path Through Wrapper
+#### Scenario: Dual-Risk Escalation Path Through Wrapper
 
 - **WHEN** both the Conservative and Neutral `RiskReport` objects have `flags_violation = true`
-- **THEN** the Fund Manager agent's deterministic rejection rule still operates correctly through the task
-  wrapper, producing a rejection `ExecutionStatus` and ending the pipeline
+- **THEN** the Fund Manager agent receives a `DualRiskStatus::Present` indicator, invokes the LLM with the
+  required first-line prefix contract, and the resulting `ExecutionStatus` is written to state, ending the pipeline
 
 ### Requirement: SQLite Phase Snapshot Storage
 

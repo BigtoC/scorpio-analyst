@@ -5,8 +5,7 @@ use rig::agent::PromptResponse;
 use super::{
     prompt::build_prompt_context,
     validation::{
-        DETERMINISTIC_REJECT_RATIONALE, deterministic_reject, parse_and_validate_execution_status,
-        runtime_timestamp, state_has_missing_inputs,
+        parse_and_validate_execution_status, runtime_timestamp, state_has_missing_inputs,
     },
 };
 use crate::agents::shared::agent_token_usage_from_completion;
@@ -21,7 +20,7 @@ use crate::{
         },
     },
     rate_limit::ProviderRateLimiters,
-    state::{AgentTokenUsage, Decision, ExecutionStatus, TradeAction, TradingState},
+    state::{AgentTokenUsage, TradingState},
 };
 
 pub(super) trait FundManagerInference {
@@ -53,9 +52,8 @@ impl FundManagerInference for RigFundManagerInference {
 
 /// The Fund Manager Agent.
 ///
-/// Constructs a one-shot prompt from the current [`TradingState`] context, optionally
-/// applies the deterministic safety-net, and invokes the `DeepThinking` LLM to produce
-/// a validated [`ExecutionStatus`].
+/// Constructs a one-shot prompt from the current [`TradingState`] context and invokes
+/// the `DeepThinking` LLM to produce a validated `ExecutionStatus`.
 pub struct FundManagerAgent {
     handle: CompletionModelHandle,
     symbol: String,
@@ -92,10 +90,10 @@ impl FundManagerAgent {
         })
     }
 
-    /// Run the Fund Manager: deterministic check → LLM call → validate → write to `state`.
+    /// Run the Fund Manager: LLM call → validate → write to `state`.
     ///
     /// # Returns
-    /// [`AgentTokenUsage`] for the invocation (zero tokens for the deterministic path).
+    /// [`AgentTokenUsage`] for the invocation.
     ///
     /// # Errors
     /// - [`TradingError::SchemaViolation`] when `trader_proposal` is `None` or the LLM
@@ -120,26 +118,18 @@ impl FundManagerAgent {
             });
         }
 
-        if deterministic_reject(state) {
-            let decided_at = runtime_timestamp(&state.target_date);
-            let status = ExecutionStatus {
-                decision: Decision::Rejected,
-                action: TradeAction::Hold,
-                rationale: DETERMINISTIC_REJECT_RATIONALE.to_owned(),
-                decided_at,
-                entry_guidance: None,
-                suggested_position: None,
-            };
-            state.final_execution_status = Some(status);
-            return Ok(AgentTokenUsage::unavailable(
-                "Fund Manager",
-                self.handle.model_id(),
-                started_at.elapsed().as_millis() as u64,
-            ));
-        }
+        let trader_proposal_action = state
+            .trader_proposal
+            .as_ref()
+            .map(|p| p.action.clone())
+            .expect("checked above");
+        let dual_risk_status = crate::agents::risk::DualRiskStatus::from_reports(
+            state.conservative_risk_report.as_ref(),
+            state.neutral_risk_report.as_ref(),
+        );
 
         let (system_prompt, user_prompt) =
-            build_prompt_context(state, &self.symbol, &self.target_date);
+            build_prompt_context(state, &self.symbol, &self.target_date, dual_risk_status);
 
         let outcome = inference
             .infer(
@@ -155,6 +145,8 @@ impl FundManagerAgent {
             &outcome.result.output,
             state_has_missing_inputs(state),
             &state.target_date,
+            dual_risk_status,
+            trader_proposal_action,
         )?;
 
         status.decided_at = runtime_timestamp(&state.target_date);

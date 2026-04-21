@@ -582,8 +582,7 @@ Available inputs:
 Instructions:
 1. Identify the main agreement points and the true blockers.
 2. Call out whether the trader's proposal is adequately defended on target, stop, and confidence.
-3. Explicitly note whether Conservative and Neutral both flag a material violation, because the Fund Manager uses that as
-   a deterministic rejection rule.
+3. Explicitly note the dual-risk escalation status for downstream Fund Manager review.
 4. Keep the output concise and suitable for storage as a plain-text risk discussion note.
 5. Do not output JSON and do not make the final execution decision.
 
@@ -633,18 +632,29 @@ Return ONLY a JSON object matching `ExecutionStatus`:
 - `action`: one of `Buy`, `Sell`, `Hold`
 - `rationale`: concise audit-ready explanation
 - `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
+- `entry_guidance`: (required when action is Hold or Sell) a specific tactical entry condition
+- `suggested_position`: recommended portfolio allocation with scaling guidance
 
 Instructions:
 1. Review the trader proposal and all risk inputs carefully.
-2. Apply the deterministic safety rule: if BOTH the Conservative and Neutral risk reports clearly flag a material
-   violation (`flags_violation == true`), reject the proposal.
-3. Otherwise, make an evidence-based decision using the full input set.
-4. Approve only if the proposal's action, target, stop, and confidence are defensible.
-5. If rejecting, make the blocking reason explicit in `rationale`.
-6. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and calibrate confidence
+2. Check the `Dual-risk escalation:` indicator at the top of the user context. When it is `present` (both Conservative
+   and Neutral risk reports flagged a material violation), your first rationale line MUST begin with one of:
+   `Dual-risk escalation: upheld because ` (if Rejected), `Dual-risk escalation: deferred because ` (if Approved with
+   Hold), or `Dual-risk escalation: overridden because ` (if Approved with a directional action). When it is `unknown`
+   (one or more reports missing), start the first line with: `Dual-risk escalation: indeterminate because `. When it is
+   `absent`, no first-line prefix is required. Emit the prefix byte-for-byte. Do not use markdown fences, lowercase
+   variants, mixed-case variants, or em-dashes.
+3. Make an evidence-based decision using the full input set.
+4. Ground the decision in the pre-computed deterministic valuation provided in the user context.
+5. Approve only if the proposal's action, target, stop, and confidence are defensible.
+6. If rejecting, make the blocking reason explicit in `rationale`.
+7. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and calibrate confidence
    conservatively.
-7. Return ONLY the single JSON object required by `ExecutionStatus`.
-8. Set `action` to the trade direction you endorse. This may match the trader's proposed action or differ if your
+8. If the final `action` is Hold or Sell, provide `entry_guidance` with a specific price level or condition at which the
+   asset becomes a buy.
+9. Always provide `suggested_position` with concrete portfolio percentage ranges.
+10. Return ONLY the single JSON object required by `ExecutionStatus`.
+11. Set `action` to the trade direction you endorse. This may match the trader's proposed action or differ if your
    review warrants a change. If rejecting, `Hold` is the expected default unless the rejection is specifically about
    direction (e.g., the trader said Buy but evidence supports Sell).
 
@@ -704,10 +714,10 @@ factor. This should closely reflect `ExecutionStatus.rationale` and the trader p
 | Neutral      | [true/false/unknown] | [Short summary from neutral `RiskReport.assessment`]      | [Comma-separated items or `None`] |
 | Conservative | [true/false/unknown] | [Short summary from conservative `RiskReport.assessment`] | [Comma-separated items or `None`] |
 
-### Deterministic Safety Check
+### Dual-Risk Escalation
 - **Neutral flags violation:** [true/false/unknown]
 - **Conservative flags violation:** [true/false/unknown]
-- **Auto-reject rule triggered:** [Yes/No]
+- **Dual-risk escalation status:** [present/absent/unknown]
 
 ### Data Quality And Missing Inputs
 - **Missing analyst inputs:** [List missing `fundamental_metrics`, `technical_indicators`, `market_sentiment`, `macro_news`, or `None`]
