@@ -151,14 +151,18 @@ fn validate_dual_risk_rationale(
     dual_risk_status: DualRiskStatus,
     trader_proposal_action: TradeAction,
 ) -> Result<(), TradingError> {
-    match dual_risk_status {
-        DualRiskStatus::Absent => return Ok(()),
-        DualRiskStatus::Present | DualRiskStatus::Unknown => {}
+    let first_line = first_rationale_line(&status.rationale)?;
+    const ESCALATION_PREFIX: &str = "Dual-risk escalation: ";
+
+    if dual_risk_status == DualRiskStatus::Absent && first_line.starts_with(ESCALATION_PREFIX) {
+        return Err(TradingError::SchemaViolation {
+            message: "FundManager: dual-risk escalation absent — rationale must not use a dual-risk escalation first-line prefix"
+                .to_owned(),
+        });
     }
 
-    let first_line = first_rationale_line(&status.rationale)?;
-
     match dual_risk_status {
+        DualRiskStatus::Absent => return Ok(()),
         DualRiskStatus::Present => {
             // Same-direction rejection is invalid (e.g. trader proposed Buy, FM rejected Buy).
             // Exception: trader proposed Hold (no defined "opposite direction").
@@ -201,7 +205,6 @@ fn validate_dual_risk_rationale(
                 });
             }
         }
-        DualRiskStatus::Absent => unreachable!(),
     }
 
     Ok(())

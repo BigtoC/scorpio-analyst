@@ -161,6 +161,10 @@ fn approved_json_without_decided_at() -> String {
 }
 
 fn approved_json_with_missing_data_ack() -> String {
+    r#"{"decision":"Approved","action":"Hold","rationale":"Approved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
+}
+
+fn approved_json_with_missing_risk_data_ack() -> String {
     r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because the upstream inputs required for dual-risk evaluation are missing.\nApproved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
 }
 
@@ -592,7 +596,7 @@ async fn missing_risk_reports_invoke_llm_path() {
     // All risk reports are None.
 
     let inference = StubInference::new(vec![Ok(make_prompt_response(
-        &approved_json_with_missing_data_ack(),
+        &approved_json_with_missing_risk_data_ack(),
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
@@ -1422,6 +1426,25 @@ fn dual_risk_unknown_requires_indeterminate_prefix() {
     );
 }
 
+#[test]
+fn dual_risk_absent_rejects_first_line_escalation_prefix() {
+    use super::validation::parse_and_validate_execution_status;
+    use crate::agents::risk::DualRiskStatus;
+
+    let bad_json = r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because analyst inputs are missing.\nApproved with reduced confidence because technical inputs are unavailable.","decided_at":"2026-03-15"}"#;
+    let result = parse_and_validate_execution_status(
+        bad_json,
+        true,
+        "2026-03-15",
+        DualRiskStatus::Absent,
+        TradeAction::Buy,
+    );
+    assert!(
+        matches!(result, Err(TradingError::SchemaViolation { .. })),
+        "Absent status must reject a fabricated dual-risk escalation prefix: {result:?}"
+    );
+}
+
 // ── Task 4: prompt contract ───────────────────────────────────────────────
 
 #[test]
@@ -1542,6 +1565,22 @@ fn fund_manager_system_prompt_contains_exact_first_line_contract() {
     assert!(
         FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation: indeterminate because"),
         "system prompt must contain indeterminate prefix example"
+    );
+}
+
+#[test]
+fn fund_manager_system_prompt_requires_byte_for_byte_prefix_emission() {
+    use super::prompt::FUND_MANAGER_SYSTEM_PROMPT;
+
+    assert!(
+        FUND_MANAGER_SYSTEM_PROMPT.contains("Emit the prefix byte-for-byte"),
+        "system prompt must require byte-for-byte prefix emission"
+    );
+    assert!(
+        FUND_MANAGER_SYSTEM_PROMPT.contains(
+            "Do not use markdown fences, lowercase variants, mixed-case variants, or em-dashes."
+        ),
+        "system prompt must forbid alternate prefix formatting"
     );
 }
 

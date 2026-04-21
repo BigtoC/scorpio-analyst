@@ -63,6 +63,8 @@ your first rationale line MUST begin with one of: \
 When it is `unknown` (one or more reports missing), start the first line with: \
 `Dual-risk escalation: indeterminate because `. \
 When it is `absent`, no first-line prefix is required.
+Emit the prefix byte-for-byte. Do not use markdown fences, lowercase variants, \
+mixed-case variants, or em-dashes.
 3. Make an evidence-based decision using the full input set.
 4. Ground the decision in the pre-computed deterministic valuation provided in the user context \
 (see \"Deterministic scenario valuation\" section). Use those numbers to anchor price levels \
