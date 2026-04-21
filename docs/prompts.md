@@ -582,8 +582,7 @@ Available inputs:
 Instructions:
 1. Identify the main agreement points and the true blockers.
 2. Call out whether the trader's proposal is adequately defended on target, stop, and confidence.
-3. Explicitly note whether Conservative and Neutral both flag a material violation, because the Fund Manager uses that as
-   a deterministic rejection rule.
+3. Explicitly note the dual-risk escalation status for downstream Fund Manager review.
 4. Keep the output concise and suitable for storage as a plain-text risk discussion note.
 5. Do not output JSON and do not make the final execution decision.
 
@@ -636,9 +635,13 @@ Return ONLY a JSON object matching `ExecutionStatus`:
 
 Instructions:
 1. Review the trader proposal and all risk inputs carefully.
-2. Apply the deterministic safety rule: if BOTH the Conservative and Neutral risk reports clearly flag a material
-   violation (`flags_violation == true`), reject the proposal.
-3. Otherwise, make an evidence-based decision using the full input set.
+2. Check the `Dual-risk escalation:` indicator at the top of the user context. When it is `present` (both Conservative
+   and Neutral risk reports flagged a material violation), your first rationale line MUST begin with one of:
+   `Dual-risk escalation: upheld because ` (if Rejected), `Dual-risk escalation: deferred because ` (if Approved with
+   Hold), or `Dual-risk escalation: overridden because ` (if Approved with a directional action). When it is `unknown`
+   (one or more reports missing), start the first line with: `Dual-risk escalation: indeterminate because `. When it is
+   `absent`, no first-line prefix is required.
+3. Make an evidence-based decision using the full input set.
 4. Approve only if the proposal's action, target, stop, and confidence are defensible.
 5. If rejecting, make the blocking reason explicit in `rationale`.
 6. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and calibrate confidence
