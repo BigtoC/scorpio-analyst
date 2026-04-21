@@ -81,7 +81,7 @@ External research was skipped: the patterns involved (Cargo workspaces, `[[bin]]
 ## Key Technical Decisions
 
 - **Keep CLI package name `scorpio-analyst`; introduce new `scorpio-core` library crate.** Rationale: R12 forbids non-essential renames. The existing package name is baked into the release pipeline (`target/<triple>/release/scorpio-analyst`), install scripts, and repo identity. Retaining it for the CLI crate means zero changes to `.github/workflows/release.yml`, `install.sh`, `install.ps1`. See Alternative Approaches for the discarded rename option.
-- **Workspace layout under `crates/`.** Root `Cargo.toml` becomes a workspace manifest. Members: `crates/scorpio-core`, `crates/scorpio-analyst`. Standard idiom; makes future crates (`crates/scorpio-backtest`, `crates/scorpio-tui`) cheap to add.
+- **Workspace layout under `crates/`.** Root `Cargo.toml` becomes a workspace manifest. Members: `crates/scorpio-core`, `crates/scorpio-cli`. The CLI workspace member lives under `crates/scorpio-cli/` while keeping `package.name = "scorpio-analyst"` for artifact continuity. This is a hard requirement for the slice, not optional convention cleanup. The plan accepts the extra path churn in Unit 1 so the first workspace conversion already lands in the repo layout future crates (`crates/scorpio-backtest`, `crates/scorpio-tui`) would follow.
 - **Mandatory `[workspace.package] version = "..."` in Unit 1.** The release workflow (`.github/workflows/release.yml:24-42`) validates the release tag by greping `^version` from the root `Cargo.toml`. After workspace conversion the root has no top-level `version` unless `[workspace.package]` provides one. Unit 1 must set `[workspace.package] version = "0.2.5"` (today's value) so the grep still finds a line like `version = "0.2.5"` at the root. Both crates consume it via `version.workspace = true`. Not optional — skipping this breaks the next release.
 - **Core facade: one async method on a prepared runtime struct.** `scorpio_core::app::AnalysisRuntime::new(cfg).await` assembles providers/clients/snapshot store; `AnalysisRuntime::run(symbol).await -> anyhow::Result<TradingState>` executes one cycle. Matches R16/R17 (application-centered, close to current assembly path) and R20/R21 (single async contract returning typed state). A free function would also satisfy R17, but a struct gives future callers one-setup/many-runs without re-assembling the pipeline, and costs nothing extra today. **Note on "minimal" vs. returning `TradingState`:** R17 asks for a minimal facade close to today's assembly; returning the full `TradingState` is not minimal in the sense of "narrow DTO," but it matches the current call site's information needs exactly. A narrower `AnalysisResult` wrapper is deliberately deferred until a second consumer proves what it should omit; this slice accepts the wider return type as a known, revisit-later trade-off.
 - **Tokio runtime construction stays in the CLI crate, not the facade.** `cli::analyze::run` continues to build the current-thread runtime and `block_on` the facade; `AnalysisRuntime::new` / `AnalysisRuntime::run` are plain `async fn` / `async` methods that expect to be called from an existing executor. Rationale: R12 (minimal change vs. today's `#[tokio::main]` + `spawn_blocking` shape in `main.rs`). Future async-first consumers will already be inside a runtime and do not need a core-owned executor.
@@ -89,11 +89,15 @@ External research was skipped: the patterns involved (Cargo workspaces, `[[bin]]
 - **Report/ stays in the CLI crate.** Per R23, terminal-specific formatting is excluded from the stable core API. `src/report/` is referenced only by `cli/analyze.rs`; it depends on core types (`state`, `data::adapters`) which matches CLI → core direction. It never needs to enter core.
 - **Observability and backtest stay in core.** `src/observability.rs` is a generic `init_tracing` helper; every future surface will want it. `src/backtest/` is a one-line placeholder that already represents core-internal territory; R13 keeps it a module, not a crate.
 - **Migrations move with core.** `migrations/` directory moves to `crates/scorpio-core/migrations/` since `sqlx::migrate!()` resolves paths relative to the caller's `CARGO_MANIFEST_DIR`.
-- **Tests re-home to the crate they exercise.** Core-focused tests (pipeline, state, workflow, config, foundation) move to `crates/scorpio-core/tests/`. CLI-focused tests (CLI parsing, analyze harness, release contract) move to `crates/scorpio-analyst/tests/`. Test imports switch from `scorpio_analyst::` to `scorpio_core::` for core types.
+- **Tests re-home to the crate they exercise.** Core-focused tests (pipeline, state, workflow, config, foundation) move to `crates/scorpio-core/tests/`. CLI-focused tests (CLI parsing, analyze harness, release contract) move to `crates/scorpio-cli/tests/`. Test imports switch from `scorpio_analyst::` to `scorpio_core::` for core types.
 - **`test-helpers` feature lives on `scorpio-core`, with a forwarder on the CLI.** The feature's primary home is `crates/scorpio-core/Cargo.toml` (`test-helpers = []`), because every existing `#[cfg(feature = "test-helpers")]` gate in `src/` lives in code that moves to core (`src/workflow/**`, `src/providers/factory/client.rs`). The CLI crate also declares `test-helpers = ["scorpio-core/test-helpers"]` as a forwarder so `cargo test -p scorpio-analyst --all-features` still builds cleanly. CI invocation becomes `cargo nextest run --workspace --all-features --locked --no-fail-fast`.
 - **Root `.cargo/config.toml` alias to preserve `cargo run -- analyze`.** If `cargo run` at the root becomes ambiguous across members, add `[alias] run-cli = "run -p scorpio-analyst --"` and document it. In practice only the CLI crate has a `[[bin]]`, so `cargo run -- analyze AAPL` should continue to work without an alias — verify in Unit 1.
-- **`.github/workflows/tests.yml` gains `--workspace`.** Unit 1 must edit the workflow's clippy step to `cargo clippy --workspace --all-targets -- -D warnings` and the nextest step to `cargo nextest run --workspace --all-features --locked --no-fail-fast`. A virtual workspace manifest makes `--all-features` without a target ambiguous, so `--workspace` is required, not optional.
-- **No `pub use` aggregation at the core crate root.** Each core module stays behind its explicit path (`scorpio_core::state::TradingState`, `scorpio_core::workflow::TradingPipeline`, etc.). R24 favors minimal re-exports. A tiny exception: `scorpio_core::app::{AnalysisRuntime, AnalysisResult}` may be re-exported at the crate root so the facade is discoverable without forcing callers to know the `app` submodule.
+- **`.github/workflows/tests.yml` gains `--workspace` and `.cargo/**` path coverage.** Unit 1 must edit the workflow's clippy step to `cargo clippy --workspace --all-targets -- -D warnings` and the nextest step to `cargo nextest run --workspace --all-features --locked --no-fail-fast`. The workflow path filters must include both `crates/**` and `.cargo/**`, because Unit 1 may add `.cargo/config.toml` to preserve root workflows. A virtual workspace manifest makes `--all-features` without a target ambiguous, so `--workspace` is required, not optional.
+- **No `pub use` aggregation at the core crate root.** Each core module stays behind its explicit path (`scorpio_core::state::TradingState`, `scorpio_core::workflow::TradingPipeline`, etc.). R24 favors minimal re-exports. A tiny exception: `scorpio_core::app::AnalysisRuntime` may be re-exported at the crate root so the facade is discoverable without forcing callers to know the `app` submodule.
+- **`scorpio-core` is both implementation home and shared surface.** In this slice, `scorpio-core` is not merely an internal relocation target; it is the shared crate consumed by `scorpio-analyst` first and by future internal surfaces later. `app`, `settings`, and explicitly documented shared types are the preferred entry points for new consumers. The broader public module tree remains available only where the compile-green split, the current CLI, and existing tests still need direct access during this refactor; it is not the default integration guidance for new surfaces. This does not make `scorpio-core` a published semver-stable crate: it remains `publish = false`, and the supported surface may still narrow once additional consumers clarify what should stay public.
+- **Facade error contract stays `anyhow` with preserved context strings.** `AnalysisRuntime::new` and `AnalysisRuntime::run` keep an `anyhow::Result` surface, but every failure site moved out of `cli::analyze::run` carries forward its existing `context(...)` string verbatim inside core. The CLI continues to own runtime-construction and presentation-specific wording; core owns the moved assembly/run-stage context.
+- **Facade validation lives in core, with optional CLI fast-fail retained.** `AnalysisRuntime::run` validates the symbol with the existing `data::symbol::validate_symbol` helper so every consumer gets the same contract. `cli::analyze::run` may keep its current early validation call before building the runtime to preserve today's fail-fast UX, but the facade repeats the check defensively.
+- **Facade test seam is test-only.** Unit 5 adds a `#[cfg(any(test, feature = "test-helpers"))]` constructor/helper that wraps a prebuilt `TradingPipeline` for hermetic `AnalysisRuntime` tests. Production callers only use `AnalysisRuntime::new` and `AnalysisRuntime::run`.
 - **No changes to config file on-disk schema, env-var names, or migration files.** Purely structural. R7 / Scope Boundaries.
 
 ## Open Questions
@@ -107,10 +111,15 @@ External research was skipped: the patterns involved (Cargo workspaces, `[[bin]]
 - **Minimal shared settings seam.** Move only `PartialConfig`, `UserConfigFileError`, `user_config_path`, `load_user_config_at`, `save_user_config_at`, `load_user_config`, `save_user_config` to core. Keep `handle_cancellation`, `is_prompt_cancellation`, `backup_path_for`, `prompt_to_recover_malformed_config`, `load_or_recover_user_config_at`, and the wizard orchestrator (`setup::run`) + every `steps::*` function in CLI. Resolves R18, R19.
 - **Which result type does the facade return?** `TradingState`. It already carries everything the current report renderer needs (`final_execution_status`, evidence, provenance, valuation, token usage). Introducing a new `AnalysisResult` wrapper would be premature API curation (R17). Resolves R20, R21, R23.
 - **Repo-root workflow preservation.** `cargo build`, `cargo run -- analyze AAPL`, `cargo nextest run --workspace --all-features`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt -- --check` all continue to work from the repo root after Unit 1. If `cargo run -- analyze AAPL` requires `-p scorpio-analyst` disambiguation (it shouldn't, since only the CLI crate has a bin), add a `[alias]` entry to `.cargo/config.toml`. Resolves R9.
+- **Is the `crates/` layout optional or required?** Required. This slice standardizes on `crates/` even though keeping `scorpio-analyst` at the repo root would be mechanically possible. The extra move churn is accepted deliberately so the initial workspace conversion lands in the final repo layout rather than forcing a second repo-wide move later.
+- **Is `scorpio-core` an internal implementation crate or a supported reuse surface?** Both. It owns the shared implementation and is the supported crate boundary for internal consumers, with `scorpio-analyst` as the first consumer in this slice. `app` and `settings` are the preferred consumer-facing entry points; broader module visibility remains available where the cross-crate split still needs it.
+- **How does Unit 5 stay hermetic under test?** `AnalysisRuntime` gets a `#[cfg(any(test, feature = "test-helpers"))]` constructor/helper that accepts a prebuilt `TradingPipeline`. The `app_runtime` integration test uses that seam instead of trying to stub provider/model assembly through `AnalysisRuntime::new`.
+- **How does Unit 5 preserve existing error wording?** The facade keeps the `anyhow::Result` contract, and each failure site moved from `cli::analyze::run` into `AnalysisRuntime::{new,run}` preserves the current context string verbatim. The CLI keeps only runtime-builder and presentation-layer wording that still lives there.
+- **Where does symbol validation live after the facade lands?** In both places for this slice: `cli::analyze::run` may keep its early fail-fast validation for unchanged UX, and `AnalysisRuntime::run` repeats the same `validate_symbol` check defensively so non-CLI consumers get the same contract.
 
 ### Deferred to Implementation
 
-- Exact method signatures and error shapes for `AnalysisRuntime` — surfaced during Unit 5 implementation. The plan commits to inputs (`Config`, `symbol: &str`) and output (`TradingState`), not to internal helper structs.
+- Exact method signatures for `AnalysisRuntime` internals and its `#[cfg(any(test, feature = "test-helpers"))]` helper — surfaced during Unit 5 implementation. The external contract is fixed to `anyhow::Result<TradingState>` with preserved context strings at moved failure sites.
 - Whether to centralize shared dep versions via `[workspace.dependencies]` — attempt in Unit 1 only if trivially clean; otherwise defer to post-slice cleanup per R12.
 - Whether `scorpio_core` re-exports anything at its crate root beyond the facade — start with no re-exports except `AnalysisRuntime`; add individual re-exports only when a CLI or test call site becomes painfully verbose. R24.
 - Whether `tests/install_release_contract.rs` adopts a `repo_root()` walker or hard-coded `../../` — decide during Unit 1 based on which keeps the test most resistant to deeper nesting later.
@@ -126,7 +135,7 @@ External research was skipped: the patterns involved (Cargo workspaces, `[[bin]]
 scorpio-analyst/                     # repo root (workspace manifest only)
 ├── Cargo.toml                       # [workspace] members = ["crates/*"]
 ├── Cargo.lock                       # shared lockfile
-├── .github/workflows/               # unchanged (tests.yml, release.yml)
+├── .github/workflows/               # tests.yml updated in Unit 1; release.yml unchanged
 ├── install.sh, install.ps1          # unchanged
 ├── config.toml                      # inert deprecated stub, unchanged
 ├── docs/, examples/, openspec/      # unchanged
@@ -157,7 +166,7 @@ scorpio-analyst/                     # repo root (workspace manifest only)
     │       ├── state/               # moved
     │       └── workflow/            # moved (incl. sqlx::migrate! callers)
     │
-    └── scorpio-analyst/
+    └── scorpio-cli/
         ├── Cargo.toml               # package.name = "scorpio-analyst", [dependencies] scorpio-core = { path = "../scorpio-core" }
         └── src/
             ├── main.rs              # moved; imports scorpio_core::... and crate::cli::...
@@ -208,9 +217,9 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Convert repository to a Cargo workspace with a single `scorpio-analyst` member**
+- [ ] **Unit 1: Convert repository to a Cargo workspace with a single CLI member under `crates/scorpio-cli`**
 
-**Goal:** Turn the repo root into a workspace manifest and move all current source, tests, and migrations under `crates/scorpio-analyst/` while keeping the binary name, release pipeline, and root-level developer commands working.
+**Goal:** Turn the repo root into a workspace manifest and move all current source, tests, and migrations under `crates/scorpio-cli/` while keeping the binary name, release pipeline, and root-level developer commands working.
 
 **Requirements:** R1, R7, R8, R9, R10.
 
@@ -218,12 +227,12 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 **Files:**
 - Modify: `Cargo.toml` (root — becomes `[workspace]` manifest; **must** include `[workspace.package] version = "0.2.5"` — see Approach for why this is mandatory, not optional)
-- Create: `crates/scorpio-analyst/Cargo.toml` (move existing package definition here; consume shared metadata via `version.workspace = true`, `edition.workspace = true`, `license.workspace = true`, `repository.workspace = true`, `description.workspace = true`)
-- Move: `src/**` → `crates/scorpio-analyst/src/**`
-- Move: `tests/**` → `crates/scorpio-analyst/tests/**`
-- Move: `migrations/**` → `crates/scorpio-analyst/migrations/**`
-- Modify: `crates/scorpio-analyst/tests/install_release_contract.rs` — adjust `repo_root()` to walk up from `CARGO_MANIFEST_DIR` to the repo root (e.g. `env!("CARGO_MANIFEST_DIR")` + `../../`) so it still finds `.github/workflows/release.yml`
-- Modify: `.github/workflows/tests.yml` — (a) add `--workspace` to both `cargo clippy --all-targets` and `cargo nextest run` so the virtual-manifest root compiles the whole workspace; (b) update the `push.paths` and `pull_request.paths` filters to replace `src/**` and `tests/**` with `crates/**` (keep `Cargo.toml`, `Cargo.lock`, and the workflow file). Without the path-filter update, PRs that only touch code under `crates/` will silently skip CI.
+- Create: `crates/scorpio-cli/Cargo.toml` (move existing package definition here; consume shared metadata via `version.workspace = true`, `edition.workspace = true`, `license.workspace = true`, `repository.workspace = true`, `description.workspace = true`)
+- Move: `src/**` → `crates/scorpio-cli/src/**`
+- Move: `tests/**` → `crates/scorpio-cli/tests/**`
+- Move: `migrations/**` → `crates/scorpio-cli/migrations/**`
+- Modify: `crates/scorpio-cli/tests/install_release_contract.rs` — adjust `repo_root()` to walk up from `CARGO_MANIFEST_DIR` to the repo root (e.g. `env!("CARGO_MANIFEST_DIR")` + `../../`) so it still finds `.github/workflows/release.yml`
+- Modify: `.github/workflows/tests.yml` — (a) add `--workspace` to both `cargo clippy --all-targets` and `cargo nextest run` so the virtual-manifest root compiles the whole workspace; (b) update the `push.paths` and `pull_request.paths` filters to replace `src/**` and `tests/**` with `crates/**`, and also include `.cargo/**` because Unit 1 may add `.cargo/config.toml` (keep `Cargo.toml`, `Cargo.lock`, and the workflow file). Without the path-filter update, PRs that only touch code under `crates/` or `.cargo/` will silently skip CI.
 - Verify-only: `.github/workflows/release.yml` still grep-resolves `^version = "..."` at the root `Cargo.toml` via `[workspace.package]`; no edit required once that inheritance is wired
 - Modify (if needed): Create `.cargo/config.toml` at repo root with `[alias]` entries only if plain `cargo run -- analyze AAPL`, `cargo build`, `cargo test`/`cargo nextest` stop working from the root
 
@@ -232,8 +241,8 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - Use `git mv` for every file move so `git log --follow` still reveals history.
 - The root `Cargo.toml` keeps `Cargo.lock` at the root and declares `members = ["crates/*"]` with `resolver = "2"`.
 - **Mandatory:** set `[workspace.package] version = "0.2.5"` (today's crate version) plus `edition = "2024"`, `license = "MIT"`, `repository`, `description`. Both crates consume these via `version.workspace = true`, `edition.workspace = true`, etc. This is non-negotiable because `.github/workflows/release.yml:24-42` validates the release tag by greping `^version` at the root `Cargo.toml`; without the `[workspace.package] version` line the next release will fail. Verify locally by running `grep -m1 '^version' Cargo.toml | cut -d '"' -f2` and confirming the tag version is returned. Note that crate-level `Cargo.toml` files will contain `version.workspace = true`, not a literal version string; the release workflow always greps the root `Cargo.toml`, so the literal version line lives under `[workspace.package]`.
-- After the move, `crates/scorpio-analyst/tests/install_release_contract.rs` points at `.github/workflows/release.yml` via a repo-root resolver rather than the crate's own manifest dir.
-- `.github/workflows/tests.yml` must add `--workspace` to both the clippy and nextest steps. A virtual workspace manifest makes `cargo nextest run --all-features` with no `-p` argument error out, so the flag is required, not an optional mitigation.
+- After the move, `crates/scorpio-cli/tests/install_release_contract.rs` points at `.github/workflows/release.yml` via a repo-root resolver rather than the crate's own manifest dir.
+- `.github/workflows/tests.yml` must add `--workspace` to both the clippy and nextest steps, and its path filters must include `.cargo/**` if Unit 1 introduces `.cargo/config.toml`. A virtual workspace manifest makes `cargo nextest run --all-features` with no `-p` argument error out, so the flag is required, not an optional mitigation.
 - Verify CI commands from the repo root: `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace --all-features --locked --no-fail-fast`, `cargo build --release`.
 
 **Execution note:** Mechanical move. Keep this unit purely structural — zero logical edits beyond the path adjustment in `install_release_contract.rs` and any Cargo-alias file required to keep root commands working.
@@ -246,14 +255,16 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - Integration — After the move, `cargo build --workspace` produces `target/<triple>/release/scorpio-analyst` (or `target/release/scorpio-analyst`) with the same artifact path the release workflow expects.
 - Integration — `cargo nextest run --workspace --all-features --locked` runs every existing test with identical pass/fail outcomes.
 - Integration — `cargo run -- analyze AAPL` (or the configured alias) launches the CLI with no behavioral change.
-- Edge case — `crates/scorpio-analyst/tests/install_release_contract.rs` still finds `.github/workflows/release.yml` after moving under a crate (fails loudly if path resolution regresses).
-- Edge case — `sqlx::migrate!()` inside `workflow/snapshot*.rs` still finds the migrations directory at `crates/scorpio-analyst/migrations/` via its crate's `CARGO_MANIFEST_DIR`.
+- Edge case — `crates/scorpio-cli/tests/install_release_contract.rs` still finds `.github/workflows/release.yml` after moving under a crate (fails loudly if path resolution regresses).
+- Edge case — `sqlx::migrate!()` inside `workflow/snapshot*.rs` still finds the migrations directory at `crates/scorpio-cli/migrations/` via its crate's `CARGO_MANIFEST_DIR`.
 - Edge case — `grep -m1 '^version' Cargo.toml | cut -d '"' -f2` at the repo root returns `0.2.5` (or whatever the current version is), matching the exact shell invocation used by `.github/workflows/release.yml:24-42`. Add this as an assertion inside `install_release_contract.rs` or a new companion test so CI catches any future regression that drops the workspace-level version line.
+- Edge case — if Unit 1 adds `.cargo/config.toml`, a PR touching only `.cargo/config.toml` still matches `.github/workflows/tests.yml` path filters and runs CI.
 - Happy path — `cargo fmt -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass from the repo root.
 
 **Verification:**
 - Root-level `cargo fmt`, `cargo clippy`, and `cargo nextest` commands all succeed.
-- `git log --follow crates/scorpio-analyst/src/lib.rs` still shows pre-move history.
+- `.github/workflows/tests.yml` path filters cover `crates/**` and `.cargo/**` when the repo adds `.cargo/config.toml` in Unit 1.
+- `git log --follow crates/scorpio-cli/src/lib.rs` still shows pre-move history.
 - The release pipeline, when dry-run built locally for the host triple, still produces `target/<triple>/release/scorpio-analyst`.
 
 ---
@@ -269,7 +280,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 **Files:**
 - Create: `crates/scorpio-core/Cargo.toml` (package `scorpio-core`, `publish = false`, minimal dependencies — add only what the first moved module needs; start empty)
 - Create: `crates/scorpio-core/src/lib.rs` (empty `//! scorpio-core` header; optional doc comment)
-- Modify: `crates/scorpio-analyst/Cargo.toml` (add `scorpio-core = { path = "../scorpio-core" }` to `[dependencies]`)
+- Modify: `crates/scorpio-cli/Cargo.toml` (add `scorpio-core = { path = "../scorpio-core" }` to `[dependencies]`)
 - Modify: root `Cargo.toml` (append `crates/scorpio-core` to `members`)
 
 **Approach:**
@@ -279,7 +290,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - Keep `edition`, `license`, `repository` consistent with the CLI crate (share via `[workspace.package]` if set up in Unit 1).
 
 **Patterns to follow:**
-- Existing `crates/scorpio-analyst/Cargo.toml` for metadata/features conventions.
+- Existing `crates/scorpio-cli/Cargo.toml` for metadata/features conventions.
 
 **Test scenarios:**
 - Integration — `cargo build --workspace` succeeds with both crates in the workspace.
@@ -304,16 +315,16 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - Create: `crates/scorpio-core/src/settings.rs` (houses `PartialConfig`, `UserConfigFileError`, `user_config_path`, `load_user_config_at`, `save_user_config_at`, `load_user_config`, `save_user_config`, plus the existing unit tests for these APIs)
 - Modify: `crates/scorpio-core/src/lib.rs` (add `pub mod settings;`)
 - Modify: `crates/scorpio-core/Cargo.toml` (add `anyhow`, `serde`, `tempfile`, `thiserror`, `toml` as `[dependencies]`; keep the dep set minimal to this unit)
-- Modify: `crates/scorpio-analyst/src/cli/setup/config_file.rs` — delete the moved symbols; if the file is now empty, delete it and drop the `pub mod config_file;` entry from `cli/setup/mod.rs`.
-- Modify: `crates/scorpio-analyst/src/cli/setup/mod.rs` — switch imports from `config_file::{...}` to `scorpio_core::settings::{...}`; `handle_cancellation`, `backup_path_for`, `prompt_to_recover_malformed_config`, `load_or_recover_user_config_at`, and `run()` all stay here.
-- Modify: `crates/scorpio-analyst/src/cli/setup/steps.rs` — switch `use crate::cli::setup::config_file::PartialConfig` to `use scorpio_core::settings::PartialConfig`.
-- Modify: `crates/scorpio-analyst/src/config.rs` — **this is a required edit in Unit 3**, even though `config.rs` itself does not physically move until Unit 4. Switch every `crate::cli::setup::config_file::{...}` path to `scorpio_core::settings::{...}`. Production-code call sites: `Config::load` (line 371), `Config::load` fallback (line 374), `Config::load_from_user_path` (line 384), `Config::load_effective_runtime` signature (line 394), and `partial_to_nested_toml_non_secrets` (line 589). Test-block call sites inside `#[cfg(test)] mod tests`: lines 1202, 1245, 1274, 1309, 1331. The enumeration is not exhaustive — after editing, the authoritative check is `grep -rn "crate::cli::setup" crates/scorpio-analyst/src/config.rs` returning no hits.
-- Modify: `crates/scorpio-analyst/src/cli/analyze.rs` — its test helpers currently import `crate::cli::setup::config_file::{PartialConfig, save_user_config_at}`. Switch to `scorpio_core::settings::{PartialConfig, save_user_config_at}`.
+- Modify: `crates/scorpio-cli/src/cli/setup/config_file.rs` — delete the moved symbols; if the file is now empty, delete it and drop the `pub mod config_file;` entry from `cli/setup/mod.rs`.
+- Modify: `crates/scorpio-cli/src/cli/setup/mod.rs` — switch imports from `config_file::{...}` to `scorpio_core::settings::{...}`; `handle_cancellation`, `backup_path_for`, `prompt_to_recover_malformed_config`, `load_or_recover_user_config_at`, and `run()` all stay here.
+- Modify: `crates/scorpio-cli/src/cli/setup/steps.rs` — switch `use crate::cli::setup::config_file::PartialConfig` to `use scorpio_core::settings::PartialConfig`.
+- Modify: `crates/scorpio-cli/src/config.rs` — **this is a required edit in Unit 3**, even though `config.rs` itself does not physically move until Unit 4. Switch every `crate::cli::setup::config_file::{...}` path to `scorpio_core::settings::{...}`. Production-code call sites: `Config::load` (line 371), `Config::load` fallback (line 374), `Config::load_from_user_path` (line 384), `Config::load_effective_runtime` signature (line 394), and `partial_to_nested_toml_non_secrets` (line 589). Test-block call sites inside `#[cfg(test)] mod tests`: lines 1202, 1245, 1274, 1309, 1331. The enumeration is not exhaustive — after editing, the authoritative check is `grep -rn "crate::cli::setup" crates/scorpio-cli/src/config.rs` returning no hits.
+- Modify: `crates/scorpio-cli/src/cli/analyze.rs` — its test helpers currently import `crate::cli::setup::config_file::{PartialConfig, save_user_config_at}`. Switch to `scorpio_core::settings::{PartialConfig, save_user_config_at}`.
 - Test: move the existing `#[cfg(test)] mod tests` block from the old `cli/setup/config_file.rs` into `crates/scorpio-core/src/settings.rs`. Tests that depended on `ENV_LOCK` and `HOME` mutation come with it verbatim.
 
 **Approach:**
 - The move is pure symbol relocation; no rename, no signature change, no behavior change.
-- After this unit, `grep -rn "crate::cli::setup" crates/scorpio-analyst/src/config.rs` returns nothing. `config.rs` is still in the CLI crate during Unit 3 — its own file move to core happens in Unit 4.
+- After this unit, `grep -rn "crate::cli::setup" crates/scorpio-cli/src/config.rs` returns nothing. `config.rs` is still in the CLI crate during Unit 3 — its own file move to core happens in Unit 4.
 - **Bump `save_user_config_at` from `pub(crate)` to `pub`.** Required so `config.rs`'s tests and the setup wizard can call it across crate boundaries. Minimum-necessary cross-crate seam change per R24.
 - **Bump `UserConfigFileError` from `pub(crate)` to `pub`.** Required because `cli/setup/mod.rs::load_or_recover_user_config_at` downcasts `anyhow::Error` to `&UserConfigFileError` to branch on `Parse` vs. `Read` variants; the CLI retains this downcast and needs the type visible across the new crate boundary. Do *not* refactor the recovery path to string-matching anyhow messages — that would lose the structural signal and goes beyond scope per R12.
 - No other visibility changes. `backup_path_for`, `prompt_to_recover_malformed_config`, `load_or_recover_user_config_at`, `is_prompt_cancellation`, and all CLI-only symbols remain `pub(crate)` or private in their current home.
@@ -337,7 +348,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 **Verification:**
 - `cargo clippy --workspace --all-targets -- -D warnings` passes.
 - `grep -rn "crate::cli::setup::config_file" crates/` returns no hits.
-- The existing config-related tests in `crates/scorpio-analyst/src/config.rs::tests` (e.g. `load_from_user_path_populates_llm_routing_from_partial_config`) all pass with updated imports.
+- The existing config-related tests in `crates/scorpio-cli/src/config.rs::tests` (e.g. `load_from_user_path_populates_llm_routing_from_partial_config`) all pass with updated imports.
 
 ---
 
@@ -350,25 +361,25 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 **Dependencies:** Unit 3.
 
 **Files:**
-- Move: `crates/scorpio-analyst/src/agents/**` → `crates/scorpio-core/src/agents/**`
-- Move: `crates/scorpio-analyst/src/analysis_packs/**` → `crates/scorpio-core/src/analysis_packs/**`
-- Move: `crates/scorpio-analyst/src/backtest/**` → `crates/scorpio-core/src/backtest/**`
-- Move: `crates/scorpio-analyst/src/config.rs` → `crates/scorpio-core/src/config.rs`
-- Move: `crates/scorpio-analyst/src/constants.rs` → `crates/scorpio-core/src/constants.rs`
-- Move: `crates/scorpio-analyst/src/data/**` → `crates/scorpio-core/src/data/**`
-- Move: `crates/scorpio-analyst/src/error.rs` → `crates/scorpio-core/src/error.rs`
-- Move: `crates/scorpio-analyst/src/indicators/**` → `crates/scorpio-core/src/indicators/**`
-- Move: `crates/scorpio-analyst/src/observability.rs` → `crates/scorpio-core/src/observability.rs`
-- Move: `crates/scorpio-analyst/src/providers/**` → `crates/scorpio-core/src/providers/**`
-- Move: `crates/scorpio-analyst/src/rate_limit.rs` → `crates/scorpio-core/src/rate_limit.rs`
-- Move: `crates/scorpio-analyst/src/state/**` → `crates/scorpio-core/src/state/**`
-- Move: `crates/scorpio-analyst/src/workflow/**` → `crates/scorpio-core/src/workflow/**`
-- Move: `crates/scorpio-analyst/migrations/**` → `crates/scorpio-core/migrations/**`
+- Move: `crates/scorpio-cli/src/agents/**` → `crates/scorpio-core/src/agents/**`
+- Move: `crates/scorpio-cli/src/analysis_packs/**` → `crates/scorpio-core/src/analysis_packs/**`
+- Move: `crates/scorpio-cli/src/backtest/**` → `crates/scorpio-core/src/backtest/**`
+- Move: `crates/scorpio-cli/src/config.rs` → `crates/scorpio-core/src/config.rs`
+- Move: `crates/scorpio-cli/src/constants.rs` → `crates/scorpio-core/src/constants.rs`
+- Move: `crates/scorpio-cli/src/data/**` → `crates/scorpio-core/src/data/**`
+- Move: `crates/scorpio-cli/src/error.rs` → `crates/scorpio-core/src/error.rs`
+- Move: `crates/scorpio-cli/src/indicators/**` → `crates/scorpio-core/src/indicators/**`
+- Move: `crates/scorpio-cli/src/observability.rs` → `crates/scorpio-core/src/observability.rs`
+- Move: `crates/scorpio-cli/src/providers/**` → `crates/scorpio-core/src/providers/**`
+- Move: `crates/scorpio-cli/src/rate_limit.rs` → `crates/scorpio-core/src/rate_limit.rs`
+- Move: `crates/scorpio-cli/src/state/**` → `crates/scorpio-core/src/state/**`
+- Move: `crates/scorpio-cli/src/workflow/**` → `crates/scorpio-core/src/workflow/**`
+- Move: `crates/scorpio-cli/migrations/**` → `crates/scorpio-core/migrations/**`
 - Modify: `crates/scorpio-core/src/lib.rs` — add `pub mod` declarations for every moved module, preserving the `#![allow(clippy::absurd_extreme_comparisons)]` top-of-lib attribute.
 - Modify: `crates/scorpio-core/Cargo.toml` — migrate the runtime `[dependencies]` block (rig-core, schemars, serde, serde_json, toml, thiserror, anyhow, tokio, tracing, tracing-subscriber, governor, config, dotenvy, secrecy, uuid, chrono, reqwest, finnhub, yfinance-rs, kand, num-traits, graph-flow, async-trait, sqlx, nonzero_ext, futures). Move the `test-helpers` feature and any `[dev-dependencies]` that the moved tests require (proptest, mockall, pretty_assertions, paft-money, rust_decimal).
-- Modify: `crates/scorpio-analyst/Cargo.toml` — prune dependencies that are no longer used by CLI-only code. Retain clap, inquire, colored, comfy-table, figlet-rs, tempfile, chrono (for Local::now in analyze), anyhow, tracing, tokio, serde, self_update, semver, sha2, hex, flate2, tar, zip, reqwest if still referenced. Leave `test-helpers`-bearing `[features]` on core only (or make it a workspace-level feature — simplest: it lives on core, and CLI invokes via `scorpio-core/test-helpers`). The release dev-dep items (flate2, tar, zip) stay on whichever crate hosts `tests/install_release_contract.rs` — by default the CLI crate.
-- Modify: every file in `crates/scorpio-analyst/src/main.rs`, `src/cli/**`, `src/report/**` — replace `use crate::{agents, config, data, ...}` with `use scorpio_core::{agents, config, data, ...}` where applicable. `main.rs` imports `scorpio_core::observability::init_tracing`.
-- Move: tests that exercise core types from `crates/scorpio-analyst/tests/` to `crates/scorpio-core/tests/`:
+- Modify: `crates/scorpio-cli/Cargo.toml` — prune dependencies that are no longer used by CLI-only code. Retain clap, inquire, colored, comfy-table, figlet-rs, tempfile, chrono (for Local::now in analyze), anyhow, tracing, tokio, serde, self_update, semver, sha2, hex, flate2, tar, zip, reqwest if still referenced. Declare a CLI-side `test-helpers = ["scorpio-core/test-helpers"]` forwarder so `cargo test -p scorpio-analyst --all-features` still enables the gated core helpers. The release dev-dep items (flate2, tar, zip) stay on whichever crate hosts `tests/install_release_contract.rs` — by default the CLI crate.
+- Modify: every file in `crates/scorpio-cli/src/main.rs`, `src/cli/**`, `src/report/**` — replace `use crate::{agents, config, data, ...}` with `use scorpio_core::{agents, config, data, ...}` where applicable. `main.rs` imports `scorpio_core::observability::init_tracing`.
+- Move: tests that exercise core types from `crates/scorpio-cli/tests/` to `crates/scorpio-core/tests/`:
   - `foundation_edge_cases.rs`
   - `state_roundtrip.rs`
   - `workflow_pipeline_e2e.rs`
@@ -377,7 +388,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
   - `workflow_observability_pipeline.rs`
   - `workflow_pipeline_accounting.rs`
   - `tests/support/**` (all)
-- Keep in `crates/scorpio-analyst/tests/`:
+- Keep in `crates/scorpio-cli/tests/`:
   - `install_release_contract.rs` (release artifact contract — CLI-adjacent)
 - Modify: every `use scorpio_analyst::{state, error, workflow, data, providers, ...}` in moved tests → `use scorpio_core::{...}`. Likewise for `tests/support/*.rs`.
 
@@ -387,13 +398,14 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - `sqlx::migrate!()` resolves relative to the caller's `CARGO_MANIFEST_DIR`; it now resolves to `crates/scorpio-core/migrations/` after the directory move.
 - `test-helpers` feature migrates to `scorpio-core`. CI invocation becomes `cargo nextest run --workspace --all-features --locked --no-fail-fast` which enables features on all workspace members.
 - **Visibility bumps required for cross-crate CLI consumers.** After the move, two symbols currently `pub(crate)` become cross-crate calls from the CLI and must be bumped to `pub`:
-  - `scorpio_core::data::symbol::validate_symbol` (called from `cli/analyze.rs:47`)
+  - `scorpio_core::data::symbol::validate_symbol` (called from `cli/analyze.rs` and reused by `app::AnalysisRuntime` in Unit 5)
   - `scorpio_core::providers::factory::sanitize_error_summary` (called from `cli/setup/steps.rs:234`; both the function declaration in `providers/factory/error.rs` and the `pub(crate) use` re-export in `providers/factory/mod.rs` must become `pub` / `pub use`)
   Before the unit starts, audit any remaining `pub(crate)` items under `data/`, `providers/`, `rate_limit`, `state`, `workflow`, `config`, `analysis_packs`, and `error` against the CLI import list (`grep -rn '^use crate::' src/cli/ src/main.rs src/report/`) to catch additional bumps this enumeration may miss. The rule is: bump only what the CLI seam strictly requires; leave everything else at its current visibility per R24.
 - **Intra-crate path rewrites for `config.rs` after its move.** In Unit 3, `config.rs` imports were switched to `scorpio_core::settings::*` (cross-crate). Now that `config.rs` physically moves into core alongside `settings.rs`, those imports should become intra-crate `crate::settings::*`. Same for any other module this unit moves that Unit 3 already pointed at `scorpio_core::...`.
 - **Watch for CARGO_MANIFEST_DIR users in relocated tests.** `tests/workflow_pipeline_structure.rs:153` uses `env!("CARGO_MANIFEST_DIR")` and joins `tests/support/`. Moving the test to `crates/scorpio-core/tests/` resolves the path correctly because the support files move alongside, but surface this as a sub-stage verification so future refactors do not break it silently.
 - Do not introduce `pub use` aggregation at the core crate root beyond what compile errors demand.
-- Preserve `#![allow(clippy::absurd_extreme_comparisons)]` from `crates/scorpio-analyst/src/lib.rs`: move it to `crates/scorpio-core/src/lib.rs`. The CLI lib becomes a minimal `lib.rs` exporting only `pub mod cli; pub mod report;` (plus any CLI-internal modules needed by integration tests). Add a top-of-file `//!` comment clarifying that `scorpio-analyst` is a binary crate and these `pub mod` declarations exist to support integration tests within the same crate, not as a public library surface for external consumers.
+- Treat the broader public module tree as a migration aid for this slice, not the default integration story for new consumers. Unit 6 should document `scorpio_core::app`, `scorpio_core::settings`, and explicitly shared types as the preferred entry points, while existing direct module imports are tolerated only where the split still needs them.
+- Preserve `#![allow(clippy::absurd_extreme_comparisons)]` from `crates/scorpio-cli/src/lib.rs`: move it to `crates/scorpio-core/src/lib.rs`. The CLI lib becomes a minimal `lib.rs` exporting only `pub mod cli; pub mod report;` (plus any CLI-internal modules needed by integration tests). Add a top-of-file `//!` comment clarifying that `scorpio-analyst` is a binary crate and these `pub mod` declarations exist to support integration tests within the same crate, not as a public library surface for external consumers.
 
 **Execution note:** Large mechanical move; bias toward many small compile-check cycles. After each sub-stage run `cargo check --workspace` and halt on first red.
 
@@ -412,7 +424,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - Integration — `tests/install_release_contract.rs` still passes from its CLI-crate location.
 
 **Verification:**
-- `grep -rn "^use crate::" crates/scorpio-analyst/src/cli/ crates/scorpio-analyst/src/report/ | grep -v "crate::cli\|crate::report\|crate::main"` returns no lines whose right-hand side would live in core (every such line must now use `scorpio_core::`).
+- `grep -rn "^use crate::" crates/scorpio-cli/src/cli/ crates/scorpio-cli/src/report/ | grep -v "crate::cli\|crate::report\|crate::main"` returns no lines whose right-hand side would live in core (every such line must now use `scorpio_core::`).
 - `grep -rn "^use crate::" crates/scorpio-core/src/ | grep "crate::cli"` returns nothing — no reverse dependency.
 - `cargo nextest run --workspace --all-features --locked --no-fail-fast` passes.
 - `cargo clippy --workspace --all-targets -- -D warnings` passes.
@@ -431,14 +443,15 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 **Files:**
 - Create: `crates/scorpio-core/src/app/mod.rs` — houses `AnalysisRuntime`
 - Modify: `crates/scorpio-core/src/lib.rs` — add `pub mod app;` and (optionally) `pub use app::AnalysisRuntime;`
-- Modify: `crates/scorpio-analyst/src/cli/analyze.rs` — replace the inline assembly with an `AnalysisRuntime` call; `print_banner()` stays in CLI; `validate_symbol` call stays in CLI; symbol-validation error handling stays in CLI
+- Modify: `crates/scorpio-cli/src/cli/analyze.rs` — replace the inline assembly with an `AnalysisRuntime` call; `print_banner()` stays in CLI; the CLI may keep its current early `validate_symbol` fast-fail before building the runtime, but `AnalysisRuntime::run` also validates defensively for non-CLI consumers
 - Test: `crates/scorpio-core/tests/app_runtime.rs` (new integration test exercising the facade against stubbed-task pipeline via the existing `test-helpers` feature)
-- Test: `crates/scorpio-analyst/src/cli/analyze.rs::tests` — update the existing tests to exercise the thin wrapper (missing-config guard, symbol validation, env-only config) against the new facade seam
+- Test: `crates/scorpio-cli/src/cli/analyze.rs::tests` — update the existing tests to exercise the thin wrapper (missing-config guard, symbol validation, env-only config) against the new facade seam
 
 **Approach:**
 - The facade struct holds the assembled pipeline plus anything needed to run more than once without re-assembly:
   - `Config` (owned; for consumers that want to inspect it later)
   - `TradingPipeline` (owned)
+- Production callers only use `AnalysisRuntime::new` and `AnalysisRuntime::run`. Add a `#[cfg(any(test, feature = "test-helpers"))]` constructor/helper that accepts a prebuilt `TradingPipeline` so facade tests can stay hermetic without stubbing provider/model assembly through `new`.
 - `AnalysisRuntime::new(cfg: Config) -> impl Future<Output = anyhow::Result<Self>>`:
   - Runs `preflight_copilot_if_configured` (async)
   - Builds `SnapshotStore::from_config(&cfg)` (async)
@@ -448,6 +461,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
   - Constructs `TradingPipeline::new(cfg, finnhub, fred, yfinance, snapshot_store, quick_handle, deep_handle)`
   - Returns `Self`
 - `AnalysisRuntime::run(&self, symbol: &str) -> impl Future<Output = anyhow::Result<TradingState>>`:
+  - Calls `crate::data::symbol::validate_symbol(symbol)` first so non-CLI consumers get the same input contract as the CLI
   - Computes `target_date` (keep this in CLI or move here — current plan: move here so consumers don't have to duplicate it)
   - Constructs `TradingState::new(symbol, &target_date)`
   - Calls `self.pipeline.run_analysis_cycle(initial_state).await`
@@ -455,15 +469,15 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
   - Returns `state`
 - `cli::analyze::run` shrinks to approximately:
   1. `load_analysis_config()?`
-  2. `validate_symbol(&symbol)?`
+  2. `validate_symbol(&symbol)?` (optional but recommended to preserve today's fail-fast UX before runtime construction)
   3. Build tokio current-thread runtime (CLI-owned concern — main.rs already has one, but analyze was historically spawned via `spawn_blocking` so it carries its own)
-  4. `runtime.block_on(async move { let rt = AnalysisRuntime::new(cfg).await?; let state = rt.run(&symbol).await?; println!("{}", scorpio_core::... ? crate::report::format_final_report(&state)); Ok(()) })`
+  4. `runtime.block_on(async move { let rt = AnalysisRuntime::new(cfg).await?; let state = rt.run(&symbol).await?; println!("{}", crate::report::format_final_report(&state)); Ok(()) })`
   5. Print `format_final_report` (still CLI-owned)
-- Error messages (`"pipeline completed without a final execution status"`, `"failed to initialize async runtime"`, provider preflight failures, etc.) stay either in core (where they originate) or CLI (where user-facing phrasing lives). Preserve user-visible wording verbatim where it currently appears on stderr (R7).
+- Error contract: `AnalysisRuntime::{new,run}` keep `anyhow::Result`, and every failure site moved out of `cli::analyze::run` preserves its existing `context(...)` string verbatim inside core. CLI-only errors such as `failed to initialize async runtime` remain in CLI. This keeps user-visible stderr wording stable without introducing a new facade error enum in this slice.
 - The facade does not do any `println!`/`eprintln!`; all user output remains in CLI (R23).
 - **Decision — tokio runtime stays in the CLI.** `tokio::runtime::Builder::new_current_thread()` construction lives in `cli::analyze::run` exactly as today; the facade is plain `async fn`/`async` methods that expect the caller to already be inside a runtime. This preserves today's `#[tokio::main]` + `spawn_blocking` shape in `main.rs` and matches R12. Do not migrate the runtime builder into the facade in this slice even if it appears cleaner locally.
 
-**Execution note:** Implement test-first: write `crates/scorpio-core/tests/app_runtime.rs` asserting `AnalysisRuntime::new(...).await.run(...).await` on stubbed tasks produces the expected `TradingState` shape before implementing the facade. Leverage the existing `workflow::test_support` utilities.
+**Execution note:** Implement test-first: start with `crates/scorpio-core/tests/app_runtime.rs` built around the test-only `AnalysisRuntime` helper and existing `workflow::test_support` utilities so the facade contract is proven under hermetic stubbed-task conditions before wiring the production `new` path.
 
 **Technical design:** *(directional only — the implementing agent should treat this as a sketch of shape, not a binding signature)*
 
@@ -476,8 +490,11 @@ pub struct AnalysisRuntime {
 impl AnalysisRuntime {
     pub async fn new(cfg: crate::config::Config) -> anyhow::Result<Self> { /* assembles pipeline */ }
 
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn from_pipeline_for_test(pipeline: crate::workflow::TradingPipeline) -> Self { /* wraps prebuilt pipeline */ }
+
     pub async fn run(&self, symbol: &str) -> anyhow::Result<crate::state::TradingState> {
-        /* target_date, TradingState::new, run_analysis_cycle, final-status check */
+        /* validate_symbol, target_date, TradingState::new, run_analysis_cycle, final-status check */
     }
 }
 ```
@@ -485,18 +502,20 @@ impl AnalysisRuntime {
 **Patterns to follow:**
 - The current assembly order in `cli/analyze::run` (preflight → snapshot store → rate limiters → completion models → clients → pipeline) — preserve sequencing so first-run behavior is identical.
 - Existing `#[cfg(feature = "test-helpers")]`-gated stubs in `workflow::test_support` — reuse for the new integration test.
+- Existing `anyhow::Context` strings in `cli/analyze::run` — move them verbatim with the corresponding failure sites so stderr wording does not drift.
 
 **Test scenarios:**
-- Happy path — `AnalysisRuntime::new(cfg).await?.run("AAPL").await?` against a test pipeline (stubbed tasks via `test-helpers`) returns a `TradingState` with `final_execution_status = Some(...)`.
+- Happy path — `AnalysisRuntime::from_pipeline_for_test(...)` with a stubbed pipeline runs `"AAPL"` and returns a `TradingState` with `final_execution_status = Some(...)`.
 - Happy path — `cli::analyze::run("AAPL")` against the same test config still prints the existing report shape to stdout (verify via captured output or by asserting the `format_final_report(&state)` call site).
-- Error path — `AnalysisRuntime::new(cfg)` returns a wrapped error when Copilot preflight fails, matching the current `"failed to preflight configured Copilot provider"` message (CLI layer wraps this with its existing context).
+- Error path — `AnalysisRuntime::new(cfg)` returns a wrapped error when Copilot preflight fails, preserving the current `"failed to preflight configured Copilot provider"` context string at the moved failure site.
 - Error path — `AnalysisRuntime::run(symbol)` returns an error when the pipeline completes without a final execution status; CLI layer translates this into the existing stderr phrasing.
+- Error path — `AnalysisRuntime::run("BAD;")` returns the same invalid-symbol failure that the CLI currently gets from `validate_symbol`, even when called outside `cli::analyze::run`.
 - Edge case — calling `AnalysisRuntime::run` twice in sequence on the same runtime succeeds (no hidden single-run state), even though the CLI never does this today. This protects the facade's future-consumer promise (R20).
 - Integration — CLI `cli::analyze::run` missing-config guard, symbol validation (empty / semicolons / lowercase-ok) continue to pass the existing tests in `cli/analyze::tests`, with only import paths updated.
 
 **Verification:**
 - `cargo nextest run --workspace --all-features --locked` passes, including the new `app_runtime` integration test.
-- `grep -rn "TradingPipeline::new\|SnapshotStore::from_config" crates/scorpio-analyst/src/` returns only comments or test fixtures — the CLI no longer assembles the pipeline itself.
+- `grep -rn "TradingPipeline::new\|SnapshotStore::from_config" crates/scorpio-cli/src/` returns only comments or test fixtures — the CLI no longer assembles the pipeline itself.
 - A manual smoke run (`cargo run -p scorpio-analyst -- analyze AAPL` with minimal config) prints the same banner, runs the pipeline, and emits the same report as before Unit 5.
 
 ---
@@ -510,7 +529,7 @@ impl AnalysisRuntime {
 **Dependencies:** Unit 5.
 
 **Files:**
-- Modify: `AGENTS.md` — update "Single crate, no workspace" framing; replace `src/**` paths with `crates/scorpio-core/src/**` or `crates/scorpio-analyst/src/**` as appropriate; update the "Adding things" table so each row lands in the right crate; update test invocations to `cargo nextest run --workspace --all-features`.
+- Modify: `AGENTS.md` — update "Single crate, no workspace" framing; replace `src/**` paths with `crates/scorpio-core/src/**` or `crates/scorpio-cli/src/**` as appropriate; update the "Adding things" table so each row lands in the right crate; update test invocations to `cargo nextest run --workspace --all-features`.
 - Modify: `CLAUDE.md` — update the Source Layout tree to reflect the two-crate structure; update the "Common Development Tasks" table with correct crate paths; update "Running & Debugging" to show `cargo run -p scorpio-analyst -- analyze AAPL` (or whichever invocation Unit 1 confirmed works) and any new alias.
 - Modify: `README.md` — light pass to mention the workspace structure only where it helps a newcomer; the user-facing install path (`~/.local/bin/scorpio`, `scorpio analyze AAPL`) stays unchanged.
 - Modify: `PRD.md` — the architecture diagram/text that describes module layout. If PRD.md currently describes "a single crate", update to reflect the new boundary model (core + CLI, future backtest/TUI). Keep the spec framing aligned with R5/R13.
@@ -519,7 +538,7 @@ impl AnalysisRuntime {
 **Approach:**
 - Do not rewrite architecture narratives wholesale — update only the passages that conflict with the new layout. Per R12, docs should reflect reality, not expand scope.
 - Preserve every user-facing command recipe — `scorpio setup`, `scorpio analyze AAPL`, `cargo run -- analyze ...`, etc. — except where a workspace disambiguation alias is required.
-- The "Common Development Tasks" table rows must route contributors to `crates/scorpio-core/src/...` for core work and `crates/scorpio-analyst/src/...` for CLI work. Rows like "New agent", "New data source", "New indicator", "New LLM provider", "New analysis pack" go to core. "New CLI subcommand" goes to CLI. "New wizard config key" spans both: `scorpio_core::settings::PartialConfig` for the field; `cli/setup/steps.rs` + `scorpio_core::config` for injection.
+- The "Common Development Tasks" table rows must route contributors to `crates/scorpio-core/src/...` for core work and `crates/scorpio-cli/src/...` for CLI work. Rows like "New agent", "New data source", "New indicator", "New LLM provider", "New analysis pack" go to core. "New CLI subcommand" goes to CLI. "New wizard config key" spans both: `scorpio_core::settings::PartialConfig` for the field; `cli/setup/steps.rs` + `scorpio_core::config` for injection.
 
 **Patterns to follow:**
 - Existing table format and tone in `AGENTS.md` and `CLAUDE.md`.
@@ -528,7 +547,7 @@ impl AnalysisRuntime {
 **Test scenarios:**
 - Verify-only — A contributor reading AGENTS.md can answer "where does a new analyst agent live?" with `crates/scorpio-core/src/agents/analyst/` without running `grep`.
 - Verify-only — `CLAUDE.md`'s source layout diagram matches the actual `crates/` tree produced by `find crates -type d -maxdepth 3`.
-- Verify-only — Every `src/` path mentioned in `AGENTS.md` or `CLAUDE.md` resolves to a real file under `crates/scorpio-core/src/` or `crates/scorpio-analyst/src/`.
+- Verify-only — Every `src/` path mentioned in `AGENTS.md` or `CLAUDE.md` resolves to a real file under `crates/scorpio-core/src/` or `crates/scorpio-cli/src/`.
 - Test expectation: none — documentation updates carry no behavior change. This is not a feature-bearing unit.
 
 **Verification:**
@@ -542,6 +561,7 @@ impl AnalysisRuntime {
 
 - **Interaction graph:** The only reversed dependency today (`src/config.rs → crate::cli::setup::config_file::*`) is eliminated in Unit 3. After Unit 4, no module in `scorpio-core` imports anything from `scorpio_analyst`. `main.rs` and `cli/**` imports from `scorpio_core::*` are the only cross-crate edges. Enforced by compiler.
 - **Error propagation:** Preserved. `AnalysisRuntime` returns the same `anyhow::Result<...>` surface the CLI already propagates; current stderr wording in `cli/analyze::run` stays in the CLI where it belongs.
+- **Shared boundary discipline:** New internal consumers should prefer `scorpio_core::app`, `scorpio_core::settings`, and explicitly documented shared types. Broader direct module imports remain temporarily available to keep the extraction compile-green and the migrated tests intact, not as the recommended long-term integration path.
 - **State lifecycle risks:** `TradingState` continues to serialize through `phase_snapshots.trading_state_json`. Moving `state/` to core does not change the JSON shape or `THESIS_MEMORY_SCHEMA_VERSION`. Reviewers must verify `#[serde(default)]` attributes survive the move exactly.
 - **API surface parity:** The CLI surface (`scorpio analyze <SYMBOL>`, `scorpio setup`, `scorpio upgrade`, `--no-update-check`, `SCORPIO_NO_UPDATE_CHECK`) is unchanged. Config env vars (`SCORPIO__*`, `SCORPIO_*_API_KEY`) unchanged. `~/.scorpio-analyst/config.toml` schema unchanged.
 - **Integration coverage:** Existing integration tests (`tests/workflow_pipeline_e2e.rs`, `workflow_pipeline_structure.rs`, `state_roundtrip.rs`, `foundation_edge_cases.rs`, plus `tests/support/**`) relocate to `crates/scorpio-core/tests/` and continue to cover stubbed-pipeline roundtrips. A new `crates/scorpio-core/tests/app_runtime.rs` asserts the new facade seam end-to-end.
@@ -552,11 +572,12 @@ impl AnalysisRuntime {
   - sqlx migration files (`0001_create_phase_snapshots.sql`, `0002_add_symbol_and_schema_version.sql`) are byte-identical; only their directory path moves.
   - `TradingState` JSON schema and `THESIS_MEMORY_SCHEMA_VERSION` constant unchanged.
   - `#![allow(clippy::absurd_extreme_comparisons)]` lint-allow preserved at `crates/scorpio-core/src/lib.rs`.
-- **CI configuration:** `.github/workflows/tests.yml` commands should continue to work. One likely tweak: add `--workspace` to the `cargo nextest run` step so every member's tests run. Verify in Unit 1; adjust if needed.
+- **CI configuration:** Unit 1 updates `.github/workflows/tests.yml` to add `--workspace` to both the clippy and nextest steps and to retarget path filters from `src/**` and `tests/**` to `crates/**`, while also including `.cargo/**` if the repo adds `.cargo/config.toml` to preserve root commands (keep `Cargo.toml`, `Cargo.lock`, and the workflow file itself). `release.yml` remains unchanged.
 
 ## Alternative Approaches Considered
 
 - **Rename the CLI crate to `scorpio-cli` and take `scorpio-analyst` for the core crate.** Cleaner semantic naming (the core is the "analyst", the CLI is the UI). Rejected for this slice: the current package name is baked into the release pipeline (build-output path, install scripts, SHA sidecars, archive names), and R12 explicitly rules out non-essential renames. If later renames become worthwhile, `[[bin]] name = "scorpio-analyst"` can decouple the binary artifact from the package name without touching the pipeline — but that's future work.
+- **Keep `scorpio-analyst` at the repo root and add only `scorpio-core` under `crates/`.** Mechanically viable and it would reduce Unit 1 path churn. Rejected because this slice explicitly requires a uniform `crates/` workspace layout; deferring that normalization would only split the churn into two repo-wide moves instead of one.
 - **Single-step "big bang" restructure.** Rejected: R10 requires incremental compile-green stages. A single PR touching every file would be review-hostile and hard to bisect if CI regresses.
 - **Expose the full current module tree via `pub use` at the core crate root for drop-in source compatibility.** Rejected per R24 — broad re-exports defeat the purpose of shaping a stable shared API. Only `AnalysisRuntime` is considered for re-export, and only if it clearly improves call-site ergonomics.
 - **Return a brand-new `AnalysisResult` wrapper type from the facade instead of `TradingState`.** Rejected for this slice per R17 — premature API curation. The existing `TradingState` already carries everything the report renderer needs. Introduce a wrapper only when a real second consumer demonstrates it.
@@ -566,7 +587,7 @@ impl AnalysisRuntime {
 
 - `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace --all-features --locked --no-fail-fast` all pass from the repo root after every unit.
 - `grep -rn "^use crate::cli\|^use scorpio_analyst::cli" crates/scorpio-core/src/ crates/scorpio-core/tests/` returns no hits.
-- `grep -rn "^use crate::" crates/scorpio-analyst/src/` returns only `crate::cli`, `crate::report`, and `crate::` self-references — no shared-logic imports sneak through `crate::`.
+- `grep -rn "^use crate::" crates/scorpio-cli/src/` returns only `crate::cli`, `crate::report`, and `crate::` self-references — no shared-logic imports sneak through `crate::`.
 - A dry-run of the release workflow against the host triple produces `scorpio-<triple>.tar.gz` with the same contents as before the split (a `scorpio` binary at the archive root).
 - Contributor survey (ad hoc): a new teammate reading `AGENTS.md` can correctly place a hypothetical new agent, indicator, provider, or wizard step into the right crate without re-reading the source.
 
@@ -577,6 +598,7 @@ impl AnalysisRuntime {
 | Release pipeline regression if binary output path changes                                                                                                    | Low        | High   | Retain CLI package name `scorpio-analyst`; verify `target/<triple>/release/scorpio-analyst` exists after Unit 1 via local dry-run build.                                                                                            |
 | Release workflow tag-version check fails because root `Cargo.toml` has no `^version` line after workspace conversion (`.github/workflows/release.yml:24-42`) | Medium     | High   | Unit 1 sets `[workspace.package] version = "0.2.5"` at the root; both crates inherit via `version.workspace = true`. Unit 1's test scenarios add an assertion replaying the exact grep invocation so CI catches future regressions. |
 | CI `cargo nextest --all-features` errors out on virtual workspace manifest without `-p`/`--workspace`                                                        | Medium     | High   | Unit 1 edits `.github/workflows/tests.yml` to add `--workspace` to both the clippy and nextest steps. Non-optional.                                                                                                                 |
+| Unit 1 adds `.cargo/config.toml`, but CI path filters do not watch `.cargo/**`, so root workflow changes skip CI                                                | Low        | Medium | Include `.cargo/**` in `.github/workflows/tests.yml` path filters alongside `crates/**`, `Cargo.toml`, `Cargo.lock`, and the workflow file.                                                                                         |
 | `test-helpers` feature available from core but not forwarded by CLI, so `cargo test -p scorpio-analyst --all-features` fails to activate gated core code     | Low        | Low    | CLI crate declares `test-helpers = ["scorpio-core/test-helpers"]` forwarder in Unit 4.                                                                                                                                              |
 | `UserConfigFileError` or `save_user_config_at` left as `pub(crate)` after settings move, breaking CLI recovery path or cross-crate test access               | Low        | Medium | Unit 3 explicitly bumps both to `pub`; Approach section commits to the decision (no "either/or" left to the implementer).                                                                                                           |
 | `sqlx::migrate!()` fails at runtime because `migrations/` is no longer under the calling crate's manifest dir                                                | Medium     | High   | Move `migrations/` with `workflow/` in Unit 4; guard with an integration test that exercises `SnapshotStore::from_config` in the new crate.                                                                                         |
