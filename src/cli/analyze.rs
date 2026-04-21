@@ -19,6 +19,19 @@ use crate::workflow::{SnapshotStore, TradingPipeline};
 /// Error message printed when the user config is missing or incomplete.
 const CONFIG_MISSING_MSG: &str = "✗ Config not found or incomplete. Run `scorpio setup` to configure your API keys and providers.";
 
+/// Print the "Scorpio Analyst" figlet banner to stdout.
+///
+/// Lifted out of [`run`] so `main.rs` can render it before the post-banner
+/// update notice, letting users Ctrl-C and upgrade before the minutes-long
+/// pipeline starts.
+pub fn print_banner() {
+    if let Ok(font) = Toilet::mono12()
+        && let Some(figure) = font.convert("Scorpio Analyst")
+    {
+        println!("{}", figure.as_str());
+    }
+}
+
 /// Run the full 5-phase analysis pipeline for `symbol`.
 ///
 /// # Errors
@@ -28,13 +41,6 @@ const CONFIG_MISSING_MSG: &str = "✗ Config not found or incomplete. Run `scorp
 /// - invalid symbol format
 /// - any pipeline runtime failure
 pub fn run(symbol: &str) -> anyhow::Result<()> {
-    // ASCII banner
-    if let Ok(font) = Toilet::mono12()
-        && let Some(figure) = font.convert("Scorpio Analyst")
-    {
-        println!("{}", figure.as_str());
-    }
-
     let cfg = load_analysis_config()?;
 
     // Validate symbol (re-homed from Config::validate() in Unit 3).
