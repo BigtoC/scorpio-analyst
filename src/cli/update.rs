@@ -13,7 +13,6 @@
 
 use std::path::Path;
 use std::time::Duration;
-use std::{io, io::IsTerminal};
 
 use anyhow::{Context, anyhow};
 use colored::Colorize;
@@ -463,7 +462,7 @@ async fn check_latest_version_with<U: Updater>(updater: U) -> Option<String> {
     }
 }
 
-// ── try_show_update_notice ─────────────────────────────────────────────
+// ── try_show_update_notice_with_tty ────────────────────────────────────
 
 /// Best-effort non-blocking drain of the background update-check result.
 ///
@@ -471,14 +470,11 @@ async fn check_latest_version_with<U: Updater>(updater: U) -> Option<String> {
 /// `Some(latest)` payload; returns `None` otherwise (channel empty, sender
 /// dropped, or the task reported "up to date"). This is intentional: the
 /// subcommand should not wait on the check.
-pub fn try_show_update_notice(
-    rx: tokio::sync::oneshot::Receiver<Option<String>>,
-    current: &str,
-) -> Option<String> {
-    try_show_update_notice_with_tty(rx, current, io::stderr().is_terminal())
-}
-
-fn try_show_update_notice_with_tty(
+///
+/// `stderr_is_terminal` selects between the boxed/colored notice (TTY) and the
+/// plain-text notice (redirected stderr). Callers typically pass
+/// `std::io::stderr().is_terminal()`.
+pub fn try_show_update_notice_with_tty(
     rx: tokio::sync::oneshot::Receiver<Option<String>>,
     current: &str,
     stderr_is_terminal: bool,
@@ -1173,7 +1169,7 @@ mod tests {
         assert_eq!(got, None);
     }
 
-    // ── try_show_update_notice ─────────────────────────────────────
+    // ── try_show_update_notice_with_tty ────────────────────────────
 
     mod notice_dispatch {
         use super::*;
@@ -1182,7 +1178,7 @@ mod tests {
         async fn returns_formatted_notice_when_some() {
             let (tx, rx) = tokio::sync::oneshot::channel();
             tx.send(Some("0.3.0".to_string())).unwrap();
-            let got = try_show_update_notice(rx, "0.2.1");
+            let got = try_show_update_notice_with_tty(rx, "0.2.1", true);
             let s = got.expect("expected Some");
             assert!(s.contains("0.2.1") && s.contains("0.3.0"));
         }
@@ -1217,7 +1213,7 @@ mod tests {
         async fn returns_none_when_sender_reports_up_to_date() {
             let (tx, rx) = tokio::sync::oneshot::channel();
             tx.send(None).unwrap();
-            assert!(try_show_update_notice(rx, "0.2.1").is_none());
+            assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
         }
 
         #[tokio::test]
@@ -1225,14 +1221,14 @@ mod tests {
             // Intentional best-effort: if the check hasn't finished when the
             // subcommand returns, we silently skip — documented in R3.
             let (_tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
-            assert!(try_show_update_notice(rx, "0.2.1").is_none());
+            assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
         }
 
         #[tokio::test]
         async fn returns_none_when_sender_dropped_disconnected() {
             let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
             drop(tx); // background task panicked before sending
-            assert!(try_show_update_notice(rx, "0.2.1").is_none());
+            assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
         }
     }
 

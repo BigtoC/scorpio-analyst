@@ -1,5 +1,9 @@
+use std::io::{self, IsTerminal};
+
 use clap::Parser;
-use scorpio_analyst::cli::update::{check_latest_version, run_upgrade, try_show_update_notice};
+use scorpio_analyst::cli::update::{
+    check_latest_version, run_upgrade, try_show_update_notice_with_tty,
+};
 use scorpio_analyst::cli::{Cli, Commands};
 use scorpio_analyst::observability::init_tracing;
 
@@ -53,7 +57,8 @@ async fn main() {
     // run `scorpio upgrade` immediately after they just did.
     if !is_upgrade
         && let Some(rx) = update_rx
-        && let Some(notice) = try_show_update_notice(rx, CURRENT_VERSION)
+        && let Some(notice) =
+            try_show_update_notice_with_tty(rx, CURRENT_VERSION, io::stderr().is_terminal())
     {
         eprintln!("{notice}");
     }
