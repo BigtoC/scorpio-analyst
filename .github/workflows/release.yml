@@ -69,7 +69,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Protobuf compiler (Linux)
         if: runner.os == 'Linux'
@@ -167,7 +167,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Upload installer scripts
         uses: softprops/action-gh-release@v2
