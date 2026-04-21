@@ -26,6 +26,7 @@ mod common;
 mod conservative;
 mod moderator;
 mod neutral;
+mod prompt;
 
 pub(crate) use self::common::DualRiskStatus;
 pub use aggressive::AggressiveRiskAgent;
