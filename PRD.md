@@ -316,8 +316,8 @@ parameter.
                           ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Fund Manager  [Chunk 3: evidence context injected]     │
-│  → Approve / Reject  (deterministic fallback if         │
-│    Conservative + Neutral both flag violation)          │
+│  → Approve / Reject  (LLM judgment informed by all      │
+│    three risk reports and dual-risk escalation status)  │
 └──────────────────────────┬──────────────────────────────┘
                            │
                            ▼
@@ -517,11 +517,12 @@ execution at the entry point and routes the `TradingState` through the necessary
    `consensus_summary` before updating the `NextAction` to exit the loop, moving the state to the Trader Agent.
 4. **Synthesis and Proposal**: The Trader Agent task operates sequentially, utilizing the complete `TradingState` to
    generate a formalized TradeProposal.
-5. **Risk Fan-Out**: Similar to the initial data ingestion, the risk assessment phase utilizes a parallel Fan-Out
-   pattern. The Aggressive, Neutral, and Conservative risk agents simultaneously evaluate the `TradeProposal` against
-   the technical and fundamental data, appending their distinct `RiskReport` objects to the state.
+5. **Risk Review**: The risk assessment phase evaluates the `TradeProposal` through the Aggressive, Conservative, and
+   Neutral risk agents, then synthesizes their outputs via the Risk Moderator before handing the discussion to the Fund
+   Manager.
 6. **Managerial Arbitration**: The graph terminates at the Fund Manager node, which uses LLM judgment informed by a
-   tri-state dual-risk escalation indicator derived from the three risk reports to approve or reject the trade.
+   tri-state dual-risk escalation indicator derived from the Conservative and Neutral risk reports, while still reading
+   all three risk reports to approve or reject the trade.
 
 ## Agent Role Specifications and Implementation Directives
 
