@@ -1,9 +1,12 @@
 use crate::{
-    agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-        build_evidence_context, build_pack_context, build_thesis_memory_context,
-        build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+    agents::{
+        risk::DualRiskStatus,
+        shared::{
+            UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
+            build_evidence_context, build_pack_context, build_thesis_memory_context,
+            build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
+            sanitize_symbol_for_prompt, serialize_prompt_value,
+        },
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     state::{DebateMessage, RiskReport, TradingState},
@@ -51,9 +54,16 @@ Calibrate size to conviction level, volatility, and risk tolerance.
 
 Instructions:
 1. Review the trader proposal and all risk inputs carefully.
-2. Apply the deterministic safety rule: if BOTH the Conservative and Neutral risk reports clearly \
-flag a material violation (`flags_violation == true`), reject the proposal.
-3. Otherwise, make an evidence-based decision using the full input set.
+2. Check the `Dual-risk escalation:` indicator at the top of the user context. \
+When it is `present` (both Conservative and Neutral risk reports flagged a material violation), \
+your first rationale line MUST begin with one of: \
+`Dual-risk escalation: upheld because ` (if Rejected), \
+`Dual-risk escalation: deferred because ` (if Approved with Hold), or \
+`Dual-risk escalation: overridden because ` (if Approved with a directional action). \
+When it is `unknown` (one or more reports missing), start the first line with: \
+`Dual-risk escalation: indeterminate because `. \
+When it is `absent`, no first-line prefix is required.
+3. Make an evidence-based decision using the full input set.
 4. Ground the decision in the pre-computed deterministic valuation provided in the user context \
 (see \"Deterministic scenario valuation\" section). Use those numbers to anchor price levels \
 in `entry_guidance` and calibrate `suggested_position`. If the valuation is `not assessed` \
@@ -80,6 +90,7 @@ pub(super) fn build_prompt_context(
     state: &TradingState,
     symbol: &str,
     target_date: &str,
+    dual_risk_status: DualRiskStatus,
 ) -> (String, String) {
     let symbol = sanitize_symbol_for_prompt(symbol);
     let target_date = sanitize_date_for_prompt(target_date);
@@ -115,7 +126,13 @@ pub(super) fn build_prompt_context(
                 .map_or_else(|| "unavailable".to_owned(), |p| format!("{p:.2}")),
         );
 
-    let user_prompt = build_user_prompt(state, &symbol, &target_date, data_quality_note);
+    let user_prompt = build_user_prompt(
+        state,
+        &symbol,
+        &target_date,
+        data_quality_note,
+        dual_risk_status,
+    );
 
     (system_prompt, user_prompt)
 }
@@ -149,6 +166,7 @@ fn build_user_prompt(
     symbol: &str,
     target_date: &str,
     data_quality_note: &str,
+    dual_risk_status: DualRiskStatus,
 ) -> String {
     let mut prompt = String::new();
 
@@ -157,6 +175,14 @@ fn build_user_prompt(
         &format!(
             "Produce an ExecutionStatus JSON for {} as of {}.",
             symbol, target_date
+        ),
+        MAX_USER_PROMPT_CHARS,
+    );
+    push_bounded_line(
+        &mut prompt,
+        &format!(
+            "Dual-risk escalation: {}",
+            dual_risk_status.as_prompt_value()
         ),
         MAX_USER_PROMPT_CHARS,
     );
@@ -292,6 +318,19 @@ fn serialize_optional_value_with_missing_note<T: serde::Serialize>(
     }
 }
 
+#[cfg(test)]
+pub(super) fn build_user_prompt_for_test(dual_risk_status: DualRiskStatus) -> String {
+    use crate::state::TradingState;
+    let state = TradingState::new("AAPL", "2026-01-15");
+    build_user_prompt(
+        &state,
+        "AAPL",
+        "2026-01-15",
+        "test data quality note",
+        dual_risk_status,
+    )
+}
+
 fn push_bounded_line(buffer: &mut String, line: &str, max_chars: usize) {
     if buffer.chars().count() >= max_chars {
         return;
@@ -321,10 +360,13 @@ fn push_bounded_line(buffer: &mut String, line: &str, max_chars: usize) {
 #[cfg(test)]
 mod tests {
     use super::{FUND_MANAGER_SYSTEM_PROMPT, build_prompt_context};
-    use crate::state::{
-        DebateMessage, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData,
-        RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction,
-        TradeProposal, TradingState,
+    use crate::{
+        agents::risk::DualRiskStatus,
+        state::{
+            DebateMessage, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData,
+            RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction,
+            TradeProposal, TradingState,
+        },
     };
 
     fn valid_proposal() -> TradeProposal {
@@ -409,10 +451,10 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_contains_safety_net_instructions() {
+    fn system_prompt_contains_decision_instructions() {
         assert!(
-            FUND_MANAGER_SYSTEM_PROMPT.contains("flags_violation"),
-            "system prompt must mention flags_violation"
+            FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation:"),
+            "system prompt must contain the dual-risk escalation indicator reference"
         );
         assert!(
             FUND_MANAGER_SYSTEM_PROMPT.contains("Approved"),
@@ -431,8 +473,12 @@ mod tests {
     #[test]
     fn prompt_context_includes_serialized_trader_proposal_and_risk_reports() {
         let state = populated_state();
-        let (_system_prompt, user_prompt) =
-            build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
         assert!(
             user_prompt.contains("target_price"),
             "user prompt must include serialized trader proposal"
@@ -447,8 +493,12 @@ mod tests {
     fn prompt_context_uses_missing_note_when_risk_reports_absent() {
         let mut state = TradingState::new("AAPL", "2026-03-15");
         state.trader_proposal = Some(valid_proposal());
-        let (_system_prompt, user_prompt) =
-            build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Unknown,
+        );
         assert!(
             user_prompt.contains("no risk report available"),
             "prompt should note missing risk reports"
@@ -458,8 +508,12 @@ mod tests {
     #[test]
     fn untrusted_serialized_context_is_not_embedded_in_system_prompt() {
         let state = populated_state();
-        let (system_prompt, user_prompt) =
-            build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+        let (system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
         assert!(
             !system_prompt.contains("target_price"),
             "serialized proposal should stay out of the system prompt"
@@ -481,8 +535,12 @@ mod tests {
             role: "moderator".to_owned(),
             content: "Conservative and Neutral disagree on stop-loss width.".to_owned(),
         });
-        let (_system_prompt, user_prompt) =
-            build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
         assert!(
             user_prompt.contains("Conservative and Neutral disagree"),
             "prompt should include risk discussion history"
@@ -522,8 +580,12 @@ mod tests {
             }),
         };
 
-        let (_system_prompt, user_prompt) =
-            build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
 
         assert!(user_prompt.contains("Event-news enrichment"));
         assert!(user_prompt.contains("Apple raises guidance"));

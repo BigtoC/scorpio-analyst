@@ -4,9 +4,8 @@
 //! `risk_discussion_history`, and the supporting analyst context, then renders an
 //! auditable approve/reject [`ExecutionStatus`].
 //!
-//! A **deterministic safety-net** rejects the proposal immediately — without an LLM
-//! call — whenever both the Conservative and Neutral risk reports have
-//! `flags_violation == true`.
+//! When both the Conservative and Neutral risk reports flag a violation, the
+//! dual-risk escalation status is surfaced to the LLM for transparent judgment.
 
 mod agent;
 mod prompt;

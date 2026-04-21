@@ -504,7 +504,10 @@ mod tests {
     #[test]
     fn validate_moderator_output_rejects_missing_required_violation_sentence() {
         assert!(matches!(
-            validate_moderator_output("Short summary without required sentence.", DualRiskStatus::Present),
+            validate_moderator_output(
+                "Short summary without required sentence.",
+                DualRiskStatus::Present
+            ),
             Err(TradingError::SchemaViolation { .. })
         ));
     }

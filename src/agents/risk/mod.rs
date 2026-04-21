@@ -27,11 +27,11 @@ mod conservative;
 mod moderator;
 mod neutral;
 
+pub(crate) use self::common::DualRiskStatus;
 pub use aggressive::AggressiveRiskAgent;
 pub use conservative::ConservativeRiskAgent;
 pub use moderator::RiskModerator;
 pub use neutral::NeutralRiskAgent;
-pub(crate) use self::common::DualRiskStatus;
 
 use common::{redact_text_for_storage, serialize_risk_report_context};
 
@@ -582,8 +582,7 @@ mod tests {
                 return Err(TradingError::Rig("moderator failed".to_owned()));
             }
             Ok((
-                "Violation status: dual-risk escalation present. Proceed with caution."
-                    .to_owned(),
+                "Violation status: dual-risk escalation present. Proceed with caution.".to_owned(),
                 AgentTokenUsage::unavailable("Risk Moderator", "o3", 1),
             ))
         }

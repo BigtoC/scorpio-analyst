@@ -439,7 +439,8 @@ mod tests {
     #[test]
     fn build_moderator_result_redacts_secret_from_stored_output() {
         let (synthesis, _) = build_moderator_result(
-            "Violation status: dual-risk escalation absent. api_key=abcd1234 token=qwerty".to_owned(),
+            "Violation status: dual-risk escalation absent. api_key=abcd1234 token=qwerty"
+                .to_owned(),
             &sample_state(),
             "o3",
             mock_usage(10),
