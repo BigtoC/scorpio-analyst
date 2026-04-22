@@ -8,8 +8,8 @@ on:
       - '.github/workflows/tests.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'src/**'
-      - 'tests/**'
+      - 'crates/**'
+      - '.cargo/**'
   pull_request:
     branches:
       - main
@@ -17,8 +17,8 @@ on:
       - '.github/workflows/tests.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'src/**'
-      - 'tests/**'
+      - 'crates/**'
+      - '.cargo/**'
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
@@ -52,7 +52,7 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo nextest run --all-features --locked --no-fail-fast
+        run: cargo nextest run --workspace --all-features --locked --no-fail-fast
