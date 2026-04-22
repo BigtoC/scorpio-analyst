@@ -116,14 +116,15 @@ External research was skipped: the patterns involved (Cargo workspaces, `[[bin]]
 - **How does Unit 5 stay hermetic under test?** `AnalysisRuntime` gets a `#[cfg(any(test, feature = "test-helpers"))]` constructor/helper that accepts a prebuilt `TradingPipeline`. The `app_runtime` integration test uses that seam instead of trying to stub provider/model assembly through `AnalysisRuntime::new`.
 - **How does Unit 5 preserve existing error wording?** The facade keeps the `anyhow::Result` contract, and each failure site moved from `cli::analyze::run` into `AnalysisRuntime::{new,run}` preserves the current context string verbatim. The CLI keeps only runtime-builder and presentation-layer wording that still lives there.
 - **Where does symbol validation live after the facade lands?** In both places for this slice: `cli::analyze::run` may keep its early fail-fast validation for unchanged UX, and `AnalysisRuntime::run` repeats the same `validate_symbol` check defensively so non-CLI consumers get the same contract.
+- **Test-only facade constructor shape.** `AnalysisRuntime::from_pipeline(pipeline: TradingPipeline) -> Self` — infallible, single-argument, gated `#[cfg(any(test, feature = "test-helpers"))]`. One constructor only; add more (e.g. a `with_config` variant) the first time a test actually needs additional injected state, not preemptively. Resolves the test-seam portion of the deferred facade-internals question.
+- **`[workspace.dependencies]` centralization happens in Unit 1.** With only two members, the move is trivially clean and every dep consumed by both crates (`tokio`, `serde`, `serde_json`, `anyhow`, `thiserror`, `tracing`, `chrono`, `uuid`, `reqwest`, `async-trait`, `futures`, `tempfile`) becomes a single source of truth from day one. Deps that live in exactly one crate (e.g. `clap`, `inquire`, `self_update` → CLI; `rig-core`, `graph-flow`, `kand` → core) stay crate-local. This avoids dep-version drift that would otherwise need a follow-up cleanup pass.
+- **`scorpio_core` crate-root re-exports stay minimal from day one.** Only `pub use crate::app::AnalysisRuntime;` at the crate root. Additional re-exports are added lazily, one at a time, when a specific call site becomes painfully verbose — not preemptively. R24.
+- **`repo_root()` uses an upward walker, not a hard-coded `../../`.** From `CARGO_MANIFEST_DIR`, ascend until a directory contains `.github/workflows/release.yml` (or alternately a `Cargo.lock` next to a root `Cargo.toml` with `[workspace]`). Robust to future nesting (e.g. a later split into `crates/scorpio-cli/tests/` vs `crates/scorpio-cli/tests-support/`) and makes the test's intent — "find the repo root" — explicit. ~6 lines of extra code over the literal parent-path form.
+- **No per-crate `README.md` in this slice.** Root `README.md` plus the `[workspace.package] description` inherited by each crate covers discoverability. Per-crate READMEs matter when crates publish to crates.io; both are pinned `publish = false`. Revisit if/when that changes.
 
 ### Deferred to Implementation
 
-- Exact method signatures for `AnalysisRuntime` internals and its `#[cfg(any(test, feature = "test-helpers"))]` helper — surfaced during Unit 5 implementation. The external contract is fixed to `anyhow::Result<TradingState>` with preserved context strings at moved failure sites.
-- Whether to centralize shared dep versions via `[workspace.dependencies]` — attempt in Unit 1 only if trivially clean; otherwise defer to post-slice cleanup per R12.
-- Whether `scorpio_core` re-exports anything at its crate root beyond the facade — start with no re-exports except `AnalysisRuntime`; add individual re-exports only when a CLI or test call site becomes painfully verbose. R24.
-- Whether `tests/install_release_contract.rs` adopts a `repo_root()` walker or hard-coded `../../` — decide during Unit 1 based on which keeps the test most resistant to deeper nesting later.
-- Whether to add a workspace-level `README.md` pointer to each crate — defer to Unit 6 as part of the documentation pass.
+- Exact method signatures for `AnalysisRuntime` internal helpers (field accessors, non-test constructors) — surfaced during Unit 5 implementation. The external contract is fixed to `anyhow::Result<TradingState>` with preserved context strings at moved failure sites, and the test seam is fixed to `AnalysisRuntime::from_pipeline(TradingPipeline) -> Self`.
 
 ## High-Level Technical Design
 
@@ -226,12 +227,12 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 **Dependencies:** None.
 
 **Files:**
-- Modify: `Cargo.toml` (root — becomes `[workspace]` manifest; **must** include `[workspace.package] version = "0.2.5"` — see Approach for why this is mandatory, not optional)
-- Create: `crates/scorpio-cli/Cargo.toml` (move existing package definition here; consume shared metadata via `version.workspace = true`, `edition.workspace = true`, `license.workspace = true`, `repository.workspace = true`, `description.workspace = true`)
+- Modify: `Cargo.toml` (root — becomes `[workspace]` manifest; **must** include `[workspace.package] version = "0.2.5"` — see Approach for why this is mandatory, not optional; also introduces `[workspace.dependencies]` for deps consumed by both crates — see Approach)
+- Create: `crates/scorpio-cli/Cargo.toml` (move existing package definition here; consume shared metadata via `version.workspace = true`, `edition.workspace = true`, `license.workspace = true`, `repository.workspace = true`, `description.workspace = true`; consume shared deps via `tokio.workspace = true`, `serde.workspace = true`, etc. — see Approach)
 - Move: `src/**` → `crates/scorpio-cli/src/**`
 - Move: `tests/**` → `crates/scorpio-cli/tests/**`
 - Move: `migrations/**` → `crates/scorpio-cli/migrations/**`
-- Modify: `crates/scorpio-cli/tests/install_release_contract.rs` — adjust `repo_root()` to walk up from `CARGO_MANIFEST_DIR` to the repo root (e.g. `env!("CARGO_MANIFEST_DIR")` + `../../`) so it still finds `.github/workflows/release.yml`
+- Modify: `crates/scorpio-cli/tests/install_release_contract.rs` — replace the `repo_root()` literal with an upward walker that ascends from `CARGO_MANIFEST_DIR` until it finds `.github/workflows/release.yml` (or a root `Cargo.toml` containing `[workspace]`), so the test resolves the repo root regardless of future crate nesting
 - Modify: `.github/workflows/tests.yml` — (a) add `--workspace` to both `cargo clippy --all-targets` and `cargo nextest run` so the virtual-manifest root compiles the whole workspace; (b) update the `push.paths` and `pull_request.paths` filters to replace `src/**` and `tests/**` with `crates/**`, and also include `.cargo/**` because Unit 1 may add `.cargo/config.toml` (keep `Cargo.toml`, `Cargo.lock`, and the workflow file). Without the path-filter update, PRs that only touch code under `crates/` or `.cargo/` will silently skip CI.
 - Verify-only: `.github/workflows/release.yml` still grep-resolves `^version = "..."` at the root `Cargo.toml` via `[workspace.package]`; no edit required once that inheritance is wired
 - Modify (if needed): Create `.cargo/config.toml` at repo root with `[alias]` entries only if plain `cargo run -- analyze AAPL`, `cargo build`, `cargo test`/`cargo nextest` stop working from the root
@@ -241,7 +242,8 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - Use `git mv` for every file move so `git log --follow` still reveals history.
 - The root `Cargo.toml` keeps `Cargo.lock` at the root and declares `members = ["crates/*"]` with `resolver = "2"`.
 - **Mandatory:** set `[workspace.package] version = "0.2.5"` (today's crate version) plus `edition = "2024"`, `license = "MIT"`, `repository`, `description`. Both crates consume these via `version.workspace = true`, `edition.workspace = true`, etc. This is non-negotiable because `.github/workflows/release.yml:24-42` validates the release tag by greping `^version` at the root `Cargo.toml`; without the `[workspace.package] version` line the next release will fail. Verify locally by running `grep -m1 '^version' Cargo.toml | cut -d '"' -f2` and confirming the tag version is returned. Note that crate-level `Cargo.toml` files will contain `version.workspace = true`, not a literal version string; the release workflow always greps the root `Cargo.toml`, so the literal version line lives under `[workspace.package]`.
-- After the move, `crates/scorpio-cli/tests/install_release_contract.rs` points at `.github/workflows/release.yml` via a repo-root resolver rather than the crate's own manifest dir.
+- **Centralize shared deps via `[workspace.dependencies]`.** In the root `Cargo.toml`, add a `[workspace.dependencies]` block that pins the exact version + features for every dep the two crates will share (current list: `tokio`, `serde`, `serde_json`, `anyhow`, `thiserror`, `tracing`, `chrono`, `uuid`, `reqwest`, `async-trait`, `futures`, `tempfile`; revisit during Unit 4 when the final split is known). Crate-level `Cargo.toml` files then declare these as `tokio.workspace = true`, `serde.workspace = true`, etc. Crate-exclusive deps stay crate-local: `clap`, `inquire`, `colored`, `comfy-table`, `figlet-rs`, `self_update`, `semver`, `sha2`, `hex`, `flate2`, `tar`, `zip` on the CLI side; `rig-core`, `graph-flow`, `schemars`, `kand`, `finnhub`, `yfinance-rs`, `governor`, `secrecy`, `config`, `dotenvy`, `sqlx`, `num-traits`, `nonzero_ext` on the core side. The goal is one source of truth for every shared version from day one; deferring this produces version drift that is painful to reconcile later.
+- After the move, `crates/scorpio-cli/tests/install_release_contract.rs` ascends from its own `CARGO_MANIFEST_DIR` until it finds `.github/workflows/release.yml` rather than embedding a literal `../../` parent path. The walker form keeps the test correct under any future crate nesting.
 - `.github/workflows/tests.yml` must add `--workspace` to both the clippy and nextest steps, and its path filters must include `.cargo/**` if Unit 1 introduces `.cargo/config.toml`. A virtual workspace manifest makes `cargo nextest run --all-features` with no `-p` argument error out, so the flag is required, not an optional mitigation.
 - Verify CI commands from the repo root: `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace --all-features --locked --no-fail-fast`, `cargo build --release`.
 
@@ -451,7 +453,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 - The facade struct holds the assembled pipeline plus anything needed to run more than once without re-assembly:
   - `Config` (owned; for consumers that want to inspect it later)
   - `TradingPipeline` (owned)
-- Production callers only use `AnalysisRuntime::new` and `AnalysisRuntime::run`. Add a `#[cfg(any(test, feature = "test-helpers"))]` constructor/helper that accepts a prebuilt `TradingPipeline` so facade tests can stay hermetic without stubbing provider/model assembly through `new`.
+- Production callers only use `AnalysisRuntime::new` and `AnalysisRuntime::run`. Add `AnalysisRuntime::from_pipeline(pipeline: TradingPipeline) -> Self`, infallible, gated `#[cfg(any(test, feature = "test-helpers"))]`, so facade tests can stay hermetic without stubbing provider/model assembly through `new`. Only add further test-only constructors (e.g. a `with_config` variant) the first time a test actually needs additional injected state.
 - `AnalysisRuntime::new(cfg: Config) -> impl Future<Output = anyhow::Result<Self>>`:
   - Runs `preflight_copilot_if_configured` (async)
   - Builds `SnapshotStore::from_config(&cfg)` (async)
@@ -491,7 +493,7 @@ impl AnalysisRuntime {
     pub async fn new(cfg: crate::config::Config) -> anyhow::Result<Self> { /* assembles pipeline */ }
 
     #[cfg(any(test, feature = "test-helpers"))]
-    pub fn from_pipeline_for_test(pipeline: crate::workflow::TradingPipeline) -> Self { /* wraps prebuilt pipeline */ }
+    pub fn from_pipeline(pipeline: crate::workflow::TradingPipeline) -> Self { /* wraps prebuilt pipeline */ }
 
     pub async fn run(&self, symbol: &str) -> anyhow::Result<crate::state::TradingState> {
         /* validate_symbol, target_date, TradingState::new, run_analysis_cycle, final-status check */
