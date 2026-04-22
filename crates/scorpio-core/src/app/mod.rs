@@ -44,6 +44,7 @@ use crate::workflow::{SnapshotStore, TradingPipeline};
 /// Construct with [`AnalysisRuntime::new`]; execute each analysis cycle via
 /// [`AnalysisRuntime::run`]. The runtime is reusable — call `run` multiple
 /// times with different symbols without rebuilding provider handles.
+#[derive(Debug)]
 pub struct AnalysisRuntime {
     /// Quick-thinking provider name, cached for the per-run structured log
     /// so consumers don't have to keep the full `Config` alive alongside the
