@@ -218,7 +218,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Convert repository to a Cargo workspace with a single CLI member under `crates/scorpio-cli`**
+- [x] **Unit 1: Convert repository to a Cargo workspace with a single CLI member under `crates/scorpio-cli`**
 
 **Goal:** Turn the repo root into a workspace manifest and move all current source, tests, and migrations under `crates/scorpio-cli/` while keeping the binary name, release pipeline, and root-level developer commands working.
 
@@ -271,7 +271,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 ---
 
-- [ ] **Unit 2: Introduce empty `scorpio-core` crate and wire it as a dependency of `scorpio-cli`**
+- [x] **Unit 2: Introduce empty `scorpio-core` crate and wire it as a dependency of `scorpio-cli`**
 
 **Goal:** Add a second workspace member `crates/scorpio-core` with an empty library surface, and declare `scorpio-core = { path = "../scorpio-core" }` in `scorpio-cli`'s Cargo.toml so Units 3–5 can move modules into it one slice at a time.
 
@@ -305,7 +305,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 ---
 
-- [ ] **Unit 3: Move the non-interactive settings boundary from `cli::setup::config_file` into `scorpio_core::settings`**
+- [x] **Unit 3: Move the non-interactive settings boundary from `cli::setup::config_file` into `scorpio_core::settings`**
 
 **Goal:** Relocate the shared, non-interactive user-config surface — `PartialConfig`, `UserConfigFileError`, `user_config_path`, `load_user_config_at`, `save_user_config_at`, and the `load_user_config`/`save_user_config` conveniences — into `crates/scorpio-core/src/settings.rs`. This removes the inverted dependency `src/config.rs → crate::cli::setup::config_file` that currently violates R6. Interactive setup UX (prompt helpers, malformed-config recovery, wizard orchestrator, step functions) stays in CLI.
 
@@ -354,7 +354,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 ---
 
-- [ ] **Unit 4: Move shared runtime modules into `scorpio-core`**
+- [x] **Unit 4: Move shared runtime modules into `scorpio-core`**
 
 **Goal:** Relocate every non-CLI, non-report module into `scorpio-core`: `agents`, `analysis_packs`, `backtest`, `config.rs`, `constants.rs`, `data`, `error.rs`, `indicators`, `observability.rs`, `providers`, `rate_limit.rs`, `state`, `workflow`, plus the `migrations/` directory. Update every `crate::` path to either stay local (intra-core) or become `scorpio_core::` (from the CLI crate). Re-home tests to whichever crate now owns the subject.
 
@@ -434,7 +434,7 @@ No arrow ever points from a core module to a CLI module after Unit 3 lands.
 
 ---
 
-- [ ] **Unit 5: Introduce `scorpio_core::app::AnalysisRuntime` facade and refactor `cli::analyze::run` to use it**
+- [x] **Unit 5: Introduce `scorpio_core::app::AnalysisRuntime` facade and refactor `cli::analyze::run` to use it**
 
 **Goal:** Collapse the runtime assembly that today lives inline in `cli::analyze::run` — building provider rate limiters, quick/deep completion models, Finnhub/FRED/YFinance clients, `SnapshotStore`, and `TradingPipeline` — behind a single async facade in `scorpio-core`. After this unit, `cli::analyze::run` is a thin wrapper that loads config, validates the symbol, spawns a tokio runtime, calls `AnalysisRuntime::new(cfg).await?.run(&symbol).await?`, and formats the report.
 
@@ -522,7 +522,7 @@ impl AnalysisRuntime {
 
 ---
 
-- [ ] **Unit 6: Update contributor documentation to match the workspace layout**
+- [x] **Unit 6: Update contributor documentation to match the workspace layout**
 
 **Goal:** Refresh every document that tells contributors the repo is a single crate, points at `src/cli/` within `lib.rs`, or mentions modules whose paths have changed. Ensure the docs describe the new boundary clearly enough that contributors know whether new code belongs in core or CLI without re-deriving the split.
 
