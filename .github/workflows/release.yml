@@ -98,20 +98,20 @@ jobs:
 
       - name: Strip binary (Linux / macOS)
         if: runner.os != 'Windows'
-        run: strip "target/${{ matrix.target }}/release/scorpio-analyst" || true
+        run: strip "target/${{ matrix.target }}/release/scorpio-cli" || true
 
       - name: Stage binary (Linux / macOS)
         if: runner.os != 'Windows'
         run: |
           mkdir -p release-stage
-          cp "target/${{ matrix.target }}/release/scorpio-analyst" "release-stage/scorpio"
+          cp "target/${{ matrix.target }}/release/scorpio-cli" "release-stage/scorpio"
 
       - name: Stage binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release-stage | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\scorpio-analyst.exe" "release-stage\scorpio.exe"
+          Copy-Item "target\${{ matrix.target }}\release\scorpio-cli.exe" "release-stage\scorpio.exe"
 
       - name: Package binary (Linux / macOS)
         if: runner.os != 'Windows'
