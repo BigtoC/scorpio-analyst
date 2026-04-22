@@ -215,7 +215,7 @@ SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -- analyze AAPL   # Quick test (1 de
 cargo run -- --version                                # Print version
 ```
 
-Only the CLI crate declares a `[[bin]]`, so plain `cargo run -- …` from the repo root resolves unambiguously to `scorpio-cli`. Use `cargo run -p scorpio-cli -- …` or `cargo run -p scorpio-core …` for explicit crate selection.
+Only the CLI crate declares a `[[bin]]`, so plain `cargo run -- …` from the repo root resolves unambiguously to `scorpio-cli`. Use `cargo run -p scorpio-cli -- …` when you want to select the CLI crate explicitly.
 
 ### Common Development Tasks
 
@@ -225,7 +225,7 @@ Only the CLI crate declares a `[[bin]]`, so plain `cargo run -- …` from the re
 | New data source       | `crates/scorpio-core/src/data/`, expose via `#[tool]` macro                                                                                                                                                    |
 | New indicator         | `crates/scorpio-core/src/indicators/core_math.rs` + `crates/scorpio-core/src/indicators/tools.rs`                                                                                                              |
 | New LLM provider      | Extend `ProviderId` in `crates/scorpio-core/src/providers/mod.rs`, add case in `crates/scorpio-core/src/providers/factory/`                                                                                    |
-| New analysis pack     | Add `PackId` variant in `crates/scorpio-core/src/analysis_packs/manifest.rs`, add match arm in `crates/scorpio-core/src/analysis_packs/builtin.rs`                                                             |
+| New analysis pack     | Add `PackId` variant in `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs`, add match arm in `crates/scorpio-core/src/analysis_packs/builtin.rs`                                                     |
 | New CLI subcommand    | Add variant to `Commands` in `crates/scorpio-cli/src/cli/mod.rs`, create `crates/scorpio-cli/src/cli/<name>.rs`, dispatch in `crates/scorpio-cli/src/main.rs`                                                  |
 | New wizard config key | Add field to `PartialConfig` in `crates/scorpio-core/src/settings.rs`, add step in `crates/scorpio-cli/src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `crates/scorpio-core/src/config.rs` |
 
