@@ -1,0 +1,73 @@
+[package]
+name = "scorpio-cli"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# Sibling core crate — shared runtime/domain logic.
+scorpio-core = { path = "../scorpio-core" }
+
+# Async runtime (CLI entry point drives the executor).
+tokio.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Observability
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Date/time (CLI formats target-date at analyze time)
+chrono.workspace = true
+
+# CLI argument parsing and interactive prompts
+clap.workspace = true
+inquire.workspace = true
+
+# Terminal presentation
+colored.workspace = true
+comfy-table.workspace = true
+figlet-rs.workspace = true
+
+# File utilities (used by setup wizard + release contract test)
+tempfile.workspace = true
+
+# Self-update + release verification for `scorpio upgrade`
+reqwest.workspace = true
+self_update.workspace = true
+semver.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# Serialization (used by `scorpio upgrade` GitHub release deserialization
+# and by report rendering).
+serde.workspace = true
+serde_json.workspace = true
+
+# Setup wizard exposes API keys through the secrecy API to emit values
+# into the transient health-check config.
+secrecy.workspace = true
+
+# Report rendering reaches into core types and async combinators
+futures.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+paft-money.workspace = true
+proptest.workspace = true
+rust_decimal.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[features]
+default = []
+## Forwarder for the core `test-helpers` feature so `cargo test -p scorpio-cli
+## --all-features` still enables the gated helpers that live in scorpio-core.
+test-helpers = ["scorpio-core/test-helpers"]
