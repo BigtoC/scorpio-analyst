@@ -13,12 +13,10 @@ use std::time::Duration;
 use anyhow::Context;
 use inquire::{PasswordDisplayMode, validator::Validation};
 
-use crate::constants::HEALTH_CHECK_TIMEOUT_SECS;
-use crate::{
-    cli::setup::config_file::PartialConfig,
-    error::RetryPolicy,
-    providers::{ModelTier, ProviderId},
-};
+use scorpio_core::constants::HEALTH_CHECK_TIMEOUT_SECS;
+use scorpio_core::error::RetryPolicy;
+use scorpio_core::providers::{ModelTier, ProviderId};
+use scorpio_core::settings::PartialConfig;
 
 /// Wizard-visible providers — Copilot is intentionally excluded (no API-key concept).
 pub const WIZARD_PROVIDERS: &[ProviderId] = &[
@@ -224,14 +222,14 @@ pub fn step5_health_check(partial: &PartialConfig) -> anyhow::Result<bool> {
     let deep_model = partial.deep_thinking_model.as_deref().unwrap_or("");
     println!("Sending \"Hello\" to deep-thinking provider ({deep_provider} / {deep_model})...");
 
-    let cfg = crate::config::Config::load_effective_runtime(partial.clone())?;
+    let cfg = scorpio_core::config::Config::load_effective_runtime(partial.clone())?;
 
     run_health_check_loop(
         || run_single_health_check(&cfg),
         |error| {
             eprintln!(
                 "✗ Health check failed: {}",
-                crate::providers::factory::sanitize_error_summary(&error.to_string())
+                scorpio_core::providers::factory::sanitize_error_summary(&error.to_string())
             );
         },
         || {
@@ -384,19 +382,21 @@ fn set_provider_key(partial: &mut PartialConfig, provider: ProviderId, value: Op
 }
 
 fn preflight_analysis_runtime_for_setup_with_runtime(
-    cfg: &crate::config::Config,
-    rate_limiters: &crate::rate_limit::ProviderRateLimiters,
+    cfg: &scorpio_core::config::Config,
+    rate_limiters: &scorpio_core::rate_limit::ProviderRateLimiters,
     runtime: &tokio::runtime::Runtime,
 ) -> anyhow::Result<()> {
     cfg.is_analysis_ready()
         .context("effective runtime config is not ready for analysis")?;
 
     runtime
-        .block_on(crate::providers::factory::preflight_copilot_if_configured(
-            &cfg.llm,
-            &cfg.providers,
-            rate_limiters,
-        ))
+        .block_on(
+            scorpio_core::providers::factory::preflight_copilot_if_configured(
+                &cfg.llm,
+                &cfg.providers,
+                rate_limiters,
+            ),
+        )
         .map_err(|e| anyhow::anyhow!("failed to preflight configured Copilot provider: {e}"))
 }
 
@@ -412,8 +412,8 @@ where
     Ok(())
 }
 
-fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
-    let rate_limiters = crate::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
+fn run_single_health_check(cfg: &scorpio_core::config::Config) -> anyhow::Result<()> {
+    let rate_limiters = scorpio_core::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -424,7 +424,7 @@ fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
     check_selected_model_tiers(
         [ModelTier::QuickThinking, ModelTier::DeepThinking],
         |tier| {
-            let handle = crate::providers::factory::create_completion_model(
+            let handle = scorpio_core::providers::factory::create_completion_model(
                 tier,
                 &cfg.llm,
                 &cfg.providers,
@@ -436,8 +436,8 @@ fn run_single_health_check(cfg: &crate::config::Config) -> anyhow::Result<()> {
                 .block_on(async {
                     // build_agent calls ToolServer::new().run() → tokio::spawn internally,
                     // so it must be called from within a live Tokio runtime context.
-                    let agent = crate::providers::factory::build_agent(&handle, "");
-                    crate::providers::factory::prompt_with_retry(
+                    let agent = scorpio_core::providers::factory::build_agent(&handle, "");
+                    scorpio_core::providers::factory::prompt_with_retry(
                         &agent,
                         "Hello",
                         Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
@@ -634,7 +634,7 @@ mod tests {
             std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-from-env");
         }
 
-        let cfg = crate::config::Config::load_effective_runtime(partial.clone())
+        let cfg = scorpio_core::config::Config::load_effective_runtime(partial.clone())
             .expect("merged config should load");
 
         unsafe {
@@ -662,7 +662,7 @@ mod tests {
             ..Default::default()
         };
 
-        let cfg = crate::config::Config::load_effective_runtime(partial.clone())
+        let cfg = scorpio_core::config::Config::load_effective_runtime(partial.clone())
             .expect("merged config should load");
         let err = run_single_health_check(&cfg)
             .expect_err("health check should fail when analyze readiness fails");
@@ -695,7 +695,7 @@ mod tests {
             ..Default::default()
         };
 
-        let cfg = crate::config::Config::load_effective_runtime(partial.clone())
+        let cfg = scorpio_core::config::Config::load_effective_runtime(partial.clone())
             .expect("merged config should load");
         let err = run_single_health_check(&cfg)
             .expect_err("copilot preflight mismatch should fail before the probe");

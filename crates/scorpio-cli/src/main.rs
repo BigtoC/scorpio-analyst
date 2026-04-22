@@ -2,11 +2,11 @@ use std::io::{self, IsTerminal};
 use std::time::Duration;
 
 use clap::Parser;
-use scorpio_analyst::cli::update::{
+use scorpio_cli::cli::update::{
     NoticeOutcome, check_latest_version, run_upgrade, show_update_notice_with_tty,
 };
-use scorpio_analyst::cli::{Cli, Commands};
-use scorpio_analyst::observability::init_tracing;
+use scorpio_cli::cli::{Cli, Commands};
+use scorpio_core::observability::init_tracing;
 
 /// Current scorpio version, embedded at build time from `Cargo.toml`.
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -47,7 +47,7 @@ async fn main() {
     // post-command block below gets a second chance.
     let mut cached_notice: Option<String> = None;
     if is_analyze {
-        scorpio_analyst::cli::analyze::print_banner();
+        scorpio_cli::cli::analyze::print_banner();
         if let Some(rx) = update_rx.take() {
             match show_update_notice_with_tty(
                 rx,
@@ -72,12 +72,12 @@ async fn main() {
     // we bridge via `spawn_blocking`. `Upgrade` is natively async.
     let result: anyhow::Result<()> = match cli.command {
         Commands::Analyze { symbol } => {
-            tokio::task::spawn_blocking(move || scorpio_analyst::cli::analyze::run(&symbol))
+            tokio::task::spawn_blocking(move || scorpio_cli::cli::analyze::run(&symbol))
                 .await
                 .map_err(|e| anyhow::anyhow!("analyze task failed to join: {e}"))
                 .and_then(|r| r)
         }
-        Commands::Setup => tokio::task::spawn_blocking(scorpio_analyst::cli::setup::run)
+        Commands::Setup => tokio::task::spawn_blocking(scorpio_cli::cli::setup::run)
             .await
             .map_err(|e| anyhow::anyhow!("setup task failed to join: {e}"))
             .and_then(|r| r),

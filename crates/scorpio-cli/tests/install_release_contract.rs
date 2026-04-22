@@ -1,7 +1,21 @@
 use std::{fs, path::PathBuf};
 
+// Walk upward from this crate's manifest directory until `.github/workflows/release.yml`
+// resolves next to the path. Starting with the Cargo workspace conversion, this test
+// lives inside a member crate rather than at the repo root, so a literal `../../` parent
+// jump is brittle — any future re-nesting silently breaks the contract. The walker form
+// stays correct regardless of how deep the crate sits under the workspace.
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let start = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in start.ancestors() {
+        if ancestor.join(".github/workflows/release.yml").is_file() {
+            return ancestor.to_path_buf();
+        }
+    }
+    panic!(
+        "could not locate repo root (no .github/workflows/release.yml found above {})",
+        start.display()
+    );
 }
 
 fn read_repo_file(path: &str) -> String {
@@ -60,6 +74,29 @@ fn release_workflow_publishes_archive_only_installer_assets() {
             .join("packaging/install-signing-public.pem")
             .exists(),
         "obsolete signing public key artifact should be removed"
+    );
+}
+
+// Mirrors the shell invocation at `.github/workflows/release.yml:24-42`:
+//     grep -m 1 '^version' Cargo.toml | cut -d '"' -f2
+// After the workspace conversion the root `Cargo.toml` no longer declares a
+// package-level `version`; the inherited value lives under `[workspace.package]`.
+// Dropping that line would silently break the next release (the tag match step
+// would see an empty version string). This test fails loudly instead.
+#[test]
+fn root_cargo_toml_exposes_version_line_for_release_workflow() {
+    let cargo_toml = read_repo_file("Cargo.toml");
+    let version_line = cargo_toml
+        .lines()
+        .find(|line| line.starts_with("version"))
+        .expect("root Cargo.toml must contain a top-level `version = \"...\"` line");
+    let version = version_line
+        .split('"')
+        .nth(1)
+        .expect("version line must be quoted, e.g. `version = \"0.2.5\"`");
+    assert!(
+        version.chars().next().is_some_and(|c| c.is_ascii_digit()),
+        "parsed version `{version}` must start with a digit (e.g. 0.2.5)"
     );
 }
 

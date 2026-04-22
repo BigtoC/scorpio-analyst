@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::state::{ProvenanceSummary, TradingState};
+use scorpio_core::state::{ProvenanceSummary, TradingState};
 
 /// Render the `Evidence Provenance` section into `out`.
 ///
@@ -40,7 +40,7 @@ fn write_provenance_body(out: &mut String, provenance: &ProvenanceSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::TradingState;
+    use scorpio_core::state::TradingState;
 
     fn state_with_provenance(provenance: ProvenanceSummary) -> TradingState {
         let mut state = TradingState::new("AAPL", "2026-04-03");

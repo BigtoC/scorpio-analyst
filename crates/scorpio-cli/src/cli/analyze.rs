@@ -1,20 +1,17 @@
 //! `scorpio analyze <SYMBOL>` subcommand handler.
 //!
-//! Lifts the existing `main.rs` pipeline body into a testable function, adds
-//! a user-facing config-not-found guard, and moves symbol validation here from
-//! the now-removed `Config::validate()`.
+//! Loads the runtime config, validates the symbol up-front for fail-fast UX,
+//! builds a CLI-owned tokio runtime, and hands the heavy lifting off to
+//! [`AnalysisRuntime`]. Presentation (figlet banner and final-report
+//! formatting) stays in this crate; assembly + pipeline execution live in
+//! `scorpio-core`.
 
 use anyhow::Context;
-use chrono::Local;
 use figlet_rs::Toilet;
 
-use crate::config::Config;
-use crate::data::{FinnhubClient, FredClient, YFinanceClient};
-use crate::providers::ModelTier;
-use crate::providers::factory::{create_completion_model, preflight_copilot_if_configured};
-use crate::rate_limit::{ProviderRateLimiters, SharedRateLimiter};
-use crate::state::TradingState;
-use crate::workflow::{SnapshotStore, TradingPipeline};
+use scorpio_core::app::AnalysisRuntime;
+use scorpio_core::config::Config;
+use scorpio_core::data::symbol::validate_symbol;
 
 /// Error message printed when the user config is missing or incomplete.
 const CONFIG_MISSING_MSG: &str = "✗ Config not found or incomplete. Run `scorpio setup` to configure your API keys and providers.";
@@ -34,137 +31,36 @@ pub fn print_banner() {
 
 /// Run the full 5-phase analysis pipeline for `symbol`.
 ///
+/// Synchronous shell around the async [`AnalysisRuntime`]: builds a CLI-owned
+/// current-thread tokio runtime (matching the pre-facade shape), validates the
+/// symbol for fail-fast UX, assembles the runtime, executes one cycle, and
+/// prints the formatted report to stdout.
+///
 /// # Errors
 ///
-/// Returns `Err` (with a message printed to stderr) for:
+/// Returns `Err` for:
 /// - missing or incomplete user config
 /// - invalid symbol format
-/// - any pipeline runtime failure
+/// - any facade assembly or pipeline runtime failure
 pub fn run(symbol: &str) -> anyhow::Result<()> {
     let cfg = load_analysis_config()?;
 
-    // Validate symbol (re-homed from Config::validate() in Unit 3).
-    let symbol = match crate::data::symbol::validate_symbol(symbol) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{e}");
-            anyhow::bail!("{e}");
-        }
-    };
+    // Early validation preserves today's fail-fast UX before any runtime
+    // assembly starts. The facade re-validates defensively so non-CLI
+    // consumers get the same input contract.
+    let _ = validate_symbol(symbol)?;
 
-    let target_date = Local::now().format("%Y-%m-%d").to_string();
-
-    tracing::info!(
-        quick_provider = %cfg.llm.quick_thinking_provider,
-        deep_provider = %cfg.llm.deep_thinking_provider,
-        symbol = %symbol,
-        target_date = %target_date,
-        "scorpio-analyst initialized"
-    );
-
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("failed to initialize async runtime: {e:#}");
-            anyhow::bail!("failed to initialize async runtime: {e}");
-        }
-    };
+        .context("failed to initialize async runtime")?;
 
-    if let Err(e) = runtime.block_on(preflight_copilot_if_configured(
-        &cfg.llm,
-        &cfg.providers,
-        &ProviderRateLimiters::from_config(&cfg.providers),
-    )) {
-        eprintln!("failed to preflight configured Copilot provider: {e:#}");
-        return Err(e.into());
-    }
-
-    let snapshot_store = match runtime.block_on(SnapshotStore::from_config(&cfg)) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("failed to initialize snapshot storage: {e:#}");
-            return Err(e.into());
-        }
-    };
-
-    let rate_limiters = ProviderRateLimiters::from_config(&cfg.providers);
-
-    let quick_handle = match create_completion_model(
-        ModelTier::QuickThinking,
-        &cfg.llm,
-        &cfg.providers,
-        &rate_limiters,
-    ) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("failed to create quick-thinking model handle: {e:#}");
-            anyhow::bail!("failed to create quick-thinking model handle: {e}");
-        }
-    };
-
-    let deep_handle = match create_completion_model(
-        ModelTier::DeepThinking,
-        &cfg.llm,
-        &cfg.providers,
-        &rate_limiters,
-    ) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("failed to create deep-thinking model handle: {e:#}");
-            anyhow::bail!("failed to create deep-thinking model handle: {e}");
-        }
-    };
-
-    let finnhub_limiter = SharedRateLimiter::finnhub_from_config(&cfg.rate_limits)
-        .unwrap_or_else(|| SharedRateLimiter::disabled("finnhub"));
-    let finnhub = match FinnhubClient::new(&cfg.api, finnhub_limiter) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("failed to initialize Finnhub client: {e:#}");
-            return Err(e.into());
-        }
-    };
-    let fred_limiter = SharedRateLimiter::fred_from_config(&cfg.rate_limits)
-        .unwrap_or_else(|| SharedRateLimiter::disabled("fred"));
-    let fred = match FredClient::new(&cfg.api, fred_limiter) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("failed to initialize FRED client: {e:#}");
-            return Err(e.into());
-        }
-    };
-    let yfinance = YFinanceClient::from_config(&cfg.rate_limits);
-
-    let pipeline = TradingPipeline::new(
-        cfg,
-        finnhub,
-        fred,
-        yfinance,
-        snapshot_store,
-        quick_handle,
-        deep_handle,
-    );
-
-    let initial_state = TradingState::new(symbol, &target_date);
-
-    match runtime.block_on(pipeline.run_analysis_cycle(initial_state)) {
-        Ok(state) => {
-            if state.final_execution_status.is_none() {
-                eprintln!("pipeline completed without a final execution status");
-                anyhow::bail!("pipeline completed without a final execution status");
-            }
-            println!("{}", crate::report::format_final_report(&state));
-        }
-        Err(e) => {
-            eprintln!("analysis cycle failed: {e:#}");
-            return Err(e.into());
-        }
-    }
-
-    Ok(())
+    runtime.block_on(async move {
+        let analysis = AnalysisRuntime::new(cfg).await?;
+        let state = analysis.run(symbol).await?;
+        println!("{}", crate::report::format_final_report(&state));
+        Ok::<(), anyhow::Error>(())
+    })
 }
 
 fn load_analysis_config() -> anyhow::Result<Config> {
@@ -237,7 +133,7 @@ mod tests {
     // ── Symbol validation (re-homed from Config::validate() in Unit 3) ───────
 
     fn write_minimal_config(dir: &tempfile::TempDir) {
-        use crate::cli::setup::config_file::{PartialConfig, save_user_config_at};
+        use scorpio_core::settings::{PartialConfig, save_user_config_at};
         let config_path = dir.path().join(".scorpio-analyst/config.toml");
         let partial = PartialConfig {
             finnhub_api_key: Some("fh-test".into()),

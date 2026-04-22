@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::state::{
+use scorpio_core::state::{
     AssetShape, CorporateEquityValuation, DerivedValuation, ScenarioValuation, TradingState,
 };
 
@@ -98,7 +98,7 @@ fn write_equity_metrics(out: &mut String, equity: &CorporateEquityValuation) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{
+    use scorpio_core::state::{
         AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, EvEbitdaValuation,
         ForwardPeValuation, PegValuation, ScenarioValuation, TradingState,
     };

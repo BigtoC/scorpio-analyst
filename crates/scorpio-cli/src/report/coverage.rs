@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::state::{DataCoverageReport, TradingState};
+use scorpio_core::state::{DataCoverageReport, TradingState};
 
 /// Render the `Data Quality and Coverage` section into `out`.
 ///
@@ -52,7 +52,7 @@ fn write_coverage_body(out: &mut String, coverage: &DataCoverageReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::TradingState;
+    use scorpio_core::state::TradingState;
 
     fn state_with_coverage(coverage: DataCoverageReport) -> TradingState {
         let mut state = TradingState::new("AAPL", "2026-04-03");

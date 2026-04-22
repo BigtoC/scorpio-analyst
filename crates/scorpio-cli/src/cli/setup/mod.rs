@@ -1,11 +1,10 @@
-pub mod config_file;
 pub mod steps;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use config_file::{
+use scorpio_core::settings::{
     PartialConfig, UserConfigFileError, load_user_config_at, save_user_config_at, user_config_path,
 };
 use steps::{

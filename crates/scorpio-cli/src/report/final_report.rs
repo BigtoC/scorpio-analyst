@@ -3,8 +3,8 @@ use std::fmt::Write;
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
 
-use crate::data::adapters::EnrichmentStatus;
-use crate::state::{
+use scorpio_core::data::adapters::EnrichmentStatus;
+use scorpio_core::state::{
     AgentTokenUsage, Decision, RiskReport, TokenUsageTracker, TradeAction, TradingState,
 };
 
@@ -149,7 +149,7 @@ fn write_header(out: &mut String, state: &TradingState) {
     let strategy_label = state
         .analysis_pack_name
         .as_deref()
-        .and_then(|pack_name| crate::analysis_packs::resolve_runtime_policy(pack_name).ok())
+        .and_then(|pack_name| scorpio_core::analysis_packs::resolve_runtime_policy(pack_name).ok())
         .map(|policy| policy.report_strategy_label)
         .unwrap_or_else(|| {
             state
@@ -248,17 +248,17 @@ fn write_trader_proposal(out: &mut String, state: &TradingState) {
     }
 }
 
-fn trader_valuation_label(proposal: &crate::state::TradeProposal) -> String {
+fn trader_valuation_label(proposal: &scorpio_core::state::TradeProposal) -> String {
     match proposal.scenario_valuation.as_ref() {
         None => {
             "Model-authored assessment omitted because deterministic valuation is unavailable in this snapshot"
                 .to_owned()
         }
-        Some(crate::state::ScenarioValuation::NotAssessed { .. }) => {
+        Some(scorpio_core::state::ScenarioValuation::NotAssessed { .. }) => {
             "Model-authored assessment omitted because deterministic valuation was not assessed for this asset shape"
                 .to_owned()
         }
-        Some(crate::state::ScenarioValuation::CorporateEquity(_)) => proposal
+        Some(scorpio_core::state::ScenarioValuation::CorporateEquity(_)) => proposal
             .valuation_assessment
             .clone()
             .unwrap_or_else(|| "Not assessed".to_owned()),
@@ -646,7 +646,7 @@ fn write_disclaimer(out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{
+    use scorpio_core::state::{
         AgentTokenUsage, AssetShape, CorporateEquityValuation, DcfValuation, Decision,
         DerivedValuation, ExecutionStatus, ForwardPeValuation, PhaseTokenUsage, ScenarioValuation,
         TradeAction, TradeProposal, TradingState,
@@ -946,10 +946,8 @@ mod tests {
 
     #[test]
     fn format_final_report_surfaces_failed_enrichment_status() {
-        use crate::{
-            data::adapters::{EnrichmentStatus, estimates::ConsensusEvidence},
-            state::EnrichmentState,
-        };
+        use scorpio_core::data::adapters::{EnrichmentStatus, estimates::ConsensusEvidence};
+        use scorpio_core::state::EnrichmentState;
 
         let mut state = minimal_state();
         state.enrichment_consensus = EnrichmentState {
