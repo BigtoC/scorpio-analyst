@@ -3646,25 +3646,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "scorpio-analyst"
+name = "scorpio-cli"
+version = "0.2.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "colored",
+ "comfy-table",
+ "figlet-rs",
+ "flate2",
+ "futures",
+ "hex",
+ "inquire",
+ "paft-money",
+ "pretty_assertions",
+ "proptest",
+ "reqwest 0.13.2",
+ "rust_decimal",
+ "scorpio-core",
+ "secrecy",
+ "self_update",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tar",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "zip 8.5.1",
+]
+
+[[package]]
+name = "scorpio-core"
 version = "0.2.5"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "clap",
- "colored",
- "comfy-table",
  "config",
  "dotenvy",
- "figlet-rs",
  "finnhub",
- "flate2",
  "futures",
  "governor",
  "graph-flow",
- "hex",
- "inquire",
  "kand",
  "mockall",
  "nonzero_ext",
@@ -3677,13 +3705,9 @@ dependencies = [
  "rust_decimal",
  "schemars",
  "secrecy",
- "self_update",
- "semver",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "sqlx",
- "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3692,7 +3716,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "yfinance-rs",
- "zip 8.5.1",
 ]
 
 [[package]]
