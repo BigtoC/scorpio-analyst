@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 /// Scorpio Analyst — multi-agent LLM-powered financial analysis.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(name = "scorpio", bin_name = "scorpio", version, about)]
 pub struct Cli {
     /// Suppress the background release check.
     ///
@@ -45,6 +45,7 @@ pub enum Commands {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use clap::error::ErrorKind;
 
     #[test]
@@ -103,6 +104,54 @@ mod tests {
     fn parse_analyze_without_symbol_yields_missing_required_argument_error() {
         let err = Cli::try_parse_from(["scorpio", "analyze"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn command_reports_stable_cli_name_in_help() {
+        let mut rendered = Vec::new();
+        let mut cmd = Cli::command();
+        cmd.write_long_help(&mut rendered)
+            .expect("help should render");
+
+        let help = String::from_utf8(rendered).expect("help should be utf8");
+        assert!(
+            help.contains("Usage: scorpio [OPTIONS] <COMMAND>"),
+            "help output should use the installed `scorpio` command name; got: {help}"
+        );
+        assert!(
+            !help.contains("Usage: scorpio-cli "),
+            "help output should not leak the package name; got: {help}"
+        );
+    }
+
+    #[test]
+    fn analyze_subcommand_reports_stable_cli_name_in_help() {
+        let err = Cli::try_parse_from(["scorpio", "analyze", "--help"])
+            .expect_err("--help should exit through clap");
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+
+        let help = err.to_string();
+        assert!(
+            help.contains("Usage: scorpio analyze [OPTIONS] <SYMBOL>"),
+            "subcommand help should use the installed `scorpio` command name; got: {help}"
+        );
+        assert!(
+            !help.contains("Usage: scorpio-cli analyze"),
+            "subcommand help should not leak the package name; got: {help}"
+        );
+    }
+
+    #[test]
+    fn command_reports_stable_cli_name_in_version() {
+        let version = Cli::command().render_version().to_string();
+        assert!(
+            version.starts_with("scorpio "),
+            "version output should use the installed `scorpio` command name; got: {version}"
+        );
+        assert!(
+            !version.starts_with("scorpio-cli "),
+            "version output should not leak the package name; got: {version}"
+        );
     }
 
     // ── env-var suppression ─────────────────────────────────────────────
