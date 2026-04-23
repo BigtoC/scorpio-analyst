@@ -52,6 +52,7 @@ pub fn print_banner() {
 /// - every requested reporter failing after analysis completes
 /// - any facade assembly or pipeline runtime failure
 pub fn run(args: &AnalyzeArgs) -> anyhow::Result<()> {
+    validate_reporter_args(args)?;
     let cfg = load_analysis_config()?;
     let _ = validate_symbol(&args.symbol)?;
 
@@ -73,7 +74,7 @@ pub fn run(args: &AnalyzeArgs) -> anyhow::Result<()> {
         let ctx = Arc::new(ReportContext {
             symbol: state.asset_symbol.clone(),
             finished_at: Utc::now(),
-            output_dir: resolve_reports_dir(args.output_dir.as_deref())?,
+            output_dir: report_output_dir(args)?,
         });
 
         let failures = chain.run_all(state, ctx).await;
@@ -93,6 +94,26 @@ fn build_reporter_chain(args: &AnalyzeArgs) -> ReporterChain {
         chain.push(JsonReporter);
     }
     chain
+}
+
+fn validate_reporter_args(args: &AnalyzeArgs) -> anyhow::Result<()> {
+    if args.no_terminal && !args.json {
+        anyhow::bail!("at least one reporter must be enabled; use --json if --no-terminal is set");
+    }
+
+    if args.output_dir.is_some() && !args.json {
+        anyhow::bail!("--output-dir requires --json");
+    }
+
+    Ok(())
+}
+
+fn report_output_dir(args: &AnalyzeArgs) -> anyhow::Result<Option<PathBuf>> {
+    if !args.json {
+        return Ok(None);
+    }
+
+    resolve_reports_dir(args.output_dir.as_deref()).map(Some)
 }
 
 /// Resolve the output directory for file reporters.
@@ -129,6 +150,7 @@ mod tests {
     fn args_for(symbol: &str, dir: &tempfile::TempDir) -> AnalyzeArgs {
         AnalyzeArgs {
             symbol: symbol.to_owned(),
+            json: true,
             output_dir: Some(dir.path().to_path_buf()),
             ..Default::default()
         }
@@ -213,6 +235,7 @@ mod tests {
         unsafe { std::env::set_var("HOME", dir.path()) };
         let result = run(&AnalyzeArgs {
             symbol: "".to_owned(),
+            json: true,
             output_dir: Some(dir.path().to_path_buf()),
             ..Default::default()
         });
@@ -232,6 +255,7 @@ mod tests {
         unsafe { std::env::set_var("HOME", dir.path()) };
         let result = run(&AnalyzeArgs {
             symbol: "DROP;TABLE".to_owned(),
+            json: true,
             output_dir: Some(dir.path().to_path_buf()),
             ..Default::default()
         });
@@ -286,6 +310,55 @@ mod tests {
         assert!(
             err.to_string().contains("at least one reporter"),
             "error should explain that a reporter is required; got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_reporter_args_rejects_output_dir_without_json() {
+        let err = validate_reporter_args(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            output_dir: Some(PathBuf::from("/tmp/reports")),
+            ..Default::default()
+        })
+        .expect_err("output_dir without a file reporter should be rejected");
+        assert!(
+            err.to_string().contains("--output-dir requires --json"),
+            "error should explain output_dir requires json; got: {err}"
+        );
+    }
+
+    #[test]
+    fn report_output_dir_skips_home_lookup_when_json_disabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("HOME") };
+        let dir = report_output_dir(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            json: false,
+            output_dir: None,
+            ..Default::default()
+        })
+        .expect("terminal-only runs should not require HOME");
+        assert_eq!(dir, None);
+    }
+
+    #[test]
+    fn run_rejects_no_terminal_without_any_other_reporter_before_config_load() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let result = run(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            no_terminal: true,
+            json: false,
+            output_dir: None,
+        });
+
+        unsafe { std::env::remove_var("HOME") };
+        let err = result.expect_err("invalid reporter selection should fail before config load");
+        assert!(
+            err.to_string().contains("at least one reporter"),
+            "expected reporter validation error, got: {err}"
         );
     }
 

@@ -23,7 +23,7 @@ async fn main() {
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.
     let is_upgrade = matches!(&cli.command, Commands::Upgrade);
-    let show_banner = matches!(&cli.command, Commands::Analyze(args) if !args.no_terminal);
+    let show_banner = should_show_analyze_banner(&cli.command);
 
     // Background update check (non-blocking, fire-and-forget). Gated by the
     // `--no-update-check` flag / `SCORPIO_NO_UPDATE_CHECK` env var.
@@ -127,5 +127,37 @@ async fn main() {
 
     if exit_code != 0 {
         std::process::exit(exit_code);
+    }
+}
+
+fn should_show_analyze_banner(command: &Commands) -> bool {
+    matches!(command, Commands::Analyze(args) if !args.no_terminal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scorpio_cli::cli::AnalyzeArgs;
+
+    #[test]
+    fn analyze_shows_banner_when_terminal_output_is_enabled() {
+        assert!(should_show_analyze_banner(&Commands::Analyze(
+            AnalyzeArgs {
+                symbol: "AAPL".to_owned(),
+                ..Default::default()
+            }
+        )));
+    }
+
+    #[test]
+    fn analyze_skips_banner_when_no_terminal_is_requested() {
+        assert!(!should_show_analyze_banner(&Commands::Analyze(
+            AnalyzeArgs {
+                symbol: "AAPL".to_owned(),
+                no_terminal: true,
+                json: true,
+                ..Default::default()
+            }
+        )));
     }
 }

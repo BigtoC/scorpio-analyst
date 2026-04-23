@@ -49,7 +49,7 @@ pub struct AnalyzeArgs {
 
     /// Suppress the analyze banner and terminal reporter.
     /// Requires another reporter such as --json to be enabled.
-    #[arg(long = "no-terminal")]
+    #[arg(long = "no-terminal", requires = "json")]
     pub no_terminal: bool,
 
     /// Write a pretty-printed JSON artifact to --output-dir.
@@ -58,7 +58,7 @@ pub struct AnalyzeArgs {
 
     /// Directory for file-based reporters.
     /// Defaults to ~/.scorpio-analyst/reports and is created if missing.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", requires = "json")]
     pub output_dir: Option<PathBuf>,
 }
 
@@ -123,6 +123,20 @@ mod tests {
     #[test]
     fn parse_analyze_without_symbol_yields_missing_required_argument_error() {
         let err = Cli::try_parse_from(["scorpio", "analyze"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn parse_analyze_no_terminal_without_json_yields_missing_required_argument_error() {
+        let err = Cli::try_parse_from(["scorpio", "analyze", "AAPL", "--no-terminal"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn parse_analyze_output_dir_without_json_yields_missing_required_argument_error() {
+        let err =
+            Cli::try_parse_from(["scorpio", "analyze", "AAPL", "--output-dir", "/tmp/reports"])
+                .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
