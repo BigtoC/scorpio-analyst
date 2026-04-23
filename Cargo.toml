@@ -1,12 +1,18 @@
-[package]
-name = "scorpio-analyst"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.2.5"
 edition = "2024"
-description = "Rust-native multi-agent LLM-powered financial trading system"
 license = "MIT"
 repository = "https://github.com/BigtoC/scorpio-analyst"
+description = "Rust-native multi-agent LLM-powered financial trading system"
 
-[dependencies]
+# Centralized dependency versions. Crate-level manifests consume entries via
+# `foo.workspace = true`; this keeps every shared dep pinned in one place and
+# eliminates cross-crate version drift once the two-crate split lands.
+[workspace.dependencies]
 # LLM framework
 rig-core = "0.32.0"
 schemars = { version = "1", features = ["chrono04"] }
@@ -75,7 +81,7 @@ semver = "1"
 sha2 = "0.11"
 hex = "0.4"
 
-[dev-dependencies]
+# Dev-only
 proptest = "1"
 mockall = "0.13"
 pretty_assertions = "1"
@@ -84,8 +90,3 @@ rust_decimal = "1"
 flate2 = "1.1"
 tar = "0.4"
 zip = "8"
-
-[features]
-default = []
-## Expose internal test helpers for integration tests.  Not for production use.
-test-helpers = []

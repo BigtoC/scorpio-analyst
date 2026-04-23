@@ -194,14 +194,14 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    variable.
 
 4. **Entity Resolution**: Before any data ingestion begins, the `PreflightTask` canonicalizes the user-supplied ticker
-   symbol via the entity resolution module (`src/data/entity.rs`). This module delegates ticker-format validation to the
-   existing `src/data/symbol.rs` logic and produces a `ResolvedInstrument` containing the original input, the
+   symbol via the entity resolution module (`crates/scorpio-core/src/data/entity.rs`). This module delegates ticker-format validation to the
+   existing `crates/scorpio-core/src/data/symbol.rs` logic and produces a `ResolvedInstrument` containing the original input, the
    canonicalized uppercase symbol, and optional metadata fields (issuer name, exchange, instrument type, aliases). In
    the initial implementation, metadata fields default to `None`; future milestones may enrich them via API lookups.
    Invalid or empty symbols cause an immediate hard failure at preflight, preventing wasted LLM calls downstream.
 
 5. **Enrichment Adapter Contracts**: The system defines provider-agnostic trait contracts for optional enrichment data
-   sources in `src/data/adapters/`: `TranscriptProvider` (earnings call transcripts), `EstimatesProvider` (consensus
+   sources in `crates/scorpio-core/src/data/adapters/`: `TranscriptProvider` (earnings call transcripts), `EstimatesProvider` (consensus
    revenue/EPS estimates), and `EventNewsProvider` (event-driven news feeds). Each trait returns a normalized evidence
    struct (`TranscriptEvidence`, `ConsensusEvidence`, `EventNewsEvidence`) that can be consumed uniformly by downstream
    agents regardless of the upstream provider. In the initial implementation, no concrete providers are wired — the
@@ -498,7 +498,7 @@ The execution topology dictates the chronological flow of the artificial intelli
 execution at the entry point and routes the `TradingState` through the necessary nodes.
 
 1. **Preflight Validation (The PreflightTask)**: Before any analyst work begins, a `PreflightTask` validates and
-   canonicalizes the input symbol via entity resolution (`src/data/entity.rs`), writes the canonical
+   canonicalizes the input symbol via entity resolution (`crates/scorpio-core/src/data/entity.rs`), writes the canonical
    `ResolvedInstrument` to the workflow context, derives `ProviderCapabilities` from the `DataEnrichmentConfig`, writes
    baseline coverage expectations, and seeds enrichment cache keys with explicit `null` placeholders. If the symbol is
    invalid, the pipeline fails immediately rather than wasting LLM calls on a bad input. This step also establishes the

@@ -14,7 +14,7 @@ The project is in early development — see PRD.md for the full specification.
 
 ```bash
 cargo build           # Build the project
-cargo run             # Run the binary
+cargo run -p scorpio-cli -- --help   # Run the CLI binary
 cargo test            # Run all tests
 cargo test <name>     # Run a single test by name
 cargo clippy          # Lint
@@ -40,75 +40,49 @@ layer:
 
 ### Source Layout
 
+The repository is a Cargo workspace with two active crates under `crates/`:
+
 ```
-src/
-├── main.rs                    # Thin clap dispatcher → cli::analyze or cli::setup
-├── lib.rs                     # Public module exports
-├── config.rs                  # Configuration loading (PartialConfig merge + env)
-├── error.rs                   # TradingError enum + RetryPolicy
-├── constants.rs               # Constants (HEALTH_CHECK_TIMEOUT_SECS, etc.)
-├── observability.rs           # Tracing/logging setup
-├── rate_limit.rs              # Governor-based rate limiting
+crates/
+├── scorpio-core/              # Shared runtime/domain crate (library, publish = false)
+│   ├── Cargo.toml
+│   ├── migrations/            # sqlx::migrate! resolves via scorpio-core's CARGO_MANIFEST_DIR
+│   │   ├── 0001_create_phase_snapshots.sql
+│   │   └── 0002_add_symbol_and_schema_version.sql
+│   └── src/
+│       ├── lib.rs             # pub mod declarations + `pub use app::AnalysisRuntime`
+│       ├── app/               # Application facade (AnalysisRuntime::new / ::run)
+│       ├── settings.rs        # PartialConfig + atomic load/save (non-interactive)
+│       ├── config.rs          # Runtime Config loader (env > user file > defaults)
+│       ├── constants.rs       # Constants (HEALTH_CHECK_TIMEOUT_SECS, etc.)
+│       ├── error.rs           # TradingError + RetryPolicy
+│       ├── observability.rs   # Tracing/logging setup (used by every surface)
+│       ├── rate_limit.rs      # Governor-based rate limiting
+│       ├── agents/            # LLM agent implementations (analyst/researcher/trader/risk/fund_manager/shared)
+│       ├── state/             # Shared pipeline state (TradingState + per-phase types)
+│       ├── workflow/          # Graph orchestration (TradingPipeline, tasks, snapshot/**)
+│       ├── data/              # Market data clients (finnhub/fred/yfinance/symbol/adapters)
+│       ├── indicators/        # Technical indicators (kand-based)
+│       ├── providers/         # LLM provider factory (rig-core, copilot ACP)
+│       ├── analysis_packs/    # Pack manifests + runtime policy
+│       └── backtest/          # Backtesting skeleton (core-internal per R13)
 │
-├── agents/                    # LLM agent implementations
-│   ├── analyst/               # Phase 1: fundamental, sentiment, news, technical
-│   ├── researcher/            # Phase 2: bullish, bearish, moderator
-│   ├── trader/                # Phase 3: trade proposal synthesis
-│   ├── risk/                  # Phase 4: aggressive, neutral, conservative, moderator
-│   ├── fund_manager/          # Phase 5: final approve/reject
-│   └── shared/                # json.rs (schema enforcement), prompt.rs, usage.rs
-│
-├── state/                     # Shared pipeline state
-│   ├── trading_state.rs       # TradingState (all inter-agent data)
-│   ├── fundamental.rs         # FundamentalData
-│   ├── technical.rs           # TechnicalData
-│   ├── sentiment.rs           # SentimentData
-│   ├── news.rs                # NewsData
-│   ├── proposal.rs            # TradeProposal
-│   ├── risk.rs                # RiskReport
-│   ├── execution.rs           # ExecutionStatus (Approved/Rejected)
-│   └── token_usage.rs         # TokenUsageTracker
-│
-├── workflow/                  # Graph orchestration (graph-flow)
-│   ├── pipeline.rs            # TradingPipeline (5-phase DAG runner)
-│   ├── context_bridge.rs      # Bridge between graph-flow::Context & TradingState
-│   ├── snapshot.rs            # Phase snapshots to SQLite (SnapshotStore)
-│   └── tasks/                 # Per-phase task implementations
-│       ├── analyst.rs         # Phase 1: fan-out analysts
-│       ├── research.rs        # Phase 2: researcher debate loop
-│       ├── trading.rs         # Phase 3: trader synthesis
-│       ├── risk.rs            # Phase 4: risk debate loop
-│       └── accounting.rs      # Token usage reporting
-│
-├── data/                      # Market data clients
-│   ├── finnhub.rs             # Finnhub API (fundamentals, earnings, news, insiders)
-│   ├── fred.rs                # FRED API (macro indicators: CPI, inflation)
-│   ├── yfinance.rs            # Yahoo Finance (OHLCV bars)
-│   └── symbol.rs              # Symbol resolution
-│
-├── indicators/                # Technical indicator calculation (kand-based)
-│   ├── core_math.rs           # RSI, MACD, ATR, Bollinger, SMA, EMA, VWMA
-│   ├── batch.rs               # calculate_all_indicators
-│   ├── support_resistance.rs  # Support/resistance level derivation
-│   ├── tools.rs               # rig tool wrappers (#[tool] structs)
-│   └── types.rs               # MacdResult, BollingerResult, etc.
-│
-├── providers/                 # LLM provider factory (rig-core)
-│   ├── mod.rs                 # ModelTier (QuickThinking/DeepThinking), ProviderId enum
-│   ├── factory/               # create_completion_model, build_agent, prompt_with_retry
-│   ├── copilot.rs             # GitHub Copilot via ACP
-│   └── acp.rs                 # Agent Client Protocol (JSON-RPC 2.0/NDJSON)
-│
-├── report/                    # Final report formatting
-├── cli/                       # CLI module (clap + inquire)
-│   ├── mod.rs                 # Cli + Commands structs; clap derive
-│   ├── analyze.rs             # scorpio analyze <SYMBOL>: banner → config → validate → pipeline
-│   └── setup/
-│       ├── mod.rs             # Wizard orchestrator, handle_cancellation, run()
-│       ├── steps.rs           # Interactive step fns (1-5) + pure helpers
-│       └── config_file.rs     # PartialConfig, load/save user config (atomic, 0o600)
-└── backtest/                  # Backtesting framework (skeleton)
+└── scorpio-cli/               # Binary crate hosting the user-facing CLI
+    ├── Cargo.toml             # Depends on scorpio-core
+    └── src/
+        ├── main.rs            # #[tokio::main] entry; dispatch analyze/setup/upgrade
+        ├── lib.rs             # pub mod cli; pub mod report; (library surface for in-crate tests)
+        ├── cli/
+        │   ├── mod.rs         # Cli + Commands structs; clap derive
+        │   ├── analyze.rs     # Thin wrapper: load config → validate → AnalysisRuntime → print report
+        │   ├── update.rs      # Release check + `scorpio upgrade` self-update
+        │   └── setup/
+        │       ├── mod.rs     # Wizard orchestrator, recovery UX, run()
+        │       └── steps.rs   # Interactive step fns (1-5) + pure helpers
+        └── report/            # Final terminal report formatting (CLI-only per R23)
 ```
+
+Core integration tests live in `crates/scorpio-core/tests/` (pipeline, state, app facade, observability, foundation); CLI integration tests live in `crates/scorpio-cli/tests/` (release-archive contract only).
 
 ### Key Design Decisions
 
@@ -135,7 +109,7 @@ src/
     exceeds the constant, so bumping it explicitly retires incompatible data instead of silently failing at runtime.
   - The thesis lookup degrades gracefully (warn + skip) when deserialization fails, so a stale snapshot never crashes the
     pipeline. But relying on that for every deploy is a smell — `#[serde(default)]` + version bumps are the real fix.
-- **Phased UI**: Phase 1 = CLI (`clap` + `inquire`) — **done**; `scorpio analyze <SYMBOL>` runs the pipeline, `scorpio setup` is an interactive wizard that writes `~/.scorpio-analyst/config.toml`. Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop app (`gpui`, behind `--features gui`). All phases share the same core `lib.rs`.
+- **Phased UI**: Phase 1 = CLI (`clap` + `inquire`) — **done**; `scorpio analyze <SYMBOL>` runs the pipeline, `scorpio setup` is an interactive wizard that writes `~/.scorpio-analyst/config.toml`. Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop app (`gpui`, behind `--features gui`). All phases depend on `scorpio-core` — the shared crate exposes `AnalysisRuntime`, `settings::PartialConfig`, and the runtime `Config` type as the preferred entry points.
 
 ### Crate Dependencies
 
@@ -168,7 +142,9 @@ src/
 | `futures` 0.3                      | Async combinators                                                                  |
 | `nonzero_ext` 0.3                  | Non-zero integer utilities                                                         |
 
-**Dev dependencies:** `proptest` 1, `mockall` 0.13, `pretty_assertions` 1, `paft-money` 0.7, `rust_decimal` 1.
+**Dev dependencies:** `proptest` 1, `mockall` 0.13, `pretty_assertions` 1, `paft-money` 0.7, `rust_decimal` 1, `tempfile` 3, `flate2` 1, `tar` 0.4, `zip` 8.
+
+Shared dep versions are pinned centrally under `[workspace.dependencies]` in the root `Cargo.toml`; each crate consumes them via `foo.workspace = true`. Core owns the runtime dep set (rig-core, graph-flow, kand, finnhub, yfinance-rs, sqlx, secrecy, config, dotenvy, governor, schemars, nonzero_ext). CLI owns the presentation/binary-specific set (clap, inquire, colored, comfy-table, figlet-rs, self_update, semver, sha2, hex). Dual-consumed deps (tokio, serde, serde_json, anyhow, thiserror, tracing, chrono, uuid, reqwest, async-trait, futures, tempfile) live as workspace entries.
 
 ## Work Mode
 > Based on the complexity of the tasks, choose the appropriate work mode
@@ -231,32 +207,34 @@ The project-level `config.toml` at the repo root is **not read at runtime** — 
 ### Running & Debugging
 
 ```bash
-cargo run -- setup                                    # Interactive wizard → ~/.scorpio-analyst/config.toml
-cargo run -- analyze AAPL                             # Run pipeline for AAPL
-cargo run -- analyze AAPL -- --help                   # Show analyze flags
-RUST_LOG=debug cargo run -- analyze AAPL              # Full trace output
-SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -- analyze AAPL   # Quick test (1 debate round)
-cargo run -- --version                                # Print version
+cargo run -p scorpio-cli -- setup                     # Interactive wizard → ~/.scorpio-analyst/config.toml
+cargo run -p scorpio-cli -- analyze AAPL              # Run pipeline for AAPL
+cargo run -p scorpio-cli -- analyze --help            # Show analyze flags
+RUST_LOG=debug cargo run -p scorpio-cli -- analyze AAPL   # Full trace output
+SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL   # Quick test (1 debate round)
+cargo run -p scorpio-cli -- --version                 # Print version
 ```
+
+Use `cargo run -p scorpio-cli -- …` from the repo root to target the CLI crate explicitly after the workspace split.
 
 ### Common Development Tasks
 
-| Task                  | Files to touch                                                                                                                                                   |
-|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| New agent             | `src/agents/<role>/`, `src/workflow/tasks/`                                                                                                                      |
-| New data source       | `src/data/`, expose via `#[tool]` macro                                                                                                                          |
-| New indicator         | `src/indicators/core_math.rs` + `src/indicators/tools.rs`                                                                                                        |
-| New LLM provider      | Extend `ProviderId` in `src/providers/mod.rs`, add case in `src/providers/factory/`                                                                              |
-| New analysis pack     | Add `PackId` variant in `src/analysis_packs/manifest.rs`, add match arm in `src/analysis_packs/builtin.rs`                                                       |
-| New CLI subcommand    | Add variant to `Commands` in `src/cli/mod.rs`, create `src/cli/<name>.rs`, dispatch in `main.rs`                                                                 |
-| New wizard config key | Add field to `PartialConfig` in `src/cli/setup/config_file.rs`, add step in `src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `src/config.rs` |
+| Task                  | Files to touch                                                                                                                                                                                                 |
+|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| New agent             | `crates/scorpio-core/src/agents/<role>/`, `crates/scorpio-core/src/workflow/tasks/`                                                                                                                            |
+| New data source       | `crates/scorpio-core/src/data/`, expose via `#[tool]` macro                                                                                                                                                    |
+| New indicator         | `crates/scorpio-core/src/indicators/core_math.rs` + `crates/scorpio-core/src/indicators/tools.rs`                                                                                                              |
+| New LLM provider      | Extend `ProviderId` in `crates/scorpio-core/src/providers/mod.rs`, add case in `crates/scorpio-core/src/providers/factory/`                                                                                    |
+| New analysis pack     | Add `PackId` variant in `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs`, add match arm in `crates/scorpio-core/src/analysis_packs/builtin.rs`                                                     |
+| New CLI subcommand    | Add variant to `Commands` in `crates/scorpio-cli/src/cli/mod.rs`, create `crates/scorpio-cli/src/cli/<name>.rs`, dispatch in `crates/scorpio-cli/src/main.rs`                                                  |
+| New wizard config key | Add field to `PartialConfig` in `crates/scorpio-core/src/settings.rs`, add step in `crates/scorpio-cli/src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `crates/scorpio-core/src/config.rs` |
 
 ## CI/CD
 
 GitHub Actions (`.github/workflows/tests.yml`):
-- Triggers on push/PR to `main` (only when `src/`, `tests/`, `Cargo.toml`, or `Cargo.lock` change)
+- Triggers on push/PR to `main` (only when `crates/**`, `.cargo/**`, `Cargo.toml`, or `Cargo.lock` change, plus the workflow file itself)
 - Installs Protobuf compiler (required by dependencies)
-- Steps: `cargo fmt -- --check` → `cargo clippy --all-targets -- -D warnings` → `cargo nextest run --all-features --locked`
+- Steps: `cargo fmt -- --check` → `cargo clippy --workspace --all-targets -- -D warnings` → `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 
 ## Rust Guidelines
 

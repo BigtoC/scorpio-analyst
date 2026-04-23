@@ -139,7 +139,7 @@ cp .env.example .env
 ```
 
 ```env
-# Pick the provider(s) you intend to use in config.toml
+# Pick the provider(s) you intend to use at runtime
 SCORPIO_OPENAI_API_KEY=sk-your-key-here
 SCORPIO_ANTHROPIC_API_KEY=sk-ant-your-key-here
 SCORPIO_GEMINI_API_KEY=your-gemini-key-here
@@ -150,32 +150,27 @@ SCORPIO_FINNHUB_API_KEY=your-finnhub-key-here
 SCORPIO_FRED_API_KEY=your-fred-api-key-here
 ```
 
-Only the keys for providers referenced in `config.toml` are required at runtime.
+Only the keys for providers selected by `scorpio setup` or `SCORPIO__LLM__...` env vars are required at runtime.
 
-### 2. Edit `config.toml` (optional)
+### 2. Configure runtime routing
 
-The defaults in `config.toml` use OpenRouter free models and analyze **NVDA**. Adjust as needed:
+Run the setup wizard to write `~/.scorpio-analyst/config.toml`:
 
-```toml
-[llm]
-quick_thinking_provider = "openrouter"   # openai | anthropic | gemini | openrouter
-quick_thinking_model    = "openrouter/free"
-deep_thinking_provider  = "openrouter"
-deep_thinking_model     = "qwen/qwen3.6-plus-preview:free"
-
-[trading]
-asset_symbol = "NVDA"   # ticker to analyze
+```bash
+cargo run -p scorpio-cli -- setup
 ```
+
+The repo-root `config.toml` is deprecated and is not read at runtime. If you prefer a non-interactive flow, set the `SCORPIO__LLM__QUICK_THINKING_PROVIDER`, `SCORPIO__LLM__DEEP_THINKING_PROVIDER`, `SCORPIO__LLM__QUICK_THINKING_MODEL`, and `SCORPIO__LLM__DEEP_THINKING_MODEL` environment variables directly instead.
 
 > **Note:** GitHub Copilot does not yet support tool calling — use OpenAI, Anthropic, or Gemini for the `quick_thinking_provider`. See [Known Limitations](#known-limitations) for details.
 
 ### 3. Run
 
 ```bash
-cargo run
+cargo run -p scorpio-cli -- analyze AAPL
 ```
 
-The pipeline executes all five phases and prints a structured report to the terminal. Configuration can be overridden at runtime with environment variables (prefix `SCORPIO__`, e.g. `SCORPIO__TRADING__ASSET_SYMBOL=AAPL`).
+The pipeline executes all five phases and prints a structured report to the terminal. Configuration can be overridden at runtime with `SCORPIO__...` environment variables (for example `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL`).
 
 ### Example report
 
