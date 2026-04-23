@@ -67,8 +67,8 @@ use scorpio_core::app::AnalysisRuntime;
 
 After the split, the verified commands became:
 
-- `cargo run -- setup`
-- `cargo run -- analyze AAPL`
+- `cargo run -p scorpio-cli -- setup`
+- `cargo run -p scorpio-cli -- analyze AAPL`
 
 The README also needed to state that repo-root `config.toml` is inert at runtime and that the live user config lives under `~/.scorpio-analyst/config.toml`. If those statements are important for using the repo correctly, they should be covered by tests instead of relying on manual review.
 
