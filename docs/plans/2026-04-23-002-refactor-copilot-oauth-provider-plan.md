@@ -15,7 +15,7 @@ Replace the ACP subprocess-based Copilot provider with a direct HTTPS client tha
 1. Authenticates via GitHub OAuth Device Flow to obtain a durable `ghu_` token.
 2. Exchanges it for a short-lived `tid_` Copilot token on demand.
 3. Calls `api.githubcopilot.com/chat/completions` with IDE-spoofing headers.
-4. Preserves the existing `CopilotProviderClient` / `CopilotCompletionModel` public surface so nothing downstream (`factory/client.rs`, agent layer, retry/rate-limit) needs to change.
+4. Preserves the existing `CopilotProviderClient` / `CopilotCompletionModel` public surface so downstream consumers like the agent layer and retry/rate-limit wiring do not need to change, even though provider factory wiring still does.
 
 ## Non-goals
 
