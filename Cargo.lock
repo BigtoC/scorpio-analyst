@@ -3653,7 +3653,6 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "comfy-table",
  "figlet-rs",
  "flate2",
  "futures",
@@ -3665,6 +3664,7 @@ dependencies = [
  "reqwest 0.13.2",
  "rust_decimal",
  "scorpio-core",
+ "scorpio-reporters",
  "secrecy",
  "self_update",
  "semver",
@@ -3716,6 +3716,23 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "yfinance-rs",
+]
+
+[[package]]
+name = "scorpio-reporters"
+version = "0.2.5"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "colored",
+ "comfy-table",
+ "scorpio-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

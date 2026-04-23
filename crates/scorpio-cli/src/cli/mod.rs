@@ -2,8 +2,10 @@ pub mod analyze;
 pub mod setup;
 pub mod update;
 
+use std::path::PathBuf;
+
 use clap::builder::FalseyValueParser;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 /// Scorpio Analyst — multi-agent LLM-powered financial analysis.
 #[derive(Debug, Parser)]
@@ -31,15 +33,33 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Run the full 5-phase analysis pipeline for a ticker symbol.
-    Analyze {
-        /// Ticker symbol to analyze (e.g. AAPL, NVDA, BTC-USD).
-        #[arg(value_name = "SYMBOL")]
-        symbol: String,
-    },
+    Analyze(AnalyzeArgs),
     /// Interactive wizard to configure API keys and provider routing.
     Setup,
     /// Upgrade scorpio to the latest release from GitHub.
     Upgrade,
+}
+
+/// Arguments for `scorpio analyze`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct AnalyzeArgs {
+    /// Ticker symbol to analyze (e.g. AAPL, NVDA, BTC-USD).
+    #[arg(value_name = "SYMBOL")]
+    pub symbol: String,
+
+    /// Suppress the analyze banner and terminal reporter.
+    /// Requires another reporter such as --json to be enabled.
+    #[arg(long = "no-terminal")]
+    pub no_terminal: bool,
+
+    /// Write a pretty-printed JSON artifact to --output-dir.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Directory for file-based reporters.
+    /// Defaults to ~/.scorpio-analyst/reports and is created if missing.
+    #[arg(long, value_name = "DIR")]
+    pub output_dir: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -51,7 +71,7 @@ mod tests {
     #[test]
     fn parse_analyze_with_symbol() {
         let cli = Cli::try_parse_from(["scorpio", "analyze", "AAPL"]).unwrap();
-        assert!(matches!(cli.command, Commands::Analyze { symbol } if symbol == "AAPL"));
+        assert!(matches!(&cli.command, Commands::Analyze(args) if args.symbol == "AAPL"));
     }
 
     #[test]
@@ -70,7 +90,7 @@ mod tests {
     fn parse_no_update_check_before_subcommand() {
         let cli = Cli::try_parse_from(["scorpio", "--no-update-check", "analyze", "AAPL"]).unwrap();
         assert!(cli.no_update_check);
-        assert!(matches!(cli.command, Commands::Analyze { symbol } if symbol == "AAPL"));
+        assert!(matches!(&cli.command, Commands::Analyze(args) if args.symbol == "AAPL"));
     }
 
     #[test]
