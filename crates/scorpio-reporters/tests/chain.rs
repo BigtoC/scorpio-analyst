@@ -10,6 +10,7 @@ use scorpio_reporters::{ReportContext, Reporter, ReporterChain};
 
 struct OkReporter;
 struct FailReporter;
+struct PanicReporter;
 
 #[async_trait]
 impl Reporter for OkReporter {
@@ -28,6 +29,16 @@ impl Reporter for FailReporter {
     }
     async fn emit(&self, _: Arc<TradingState>, _: Arc<ReportContext>) -> anyhow::Result<()> {
         anyhow::bail!("intentional test failure")
+    }
+}
+
+#[async_trait]
+impl Reporter for PanicReporter {
+    fn name(&self) -> &'static str {
+        "panic"
+    }
+    async fn emit(&self, _: Arc<TradingState>, _: Arc<ReportContext>) -> anyhow::Result<()> {
+        panic!("intentional test panic")
     }
 }
 
@@ -52,7 +63,7 @@ fn test_ctx() -> Arc<ReportContext> {
     Arc::new(ReportContext {
         symbol: "AAPL".to_owned(),
         finished_at: Utc::now(),
-        output_dir: std::path::PathBuf::from("/tmp"),
+        output_dir: None,
     })
 }
 
@@ -99,6 +110,18 @@ async fn run_all_returns_full_count_when_every_reporter_fails() {
     let n = chain.len();
     let failures = chain.run_all(test_state(), test_ctx()).await;
     assert_eq!(failures, n);
+}
+
+#[tokio::test]
+async fn run_all_counts_panicked_reporter_and_continues() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut chain = ReporterChain::new();
+    chain.push(CountingReporter(Arc::clone(&counter)));
+    chain.push(PanicReporter);
+    chain.push(CountingReporter(Arc::clone(&counter)));
+    let failures = chain.run_all(test_state(), test_ctx()).await;
+    assert_eq!(failures, 1);
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
