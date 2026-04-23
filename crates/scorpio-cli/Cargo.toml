@@ -8,8 +8,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-# Sibling core crate — shared runtime/domain logic.
+# Sibling crates
 scorpio-core = { path = "../scorpio-core" }
+scorpio-reporters = { path = "../scorpio-reporters" }
 
 # Async runtime (CLI entry point drives the executor).
 tokio.workspace = true
@@ -28,9 +29,8 @@ chrono.workspace = true
 clap.workspace = true
 inquire.workspace = true
 
-# Terminal presentation
+# Terminal presentation (comfy-table moved to scorpio-reporters)
 colored.workspace = true
-comfy-table.workspace = true
 figlet-rs.workspace = true
 
 # File utilities (used by setup wizard + release contract test)

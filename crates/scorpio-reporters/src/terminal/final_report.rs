@@ -9,7 +9,7 @@ use scorpio_core::state::{
 };
 
 /// Render a comprehensive terminal report from the completed trading state.
-pub fn format_final_report(state: &TradingState) -> String {
+pub(crate) fn format_final_report(state: &TradingState) -> String {
     let mut out = String::new();
 
     write_header(&mut out, state);
@@ -971,7 +971,6 @@ mod tests {
     fn format_final_report_coverage_shows_unavailable_when_not_set() {
         let state = minimal_state(); // data_coverage is None
         let report = format_final_report(&state);
-        // Find "Data Quality and Coverage" section and verify "Unavailable" appears after it
         let coverage_pos = report
             .find("Data Quality and Coverage")
             .expect("section must appear");

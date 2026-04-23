@@ -6,14 +6,6 @@ use scorpio_core::state::{
     AssetShape, CorporateEquityValuation, DerivedValuation, ScenarioValuation, TradingState,
 };
 
-/// Render the `Scenario Valuation` section into `out`.
-///
-/// Branches:
-/// - `state.derived_valuation = None` → emits an explicit "not computed" line.
-/// - `ScenarioValuation::NotAssessed { reason }` → emits "not assessed" with the reason.
-/// - `ScenarioValuation::CorporateEquity(_)` → renders only the metrics that are `Some`.
-///
-/// Never panics — all `Option` accesses use pattern matching.
 pub(crate) fn write_scenario_valuation(out: &mut String, state: &TradingState) {
     super::final_report::section_header(out, "Scenario Valuation");
 
@@ -93,8 +85,6 @@ fn write_equity_metrics(out: &mut String, equity: &CorporateEquityValuation) {
     }
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,17 +121,12 @@ mod tests {
         }
     }
 
-    // ── None case ────────────────────────────────────────────────────────
-
     #[test]
     fn write_scenario_valuation_shows_heading_when_none() {
         let state = TradingState::new("AAPL", "2026-04-03");
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
-        assert!(
-            out.contains("Scenario Valuation"),
-            "section heading must always appear"
-        );
+        assert!(out.contains("Scenario Valuation"));
     }
 
     #[test]
@@ -149,13 +134,8 @@ mod tests {
         let state = TradingState::new("AAPL", "2026-04-03");
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
-        assert!(
-            out.contains("Not computed"),
-            "must render 'Not computed' when derived_valuation is None"
-        );
+        assert!(out.contains("Not computed"));
     }
-
-    // ── NotAssessed case ─────────────────────────────────────────────────
 
     #[test]
     fn write_scenario_valuation_shows_not_assessed_with_reason_for_fund() {
@@ -168,14 +148,8 @@ mod tests {
         let state = state_with_valuation(dv);
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
-        assert!(
-            out.contains("not assessed"),
-            "must render 'not assessed' for NotAssessed variant"
-        );
-        assert!(
-            out.contains("fund_style_asset"),
-            "must include the reason string"
-        );
+        assert!(out.contains("not assessed"));
+        assert!(out.contains("fund_style_asset"));
         assert!(out.contains("Asset shape: Fund"));
     }
 
@@ -193,18 +167,16 @@ mod tests {
         assert!(out.contains("insufficient_corporate_fundamentals"));
     }
 
-    // ── CorporateEquity full metrics ─────────────────────────────────────
-
     #[test]
     fn write_scenario_valuation_renders_all_metrics_when_present() {
         let state = state_with_valuation(full_corporate_valuation());
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
         assert!(out.contains("Asset shape: Corporate equity"));
-        assert!(out.contains("DCF intrinsic value"), "must show DCF metric");
-        assert!(out.contains("EV/EBITDA"), "must show EV/EBITDA metric");
-        assert!(out.contains("Forward P/E"), "must show forward P/E metric");
-        assert!(out.contains("PEG ratio"), "must show PEG metric");
+        assert!(out.contains("DCF intrinsic value"));
+        assert!(out.contains("EV/EBITDA"));
+        assert!(out.contains("Forward P/E"));
+        assert!(out.contains("PEG ratio"));
     }
 
     #[test]
@@ -212,13 +184,8 @@ mod tests {
         let state = state_with_valuation(full_corporate_valuation());
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
-        assert!(
-            out.contains("implied"),
-            "must render implied value per share when present"
-        );
+        assert!(out.contains("implied"));
     }
-
-    // ── Partial metrics ───────────────────────────────────────────────────
 
     #[test]
     fn write_scenario_valuation_renders_only_present_metrics() {
@@ -238,19 +205,11 @@ mod tests {
         let state = state_with_valuation(dv);
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
-        assert!(out.contains("DCF intrinsic value"), "DCF must appear");
-        assert!(
-            !out.contains("EV/EBITDA"),
-            "EV/EBITDA must be absent when None"
-        );
-        assert!(
-            !out.contains("Forward P/E"),
-            "Forward P/E must be absent when None"
-        );
-        assert!(!out.contains("PEG ratio"), "PEG must be absent when None");
+        assert!(out.contains("DCF intrinsic value"));
+        assert!(!out.contains("EV/EBITDA"));
+        assert!(!out.contains("Forward P/E"));
+        assert!(!out.contains("PEG ratio"));
     }
-
-    // ── All metrics None case ─────────────────────────────────────────────
 
     #[test]
     fn write_scenario_valuation_shows_no_metrics_message_when_all_none() {
@@ -266,20 +225,14 @@ mod tests {
         let state = state_with_valuation(dv);
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
-        assert!(
-            out.contains("No valuation metrics computed"),
-            "must emit fallback message when all metric fields are None"
-        );
+        assert!(out.contains("No valuation metrics computed"));
     }
-
-    // ── Never panics ──────────────────────────────────────────────────────
 
     #[test]
     fn write_scenario_valuation_never_panics_on_absent_valuation() {
-        // This must not panic — full regression guard.
         let state = TradingState::new("SPY", "2026-04-03");
         let mut out = String::new();
-        write_scenario_valuation(&mut out, &state); // no panic expected
+        write_scenario_valuation(&mut out, &state);
         assert!(!out.is_empty());
     }
 }

@@ -87,14 +87,6 @@ graph TD
     Abort --> Report
 ```
 
-## User Interaction
-
-Scorpio-Analyst is designed with a phased user interface approach to provide both power and ease of use:
-
-*   **Phase 1 (MVP)**: A comprehensive Command-Line Interface (CLI) built with `clap`, supporting both structured subcommands and natural language queries.
-*   **Phase 2**: An interactive Terminal User Interface (TUI) for a rich, conversational experience.
-*   **Phase 3**: A high-performance, GPU-accelerated native desktop application.
-
 ## Getting Started
 
 ### Install
@@ -119,6 +111,29 @@ The script auto-detects your OS and architecture, downloads the latest release b
 scorpio setup          # interactive wizard — configure API keys and LLM provider
 scorpio analyze AAPL   # run the full 5-phase analysis pipeline
 ```
+
+#### Output options
+
+By default `scorpio analyze` prints the terminal report. You can add extra output legs with flags:
+
+| Flag                 | Effect                                                                                               |
+|----------------------|------------------------------------------------------------------------------------------------------|
+| `--json`             | Also write a pretty-printed JSON artifact to `~/.scorpio-analyst/reports/<SYMBOL>-<timestamp>.json`  |
+| `--output-dir <DIR>` | Override the directory used by file-based reporters (created if missing)                             |
+| `--no-terminal`      | Suppress the figlet banner and terminal report; requires at least one other reporter (e.g. `--json`) |
+
+```sh
+# Terminal report + JSON artifact in the default reports directory
+scorpio analyze AAPL --json
+
+# JSON only, written to a custom directory (no terminal output)
+scorpio analyze AAPL --no-terminal --json --output-dir ./reports
+
+# Show all available flags
+scorpio analyze --help
+```
+
+A sample JSON artifact is available at [`docs/sample-reports/NVDA-20260423T104349860Z.json`](docs/sample-reports/NVDA-20260423T104349860Z.json).
 
 ---
 
@@ -172,6 +187,16 @@ cargo run -p scorpio-cli -- analyze AAPL
 ```
 
 The pipeline executes all five phases and prints a structured report to the terminal. Configuration can be overridden at runtime with `SCORPIO__...` environment variables (for example `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL`).
+
+To also export a JSON artifact:
+
+```bash
+cargo run -p scorpio-cli -- analyze AAPL --json
+# Output: terminal report + ~/.scorpio-analyst/reports/AAPL-<timestamp>.json
+
+cargo run -p scorpio-cli -- analyze AAPL --no-terminal --json --output-dir /tmp/reports
+# Output: JSON file only, no terminal report
+```
 
 ### Example report
 

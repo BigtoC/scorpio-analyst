@@ -3647,13 +3647,12 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scorpio-cli"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "colored",
- "comfy-table",
  "figlet-rs",
  "flate2",
  "futures",
@@ -3665,6 +3664,7 @@ dependencies = [
  "reqwest 0.13.2",
  "rust_decimal",
  "scorpio-core",
+ "scorpio-reporters",
  "secrecy",
  "self_update",
  "semver",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "scorpio-core"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3716,6 +3716,23 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "yfinance-rs",
+]
+
+[[package]]
+name = "scorpio-reporters"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "colored",
+ "comfy-table",
+ "scorpio-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

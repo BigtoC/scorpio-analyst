@@ -4,15 +4,6 @@ use std::fmt::Write;
 
 use scorpio_core::state::{DataCoverageReport, TradingState};
 
-/// Render the `Data Quality and Coverage` section into `out`.
-///
-/// - When `state.data_coverage` is `None`: emits the exact string `Unavailable`.
-/// - When `state.data_coverage` is `Some(coverage)`:
-///   - Lists `required_inputs` explicitly.
-///   - Emits a `Missing inputs:` bulleted list when non-empty, otherwise `Missing inputs: none`.
-///   - When all issue lists are empty, emits an "all present" confirmation line.
-///
-/// Never panics — all `Option` accesses use pattern matching.
 pub(crate) fn write_data_quality_and_coverage(out: &mut String, state: &TradingState) {
     super::final_report::section_header(out, "Data Quality and Coverage");
 
@@ -27,11 +18,9 @@ pub(crate) fn write_data_quality_and_coverage(out: &mut String, state: &TradingS
 }
 
 fn write_coverage_body(out: &mut String, coverage: &DataCoverageReport) {
-    // Required inputs line
     let required_list = coverage.required_inputs.join(", ");
     let _ = writeln!(out, "Required inputs: {required_list}");
 
-    // Missing inputs
     if coverage.missing_inputs.is_empty() {
         let _ = writeln!(out, "Missing inputs: none");
     } else {
@@ -41,13 +30,10 @@ fn write_coverage_body(out: &mut String, coverage: &DataCoverageReport) {
         }
     }
 
-    // All-present confirmation
     if coverage.missing_inputs.is_empty() {
         let _ = writeln!(out, "All required inputs are present.");
     }
 }
-
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -77,14 +63,8 @@ mod tests {
         let state = TradingState::new("AAPL", "2026-04-03");
         let mut out = String::new();
         write_data_quality_and_coverage(&mut out, &state);
-        assert!(
-            out.contains("Data Quality and Coverage"),
-            "section heading must appear"
-        );
-        assert!(
-            out.contains("Unavailable"),
-            "must render Unavailable when None"
-        );
+        assert!(out.contains("Data Quality and Coverage"));
+        assert!(out.contains("Unavailable"));
     }
 
     #[test]
@@ -92,10 +72,7 @@ mod tests {
         let state = state_with_coverage(full_coverage());
         let mut out = String::new();
         write_data_quality_and_coverage(&mut out, &state);
-        assert!(
-            out.contains("Required inputs: fundamentals, sentiment, news, technical"),
-            "must list all required inputs from the struct"
-        );
+        assert!(out.contains("Required inputs: fundamentals, sentiment, news, technical"));
     }
 
     #[test]
@@ -112,14 +89,8 @@ mod tests {
         let state = state_with_coverage(coverage);
         let mut out = String::new();
         write_data_quality_and_coverage(&mut out, &state);
-        assert!(
-            out.contains("Missing inputs:"),
-            "must have missing inputs label"
-        );
-        assert!(
-            out.contains("  - technical"),
-            "must bullet-list missing inputs"
-        );
+        assert!(out.contains("Missing inputs:"));
+        assert!(out.contains("  - technical"));
     }
 
     #[test]
@@ -127,21 +98,16 @@ mod tests {
         let state = state_with_coverage(full_coverage());
         let mut out = String::new();
         write_data_quality_and_coverage(&mut out, &state);
-        assert!(
-            out.contains("All required inputs are present"),
-            "must confirm all inputs present when no issues"
-        );
+        assert!(out.contains("All required inputs are present"));
     }
 
     #[test]
     fn write_data_quality_and_coverage_heading_always_appears() {
-        // None case
         let state = TradingState::new("TSLA", "2026-04-03");
         let mut out = String::new();
         write_data_quality_and_coverage(&mut out, &state);
         assert!(out.contains("Data Quality and Coverage"));
 
-        // Some case
         let state2 = state_with_coverage(full_coverage());
         let mut out2 = String::new();
         write_data_quality_and_coverage(&mut out2, &state2);

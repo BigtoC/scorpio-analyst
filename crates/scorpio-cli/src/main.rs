@@ -22,8 +22,8 @@ async fn main() {
     let cli = Cli::parse();
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.
-    let is_upgrade = matches!(cli.command, Commands::Upgrade);
-    let is_analyze = matches!(cli.command, Commands::Analyze { .. });
+    let is_upgrade = matches!(&cli.command, Commands::Upgrade);
+    let show_banner = should_show_analyze_banner(&cli.command);
 
     // Background update check (non-blocking, fire-and-forget). Gated by the
     // `--no-update-check` flag / `SCORPIO_NO_UPDATE_CHECK` env var.
@@ -46,7 +46,7 @@ async fn main() {
     // DNS / slow network), the receiver is returned to `update_rx` so the
     // post-command block below gets a second chance.
     let mut cached_notice: Option<String> = None;
-    if is_analyze {
+    if show_banner {
         scorpio_cli::cli::analyze::print_banner();
         if let Some(rx) = update_rx.take() {
             match show_update_notice_with_tty(
@@ -71,8 +71,9 @@ async fn main() {
     // runtime internally; calling them from async context would panic, so
     // we bridge via `spawn_blocking`. `Upgrade` is natively async.
     let result: anyhow::Result<()> = match cli.command {
-        Commands::Analyze { symbol } => {
-            tokio::task::spawn_blocking(move || scorpio_cli::cli::analyze::run(&symbol))
+        Commands::Analyze(args) => {
+            let args = args.clone();
+            tokio::task::spawn_blocking(move || scorpio_cli::cli::analyze::run(&args))
                 .await
                 .map_err(|e| anyhow::anyhow!("analyze task failed to join: {e}"))
                 .and_then(|r| r)
@@ -126,5 +127,37 @@ async fn main() {
 
     if exit_code != 0 {
         std::process::exit(exit_code);
+    }
+}
+
+fn should_show_analyze_banner(command: &Commands) -> bool {
+    matches!(command, Commands::Analyze(args) if !args.no_terminal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scorpio_cli::cli::AnalyzeArgs;
+
+    #[test]
+    fn analyze_shows_banner_when_terminal_output_is_enabled() {
+        assert!(should_show_analyze_banner(&Commands::Analyze(
+            AnalyzeArgs {
+                symbol: "AAPL".to_owned(),
+                ..Default::default()
+            }
+        )));
+    }
+
+    #[test]
+    fn analyze_skips_banner_when_no_terminal_is_requested() {
+        assert!(!should_show_analyze_banner(&Commands::Analyze(
+            AnalyzeArgs {
+                symbol: "AAPL".to_owned(),
+                no_terminal: true,
+                json: true,
+                ..Default::default()
+            }
+        )));
     }
 }

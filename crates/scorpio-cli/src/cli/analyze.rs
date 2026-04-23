@@ -1,26 +1,33 @@
 //! `scorpio analyze <SYMBOL>` subcommand handler.
 //!
 //! Loads the runtime config, validates the symbol up-front for fail-fast UX,
-//! builds a CLI-owned tokio runtime, and hands the heavy lifting off to
-//! [`AnalysisRuntime`]. Presentation (figlet banner and final-report
-//! formatting) stays in this crate; assembly + pipeline execution live in
-//! `scorpio-core`.
+//! builds a multi-thread tokio runtime so spawned reporter tasks run in
+//! genuine parallel, and hands the heavy lifting off to [`AnalysisRuntime`].
+//! The reporter chain is assembled from CLI flags and executed concurrently
+//! via [`ReporterChain::run_all`].
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context;
+use chrono::Utc;
 use figlet_rs::Toilet;
 
 use scorpio_core::app::AnalysisRuntime;
 use scorpio_core::config::Config;
 use scorpio_core::data::symbol::validate_symbol;
+use scorpio_reporters::json::JsonReporter;
+use scorpio_reporters::terminal::TerminalReporter;
+use scorpio_reporters::{ReportContext, ReporterChain};
 
-/// Error message printed when the user config is missing or incomplete.
+use super::AnalyzeArgs;
+
 const CONFIG_MISSING_MSG: &str = "✗ Config not found or incomplete. Run `scorpio setup` to configure your API keys and providers.";
 
 /// Print the "Scorpio Analyst" figlet banner to stdout.
 ///
-/// Lifted out of [`run`] so `main.rs` can render it before the post-banner
-/// update notice, letting users Ctrl-C and upgrade before the minutes-long
-/// pipeline starts.
+/// Gated on `!args.no_terminal` in `main.rs` before the pipeline starts so
+/// users can Ctrl-C and upgrade before the minutes-long run begins.
 pub fn print_banner() {
     if let Ok(font) = Toilet::mono12()
         && let Some(figure) = font.convert("Scorpio Analyst")
@@ -29,38 +36,103 @@ pub fn print_banner() {
     }
 }
 
-/// Run the full 5-phase analysis pipeline for `symbol`.
+/// Run the full 5-phase analysis pipeline and emit results through all
+/// configured reporters.
 ///
-/// Synchronous shell around the async [`AnalysisRuntime`]: builds a CLI-owned
-/// current-thread tokio runtime (matching the pre-facade shape), validates the
-/// symbol for fail-fast UX, assembles the runtime, executes one cycle, and
-/// prints the formatted report to stdout.
+/// Synchronous entry point (called from `spawn_blocking`). Builds a
+/// `new_multi_thread` runtime so reporter tasks spawned by
+/// [`ReporterChain::run_all`] run on separate OS threads.
 ///
 /// # Errors
 ///
 /// Returns `Err` for:
 /// - missing or incomplete user config
 /// - invalid symbol format
+/// - no reporters enabled (`--no-terminal` without any other reporter)
+/// - every requested reporter failing after analysis completes
 /// - any facade assembly or pipeline runtime failure
-pub fn run(symbol: &str) -> anyhow::Result<()> {
+pub fn run(args: &AnalyzeArgs) -> anyhow::Result<()> {
+    validate_reporter_args(args)?;
     let cfg = load_analysis_config()?;
+    let _ = validate_symbol(&args.symbol)?;
 
-    // Early validation preserves today's fail-fast UX before any runtime
-    // assembly starts. The facade re-validates defensively so non-CLI
-    // consumers get the same input contract.
-    let _ = validate_symbol(symbol)?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to initialize async runtime")?;
 
     runtime.block_on(async move {
+        let chain = build_reporter_chain(args);
+        let n = chain.len();
+        anyhow::ensure!(
+            n > 0,
+            "at least one reporter must be enabled; use --json if --no-terminal is set"
+        );
+
         let analysis = AnalysisRuntime::new(cfg).await?;
-        let state = analysis.run(symbol).await?;
-        println!("{}", crate::report::format_final_report(&state));
-        Ok::<(), anyhow::Error>(())
+        let state = Arc::new(analysis.run(&args.symbol).await?);
+        let ctx = Arc::new(ReportContext {
+            symbol: state.asset_symbol.clone(),
+            finished_at: Utc::now(),
+            output_dir: report_output_dir(args)?,
+        });
+
+        let failures = chain.run_all(state, ctx).await;
+        if failures == n {
+            anyhow::bail!("{failures} reporter(s) failed; see logs");
+        }
+        Ok(())
     })
+}
+
+fn build_reporter_chain(args: &AnalyzeArgs) -> ReporterChain {
+    let mut chain = ReporterChain::new();
+    if !args.no_terminal {
+        chain.push(TerminalReporter);
+    }
+    if args.json {
+        chain.push(JsonReporter);
+    }
+    chain
+}
+
+fn validate_reporter_args(args: &AnalyzeArgs) -> anyhow::Result<()> {
+    if args.no_terminal && !args.json {
+        anyhow::bail!("at least one reporter must be enabled; use --json if --no-terminal is set");
+    }
+
+    if args.output_dir.is_some() && !args.json {
+        anyhow::bail!("--output-dir requires --json");
+    }
+
+    Ok(())
+}
+
+fn report_output_dir(args: &AnalyzeArgs) -> anyhow::Result<Option<PathBuf>> {
+    if !args.json {
+        return Ok(None);
+    }
+
+    resolve_reports_dir(args.output_dir.as_deref()).map(Some)
+}
+
+/// Resolve the output directory for file reporters.
+///
+/// If `--output-dir` is provided, use it as-is. Otherwise default to
+/// `$HOME/.scorpio-analyst/reports`, matching the app-owned path style used
+/// for phase snapshots.
+fn resolve_reports_dir(output_dir: Option<&Path>) -> anyhow::Result<PathBuf> {
+    if let Some(dir) = output_dir {
+        return Ok(dir.to_path_buf());
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("HOME environment variable is not set"))?;
+    let home = PathBuf::from(home);
+    if !home.is_absolute() {
+        anyhow::bail!("HOME must be an absolute path; got: {}", home.display());
+    }
+    Ok(home.join(".scorpio-analyst/reports"))
 }
 
 fn load_analysis_config() -> anyhow::Result<Config> {
@@ -73,8 +145,16 @@ fn load_analysis_config() -> anyhow::Result<Config> {
 mod tests {
     use super::*;
 
-    /// Serialises tests that override HOME / env vars.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn args_for(symbol: &str, dir: &tempfile::TempDir) -> AnalyzeArgs {
+        AnalyzeArgs {
+            symbol: symbol.to_owned(),
+            json: true,
+            output_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        }
+    }
 
     // ── Missing-config guard ──────────────────────────────────────────────────
 
@@ -82,9 +162,8 @@ mod tests {
     fn run_missing_config_returns_config_not_found_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: serialized by ENV_LOCK
         unsafe { std::env::set_var("HOME", dir.path()) };
-        let result = run("AAPL");
+        let result = run(&args_for("AAPL", &dir));
         unsafe { std::env::remove_var("HOME") };
         let err = result.expect_err("missing config should return Err");
         assert!(
@@ -108,7 +187,7 @@ mod tests {
             std::env::set_var("SCORPIO_FRED_API_KEY", "fred-env-test");
         }
 
-        let result = run("AAPL");
+        let result = run(&args_for("AAPL", &dir));
 
         unsafe {
             std::env::remove_var("HOME");
@@ -130,7 +209,7 @@ mod tests {
         }
     }
 
-    // ── Symbol validation (re-homed from Config::validate() in Unit 3) ───────
+    // ── Symbol validation ─────────────────────────────────────────────────────
 
     fn write_minimal_config(dir: &tempfile::TempDir) {
         use scorpio_core::settings::{PartialConfig, save_user_config_at};
@@ -154,7 +233,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_minimal_config(&dir);
         unsafe { std::env::set_var("HOME", dir.path()) };
-        let result = run("");
+        let result = run(&AnalyzeArgs {
+            symbol: "".to_owned(),
+            json: true,
+            output_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        });
         unsafe { std::env::remove_var("HOME") };
         let err = result.expect_err("empty symbol should return Err");
         assert!(
@@ -169,7 +253,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_minimal_config(&dir);
         unsafe { std::env::set_var("HOME", dir.path()) };
-        let result = run("DROP;TABLE");
+        let result = run(&AnalyzeArgs {
+            symbol: "DROP;TABLE".to_owned(),
+            json: true,
+            output_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        });
         unsafe { std::env::remove_var("HOME") };
         let err = result.expect_err("symbol with semicolons should return Err");
         assert!(
@@ -180,15 +269,12 @@ mod tests {
 
     #[test]
     fn run_accepts_lowercase_symbol_past_validation() {
-        // Only tests that the symbol validator doesn't reject lowercase —
-        // pipeline failure (no real LLM/data) is expected and acceptable.
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         write_minimal_config(&dir);
         unsafe { std::env::set_var("HOME", dir.path()) };
-        let result = run("nvda");
+        let result = run(&args_for("nvda", &dir));
         unsafe { std::env::remove_var("HOME") };
-        // Must NOT be a "Config not found" or "invalid symbol" error
         match result {
             Ok(()) => {}
             Err(e) => {
@@ -203,5 +289,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Reporter chain validation ──────────────────────────────────────────────
+
+    #[test]
+    fn run_rejects_no_terminal_without_any_other_reporter() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_config(&dir);
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        let result = run(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            no_terminal: true,
+            json: false,
+            output_dir: Some(dir.path().to_path_buf()),
+        });
+        unsafe { std::env::remove_var("HOME") };
+        let err = result.expect_err("--no-terminal alone should be rejected");
+        assert!(
+            err.to_string().contains("at least one reporter"),
+            "error should explain that a reporter is required; got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_reporter_args_rejects_output_dir_without_json() {
+        let err = validate_reporter_args(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            output_dir: Some(PathBuf::from("/tmp/reports")),
+            ..Default::default()
+        })
+        .expect_err("output_dir without a file reporter should be rejected");
+        assert!(
+            err.to_string().contains("--output-dir requires --json"),
+            "error should explain output_dir requires json; got: {err}"
+        );
+    }
+
+    #[test]
+    fn report_output_dir_skips_home_lookup_when_json_disabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("HOME") };
+        let dir = report_output_dir(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            json: false,
+            output_dir: None,
+            ..Default::default()
+        })
+        .expect("terminal-only runs should not require HOME");
+        assert_eq!(dir, None);
+    }
+
+    #[test]
+    fn run_rejects_no_terminal_without_any_other_reporter_before_config_load() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let result = run(&AnalyzeArgs {
+            symbol: "AAPL".to_owned(),
+            no_terminal: true,
+            json: false,
+            output_dir: None,
+        });
+
+        unsafe { std::env::remove_var("HOME") };
+        let err = result.expect_err("invalid reporter selection should fail before config load");
+        assert!(
+            err.to_string().contains("at least one reporter"),
+            "expected reporter validation error, got: {err}"
+        );
+    }
+
+    // ── resolve_reports_dir ────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_reports_dir_returns_provided_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = resolve_reports_dir(Some(dir.path())).unwrap();
+        assert_eq!(result, dir.path());
+    }
+
+    #[test]
+    fn resolve_reports_dir_defaults_to_home_scorpio_analyst_reports() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        let result = resolve_reports_dir(None).unwrap();
+        unsafe { std::env::remove_var("HOME") };
+        assert_eq!(result, dir.path().join(".scorpio-analyst/reports"));
     }
 }

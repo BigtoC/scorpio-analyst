@@ -4,14 +4,6 @@ use std::fmt::Write;
 
 use scorpio_core::state::{ProvenanceSummary, TradingState};
 
-/// Render the `Evidence Provenance` section into `out`.
-///
-/// - When `state.provenance_summary` is `None`: emits the exact string `Unavailable`.
-/// - When `state.provenance_summary` is `Some(provenance)`:
-///   - Lists `providers_used` as a labeled inline list, or `Providers: none` if empty.
-///   - `generated_at` is intentionally omitted (Stage 1 — the report header carries the timestamp).
-///
-/// Never panics — all `Option` accesses use pattern matching.
 pub(crate) fn write_evidence_provenance(out: &mut String, state: &TradingState) {
     super::final_report::section_header(out, "Evidence Provenance");
 
@@ -26,7 +18,6 @@ pub(crate) fn write_evidence_provenance(out: &mut String, state: &TradingState) 
 }
 
 fn write_provenance_body(out: &mut String, provenance: &ProvenanceSummary) {
-    // Providers line
     if provenance.providers_used.is_empty() {
         let _ = writeln!(out, "Providers: none");
     } else {
@@ -34,8 +25,6 @@ fn write_provenance_body(out: &mut String, provenance: &ProvenanceSummary) {
         let _ = writeln!(out, "Providers: {providers_list}");
     }
 }
-
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -53,14 +42,8 @@ mod tests {
         let state = TradingState::new("AAPL", "2026-04-03");
         let mut out = String::new();
         write_evidence_provenance(&mut out, &state);
-        assert!(
-            out.contains("Evidence Provenance"),
-            "section heading must appear"
-        );
-        assert!(
-            out.contains("Unavailable"),
-            "must render Unavailable when provenance_summary is None"
-        );
+        assert!(out.contains("Evidence Provenance"));
+        assert!(out.contains("Unavailable"));
     }
 
     #[test]
@@ -91,13 +74,11 @@ mod tests {
 
     #[test]
     fn write_evidence_provenance_heading_always_appears() {
-        // None case
         let state = TradingState::new("TSLA", "2026-04-03");
         let mut out = String::new();
         write_evidence_provenance(&mut out, &state);
         assert!(out.contains("Evidence Provenance"));
 
-        // Some case with providers
         let provenance = ProvenanceSummary {
             providers_used: vec!["finnhub".to_owned()],
         };

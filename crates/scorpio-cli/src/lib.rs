@@ -10,4 +10,3 @@
 //! domain logic live in the sibling `scorpio-core` crate.
 
 pub mod cli;
-pub mod report;
