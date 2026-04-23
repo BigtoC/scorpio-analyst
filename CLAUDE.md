@@ -14,7 +14,7 @@ The project is in early development — see PRD.md for the full specification.
 
 ```bash
 cargo build           # Build the project
-cargo run             # Run the binary
+cargo run -p scorpio-cli -- --help   # Run the CLI binary
 cargo test            # Run all tests
 cargo test <name>     # Run a single test by name
 cargo clippy          # Lint
@@ -207,15 +207,15 @@ The project-level `config.toml` at the repo root is **not read at runtime** — 
 ### Running & Debugging
 
 ```bash
-cargo run -- setup                                    # Interactive wizard → ~/.scorpio-analyst/config.toml
-cargo run -- analyze AAPL                             # Run pipeline for AAPL
-cargo run -- analyze AAPL -- --help                   # Show analyze flags
-RUST_LOG=debug cargo run -- analyze AAPL              # Full trace output
-SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -- analyze AAPL   # Quick test (1 debate round)
-cargo run -- --version                                # Print version
+cargo run -p scorpio-cli -- setup                     # Interactive wizard → ~/.scorpio-analyst/config.toml
+cargo run -p scorpio-cli -- analyze AAPL              # Run pipeline for AAPL
+cargo run -p scorpio-cli -- analyze --help            # Show analyze flags
+RUST_LOG=debug cargo run -p scorpio-cli -- analyze AAPL   # Full trace output
+SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL   # Quick test (1 debate round)
+cargo run -p scorpio-cli -- --version                 # Print version
 ```
 
-Only the CLI crate declares a `[[bin]]`, so plain `cargo run -- …` from the repo root resolves unambiguously to `scorpio-cli`. Use `cargo run -p scorpio-cli -- …` when you want to select the CLI crate explicitly.
+Use `cargo run -p scorpio-cli -- …` from the repo root to target the CLI crate explicitly after the workspace split.
 
 ### Common Development Tasks
 

@@ -17,7 +17,7 @@ cargo nextest run --workspace --all-features --locked --no-fail-fast   # CI step
 
 CI uses **nextest**, not `cargo test`. Run all three in order before claiming work is done.
 
-Quick smoke run: `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -- analyze AAPL`
+Quick smoke run: `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL`
 
 ## Build prerequisite
 
