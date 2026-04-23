@@ -1,4 +1,6 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, process::Command};
+
+use serde_json::Value;
 
 // Walk upward from this crate's manifest directory until `.github/workflows/release.yml`
 // resolves next to the path. Starting with the Cargo workspace conversion, this test
@@ -21,6 +23,23 @@ fn repo_root() -> PathBuf {
 fn read_repo_file(path: &str) -> String {
     fs::read_to_string(repo_root().join(path))
         .unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
+}
+
+fn cargo_metadata() -> Value {
+    let output = Command::new("cargo")
+        .current_dir(repo_root())
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run cargo metadata: {err}"));
+
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("failed to parse cargo metadata JSON: {err}"))
 }
 
 #[test]
@@ -172,6 +191,104 @@ fn install_ps1_uses_release_archive_assets() {
         assert!(
             !script.contains(forbidden),
             "install.ps1 still contains obsolete signing fragment: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn tests_workflow_uses_workspace_paths_and_commands() {
+    let workflow = read_repo_file(".github/workflows/tests.yml");
+
+    for required in [
+        "'crates/**'",
+        "'.cargo/**'",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo nextest run --workspace --all-features --locked --no-fail-fast",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "tests workflow missing workspace contract fragment: {required}"
+        );
+    }
+}
+
+#[test]
+fn readme_build_from_source_matches_workspace_cli_flow() {
+    let readme = read_repo_file("README.md");
+
+    for required in [
+        "cargo run -- setup",
+        "cargo run -- analyze AAPL",
+        "The repo-root `config.toml` is deprecated and is not read at runtime.",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README missing workspace CLI contract fragment: {required}"
+        );
+    }
+
+    for forbidden in [
+        "### 2. Edit `config.toml` (optional)",
+        "asset_symbol = \"NVDA\"",
+        "SCORPIO__TRADING__ASSET_SYMBOL=AAPL",
+        "```bash\ncargo run\n```",
+    ] {
+        assert!(
+            !readme.contains(forbidden),
+            "README still contains removed single-crate/runtime contract fragment: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn workspace_metadata_exposes_single_cli_bin_and_core_examples() {
+    let metadata = cargo_metadata();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata must include packages array");
+
+    let bin_targets: Vec<&Value> = packages
+        .iter()
+        .flat_map(|package| package["targets"].as_array().into_iter().flatten())
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")))
+        })
+        .collect();
+
+    assert_eq!(
+        bin_targets.len(),
+        1,
+        "workspace should expose exactly one binary target so repo-root `cargo run -- ...` stays unambiguous"
+    );
+    assert_eq!(
+        bin_targets[0]["name"].as_str(),
+        Some("scorpio-cli"),
+        "workspace binary target should remain the CLI package target"
+    );
+
+    let core = packages
+        .iter()
+        .find(|package| package["name"].as_str() == Some("scorpio-core"))
+        .expect("scorpio-core package must exist");
+
+    let example_names: Vec<&str> = core["targets"]
+        .as_array()
+        .expect("scorpio-core targets must exist")
+        .iter()
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("example")))
+        })
+        .filter_map(|target| target["name"].as_str())
+        .collect();
+
+    for required in ["finnhub_live_test", "yfinance_live_test"] {
+        assert!(
+            example_names.contains(&required),
+            "scorpio-core examples should expose `{required}` after the workspace split"
         );
     }
 }
