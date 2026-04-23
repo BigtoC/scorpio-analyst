@@ -1,0 +1,1289 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-04-23T10:43:49.860289Z",
+  "trading_state": {
+    "execution_id": "79a5b0b5-eabf-436a-aece-8dfc21a14457",
+    "asset_symbol": "NVDA",
+    "target_date": "2026-04-23",
+    "current_price": 202.5,
+    "market_volatility": {
+      "vix_level": 19.76,
+      "vix_sma_20": 22.02950000000001,
+      "vix_trend": "falling",
+      "vix_regime": "normal",
+      "fetched_at": "2026-04-23"
+    },
+    "fundamental_metrics": {
+      "revenue_growth_pct": 100.05,
+      "pe_ratio": 40.5644,
+      "eps": 4.8979,
+      "current_ratio": 3.9053,
+      "debt_to_equity": 0.0538,
+      "gross_margin": 71.31,
+      "net_income": null,
+      "insider_transactions": [
+        {
+          "name": "STEVENS MARK A",
+          "share_change": -121682.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "STEVENS MARK A",
+          "share_change": -100000.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -471.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -1034.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -3876.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -1316.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -734.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -2339.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -230.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -453.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -999.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -4156.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -1051.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -765.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -2396.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -180.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -1907.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -4212.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -18020.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -4225.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -3307.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -10264.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -715.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -600.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -2100.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -600.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -500.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -400.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -1196.0,
+          "transaction_date": "2026-03-20",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Shah Aarti S.",
+          "share_change": -202.0,
+          "transaction_date": "2026-03-19",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Shah Aarti S.",
+          "share_change": -10282.0,
+          "transaction_date": "2026-03-19",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Shah Aarti S.",
+          "share_change": -8516.0,
+          "transaction_date": "2026-03-19",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Teter Timothy S.",
+          "share_change": -66506.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "Other"
+        },
+        {
+          "name": "Kress Colette",
+          "share_change": -76535.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "Other"
+        },
+        {
+          "name": "Robertson Donald F Jr",
+          "share_change": -4575.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "Other"
+        },
+        {
+          "name": "Puri Ajay K",
+          "share_change": -9985.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Puri Ajay K",
+          "share_change": -270134.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Puri Ajay K",
+          "share_change": -19881.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "S"
+        },
+        {
+          "name": "Puri Ajay K",
+          "share_change": -69529.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "Other"
+        },
+        {
+          "name": "Shoquist Debora",
+          "share_change": -65140.0,
+          "transaction_date": "2026-03-18",
+          "transaction_type": "Other"
+        }
+      ],
+      "summary": "As of April 2026, NVDA demonstrates exceptional growth with revenue up over 100% and a high gross margin of 71.31%. Valuation remains elevated with a PE ratio of approximately 40.56. The balance sheet is strong, characterized by high liquidity (current ratio 3.91) and very low leverage (debt-to-equity 0.05). Recent insider activity shows significant selling across several executives and board members."
+    },
+    "technical_indicators": {
+      "rsi": 69.81,
+      "macd": {
+        "macd_line": 5.94,
+        "signal_line": 3.64,
+        "histogram": 2.3
+      },
+      "atr": 4.88,
+      "sma_20": 185.48,
+      "sma_50": 184.43,
+      "ema_12": 194.48,
+      "ema_26": 188.54,
+      "bollinger_upper": 209.66,
+      "bollinger_lower": 161.31,
+      "support_level": 168.2,
+      "resistance_level": 212.17,
+      "volume_avg": 184198120.0,
+      "summary": "NVDA is in a strong uptrend with price above all major moving averages. RSI at 69.81 suggests near-overbought conditions, while the MACD histogram expansion confirms robust bullish momentum. Price is approaching the upper Bollinger Band and multi-month resistance near 212.17."
+    },
+    "market_sentiment": {
+      "overall_score": 0.65,
+      "source_breakdown": [
+        {
+          "source_name": "Yahoo Finance",
+          "score": 0.7,
+          "sample_size": 110
+        },
+        {
+          "source_name": "SeekingAlpha",
+          "score": 0.4,
+          "sample_size": 8
+        },
+        {
+          "source_name": "Benzinga",
+          "score": 0.6,
+          "sample_size": 15
+        },
+        {
+          "source_name": "CNBC",
+          "score": 0.5,
+          "sample_size": 5
+        }
+      ],
+      "engagement_peaks": [],
+      "summary": "Market sentiment for NVDA is bullish but tempered by short-term supply and regulatory concerns. The core narrative is driven by an 'AI Supercycle' and a rapidly expanding ecosystem, evidenced by a five-fold profit jump at key supplier SK Hynix and high-profile partnerships with Adobe, Lenovo, and Siemens in robotics and 'Physical AI.' CEO Jensen Huang's recent messaging focuses on superior Total Cost of Ownership (TCO) and a 2-3 year outlook for resolving manufacturing bottlenecks, which some analysts interpret as a 'rare discount' opportunity. However, bearish signals include Google's launch of eighth-generation TPUs aimed at Nvidia's dominance and a stall in H200 sales to China due to regulatory hurdles. The sentiment reflects high confidence in long-term demand but exhaustion regarding current price levels and supply constraints."
+    },
+    "macro_news": {
+      "articles": [
+        {
+          "title": "Nvidia Faces Google AI Chip Threat. What It Means for the Stock.",
+          "source": "Yahoo",
+          "published_at": "2026-04-23T00:00:00Z",
+          "relevance_score": 0.9,
+          "snippet": "The TPU 8t and TPU 8i, Google’s eighth-generation chips, will be available later this year. Although Google’s TPUs have posed the biggest challenge to Nvidia’s AI processor dominance so far, the rivalry is still a largely amicable one."
+        },
+        {
+          "title": "SK Hynix quarterly profit jumps five-fold on strong AI chip demand",
+          "source": "Yahoo",
+          "published_at": "2026-04-23T00:00:00Z",
+          "relevance_score": 0.85,
+          "snippet": "SK Hynix on Thursday posted a record quarterly profit and forecast AI chip demand would exceed manufacturing capacity. The Nvidia supplier reported a five-fold jump in operating profit from last year."
+        },
+        {
+          "title": "Nvidia has not yet sold its H200 AI chips to China, Lutnick says",
+          "source": "Yahoo",
+          "published_at": "2026-04-22T00:00:00Z",
+          "relevance_score": 0.8,
+          "snippet": "Nvidia's powerful H200 AI chips have not yet been sold to Chinese companies, Commerce Department Secretary Howard Lutnick said on Wednesday, citing difficulties faced by those firms to get permission from the Chinese government."
+        },
+        {
+          "title": "VAST Data valued at $30 billion in latest funding round",
+          "source": "Yahoo",
+          "published_at": "2026-04-22T00:00:00Z",
+          "relevance_score": 0.75,
+          "snippet": "AI infrastructure provider VAST Data said on Wednesday that it was valued at $30 billion in its latest funding round, which included participation from existing investors including Nvidia."
+        },
+        {
+          "title": "Cadence And NVIDIA Deepen AI Partnership As Valuation Stays Demanding",
+          "source": "Yahoo",
+          "published_at": "2026-04-23T00:00:00Z",
+          "relevance_score": 0.7,
+          "snippet": "Cadence Design Systems expanded its partnership with NVIDIA to accelerate agentic AI and digital twin solutions across semiconductor design and physical AI systems."
+        }
+      ],
+      "macro_events": [
+        {
+          "event": "AI Infrastructure Supercycle & Supply Constraints",
+          "impact_direction": "positive",
+          "confidence": 0.9
+        },
+        {
+          "event": "Geopolitical Strains & China Market Access Restrictions",
+          "impact_direction": "negative",
+          "confidence": 0.85
+        },
+        {
+          "event": "Middle East Geopolitical Volatility (Iran War)",
+          "impact_direction": "negative",
+          "confidence": 0.75
+        }
+      ],
+      "summary": "NVIDIA remains at the center of a robust AI infrastructure supercycle, evidenced by its supplier SK Hynix's record profits and NVIDIA's own strategic venture into VAST Data. However, the stock faces near-term pressure from Google's intensifying TPU competition and a significant revenue roadblock in China, where H200 sales remain stalled. Broader market sentiment is currently tempered by geopolitical instability in the Middle East and persistent supply chain bottlenecks in advanced packaging that Jensen Huang estimates may take 2-3 years to resolve."
+    },
+    "evidence_fundamental": {
+      "kind": "fundamental",
+      "payload": {
+        "revenue_growth_pct": 100.05,
+        "pe_ratio": 40.5644,
+        "eps": 4.8979,
+        "current_ratio": 3.9053,
+        "debt_to_equity": 0.0538,
+        "gross_margin": 71.31,
+        "net_income": null,
+        "insider_transactions": [
+          {
+            "name": "STEVENS MARK A",
+            "share_change": -121682.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "STEVENS MARK A",
+            "share_change": -100000.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -471.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -1034.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -3876.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -1316.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -734.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -2339.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -230.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -453.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -999.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -4156.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -1051.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -765.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -2396.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -180.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -1907.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -4212.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -18020.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -4225.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -3307.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -10264.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -715.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -600.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -2100.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -600.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -500.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -400.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -1196.0,
+            "transaction_date": "2026-03-20",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Shah Aarti S.",
+            "share_change": -202.0,
+            "transaction_date": "2026-03-19",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Shah Aarti S.",
+            "share_change": -10282.0,
+            "transaction_date": "2026-03-19",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Shah Aarti S.",
+            "share_change": -8516.0,
+            "transaction_date": "2026-03-19",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Teter Timothy S.",
+            "share_change": -66506.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "Other"
+          },
+          {
+            "name": "Kress Colette",
+            "share_change": -76535.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "Other"
+          },
+          {
+            "name": "Robertson Donald F Jr",
+            "share_change": -4575.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "Other"
+          },
+          {
+            "name": "Puri Ajay K",
+            "share_change": -9985.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Puri Ajay K",
+            "share_change": -270134.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Puri Ajay K",
+            "share_change": -19881.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "S"
+          },
+          {
+            "name": "Puri Ajay K",
+            "share_change": -69529.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "Other"
+          },
+          {
+            "name": "Shoquist Debora",
+            "share_change": -65140.0,
+            "transaction_date": "2026-03-18",
+            "transaction_type": "Other"
+          }
+        ],
+        "summary": "As of April 2026, NVDA demonstrates exceptional growth with revenue up over 100% and a high gross margin of 71.31%. Valuation remains elevated with a PE ratio of approximately 40.56. The balance sheet is strong, characterized by high liquidity (current ratio 3.91) and very low leverage (debt-to-equity 0.05). Recent insider activity shows significant selling across several executives and board members."
+      },
+      "sources": [
+        {
+          "provider": "finnhub",
+          "datasets": [
+            "fundamentals"
+          ],
+          "fetched_at": "2026-04-23T10:38:22.646345Z",
+          "effective_at": null,
+          "url": null,
+          "citation": null
+        }
+      ],
+      "quality_flags": []
+    },
+    "evidence_technical": {
+      "kind": "technical",
+      "payload": {
+        "rsi": 69.81,
+        "macd": {
+          "macd_line": 5.94,
+          "signal_line": 3.64,
+          "histogram": 2.3
+        },
+        "atr": 4.88,
+        "sma_20": 185.48,
+        "sma_50": 184.43,
+        "ema_12": 194.48,
+        "ema_26": 188.54,
+        "bollinger_upper": 209.66,
+        "bollinger_lower": 161.31,
+        "support_level": 168.2,
+        "resistance_level": 212.17,
+        "volume_avg": 184198120.0,
+        "summary": "NVDA is in a strong uptrend with price above all major moving averages. RSI at 69.81 suggests near-overbought conditions, while the MACD histogram expansion confirms robust bullish momentum. Price is approaching the upper Bollinger Band and multi-month resistance near 212.17."
+      },
+      "sources": [
+        {
+          "provider": "yfinance",
+          "datasets": [
+            "ohlcv"
+          ],
+          "fetched_at": "2026-04-23T10:38:22.646427Z",
+          "effective_at": null,
+          "url": null,
+          "citation": null
+        }
+      ],
+      "quality_flags": []
+    },
+    "evidence_sentiment": {
+      "kind": "sentiment",
+      "payload": {
+        "overall_score": 0.65,
+        "source_breakdown": [
+          {
+            "source_name": "Yahoo Finance",
+            "score": 0.7,
+            "sample_size": 110
+          },
+          {
+            "source_name": "SeekingAlpha",
+            "score": 0.4,
+            "sample_size": 8
+          },
+          {
+            "source_name": "Benzinga",
+            "score": 0.6,
+            "sample_size": 15
+          },
+          {
+            "source_name": "CNBC",
+            "score": 0.5,
+            "sample_size": 5
+          }
+        ],
+        "engagement_peaks": [],
+        "summary": "Market sentiment for NVDA is bullish but tempered by short-term supply and regulatory concerns. The core narrative is driven by an 'AI Supercycle' and a rapidly expanding ecosystem, evidenced by a five-fold profit jump at key supplier SK Hynix and high-profile partnerships with Adobe, Lenovo, and Siemens in robotics and 'Physical AI.' CEO Jensen Huang's recent messaging focuses on superior Total Cost of Ownership (TCO) and a 2-3 year outlook for resolving manufacturing bottlenecks, which some analysts interpret as a 'rare discount' opportunity. However, bearish signals include Google's launch of eighth-generation TPUs aimed at Nvidia's dominance and a stall in H200 sales to China due to regulatory hurdles. The sentiment reflects high confidence in long-term demand but exhaustion regarding current price levels and supply constraints."
+      },
+      "sources": [
+        {
+          "provider": "finnhub",
+          "datasets": [
+            "company_news_sentiment_inputs"
+          ],
+          "fetched_at": "2026-04-23T10:38:22.646377Z",
+          "effective_at": null,
+          "url": null,
+          "citation": null
+        }
+      ],
+      "quality_flags": []
+    },
+    "evidence_news": {
+      "kind": "news",
+      "payload": {
+        "articles": [
+          {
+            "title": "Nvidia Faces Google AI Chip Threat. What It Means for the Stock.",
+            "source": "Yahoo",
+            "published_at": "2026-04-23T00:00:00Z",
+            "relevance_score": 0.9,
+            "snippet": "The TPU 8t and TPU 8i, Google’s eighth-generation chips, will be available later this year. Although Google’s TPUs have posed the biggest challenge to Nvidia’s AI processor dominance so far, the rivalry is still a largely amicable one."
+          },
+          {
+            "title": "SK Hynix quarterly profit jumps five-fold on strong AI chip demand",
+            "source": "Yahoo",
+            "published_at": "2026-04-23T00:00:00Z",
+            "relevance_score": 0.85,
+            "snippet": "SK Hynix on Thursday posted a record quarterly profit and forecast AI chip demand would exceed manufacturing capacity. The Nvidia supplier reported a five-fold jump in operating profit from last year."
+          },
+          {
+            "title": "Nvidia has not yet sold its H200 AI chips to China, Lutnick says",
+            "source": "Yahoo",
+            "published_at": "2026-04-22T00:00:00Z",
+            "relevance_score": 0.8,
+            "snippet": "Nvidia's powerful H200 AI chips have not yet been sold to Chinese companies, Commerce Department Secretary Howard Lutnick said on Wednesday, citing difficulties faced by those firms to get permission from the Chinese government."
+          },
+          {
+            "title": "VAST Data valued at $30 billion in latest funding round",
+            "source": "Yahoo",
+            "published_at": "2026-04-22T00:00:00Z",
+            "relevance_score": 0.75,
+            "snippet": "AI infrastructure provider VAST Data said on Wednesday that it was valued at $30 billion in its latest funding round, which included participation from existing investors including Nvidia."
+          },
+          {
+            "title": "Cadence And NVIDIA Deepen AI Partnership As Valuation Stays Demanding",
+            "source": "Yahoo",
+            "published_at": "2026-04-23T00:00:00Z",
+            "relevance_score": 0.7,
+            "snippet": "Cadence Design Systems expanded its partnership with NVIDIA to accelerate agentic AI and digital twin solutions across semiconductor design and physical AI systems."
+          }
+        ],
+        "macro_events": [
+          {
+            "event": "AI Infrastructure Supercycle & Supply Constraints",
+            "impact_direction": "positive",
+            "confidence": 0.9
+          },
+          {
+            "event": "Geopolitical Strains & China Market Access Restrictions",
+            "impact_direction": "negative",
+            "confidence": 0.85
+          },
+          {
+            "event": "Middle East Geopolitical Volatility (Iran War)",
+            "impact_direction": "negative",
+            "confidence": 0.75
+          }
+        ],
+        "summary": "NVIDIA remains at the center of a robust AI infrastructure supercycle, evidenced by its supplier SK Hynix's record profits and NVIDIA's own strategic venture into VAST Data. However, the stock faces near-term pressure from Google's intensifying TPU competition and a significant revenue roadblock in China, where H200 sales remain stalled. Broader market sentiment is currently tempered by geopolitical instability in the Middle East and persistent supply chain bottlenecks in advanced packaging that Jensen Huang estimates may take 2-3 years to resolve."
+      },
+      "sources": [
+        {
+          "provider": "finnhub",
+          "datasets": [
+            "company_news"
+          ],
+          "fetched_at": "2026-04-23T10:38:22.646413Z",
+          "effective_at": null,
+          "url": null,
+          "citation": null
+        },
+        {
+          "provider": "fred",
+          "datasets": [
+            "macro_indicators"
+          ],
+          "fetched_at": "2026-04-23T10:38:22.646413Z",
+          "effective_at": null,
+          "url": null,
+          "citation": null
+        }
+      ],
+      "quality_flags": []
+    },
+    "enrichment_event_news": {
+      "status": "Disabled",
+      "payload": null
+    },
+    "enrichment_consensus": {
+      "status": "Disabled",
+      "payload": null
+    },
+    "data_coverage": {
+      "required_inputs": [
+        "fundamentals",
+        "sentiment",
+        "news",
+        "technical"
+      ],
+      "missing_inputs": []
+    },
+    "provenance_summary": {
+      "providers_used": [
+        "finnhub",
+        "fred",
+        "yfinance"
+      ]
+    },
+    "debate_history": [
+      {
+        "role": "bullish_researcher",
+        "content": "As we open the debate on NVDA, the fundamental and macroeconomic data point to a company unequivocally dominating the AI infrastructure supercycle. \n\nThe core bullish driver remains NVIDIA's unprecedented financial execution and the insatiable, verified demand for its products. The company is posting top-line revenue growth of 100.05% while maintaining an elite gross margin of 71.31%. Any concerns about a demand plateau are directly contradicted by key supplier SK Hynix, which just reported a five-fold jump in operating profit and explicitly forecast that AI chip demand will continue to exceed manufacturing capacity. \n\nWhile a PE ratio of 40.56 might seem elevated in a vacuum, it is highly justifiable for a company doubling its revenue and operating with a pristine balance sheet featuring a 3.91 current ratio and a microscopic 0.05 debt-to-equity ratio. Furthermore, NVIDIA is aggressively expanding its ecosystem moat. Recent strategic investments in AI infrastructure provider VAST Data (now valued at $30 billion) and deepened partnerships with Cadence Design Systems for agentic and physical AI prove NVIDIA is locking in the broader tech stack, moving well beyond standalone hardware.\n\nTechnical momentum perfectly aligns with this fundamental strength. NVDA is in a strong uptrend, trading above all major moving averages (including the EMA 12 at 194.48), with a positive MACD histogram of 2.3 confirming robust bullish momentum. Even with near-term supply constraints that CEO Jensen Huang notes may take 2-3 years to resolve, this severe supply-demand imbalance guarantees long-term pricing power and reinforces NVIDIA's superior Total Cost of Ownership against emerging alternatives like Google's TPUs.\n\nBottom line: NVIDIA's triple-digit revenue growth, unyielding supplier demand signals, and expanding software-hardware ecosystem make its current premium valuation highly defensible as it leads the defining supercycle of this decade."
+      },
+      {
+        "role": "bearish_researcher",
+        "content": "The Bull builds a case on backward-looking triple-digit growth while willfully ignoring the flashing warning signs that NVIDIA's forward trajectory is severely capped by regulatory walls, intensifying competition, and supply ceilings. \n\nFirst, if the current 40.56 PE ratio and future prospects are as bulletproof as the Bull claims, why are NVIDIA's own insiders rushing for the exits? The fundamental data exposes a massive, coordinated wave of insider selling throughout March 2026. Key executives and board members, including Mark Stevens (over 220,000 shares sold), Ajay Puri (over 300,000 shares sold), and CFO Colette Kress, offloaded massive tranches of stock. Insiders are clearly using this \"AI supercycle\" narrative as liquidity to cash out at peak valuations. \n\nSecond, the Bull's \"insatiable demand\" thesis ignores a massive revenue roadblock: China. Commerce Department Secretary Howard Lutnick confirmed just yesterday that NVIDIA's powerful H200 chips remain unsold to Chinese firms due to restrictive government permissions. You cannot maintain a 40x earnings multiple when you are effectively locked out of one of the world's largest consumer and enterprise markets. \n\nFurthermore, the Bull frames Jensen Huang’s 2-3 year manufacturing bottleneck as \"pricing power,\" but in reality, it is a hard ceiling on revenue growth that is already opening the door for rivals. Google is launching its eighth-generation TPU 8t and TPU 8i later this year, which the news explicitly flags as the \"biggest challenge to Nvidia’s AI processor dominance.\" When customers cannot get NVIDIA chips for years, they will migrate to highly capable, available alternatives. \n\nFinally, the technicals and sentiment data do not support a sustained breakout. RSI is flashing near-overbought at 69.81, and the price is slamming directly into the upper Bollinger Band (209.66) and multi-month resistance (212.17). Even the sentiment analysis notes \"exhaustion regarding current price levels,\" which is only amplified by negative macroeconomic headwinds like the Iran War and general Middle East volatility. \n\nBottom line: NVIDIA's premium valuation is crumbling under the weight of stalled Chinese market access, emerging Google TPU competition, and a hard 2-3 year supply cap that has triggered massive insider distribution."
+      },
+      {
+        "role": "bullish_researcher",
+        "content": "The Bear’s argument fundamentally misinterprets demand dynamics and cherry-picks data to spin guaranteed revenue pipelines as weaknesses. \n\nFirst, the supposed \"roadblock\" in China is entirely moot when global demand drastically outstrips manufacturing capacity. As the data explicitly notes, key supplier SK Hynix just posted a \"five-fold jump in operating profit\" and confirmed that \"AI chip demand would exceed manufacturing capacity.\" Every H200 chip Nvidia produces is being sold; China's regulatory hurdles simply shift those allocations to an insatiable backlog of global enterprise and sovereign buyers. A 2-3 year supply bottleneck isn't a \"ceiling\"—it is a multi-year guarantee of locked-in, triple-digit revenue growth at an elite 71.31% gross margin. \n\nSecond, the Bear overstates the Google TPU threat while ignoring NVIDIA's expanding moat. The news directly states the Google rivalry is \"largely amicable,\" not a zero-sum displacement. More importantly, NVIDIA is locking in the broader ecosystem, extending its dominance far beyond raw compute. High-profile partnerships with Cadence for \"agentic AI and digital twin solutions,\" expansion into Physical AI with Lenovo and Siemens, and massive ecosystem investments like VAST Data ($30 billion valuation) prove NVIDIA is offering unmatched Total Cost of Ownership (TCO) that standalone TPUs cannot replicate.\n\nThird, attempting to weaponize insider selling ignores the fundamental reality of the balance sheet. Executives routinely diversify, but a 40.56 PE ratio is remarkably cheap for a company sustaining 100.05% revenue growth with a fortress balance sheet (3.91 current ratio, near-zero 0.05 debt-to-equity). This is the definition of growth at a reasonable price. \n\nFinally, the Bear’s bearish technical read contradicts the data's core findings. The technical summary explicitly states NVIDIA is in a \"strong uptrend with price above all major moving averages,\" and the MACD histogram expansion (2.3) \"confirms robust bullish momentum,\" fully supporting a sustained breakout through the 212.17 resistance level.\n\nBottom line: NVIDIA's unmatched 100% growth, expanding software-to-hardware ecosystem, and guaranteed multi-year demand backlog easily justify its valuation and eclipse temporary geopolitical noise."
+      },
+      {
+        "role": "bearish_researcher",
+        "content": "The Bull fundamentally misunderstands the math of capacity constraints and the severity of executive flight. \n\nFirst, a 2-3 year supply bottleneck is the literal definition of a ceiling, not a growth catalyst. If manufacturing capacity is already maxed out—as the SK Hynix data confirms—Nvidia mathematically cannot sustain its 100.05% revenue growth. Growth requires expanding volume; if volume is capped for years, growth abruptly decelerates. Furthermore, the loss of the Chinese market for H200 chips is explicitly flagged in the data as a \"significant revenue roadblock,\" not a simple allocation shift. Ignoring this friction ignores reality.\n\nSecond, waving away the insider selling as \"routine diversification\" is dangerously naive when looking at the actual ledger. Between March 18 and 20, 2026, CFO Colette Kress, EVP Ajay Puri, and Board Member Mark Stevens dumped well over 800,000 shares combined. Insiders do not execute a massive, coordinated cash-out of this magnitude in a 48-hour window if they truly believe a 40.56 PE is a \"cheap\" valuation with guaranteed triple-digit upside. They are actively capitalizing on the \"exhaustion regarding current price levels\" noted in the sentiment data. \n\nThird, the Bull cherry-picks the Google news. While the relationship may be \"amicable,\" the data warns the TPU 8t and 8i pose \"the biggest challenge to Nvidia’s AI processor dominance so far.\" A dominant player losing market share to a hyperscaler with infinite capital is a textbook multiple-compression event. \n\nFinally, buying into the Bull's technical breakout narrative is reckless. The stock is flashing an RSI of 69.81—officially near-overbought—exactly as it slams into multi-month resistance at 212.17. Combined with negative-impact macro headwinds from China market restrictions (0.85 confidence) and Middle East volatility (0.75 confidence), the risk/reward is heavily skewed to the downside. \n\nBottom line: With manufacturing capacity severely capped for 2-3 years, intensifying Google TPU competition, and executives aggressively dumping hundreds of thousands of shares, NVIDIA is an overbought stock priced for a level of hyper-growth it can no longer physically supply."
+      },
+      {
+        "role": "bullish_researcher",
+        "content": "The Bear’s argument frames Nvidia's strongest structural advantages as weaknesses and misinterprets standard market dynamics.\n\nFirst, framing a 2-3 year supply bottleneck as a growth ceiling fundamentally misunderstands semiconductor economics. When SK Hynix forecasts that \"AI chip demand would exceed manufacturing capacity,\" it guarantees Nvidia multi-year revenue visibility and absolute pricing power. This dynamic is exactly what protects Nvidia's elite 71.31% gross margins. Furthermore, while the H200 stall in China is noted as a regulatory roadblock, an environment where global demand vastly exceeds supply means those restricted chips simply get reallocated to capital-rich Western hyperscalers, preserving top-line revenue without missing a beat. \n\nSecond, the Bear's attempt to spin the insider selling into an executive \"flight\" ignores the mechanics of the trades. The data explicitly shows highly fragmented, algorithmic-style execution (e.g., Colette Kress executing dozens of micro-transactions, some as small as 180 shares) alongside bulk trades classified as \"Other,\" which typically represent scheduled RSU vestings and tax-withholding obligations. You do not analyze executive conviction by looking at automated tax sales; you analyze it by looking at the balance sheet, which remains bulletproof with a 3.91 current ratio and virtually zero leverage (0.05 debt-to-equity).\n\nThird, the Google TPU threat narrative conveniently ignores Nvidia's rapid expansion beyond pure compute. While hyperscalers build internal chips, Nvidia is cementing an inescapable ecosystem moat. The data highlights deepened partnerships with Cadence for \"agentic AI and digital twin solutions,\" strategic investments in infrastructure like the $30 billion VAST Data, and expansions into \"Physical AI\" and robotics with Adobe, Lenovo, and Siemens. Google’s internal TPUs do not dismantle Nvidia's dominance in the broader, enterprise-wide AI Supercycle. \n\nFinally, the Bear's technical panic is misplaced. An RSI of 69.81 in a strong uptrend is a hallmark of sustained momentum, not an automatic sell signal. The MACD histogram expansion (2.3) and a price trading comfortably above all moving averages (EMA 12 at 194.48, SMA 50 at 184.43) confirm robust buying pressure as it approaches 212.17 resistance. Coupled with a falling VIX (19.76, down from its 20-day SMA of 22.03), the supposed macro panic simply isn't materializing in the price action.\n\nBottom line: Nvidia is not facing a growth ceiling; it is wielding unprecedented pricing power in a multi-year, locked-in demand cycle backed by 100% revenue growth, a 71% gross margin, and expanding ecosystem dominance."
+      },
+      {
+        "role": "bearish_researcher",
+        "content": "The Bull’s reliance on hypothetical \"seamless reallocation\" and \"algorithmic selling\" ignores explicit warnings in the data and severely downplays the structural threats closing in on Nvidia's premium valuation.\n\nFirst, dismissing the China H200 stall as easily mitigable directly contradicts the macro data, which flags \"Geopolitical Strains & China Market Access Restrictions\" as a high-confidence (0.85) negative event and explicitly calls it a \"significant revenue roadblock.\" For a stock trading at a demanding 40.56 PE ratio, losing access to one of the world's largest markets cannot be hand-waved away. Furthermore, when Jensen Huang admits advanced packaging constraints will take 2-3 years to resolve, that is a physical cap on growth. You cannot sustain hyper-growth momentum when your manufacturing pipeline faces a multi-year hard ceiling.\n\nSecond, the Bull drastically mischaracterizes the insider selling by cherry-picking Colette Kress's smaller micro-transactions. The data clearly logs massive, direct \"S\" (Sell) transactions—not \"Other\" tax withholdings—from key figures: Mark A. Stevens dumped over 221,000 shares on March 20, and Ajay K. Puri unloaded roughly 300,000 shares on March 18. These are significant, multi-million-dollar cash-outs perfectly timed with the \"exhaustion regarding current price levels\" explicitly noted in the sentiment summary. Insiders are taking chips off the table at the top.\n\nThird, pivoting to adjacent ecosystem partnerships (like VAST Data or Cadence) does not neutralize the threat to Nvidia's core compute monopoly. The news emphasizes that Google's new 8th-generation TPUs are directly targeting \"Nvidia's AI processor dominance.\" The very Western hyperscalers the Bull assumes will blindly absorb excess supply are the ones aggressively developing and deploying these alternatives to escape Nvidia's 71% gross margins. \n\nFinally, the Bull's technical optimism conveniently ignores the actual text of the technical summary, which states the 69.81 RSI suggests \"near-overbought conditions\" right as the price approaches the upper Bollinger Band (209.66) and hard multi-month resistance (212.17). With the data flagging high-confidence risks regarding Middle East geopolitical volatility (0.75), the stock is exceptionally vulnerable to macro shocks at these technical limits.\n\nBottom line: Nvidia's demanding 40.56 PE is priced for perfect, unhindered hyper-growth, making it incredibly fragile to the reality of massive insider dumping, Chinese revenue roadblocks, and multi-year supply caps."
+      }
+    ],
+    "consensus_summary": "The prevailing stance for NVDA is a Hold. \n\nStrongest Bullish Evidence:\nNvidia's fundamental execution remains pristine, characterized by 100% revenue growth, a 71.31% gross margin, and a flawless balance sheet. A multi-year demand backlog—corroborated by key supplier SK Hynix forecasting that AI chip demand will exceed manufacturing capacity—guarantees sustained pricing power. Furthermore, Nvidia is aggressively expanding its ecosystem moat beyond pure hardware through strategic infrastructure investments (e.g., VAST Data) and software partnerships.\n\nStrongest Bearish Evidence:\nThe stock faces immediate technical and structural ceilings. Price is approaching hard multi-month resistance near 212.17 with a near-overbought RSI of 69.81. Fundamentally, CEO Jensen Huang's admission of a 2-3 year advanced packaging bottleneck acts as a physical cap on volume growth, which is concerning given the stock's demanding 40.56 PE ratio. This exhaustion is mirrored by massive, coordinated insider selling, with key executives offloading hundreds of thousands of shares in late March.\n\nMost Important Unresolved Uncertainty:\nIt remains unproven whether the stalled H200 sales in China can be seamlessly reallocated to Western buyers without impacting top-line revenue, and whether the 2-3 year supply constraint will force those same Western hyperscalers to aggressively accelerate their migration to internal alternatives like Google's 8th-generation TPUs.",
+    "trader_proposal": {
+      "action": "Hold",
+      "target_price": 212.17,
+      "stop_loss": 168.2,
+      "confidence": 0.75,
+      "rationale": "NVDA maintains pristine fundamentals with 100% revenue growth, but faces immediate technical and structural ceilings. The stock is approaching a multi-month resistance at 212.17 with an RSI of 69.81, indicating near-overbought conditions. Combined with massive coordinated insider selling, stalled H200 sales in China, and a 2-3 year advanced packaging bottleneck, near-term upside appears limited despite a strong long-term AI supercycle narrative. Target price and stop loss are set to resistance and support levels for monitoring.",
+      "valuation_assessment": "NVDA appears undervalued on a growth-adjusted basis with a highly attractive PEG ratio of 0.52 and a Forward P/E of 18.0x, significantly lower than its trailing P/E of 40.56x. Despite this fair-to-undervalued fundamental profile, near-term technical exhaustion and structural supply bottlenecks justify a neutral stance.",
+      "scenario_valuation": {
+        "corporate_equity": {
+          "dcf": null,
+          "ev_ebitda": null,
+          "forward_pe": {
+            "forward_eps": 11.24,
+            "forward_pe": 18.01601423487545
+          },
+          "peg": {
+            "peg_ratio": 0.51814823798894
+          }
+        }
+      }
+    },
+    "risk_discussion_history": [
+      {
+        "role": "aggressive_risk",
+        "content": "The proposal's 'Hold' stance is entirely too conservative given the extraordinary fundamental momentum (100% revenue growth, PEG of 0.52) and robust technical setup. An expanding MACD and supplier SK Hynix's 5x profit jump indicate insatiable demand that easily eclipses localized China headwinds and routine executive stock sales. In a true supercycle, an RSI of 69 signals extreme strength, not an absolute ceiling."
+      },
+      {
+        "role": "conservative_risk",
+        "content": "The 'Hold' recommendation severely underestimates the downside risk posed by massive, coordinated insider selling across multiple executives, stalled H200 sales in China, and severe geopolitical volatility including Middle East conflict. The proposed stop loss at 168.2 exposes capital to an unacceptable drawdown risk given the near-overbought RSI of 69.81 and the stock's high-beta nature."
+      },
+      {
+        "role": "neutral_risk",
+        "content": "The trader's 'Hold' stance presents a well-reasoned balance between NVDA's exceptionally strong fundamentals (100% revenue growth, low forward PEG) and formidable near-term headwinds, including technical resistance, significant insider selling, and stalled China sales. Both the aggressive view of unbridled expansion and the conservative fear of imminent collapse are adequately tempered here. However, the proposed stop-loss is unnecessarily wide for a 'Hold' given the current moving averages."
+      },
+      {
+        "role": "risk_moderator",
+        "content": "The risk committee agrees on NVDA's exceptional fundamental strength, highlighted by 100% revenue growth and a highly attractive forward PEG of 0.52. However, all three risk perspectives universally reject the trader's proposed stop-loss of 168.20. \n\nThe primary blocker to the proposal in its current form is the unnecessarily wide stop-loss, which exposes capital to excessive drawdown risk given the high-beta nature of the stock. Additionally, there is strategic debate over the impact of current headwinds: the Aggressive perspective views the AI supercycle as strong enough to eclipse localized issues, while the Conservative perspective sees massive coordinated insider selling, stalled H200 sales in China, and geopolitical volatility as structural warnings.\n\nThe trader's target price of 212.17 is adequately defended, aligning perfectly with immediate multi-month resistance and technical exhaustion signals (RSI near 70). The confidence level of 0.75 appropriately reflects the tension between the pristine valuation and the looming technical and regulatory ceilings. However, the stop-loss is poorly defended; Aggressive, Neutral, and Conservative models all demand tightening it to the 20-day or 50-day SMA cluster (184.43 - 185.48) to secure profits and limit downside.\n\nWhile the Conservative perspective flagged a violation due to the macro risks and the volume of insider selling, the other perspectives found the \"Hold\" thesis balanced or overly cautious. Violation status: dual-risk escalation absent. The trader's \"Hold\" stance is fundamentally sound, but downstream review should mandate a significantly tightened stop-loss before execution."
+      },
+      {
+        "role": "aggressive_risk",
+        "content": "The 'Hold' recommendation is overly cautious and leaves significant alpha on the table. With 100% revenue growth, a highly attractive forward PEG of 0.52, and supplier SK Hynix reporting a 5x profit surge, the fundamental engine is roaring. In an AI supercycle, an RSI near 70 and an expanding MACD indicate powerful momentum, not an absolute ceiling. The Conservative panic over executive insider selling is a misinterpretation of routine tech sector liquidity events, and global demand easily dwarfs the localized China H200 roadblock. However, the proposed stop-loss at 168.20 is capital-inefficient and must be tightened."
+      },
+      {
+        "role": "conservative_risk",
+        "content": "The trader's 'Hold' recommendation severely underestimates the downside risk posed by an alarming volume of coordinated insider selling, stalled H200 sales in China, and severe geopolitical volatility (Middle East conflict). Furthermore, the proposed stop-loss of 168.20 represents a material ri[REDACTED] flaw; it is recklessly wide for a high-beta asset exhibiting near-overbought technicals (RSI 69.81) and exposes capital to an unacceptable drawdown far below the primary moving averages."
+      },
+      {
+        "role": "neutral_risk",
+        "content": "The trader's 'Hold' thesis is well-reasoned, appropriately balancing NVDA's stellar fundamentals (100% revenue growth, low forward PEG) against valid structural headwinds (heavy insider selling, China export roadblocks) and near-overbought technicals. While the Aggressive view minimizes these risks and the Conservative view overstates an imminent collapse, both correctly identify that the proposed stop-loss at 168.20 is excessively wide. It ignores the strong support structure established by the 20-day and 50-day SMAs, exposing capital to unnecessary drawdown risk."
+      },
+      {
+        "role": "risk_moderator",
+        "content": "The risk committee unanimously agrees on NVDA's exceptional fundamental momentum, highlighted by 100% revenue growth, an attractive forward PEG of 0.52, and a robust AI supercycle narrative. However, the true blocker across all perspectives is the trader's proposed stop-loss of 168.20, which is universally rejected as excessively wide and recklessly exposing capital to unnecessary drawdown risk. \n\nThe trader's target price of 212.17 is adequately defended, aligning perfectly with multi-month technical resistance and near-overbought RSI exhaustion signals, though execution preferences differ (Aggressive suggests a trailing stop, while Conservative advises scaling out). The confidence level of 0.75 is adequately defended, properly reflecting the tension between pristine growth metrics and structural headwinds, including massive coordinated insider selling, stalled H200 exports to China, and broader geopolitical instability. The stop-loss is not adequately defended; all models demand tightening it to the 20-day or 50-day SMA cluster (183.50 - 185.50) to protect capital.\n\nViolation status: dual-risk escalation absent.\n\nAlthough the Conservative perspective flagged a violation over macro risks and the capital-inefficient stop-loss, the Aggressive and Neutral perspectives found the underlying fundamental thesis sound. The trader's \"Hold\" recommendation is fundamentally balanced, but downstream review should mandate a significantly tightened stop-loss before considering execution."
+      }
+    ],
+    "aggressive_risk_report": {
+      "risk_level": "Aggressive",
+      "assessment": "The 'Hold' recommendation is overly cautious and leaves significant alpha on the table. With 100% revenue growth, a highly attractive forward PEG of 0.52, and supplier SK Hynix reporting a 5x profit surge, the fundamental engine is roaring. In an AI supercycle, an RSI near 70 and an expanding MACD indicate powerful momentum, not an absolute ceiling. The Conservative panic over executive insider selling is a misinterpretation of routine tech sector liquidity events, and global demand easily dwarfs the localized China H200 roadblock. However, the proposed stop-loss at 168.20 is capital-inefficient and must be tightened.",
+      "recommended_adjustments": [
+        "Upgrade the baseline stance to 'Buy' or actively look to add exposure on any brief consolidation toward the 20-day SMA (185.48), as the underlying demand metrics justify aggressive upside capture.",
+        "Tighten the stop-loss from 168.20 to the 184.43 - 185.48 SMA cluster. This is not to hide from volatility, but to optimize capital efficiency and lock in gains if momentum unexpectedly breaks.",
+        "Do not cap the upside at the 212.17 resistance level. Instead of a hard exit, implement a trailing stop upon reaching 212.17 to ride the inevitable breakout driven by the multi-year manufacturing backlog."
+      ],
+      "flags_violation": false
+    },
+    "neutral_risk_report": {
+      "risk_level": "Neutral",
+      "assessment": "The trader's 'Hold' thesis is well-reasoned, appropriately balancing NVDA's stellar fundamentals (100% revenue growth, low forward PEG) against valid structural headwinds (heavy insider selling, China export roadblocks) and near-overbought technicals. While the Aggressive view minimizes these risks and the Conservative view overstates an imminent collapse, both correctly identify that the proposed stop-loss at 168.20 is excessively wide. It ignores the strong support structure established by the 20-day and 50-day SMAs, exposing capital to unnecessary drawdown risk.",
+      "recommended_adjustments": [
+        "Tighten the stop-loss from 168.20 to just below the 50-day SMA (approximately 183.50 - 184.00) to improve capital efficiency and protect against structural reversals.",
+        "Maintain the target price of 212.17 as a primary monitoring level, but consider scaling out partial profits as price approaches this resistance, rather than relying on a hard exit.",
+        "Retain the 'Hold' stance; avoid upgrading to 'Buy' as suggested by Aggressive until China H200 sales and advanced packaging bottlenecks show clear signs of resolution."
+      ],
+      "flags_violation": false
+    },
+    "conservative_risk_report": {
+      "risk_level": "Conservative",
+      "assessment": "The trader's 'Hold' recommendation severely underestimates the downside risk posed by an alarming volume of coordinated insider selling, stalled H200 sales in China, and severe geopolitical volatility (Middle East conflict). Furthermore, the proposed stop-loss of 168.20 represents a material ri[REDACTED] flaw; it is recklessly wide for a high-beta asset exhibiting near-overbought technicals (RSI 69.81) and exposes capital to an unacceptable drawdown far below the primary moving averages.",
+      "recommended_adjustments": [
+        "Immediately tighten the stop-loss from 168.20 to just below the 50-day SMA (e.g., 183.50) to protect capital and prevent a catastrophic drawdown if structural headwinds trigger a reversal.",
+        "Downgrade the stance to 'Trim' or implement partial profit-taking as the price approaches the 212.17 resistance level, given the technical exhaustion signals and the heavy insider liquidation.",
+        "Actively reduce high-beta exposure or purchase downside protection (puts) to hedge against escalating macro risks, specifically the China H200 export block and broader geopolitical instability."
+      ],
+      "flags_violation": true
+    },
+    "final_execution_status": {
+      "decision": "Rejected",
+      "action": "Hold",
+      "rationale": "The proposal is rejected strictly due to the universally flagged, unacceptably wide stop-loss of 168.20, which exposes capital to excessive drawdown risk well below key moving averages. While the fundamental growth thesis remains exceptionally robust, evidenced by a 0.52 PEG ratio and an 18.0x forward P/E, near-overbought technicals (RSI 69.81), massive insider selling, and China H200 export delays justify maintaining a neutral stance. Any future execution must tighten the stop-loss to the 183.50-185.50 SMA cluster to protect capital.",
+      "decided_at": "2026-04-23T10:43:49.854343+00:00",
+      "entry_guidance": "Maintain hold stance; look to initiate tactical BUY on a pullback to the 183.50-185.50 support cluster (aligning with the 20-day and 50-day SMAs), where the highly compelling 18.0x forward P/E provides a strong valuation floor.",
+      "suggested_position": "6-8% of portfolio - maintain core weighting given high beta and geopolitical risks, with room to add 2-3% on weakness toward the 184-185 support zone."
+    },
+    "prior_thesis": null,
+    "current_thesis": {
+      "symbol": "NVDA",
+      "action": "Hold",
+      "decision": "Rejected",
+      "rationale": "The proposal is rejected strictly due to the universally flagged, unacceptably wide stop-loss of 168.20, which exposes capital to excessive drawdown risk well below key moving averages. While the fundamental growth thesis remains exceptionally robust, evidenced by a 0.52 PEG ratio and an 18.0x forward P/E, near-overbought technicals (RSI 69.81), massive insider selling, and China H200 export delays justify maintaining a neutral stance. Any future execution must tighten the stop-loss to the 183.50-185.50 SMA cluster to protect capital.",
+      "summary": null,
+      "execution_id": "79a5b0b5-eabf-436a-aece-8dfc21a14457",
+      "target_date": "2026-04-23",
+      "captured_at": "2026-04-23T10:43:49.854384Z"
+    },
+    "derived_valuation": {
+      "asset_shape": "CorporateEquity",
+      "scenario": {
+        "corporate_equity": {
+          "dcf": null,
+          "ev_ebitda": null,
+          "forward_pe": {
+            "forward_eps": 11.24,
+            "forward_pe": 18.01601423487545
+          },
+          "peg": {
+            "peg_ratio": 0.51814823798894
+          }
+        }
+      }
+    },
+    "analysis_pack_name": "baseline",
+    "analysis_runtime_policy": {
+      "pack_id": "baseline",
+      "pack_name": "Balanced Institutional",
+      "required_inputs": [
+        "fundamentals",
+        "sentiment",
+        "news",
+        "technical"
+      ],
+      "enrichment_intent": {
+        "transcripts": false,
+        "consensus_estimates": false,
+        "event_news": false
+      },
+      "strategy_focus": "balanced",
+      "analysis_emphasis": "Weight all data sources equally. Use DCF and multiples for valuation when available. Consider both fundamental quality and market sentiment.",
+      "report_strategy_label": "Balanced Institutional",
+      "default_valuation": "full"
+    },
+    "token_usage": {
+      "phase_usage": [
+        {
+          "phase_name": "Analyst Fan-Out",
+          "agent_usage": [
+            {
+              "agent_name": "Fundamental Analyst",
+              "model_id": "gemini-3-flash-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 34166,
+              "completion_tokens": 2617,
+              "total_tokens": 37691,
+              "latency_ms": 17868,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Sentiment Analyst",
+              "model_id": "gemini-3-flash-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 26084,
+              "completion_tokens": 381,
+              "total_tokens": 27492,
+              "latency_ms": 13507,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "News Analyst",
+              "model_id": "gemini-3-flash-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 27799,
+              "completion_tokens": 922,
+              "total_tokens": 30142,
+              "latency_ms": 17188,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Technical Analyst",
+              "model_id": "gemini-3-flash-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 37631,
+              "completion_tokens": 342,
+              "total_tokens": 38811,
+              "latency_ms": 35578,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 125680,
+          "phase_completion_tokens": 4262,
+          "phase_total_tokens": 134136,
+          "phase_duration_ms": 35578
+        },
+        {
+          "phase_name": "Researcher Debate Round 1",
+          "agent_usage": [
+            {
+              "agent_name": "Bullish Researcher",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 6761,
+              "completion_tokens": 399,
+              "total_tokens": 8556,
+              "latency_ms": 22254,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Bearish Researcher",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7568,
+              "completion_tokens": 492,
+              "total_tokens": 9375,
+              "latency_ms": 23397,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 14329,
+          "phase_completion_tokens": 891,
+          "phase_total_tokens": 17931,
+          "phase_duration_ms": 45651
+        },
+        {
+          "phase_name": "Researcher Debate Round 2",
+          "agent_usage": [
+            {
+              "agent_name": "Bullish Researcher",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7752,
+              "completion_tokens": 484,
+              "total_tokens": 9487,
+              "latency_ms": 19213,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Bearish Researcher",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7738,
+              "completion_tokens": 487,
+              "total_tokens": 9507,
+              "latency_ms": 20331,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 15490,
+          "phase_completion_tokens": 971,
+          "phase_total_tokens": 18994,
+          "phase_duration_ms": 39544
+        },
+        {
+          "phase_name": "Researcher Debate Round 3",
+          "agent_usage": [
+            {
+              "agent_name": "Bullish Researcher",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7742,
+              "completion_tokens": 591,
+              "total_tokens": 9604,
+              "latency_ms": 28311,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Bearish Researcher",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7952,
+              "completion_tokens": 558,
+              "total_tokens": 10055,
+              "latency_ms": 21682,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 15694,
+          "phase_completion_tokens": 1149,
+          "phase_total_tokens": 19659,
+          "phase_duration_ms": 49993
+        },
+        {
+          "phase_name": "Researcher Debate Moderation",
+          "agent_usage": [
+            {
+              "agent_name": "Debate Moderator",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 10998,
+              "completion_tokens": 314,
+              "total_tokens": 12165,
+              "latency_ms": 13129,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 10998,
+          "phase_completion_tokens": 314,
+          "phase_total_tokens": 12165,
+          "phase_duration_ms": 13148
+        },
+        {
+          "phase_name": "Trader Synthesis",
+          "agent_usage": [
+            {
+              "agent_name": "Trader Agent",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7571,
+              "completion_tokens": 238,
+              "total_tokens": 9206,
+              "latency_ms": 15690,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 7571,
+          "phase_completion_tokens": 238,
+          "phase_total_tokens": 9206,
+          "phase_duration_ms": 15691
+        },
+        {
+          "phase_name": "Risk Discussion Round 1",
+          "agent_usage": [
+            {
+              "agent_name": "Aggressive Risk Analyst",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7225,
+              "completion_tokens": 289,
+              "total_tokens": 8681,
+              "latency_ms": 16458,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Conservative Risk Analyst",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7583,
+              "completion_tokens": 251,
+              "total_tokens": 8933,
+              "latency_ms": 15300,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Neutral Risk Analyst",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 7878,
+              "completion_tokens": 293,
+              "total_tokens": 9069,
+              "latency_ms": 13277,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 22686,
+          "phase_completion_tokens": 833,
+          "phase_total_tokens": 26683,
+          "phase_duration_ms": 45035
+        },
+        {
+          "phase_name": "Risk Discussion Round 2",
+          "agent_usage": [
+            {
+              "agent_name": "Aggressive Risk Analyst",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 8352,
+              "completion_tokens": 340,
+              "total_tokens": 9885,
+              "latency_ms": 17759,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Conservative Risk Analyst",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 8597,
+              "completion_tokens": 282,
+              "total_tokens": 9907,
+              "latency_ms": 14303,
+              "rate_limit_wait_ms": 0
+            },
+            {
+              "agent_name": "Neutral Risk Analyst",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 8691,
+              "completion_tokens": 304,
+              "total_tokens": 9905,
+              "latency_ms": 13783,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 25640,
+          "phase_completion_tokens": 926,
+          "phase_total_tokens": 29697,
+          "phase_duration_ms": 45845
+        },
+        {
+          "phase_name": "Risk Discussion Moderation",
+          "agent_usage": [
+            {
+              "agent_name": "Risk Moderator",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 9054,
+              "completion_tokens": 305,
+              "total_tokens": 10066,
+              "latency_ms": 11010,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 9054,
+          "phase_completion_tokens": 305,
+          "phase_total_tokens": 10066,
+          "phase_duration_ms": 11044
+        },
+        {
+          "phase_name": "Fund Manager Decision",
+          "agent_usage": [
+            {
+              "agent_name": "Fund Manager",
+              "model_id": "gemini-3.1-pro-preview",
+              "token_counts_available": true,
+              "prompt_tokens": 9966,
+              "completion_tokens": 316,
+              "total_tokens": 11830,
+              "latency_ms": 18398,
+              "rate_limit_wait_ms": 0
+            }
+          ],
+          "phase_prompt_tokens": 9966,
+          "phase_completion_tokens": 316,
+          "phase_total_tokens": 11830,
+          "phase_duration_ms": 18399
+        }
+      ],
+      "total_prompt_tokens": 257108,
+      "total_completion_tokens": 10205,
+      "total_tokens": 290367
+    }
+  }
+}
