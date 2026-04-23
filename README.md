@@ -132,6 +132,8 @@ scorpio analyze AAPL --no-terminal --json --output-dir ./reports
 scorpio analyze --help
 ```
 
+A sample JSON artifact is available at [`docs/sample-reports/NVDA-20260423T104349860Z.json`](docs/sample-reports/NVDA-20260423T104349860Z.json).
+
 ---
 
 ### Prerequisites (build from source)
