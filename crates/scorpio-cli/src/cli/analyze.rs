@@ -82,7 +82,7 @@ mod tests {
     fn run_missing_config_returns_config_not_found_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: serialised by ENV_LOCK
+        // SAFETY: serialized by ENV_LOCK
         unsafe { std::env::set_var("HOME", dir.path()) };
         let result = run("AAPL");
         unsafe { std::env::remove_var("HOME") };
