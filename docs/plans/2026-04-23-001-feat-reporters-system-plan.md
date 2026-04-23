@@ -111,7 +111,7 @@ Located in `crates/scorpio-reporters/src/lib.rs`:
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scorpio_core::state::TradingState;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub struct ReportContext {
@@ -123,15 +123,15 @@ pub struct ReportContext {
 }
 
 #[async_trait]
-pub trait Reporter: Send + Sync {
+pub trait Reporter: Send + Sync + 'static {
     /// Stable identifier for logs and error messages (e.g. "terminal", "json").
     fn name(&self) -> &'static str;
 
     /// Emit a report for the completed analysis run.
     async fn emit(
         &self,
-        state: &TradingState,
-        ctx: &ReportContext,
+        state: Arc<TradingState>,
+        ctx: Arc<ReportContext>,
     ) -> anyhow::Result<()>;
 }
 
@@ -148,29 +148,39 @@ impl ReporterChain {
 
     pub fn len(&self) -> usize { self.reporters.len() }
 
-    /// Run every reporter concurrently via `futures::future::join_all`.
-    /// Fail-soft: a failing reporter logs a sanitized warning and the chain
-    /// continues. Returns the count of failed reporters.
+    /// Spawn each reporter as an independent `tokio::spawn` task for true
+    /// parallelism. Fail-soft: a failing or panicking reporter logs a
+    /// sanitized warning and the chain continues. Returns the count of
+    /// failed reporters.
     pub async fn run_all(
-        &self,
-        state: &TradingState,
-        ctx: &ReportContext,
+        self,
+        state: Arc<TradingState>,
+        ctx: Arc<ReportContext>,
     ) -> usize {
-        let futs = self.reporters.iter().map(|r| async move {
-            (r.name(), r.emit(state, ctx).await)
-        });
-        futures::future::join_all(futs)
-            .await
-            .into_iter()
-            .filter(|(name, result)| {
-                if let Err(e) = result {
-                    tracing::warn!(reporter = name, error = %e, "reporter failed");
-                    true
-                } else {
-                    false
-                }
+        let handles: Vec<_> = self.reporters.into_iter().map(|r| {
+            let state = Arc::clone(&state);
+            let ctx = Arc::clone(&ctx);
+            tokio::spawn(async move {
+                let name = r.name();
+                (name, r.emit(state, ctx).await)
             })
-            .count()
+        }).collect();
+
+        let mut failures = 0;
+        for handle in handles {
+            match handle.await {
+                Ok((_, Ok(()))) => {}
+                Ok((name, Err(e))) => {
+                    tracing::warn!(reporter = name, error = %e, "reporter failed");
+                    failures += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "reporter task panicked");
+                    failures += 1;
+                }
+            }
+        }
+        failures
     }
 }
 ```
@@ -178,10 +188,10 @@ impl ReporterChain {
 ### Design decisions baked in
 
 - **Async trait via `async-trait`** — already a workspace dep. Future Telegram/webhook reporters do real async I/O without `block_on`; JSON reporter uses `tokio::fs` cleanly.
-- **`&TradingState`** — immutable borrow. Reporters cannot mutate state, so sequential-or-parallel is a free choice later.
-- **`Send + Sync` bounds** — required for `Box<dyn Reporter>` storage and future concurrent execution.
+- **`Arc<TradingState>` + `Arc<ReportContext>`** — reporters receive ref-counted handles rather than borrows. Immutability is preserved (no `Arc<Mutex<_>>`); the `Arc` cost is a single allocation at chain-dispatch time.
+- **`Send + Sync + 'static` bounds** — required for `Box<dyn Reporter>` storage in `tokio::spawn` tasks.
 - **Narrow `ReportContext`** — iteration 1 only carries metadata reporters actually consume: canonical symbol, finish time, and output dir. Add more fields later only when a reporter needs them.
-- **Parallel execution via `futures::future::join_all`** — all reporters start concurrently; wall-clock time is bounded by the slowest reporter rather than the sum. Since `TradingState` is borrowed as `&TradingState` and all reporters are `Send + Sync`, sharing the reference across the join is sound without cloning state. Terminal output ordering is non-deterministic when multiple reporters emit to stdout, but in practice only `TerminalReporter` does so.
+- **True parallelism via `tokio::spawn`** — each reporter runs in its own task, giving genuine OS-thread parallelism rather than cooperative polling. This requires `Reporter: 'static` and `Arc<TradingState>` / `Arc<ReportContext>` instead of shared borrows. The chain consumes itself (`self`) on `run_all`; callers wrap state and context in `Arc` before the call. Panic safety is covered: a panicking reporter's `JoinHandle` returns `Err`, logged as a warning and counted as a failure without bringing down the process.
 - **Fail-soft at chain level** — once analysis succeeds, one broken reporter shouldn't erase successful outputs from other reporters. Each failure is logged as a sanitized warning with the reporter name; the caller exits non-zero only when every requested reporter fails.
 
 ## Built-in Reporters (Iteration 1)
@@ -190,8 +200,9 @@ impl ReporterChain {
 
 Moves the existing module wholesale from `crates/scorpio-cli/src/report/`. The
 1027-line `final_report.rs` and its helpers (`coverage.rs`, `valuation.rs`,
-`provenance.rs`) come across unchanged. `colored` and `comfy-table` deps shift
-from the CLI crate to the reporters crate.
+`provenance.rs`) come across unchanged. `comfy-table` shifts from `scorpio-cli`
+to `scorpio-reporters`; `colored` stays in `scorpio-cli` (used by the `update`
+subcommand) and is added to `scorpio-reporters` as well.
 
 ```rust
 pub struct TerminalReporter;
@@ -202,10 +213,10 @@ impl Reporter for TerminalReporter {
 
     async fn emit(
         &self,
-        state: &TradingState,
-        _ctx: &ReportContext,
+        state: Arc<TradingState>,
+        _ctx: Arc<ReportContext>,
     ) -> anyhow::Result<()> {
-        println!("{}", format_final_report(state));
+        println!("{}", format_final_report(&state));
         Ok(())
     }
 }
@@ -231,10 +242,10 @@ impl Reporter for JsonReporter {
 
     async fn emit(
         &self,
-        state: &TradingState,
-        ctx: &ReportContext,
+        state: Arc<TradingState>,
+        ctx: Arc<ReportContext>,
     ) -> anyhow::Result<()> {
-        let path = Self::filename(ctx);
+        let path = Self::filename(&ctx);
         let body = serde_json::to_string_pretty(&JsonReport::from_state(state))
             .context("serialising JsonReport")?;
         tokio::fs::create_dir_all(&ctx.output_dir).await
@@ -249,7 +260,7 @@ impl Reporter for JsonReporter {
 - Filename convention: `<SYMBOL>-<ISO8601-UTC>.json`, e.g. `AAPL-20260423T142301Z.json`.
 - Explicit output paths (`--json ./foo.json`) are a deliberate non-goal for iteration 1 — users control location via `--output-dir`. If needed later, swap `JsonReporter` for `JsonReporter { path: Option<PathBuf> }`.
 - `JsonReporter` writes a local artifact only. Iteration 1 deliberately does **not** promise a stable public schema for downstream integrations.
-- The file payload should be a small envelope such as `JsonReport { schema_version, generated_at, trading_state }` so the artifact can declare its own version from day one without inventing a large DTO yet.
+- The file payload is `JsonReport { schema_version: u32, generated_at: DateTime<Utc>, trading_state: TradingState }`. `schema_version` starts at `1` (integer, matching the existing `THESIS_MEMORY_SCHEMA_VERSION` pattern) and is bumped whenever the `JsonReport` struct changes in a backward-incompatible way.
 - Because `TradingState` includes debate history, evidence, and token/accounting details, treat the JSON file as a potentially sensitive local artifact. Do not log payload contents or embed file contents in error messages.
 
 ## CLI Surface
@@ -293,23 +304,24 @@ pub fn run(args: &AnalyzeArgs) -> anyhow::Result<()> {
     let cfg = load_analysis_config()?;
     let _ = validate_symbol(&args.symbol)?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to initialize async runtime")?;
 
     runtime.block_on(async move {
         let chain = build_reporter_chain(args);
-        anyhow::ensure!(chain.len() > 0, "at least one reporter must be enabled");
+        let n = chain.len();
+        anyhow::ensure!(n > 0, "at least one reporter must be enabled");
         let analysis = AnalysisRuntime::new(cfg).await?;
-        let state = analysis.run(&args.symbol).await?;
-        let ctx = ReportContext {
+        let state = Arc::new(analysis.run(&args.symbol).await?);
+        let ctx = Arc::new(ReportContext {
             symbol: state.asset_symbol.clone(),
             finished_at: Utc::now(),
             output_dir: resolve_reports_dir(args.output_dir.as_deref())?,
-        };
-        let failures = chain.run_all(&state, &ctx).await;
-        if failures == chain.len() {
+        });
+        let failures = chain.run_all(state, ctx).await;
+        if failures == n {
             anyhow::bail!("{failures} reporter(s) failed; see logs");
         }
         Ok(())
@@ -372,7 +384,7 @@ Spelled out to prevent scope creep:
 | CLI lib module list       | `crates/scorpio-cli/src/lib.rs` (edited — drop `pub mod report;`)                               |
 | Main dispatch             | `crates/scorpio-cli/src/main.rs` (edited — destructure `AnalyzeArgs`)                           |
 | Workspace members         | `Cargo.toml` (edited — add `"crates/scorpio-reporters"`)                                        |
-| Workspace deps            | `Cargo.toml` (edited — add `scorpio-reporters`; move `colored` / `comfy-table` if needed)       |
+| Workspace deps            | `Cargo.toml` (edited — add `scorpio-reporters`; move `comfy-table` to `scorpio-reporters`)       |
 
 ## Reused Code and Utilities
 
@@ -396,7 +408,7 @@ Spelled out to prevent scope creep:
 
 1. Add `crates/scorpio-reporters/` (`Cargo.toml`, `src/lib.rs` skeleton). Register in root `Cargo.toml` `[workspace] members`.
 2. Move `crates/scorpio-cli/src/report/` → `crates/scorpio-reporters/src/terminal/`. Update `mod.rs` to re-export `format_final_report` as `pub(crate)` and define `TerminalReporter`.
-3. Shift `colored` and `comfy-table` deps from `scorpio-cli`'s `[dependencies]` to `scorpio-reporters`'.
+3. Move `comfy-table` from `scorpio-cli`'s `[dependencies]` to `scorpio-reporters`'. Keep `colored` in `scorpio-cli` — the `update` subcommand still uses it for release-note output.
 4. Add `crates/scorpio-reporters/src/json.rs` with `JsonReporter` plus a small `JsonReport` envelope type (`schema_version`, `generated_at`, `trading_state`).
 5. In `crates/scorpio-cli/`: add `scorpio-reporters = { workspace = true }` dep; drop `pub mod report;` from `lib.rs`; update `cli/mod.rs` to switch `Commands::Analyze` to `Analyze(AnalyzeArgs)`; validate that `--no-terminal` requires another reporter; set the default `output_dir` via a helper that resolves `$HOME/.scorpio-analyst/reports`; update `cli/analyze.rs` to the new `run(&AnalyzeArgs)` signature and chain dispatch; update `main.rs` destructure and gate `print_banner()` on `!args.no_terminal`.
 6. Add a `resolve_reports_dir()` helper that mirrors the existing snapshot-path HOME resolution and returns an app-owned reports directory when `--output-dir` is omitted.
