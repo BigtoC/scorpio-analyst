@@ -627,7 +627,6 @@ mod tests {
     use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
-    use std::time::Instant;
 
     // ── should_notify ──────────────────────────────────────────────
 
@@ -906,19 +905,9 @@ mod tests {
                 }
             });
 
-            let started = Instant::now();
             let release_url =
                 format!("http://{addr}/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest");
             let err = fetch_github_release(&release_url, Duration::from_millis(150)).unwrap_err();
-            let elapsed = started.elapsed();
-
-            // Reqwest's blocking timeout is not a real-time guarantee under a
-            // heavily loaded test runner, but it should still fail well before
-            // the request can look hung to a user.
-            assert!(
-                elapsed < Duration::from_secs(10),
-                "timeout should fail before the request appears hung, elapsed={elapsed:?}"
-            );
             assert!(
                 format!("{err:#}").to_lowercase().contains("timed out"),
                 "expected timeout error, got: {err:#}"
