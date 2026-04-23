@@ -4,14 +4,15 @@
 //! Run manually with:
 //!
 //! ```sh
-//! cargo run --example finnhub_live_test
+//! cargo run -p scorpio-core --example finnhub_live_test
 //! ```
 //!
 //! Requires:
 //! - a live internet connection
 //! - `SCORPIO_FINNHUB_API_KEY` to be set in the environment
 //!
-//! Covers every public Finnhub client method currently exposed from `src/data/finnhub.rs`:
+//! Covers every public Finnhub client method currently exposed from
+//! `crates/scorpio-core/src/data/finnhub.rs`:
 //! - `FinnhubClient::get_fundamentals`
 //! - `FinnhubClient::get_earnings`
 //! - `FinnhubClient::get_insider_transactions`
@@ -20,7 +21,7 @@
 //! - `FinnhubClient::get_market_news`
 
 use chrono::{Duration, Utc};
-use scorpio_analyst::{config::ApiConfig, data::FinnhubClient, rate_limit::SharedRateLimiter};
+use scorpio_core::{config::ApiConfig, data::FinnhubClient, rate_limit::SharedRateLimiter};
 use secrecy::SecretString;
 
 /// Well-known liquid equity used as the primary test subject.

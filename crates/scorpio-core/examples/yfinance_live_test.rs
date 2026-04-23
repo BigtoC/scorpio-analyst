@@ -4,12 +4,12 @@
 //! Run manually with:
 //!
 //! ```sh
-//! cargo run --example yfinance_live_test
+//! cargo run -p scorpio-core --example yfinance_live_test
 //! ```
 //!
 //! Requires a live internet connection to reach the Yahoo Finance API.
 //!
-//! Covers every public method currently in `src/data/yfinance/`:
+//! Covers every public method currently in `crates/scorpio-core/src/data/yfinance/`:
 //! - `YFinanceClient::get_ohlcv` (OHLCV bars)
 //! - `get_latest_close` (derived price query)
 //! - `fetch_vix_data` (VIX volatility snapshot)
@@ -25,7 +25,7 @@
 //! `get_profile` returns `Profile::Fund` (or degrades without panicking).
 
 use chrono::{Duration, NaiveDate, Utc};
-use scorpio_analyst::data::{YFinanceClient, fetch_vix_data, get_latest_close};
+use scorpio_core::data::{YFinanceClient, fetch_vix_data, get_latest_close};
 use yfinance_rs::profile::Profile;
 
 /// Well-known liquid equity used as the primary test subject.
