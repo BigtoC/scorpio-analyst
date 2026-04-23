@@ -228,6 +228,15 @@ deep_thinking_model = "o3"
     assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
 }
 
+async fn test_snapshot_store(db_name: &str) -> (SnapshotStore, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join(db_name);
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("snapshot store");
+    (store, dir)
+}
+
 #[tokio::test]
 async fn task_id_constants_match_task_impl_ids() {
     let config = Arc::new(crate::config::Config {
@@ -251,7 +260,8 @@ async fn task_id_constants_match_task_impl_ids() {
         enrichment: Default::default(),
         analysis_pack: "baseline".to_owned(),
     });
-    let snapshot_store = Arc::new(SnapshotStore::new(None).await.expect("snapshot store"));
+    let (snapshot_store, _dir) = test_snapshot_store("task-id-constants.db").await;
+    let snapshot_store = Arc::new(snapshot_store);
     let finnhub = crate::data::FinnhubClient::for_test();
     let handle = crate::providers::factory::CompletionModelHandle::for_test();
 
@@ -349,7 +359,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         enrichment: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
-    let snapshot_store = SnapshotStore::new(None).await.expect("snapshot store");
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-reused-state.db").await;
     let pipeline = crate::workflow::TradingPipeline::new(
         config,
         crate::data::FinnhubClient::for_test(),
