@@ -3,11 +3,11 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.5"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BigtoC/scorpio-analyst"
-description = "Rust-native multi-agent LLM-powered financial trading system"
+description = "Rust-native multi-agent portfolio manager and financial analyst team"
 
 # Centralized dependency versions. Crate-level manifests consume entries via
 # `foo.workspace = true`; this keeps every shared dep pinned in one place and
