@@ -157,7 +157,7 @@ Only the keys for providers selected by `scorpio setup` or `SCORPIO__LLM__...` e
 Run the setup wizard to write `~/.scorpio-analyst/config.toml`:
 
 ```bash
-cargo run -- setup
+cargo run -p scorpio-cli -- setup
 ```
 
 The repo-root `config.toml` is deprecated and is not read at runtime. If you prefer a non-interactive flow, set the `SCORPIO__LLM__QUICK_THINKING_PROVIDER`, `SCORPIO__LLM__DEEP_THINKING_PROVIDER`, `SCORPIO__LLM__QUICK_THINKING_MODEL`, and `SCORPIO__LLM__DEEP_THINKING_MODEL` environment variables directly instead.
@@ -167,10 +167,10 @@ The repo-root `config.toml` is deprecated and is not read at runtime. If you pre
 ### 3. Run
 
 ```bash
-cargo run -- analyze AAPL
+cargo run -p scorpio-cli -- analyze AAPL
 ```
 
-The pipeline executes all five phases and prints a structured report to the terminal. Configuration can be overridden at runtime with `SCORPIO__...` environment variables (for example `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -- analyze AAPL`).
+The pipeline executes all five phases and prints a structured report to the terminal. Configuration can be overridden at runtime with `SCORPIO__...` environment variables (for example `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL`).
 
 ### Example report
 
