@@ -12,6 +12,10 @@ use crate::{ReportContext, Reporter};
 
 pub struct TerminalReporter;
 
+pub fn render_final_report(state: &TradingState) -> String {
+    final_report::format_final_report(state)
+}
+
 #[async_trait]
 impl Reporter for TerminalReporter {
     fn name(&self) -> &'static str {
@@ -19,7 +23,7 @@ impl Reporter for TerminalReporter {
     }
 
     async fn emit(&self, state: Arc<TradingState>, _ctx: Arc<ReportContext>) -> anyhow::Result<()> {
-        println!("{}", final_report::format_final_report(&state));
+        println!("{}", render_final_report(&state));
         Ok(())
     }
 }

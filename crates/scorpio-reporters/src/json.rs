@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{fs::OpenOptions, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -27,8 +27,11 @@ pub struct JsonReporter;
 
 impl JsonReporter {
     fn filename(ctx: &ReportContext) -> PathBuf {
-        let ts = ctx.finished_at.format("%Y%m%dT%H%M%SZ");
-        ctx.output_dir.join(format!("{}-{}.json", ctx.symbol, ts))
+        let ts = ctx.finished_at.format("%Y%m%dT%H%M%S%3fZ");
+        ctx.output_dir
+            .as_ref()
+            .expect("JsonReporter requires ReportContext.output_dir to be set")
+            .join(format!("{}-{}.json", ctx.symbol, ts))
     }
 }
 
@@ -39,6 +42,10 @@ impl Reporter for JsonReporter {
     }
 
     async fn emit(&self, state: Arc<TradingState>, ctx: Arc<ReportContext>) -> anyhow::Result<()> {
+        let output_dir = ctx
+            .output_dir
+            .as_ref()
+            .context("json reporter requires an output directory")?;
         let path = Self::filename(&ctx);
         let report = JsonReport {
             schema_version: 1,
@@ -46,12 +53,24 @@ impl Reporter for JsonReporter {
             trading_state: (*state).clone(),
         };
         let body = serde_json::to_string_pretty(&report).context("serialising JsonReport")?;
-        tokio::fs::create_dir_all(&ctx.output_dir)
+        tokio::fs::create_dir_all(output_dir)
             .await
-            .with_context(|| format!("creating {}", ctx.output_dir.display()))?;
-        tokio::fs::write(&path, body)
-            .await
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("creating {}", output_dir.display()))?;
+
+        let path_for_write = path.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path_for_write)
+                .with_context(|| format!("writing {}", path_for_write.display()))?;
+            std::io::Write::write_all(&mut file, body.as_bytes())
+                .with_context(|| format!("writing {}", path_for_write.display()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("json writer task failed: {e}"))??;
+
         Ok(())
     }
 }

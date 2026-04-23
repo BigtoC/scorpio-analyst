@@ -13,7 +13,7 @@ pub struct ReportContext {
     pub symbol: String,
     pub finished_at: DateTime<Utc>,
     /// Directory where file reporters write. Created on demand.
-    pub output_dir: PathBuf,
+    pub output_dir: Option<PathBuf>,
 }
 
 /// Output leg for a completed analysis run.
