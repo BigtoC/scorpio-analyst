@@ -86,14 +86,6 @@ graph TD
     Abort --> Report
 ```
 
-## User Interaction
-
-Scorpio-Analyst is designed with a phased user interface approach to provide both power and ease of use:
-
-*   **Phase 1 (MVP)**: A comprehensive Command-Line Interface (CLI) built with `clap`, supporting both structured subcommands and natural language queries.
-*   **Phase 2**: An interactive Terminal User Interface (TUI) for a rich, conversational experience.
-*   **Phase 3**: A high-performance, GPU-accelerated native desktop application.
-
 ## Getting Started
 
 ### Install
