@@ -217,8 +217,8 @@ fn readme_build_from_source_matches_workspace_cli_flow() {
     let readme = read_repo_file("README.md");
 
     for required in [
-        "cargo run -- setup",
-        "cargo run -- analyze AAPL",
+        "cargo run -p scorpio-cli -- setup",
+        "cargo run -p scorpio-cli -- analyze AAPL",
         "The repo-root `config.toml` is deprecated and is not read at runtime.",
     ] {
         assert!(
@@ -232,6 +232,8 @@ fn readme_build_from_source_matches_workspace_cli_flow() {
         "asset_symbol = \"NVDA\"",
         "SCORPIO__TRADING__ASSET_SYMBOL=AAPL",
         "```bash\ncargo run\n```",
+        "cargo run -- setup",
+        "cargo run -- analyze AAPL",
     ] {
         assert!(
             !readme.contains(forbidden),
