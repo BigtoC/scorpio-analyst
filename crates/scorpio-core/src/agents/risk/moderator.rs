@@ -83,7 +83,13 @@ impl RiskModerator {
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         Ok(Self {
-            core: RiskAgentCore::new(handle, RISK_MODERATOR_SYSTEM_PROMPT, state, llm_config)?,
+            core: RiskAgentCore::new(
+                handle,
+                RISK_MODERATOR_SYSTEM_PROMPT,
+                |bundle| bundle.risk_moderator.as_ref(),
+                state,
+                llm_config,
+            )?,
         })
     }
 

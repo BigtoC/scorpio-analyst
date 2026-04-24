@@ -60,7 +60,13 @@ impl ConservativeRiskAgent {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
-        let core = RiskAgentCore::new(handle, CONSERVATIVE_SYSTEM_PROMPT, state, llm_config)?;
+        let core = RiskAgentCore::new(
+            handle,
+            CONSERVATIVE_SYSTEM_PROMPT,
+            |bundle| bundle.conservative_risk.as_ref(),
+            state,
+            llm_config,
+        )?;
         let chat_history = initial_untrusted_history(state);
         Ok(Self { core, chat_history })
     }
