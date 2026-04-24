@@ -767,6 +767,64 @@ fn build_prompt_context_user_prompt_includes_pack_context() {
 }
 
 #[test]
+fn build_prompt_context_prefers_runtime_policy_fund_manager_prompt_bundle() {
+    use super::prompt::build_prompt_context;
+    use crate::{agents::risk::DualRiskStatus, state::TradingState};
+
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+        .expect("baseline runtime policy should resolve");
+    policy.prompt_bundle.fund_manager =
+        "Pack-owned fund manager prompt for {ticker} at {current_date}.".into();
+    state.analysis_runtime_policy = Some(policy);
+
+    let (system, _user) = build_prompt_context(
+        &state,
+        &state.asset_symbol,
+        &state.target_date,
+        DualRiskStatus::Absent,
+    );
+
+    assert!(
+        system.contains("Pack-owned fund manager prompt for AAPL at 2026-01-15."),
+        "system prompt should render the runtime-policy fund-manager prompt bundle: {system}"
+    );
+    assert!(
+        !system.contains("Your role is to make the final approve-or-reject execution decision"),
+        "legacy fund-manager prompt should not leak through when a pack override is present: {system}"
+    );
+}
+
+#[test]
+fn build_prompt_context_renders_analysis_emphasis_from_runtime_policy_fund_manager_prompt_bundle() {
+    use super::prompt::build_prompt_context;
+    use crate::{agents::risk::DualRiskStatus, state::TradingState};
+
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+        .expect("baseline runtime policy should resolve");
+    policy.analysis_emphasis = "favour balanced evidence".to_owned();
+    policy.prompt_bundle.fund_manager = "Fund manager emphasis: {analysis_emphasis}.".into();
+    state.analysis_runtime_policy = Some(policy);
+
+    let (system, _user) = build_prompt_context(
+        &state,
+        &state.asset_symbol,
+        &state.target_date,
+        DualRiskStatus::Absent,
+    );
+
+    assert!(
+        system.contains("Fund manager emphasis: favour balanced evidence."),
+        "system prompt should substitute analysis_emphasis for pack-owned fund-manager templates: {system}"
+    );
+    assert!(
+        !system.contains("{analysis_emphasis}"),
+        "analysis_emphasis placeholder should not leak through unresolved: {system}"
+    );
+}
+
+#[test]
 fn build_prompt_context_includes_prior_thesis_when_present() {
     use super::prompt::build_prompt_context;
     use crate::agents::risk::DualRiskStatus;

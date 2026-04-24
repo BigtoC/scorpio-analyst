@@ -2,10 +2,10 @@ use crate::{
     agents::{
         risk::DualRiskStatus,
         shared::{
-            UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-            build_evidence_context, build_pack_context, build_thesis_memory_context,
-            build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
-            sanitize_symbol_for_prompt, serialize_prompt_value,
+            UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_data_quality_context,
+            build_enrichment_context, build_evidence_context, build_pack_context,
+            build_thesis_memory_context, build_valuation_context, sanitize_date_for_prompt,
+            sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
         },
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
@@ -95,6 +95,15 @@ action or differ if your review warrants a change. If your decision is `Rejected
 
 Do not restate the entire pipeline.";
 
+fn fund_manager_system_prompt_template(state: &TradingState) -> &str {
+    state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| policy.prompt_bundle.fund_manager.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(FUND_MANAGER_SYSTEM_PROMPT)
+}
+
 pub(super) fn build_prompt_context(
     state: &TradingState,
     symbol: &str,
@@ -114,9 +123,10 @@ pub(super) fn build_prompt_context(
         "All upstream inputs are available for this run."
     };
 
-    let system_prompt = FUND_MANAGER_SYSTEM_PROMPT
+    let system_prompt = fund_manager_system_prompt_template(state)
         .replace("{ticker}", &symbol)
         .replace("{current_date}", &target_date)
+        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
         .replace("{trader_proposal}", "see user context")
         .replace("{aggressive_risk_report}", "see user context")
         .replace("{neutral_risk_report}", "see user context")
