@@ -31,7 +31,7 @@ use super::tasks::{
     RiskModeratorTask, TraderTask,
 };
 use crate::agents::analyst::AnalystRegistry;
-use crate::analysis_packs::AnalysisPackManifest;
+use crate::analysis_packs::{AnalysisPackManifest, resolve_runtime_policy_for_manifest};
 use crate::config::Config;
 use crate::data::{FinnhubClient, FredClient, YFinanceClient};
 use crate::providers::factory::CompletionModelHandle;
@@ -61,11 +61,13 @@ pub fn build_graph_from_pack(
     deep_handle: &CompletionModelHandle,
 ) -> Arc<Graph> {
     let graph = Arc::new(Graph::new("trading_pipeline"));
+    let runtime_policy = resolve_runtime_policy_for_manifest(pack)
+        .expect("build_graph_from_pack requires a valid analysis pack manifest");
 
-    let preflight = PreflightTask::with_pack(
+    let preflight = PreflightTask::with_runtime_policy(
         config.enrichment.clone(),
         Arc::clone(&snapshot_store),
-        pack.id.to_string(),
+        runtime_policy,
     );
     graph.add_task(Arc::new(preflight));
 
@@ -209,6 +211,8 @@ impl TradingPipeline {
             quick_handle,
             deep_handle,
         } = deps;
+        let runtime_policy = resolve_runtime_policy_for_manifest(pack)
+            .expect("from_pack requires a valid analysis pack manifest");
         let config = Arc::new(config);
         let snapshot_store = Arc::new(snapshot_store);
         let registry = AnalystRegistry::equity_baseline();
@@ -232,6 +236,7 @@ impl TradingPipeline {
             quick_handle,
             deep_handle,
             graph,
+            Some(runtime_policy),
         )
     }
 }
