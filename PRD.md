@@ -177,12 +177,13 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    executing four Analyst agents concurrently
 
 2. **Market Pricing and Alternative Data**: The `yfinance-rs` (v0.7.2) crate will be utilized for:
-   - historical OHLCV (Open, High, Low, Close, Volume) data, 
-   - Options Chains (for IV and Put/Call ratio), 
-   - full Financial Statements (Cashflow, Balance Sheet, Income Statement, Shares) for DCF and EV/EBITDA valuation math, 
-   - Analyst Estimates (Forward EPS/Revenue, Upgrades/Downgrades, Price Targets), 
-   - Institutional/Insider ownership (including Net Insider Shares Bought/Sold), 
-   - Corporate Calendar (Earnings dates). It DOES NOT provide ESG data (the `sustainability()` endpoint is broken).
+   - historical OHLCV (Open, High, Low, Close, Volume) data,
+   - full Financial Statements (Cashflow, Balance Sheet, Income Statement, Shares) for DCF and EV/EBITDA valuation math,
+   - Analyst Estimates (Forward EPS/Revenue, Price Targets, Recommendations Summary) — fetched as part of the `ConsensusEvidence` enrichment at pipeline startup, rendered into every downstream agent's prompt,
+   - Options & Derivatives — a summary snapshot (ATM implied volatility, IV term structure, put/call volume and OI ratios, max pain strike, 25-delta skew) plus a near-the-money strike slice (nearest expiration, strikes within ±5% of spot) exposed as the `get_options_snapshot` tool for the Technical Analyst,
+   - Company News — yfinance news feed fetched alongside Finnhub news during Phase 1 prefetch; the two feeds are deduped (by normalized URL, with headline fallback) and merged into a single `NewsData` shared via `Arc` across the News and Sentiment Analysts,
+   - Institutional/Insider ownership (including Net Insider Shares Bought/Sold),
+   - Corporate Calendar (Earnings dates). It DOES NOT provide ESG data (the `sustainability()` endpoint is broken). Historical upgrade/downgrade event streams are deferred; the Recommendations Summary above is point-in-time only.
 
 3. **Macroeconomic Indicators**: The FRED (Federal Reserve Economic Data) API provides authoritative macroeconomic
    time-series data, replacing the paid Finnhub `economic().data()` endpoint for interest-rate and inflation indicators.
@@ -202,15 +203,18 @@ programming interfaces. The Rust implementation must leverage highly optimized H
 
 5. **Enrichment Adapter Contracts**: The system defines provider-agnostic trait contracts for optional enrichment data
    sources in `crates/scorpio-core/src/data/adapters/`: `TranscriptProvider` (earnings call transcripts), `EstimatesProvider` (consensus
-   revenue/EPS estimates), and `EventNewsProvider` (event-driven news feeds). Each trait returns a normalized evidence
-   struct (`TranscriptEvidence`, `ConsensusEvidence`, `EventNewsEvidence`) that can be consumed uniformly by downstream
-   agents regardless of the upstream provider. In the initial implementation, no concrete providers are wired — the
-   `PreflightTask` seeds the workflow context with `null` placeholders for each enrichment cache key, and
-   `ProviderCapabilities` flags (derived from `DataEnrichmentConfig`) indicate which enrichment categories are enabled.
-   Under the current provider-constrained roadmap, event/news enrichment is the first concrete target, consensus
-   estimates are only in-scope if free-tier provider verification succeeds, and transcript enrichment is intentionally
-   deferred. This seam allows future milestones to plug in real providers behind the existing contracts without modifying
-   agent or orchestration code.
+   revenue/EPS estimates, price targets, recommendations summary), and `EventNewsProvider` (event-driven news feeds).
+   Each trait returns a normalized evidence struct (`TranscriptEvidence`, `ConsensusEvidence`, `EventNewsEvidence`) that
+   can be consumed uniformly by downstream agents regardless of the upstream provider. The `ConsensusEvidence` contract
+   is extended with optional `PriceTargetSummary` (mean/median/high/low + analyst count) and `RecommendationsSummary`
+   (bucket counts: strong_buy/buy/hold/sell/strong_sell) sub-payloads, both populated by `YFinanceEstimatesProvider`
+   with field-granular fail-open: if only the earnings trend endpoint succeeds, the evidence still publishes with the
+   extras as `None`. A separate `OptionsProvider` trait under `data/traits/options.rs` contracts for structured equity
+   options snapshots; it is distinct from the crypto-oriented `DerivativesProvider` stub (which carries an opaque
+   `raw: String` payload). Under the current provider-constrained roadmap, event/news enrichment, consensus estimates
+   (with the extended fields), and yfinance options are concrete targets; transcript enrichment is intentionally
+   deferred. This seam allows future milestones to plug in alternate providers (Polygon, Tradier, additional news
+   vendors) behind the existing contracts without modifying agent or orchestration code.
 
 ### Technical Analysis and Quantitative Mathematics
 
@@ -261,12 +265,38 @@ parameter.
 │  • Hard-fails on invalid symbol                         │
 └──────────────────────────┬──────────────────────────────┘
                            │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  EnrichmentPrefetch   [fail-open per stream]            │
+│                                                         │
+│  • FinnhubEventNewsProvider → enrichment_event_news     │
+│    (pre-classified events for downstream prompts)       │
+│  • YFinanceEstimatesProvider → enrichment_consensus     │
+│    EXTENDED: EPS/revenue estimates + price target       │
+│      (mean/median/high/low) + recommendations summary   │
+│      (strong_buy/buy/hold/sell/strong_sell counts)      │
+│    Field-granular fail-open across three endpoints      │
+│  • Merged news prefetch → cached Arc<NewsData>          │
+│    Finnhub + yfinance fetched concurrently, deduped     │
+│    by normalized URL (headline fallback), shared        │
+│    across News and Sentiment Analysts                   │
+└──────────────────────────┬──────────────────────────────┘
+                           │
          ┌─────────────────┼─────────────────┐─────────────────┐
          ▼                 ▼                 ▼                 ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  Fundamental │  │   Sentiment  │  │     News     │  │  Technical   │
-│   Analyst    │  │   Analyst    │  │   Analyst    │  │   Analyst    │
-└──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
+│  Fundamental │  │   Sentiment  │  │     News     │  │    Technical     │
+│   Analyst    │  │   Analyst    │  │   Analyst    │  │     Analyst      │
+│              │  │  reads       │  │  reads       │  │  OHLCV +         │
+│  Finnhub +   │  │  cached      │  │  cached      │  │  kand indicators │
+│  yfinance    │  │  Arc<News-   │  │  Arc<News-   │  │  + NEW tool      │
+│  financials  │  │  Data> +     │  │  Data> +     │  │  get_options_    │
+│              │  │  options/    │  │  FRED macro  │  │  snapshot →      │
+│              │  │  consensus   │  │              │  │  OptionsProvider │
+│              │  │  via shared  │  │              │  │  (summary +      │
+│              │  │  enrichment  │  │              │  │  near-the-money  │
+│              │  │  context     │  │              │  │  slice)          │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────────┘
        └─────────────────┼─────────────────┘─────────────────┘
                          ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -627,9 +657,13 @@ target asset.
 This agent quantifies company-specific sentiment and narrative shifts using recent news coverage rather than direct
 social-platform ingestion in the MVP.
 
-* **Tool Bindings**: Accesses company-specific news data from `finnhub` and/or `yfinance-rs` where available, as well as `yfinance-rs` Options Chains (IV, Put/Call ratio) and Analyst Upgrades/Downgrades. If direct
-  API access is unavailable or insufficient for the target company/news query, the Gemini CLI can be used as a fallback
-  for web-search-based news retrieval.
+* **Tool Bindings**: Consumes the merged `NewsData` (Finnhub + yfinance, deduped) via the shared `GetCachedNews` tool
+  path — the same cache the News Analyst reads, populated once in `prefetch_analyst_news` and handed to both analysts
+  via `Arc<NewsData>` to avoid duplicate API calls. Analyst price targets and recommendations summary are available
+  indirectly via the `ConsensusEvidence` enrichment rendered into the shared agent context, not fetched by Sentiment
+  directly. Options data is scoped to the Technical Analyst (see §4 below) and does not flow into Sentiment in this
+  iteration. If direct API access is unavailable or insufficient for the target company/news query, the Gemini CLI can
+  be used as a fallback for web-search-based news retrieval.
 * **Execution Logic**: The agent analyzes recent company-specific news to identify tone shifts, recurring themes,
   management or product narratives, and event-driven sentiment that could affect trading decisions. The goal is to
   aggregate news-driven sentiment into a normalized view of market perception over the past week. Direct Reddit and
@@ -640,12 +674,15 @@ social-platform ingestion in the MVP.
 
 The News Analyst contextualizes the asset within the broader global macroeconomic environment.
 
-* **Tool Bindings**: Accesses `finnhub` market news endpoints (`GetNews`, `GetCachedNews`, `GetMarketNews`) for
-  breaking news and company-specific coverage. Macroeconomic indicators are sourced from the FRED API via the
+* **Tool Bindings**: Accesses the merged company-specific news feed via `GetCachedNews` (populated by
+  `prefetch_analyst_news` from both `FinnhubNewsProvider` and `YFinanceNewsProvider`, deduped by normalized URL with
+  headline fallback, capped at `NEWS_MAX_ARTICLES`) and `finnhub` market news endpoints (`GetNews`, `GetMarketNews`)
+  for broader breaking-news coverage. Macroeconomic indicators are sourced from the FRED API via the
   `GetEconomicIndicators` tool, which returns the latest Federal Funds Rate and CPI inflation data classified into
-  `MacroEvent` structs with impact direction and confidence scores. Yahoo Finance news data may also be used when it
-  provides relevant company-specific coverage. If direct API access is unavailable for certain sources, the Gemini CLI
-  can be used as an alternative for web-search-based news analysis.
+  `MacroEvent` structs with impact direction and confidence scores. The merged feed is fail-open at both the
+  per-provider and combined level: if one provider fails the other's feed still reaches the analyst; if both fail the
+  analyst sees the existing "news unavailable" marker and the pipeline continues. If direct API access is unavailable
+  for all sources, the Gemini CLI can be used as an alternative for web-search-based news analysis.
 * **Execution Logic**: The agent processes breaking news articles to extract causal relationships and interprets
   macroeconomic indicators from FRED to contextualize broader monetary policy impacts. For example, if analyzing a
   semiconductor equity, the agent is prompted to identify specific geopolitical tensions, tariff implementations, or
@@ -660,15 +697,20 @@ The Technical Analyst identifies actionable entry and exit signals based entirel
 * **Tool Bindings**: Exposes `yfinance-rs` OHLCV retrieval and `kand` indicator calculation as callable tools bound
   to the `rig` agent. The LLM calls `get_ohlcv` at inference time to fetch historical candles, then calls
   `calculate_all_indicators` (or individual indicator tools such as `calculate_rsi`, `calculate_macd`,
-  `calculate_atr`, `calculate_bollinger_bands`) on those candles. Rust does not pre-fetch or pre-compute anything
-  before the agent is invoked.
-* **Execution Logic**: The LLM calls the OHLCV and indicator tools during its reasoning pass, then interprets the
-  `f64` statistical outputs — RSI overbought/oversold conditions (>70 / <30), MACD signal-line crossovers, ATR
-  historical volatility, and Bollinger Band support/resistance boundaries — producing a definitive structured summary.
-  The LLM does not perform the mathematical calculations; it invokes the tools and interprets the results. This MVP
-  interpretation path is designed for traditional long-term investing workflows; crypto-native interpretation concerns
-  such as logarithmic scaling, 24/7 market structure, and MVRV-style on-chain metrics are intentionally deferred
-  beyond the MVP.
+  `calculate_atr`, `calculate_bollinger_bands`) on those candles. A `get_options_snapshot` tool — wrapping
+  `YFinanceOptionsProvider` behind the `OptionsProvider` trait — returns a compact `OptionsSnapshot` with ATM IV, IV
+  term structure, put/call volume and OI ratios, max pain strike, 25-delta skew, and a near-the-money strike slice
+  (nearest expiration, strikes within ±5% of spot). The tool returns an error "no listed options for {symbol}" when
+  the ticker has no options chain, and the analyst is prompted to omit options analysis in that case without retrying.
+  Rust does not pre-fetch or pre-compute anything before the agent is invoked.
+* **Execution Logic**: The LLM calls the OHLCV, indicator, and options tools during its reasoning pass, then
+  interprets the `f64` statistical outputs — RSI overbought/oversold conditions (>70 / <30), MACD signal-line
+  crossovers, ATR historical volatility, Bollinger Band support/resistance boundaries, and implied-volatility regime
+  plus positioning skew from the options snapshot — producing a definitive structured summary. The options summary is
+  persisted in the optional `TechnicalData.options_summary` field. The LLM does not perform the mathematical
+  calculations; it invokes the tools and interprets the results. This MVP interpretation path is designed for
+  traditional long-term investing workflows; crypto-native interpretation concerns such as logarithmic scaling, 24/7
+  market structure, and MVRV-style on-chain metrics are intentionally deferred beyond the MVP.
 * **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis
