@@ -485,10 +485,10 @@ mod tests {
         assert_eq!(usages.len(), 4);
         assert!(usages.iter().all(|u| u.token_counts_available));
         // State fields populated
-        assert!(state.fundamental_metrics.is_some());
-        assert!(state.market_sentiment.is_some());
-        assert!(state.macro_news.is_some());
-        assert!(state.technical_indicators.is_some());
+        assert!(state.fundamental_metrics().is_some());
+        assert!(state.market_sentiment().is_some());
+        assert!(state.macro_news().is_some());
+        assert!(state.technical_indicators().is_some());
     }
 
     // ── Task 5.7 / 6.2: one analyst fails — partial data, continues ──────
@@ -524,13 +524,13 @@ mod tests {
             .expect("fallback usage for failed analyst must be present");
         assert!(!failed_usage.token_counts_available);
         // The failed field is None; the others are populated
-        assert!(state.fundamental_metrics.is_some());
+        assert!(state.fundamental_metrics().is_some());
         assert!(
-            state.market_sentiment.is_none(),
+            state.market_sentiment().is_none(),
             "failed analyst field must be None"
         );
-        assert!(state.macro_news.is_some());
-        assert!(state.technical_indicators.is_some());
+        assert!(state.macro_news().is_some());
+        assert!(state.technical_indicators().is_some());
     }
 
     // ── Task 5.8 / 6.2: two failures → abort with both agent names ───────
