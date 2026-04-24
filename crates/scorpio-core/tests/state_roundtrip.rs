@@ -640,15 +640,19 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     symbol: None,
                     target_date,
                     current_price: None,
-                    market_volatility: None,
-                    fundamental_metrics,
-                    technical_indicators,
-                    market_sentiment,
-                    macro_news,
-                    evidence_fundamental,
-                    evidence_technical,
-                    evidence_sentiment,
-                    evidence_news,
+                    equity: Some(EquityState {
+                        fundamental_metrics,
+                        technical_indicators,
+                        market_sentiment,
+                        macro_news,
+                        evidence_fundamental,
+                        evidence_technical,
+                        evidence_sentiment,
+                        evidence_news,
+                        market_volatility: None,
+                        derived_valuation: None,
+                    }),
+                    crypto: None,
                     enrichment_event_news,
                     enrichment_consensus,
                     data_coverage,
@@ -664,7 +668,6 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     prior_thesis,
                     current_thesis,
                     token_usage,
-                    derived_valuation: None,
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
                 }
@@ -766,7 +769,7 @@ fn trading_state_without_derived_valuation_deserializes_as_none() {
         .expect("json is object")
         .remove("derived_valuation");
     let back: TradingState = serde_json::from_value(json).expect("old snapshot must deserialize");
-    assert!(back.derived_valuation.is_none());
+    assert!(back.derived_valuation().is_none());
     assert_eq!(back.asset_symbol, "AAPL");
 }
 

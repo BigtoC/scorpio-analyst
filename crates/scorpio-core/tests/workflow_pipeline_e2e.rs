@@ -33,10 +33,10 @@ async fn run_analysis_cycle_success_path_populates_all_phases() {
         .expect("pipeline must complete successfully with stubs");
 
     assert_ne!(final_state.execution_id, caller_exec_id);
-    assert!(final_state.fundamental_metrics.is_some());
-    assert!(final_state.technical_indicators.is_some());
-    assert!(final_state.market_sentiment.is_some());
-    assert!(final_state.macro_news.is_some());
+    assert!(final_state.fundamental_metrics().is_some());
+    assert!(final_state.technical_indicators().is_some());
+    assert!(final_state.market_sentiment().is_some());
+    assert!(final_state.macro_news().is_some());
     assert!(!final_state.debate_history.is_empty());
     assert!(final_state.consensus_summary.is_some());
     assert!(final_state.trader_proposal.is_some());
@@ -230,13 +230,13 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
         snaps.push(snapshot.state);
     }
 
-    assert!(snaps[0].fundamental_metrics.is_some());
+    assert!(snaps[0].fundamental_metrics().is_some());
     assert!(snaps[0].debate_history.is_empty());
     assert!(snaps[0].consensus_summary.is_none());
     assert!(snaps[0].trader_proposal.is_none());
     assert!(snaps[0].final_execution_status.is_none());
 
-    assert!(snaps[1].fundamental_metrics.is_some());
+    assert!(snaps[1].fundamental_metrics().is_some());
     assert!(!snaps[1].debate_history.is_empty());
     assert!(snaps[1].consensus_summary.is_some());
     assert!(snaps[1].trader_proposal.is_none());
@@ -251,7 +251,7 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
     assert!(!snaps[3].risk_discussion_history.is_empty());
     assert!(snaps[3].final_execution_status.is_none());
 
-    assert!(snaps[4].fundamental_metrics.is_some());
+    assert!(snaps[4].fundamental_metrics().is_some());
     assert!(snaps[4].consensus_summary.is_some());
     assert!(snaps[4].trader_proposal.is_some());
     assert!(snaps[4].aggressive_risk_report.is_some());
@@ -319,7 +319,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
             content: "stale risk".to_owned(),
         });
     initial_state.consensus_summary = Some("stale consensus".to_owned());
-    initial_state.evidence_fundamental = Some(EvidenceRecord {
+    initial_state.set_evidence_fundamental(EvidenceRecord {
         kind: EvidenceKind::Fundamental,
         payload: FundamentalData {
             revenue_growth_pct: None,
@@ -369,8 +369,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
     );
     assert_ne!(
         final_state
-            .evidence_fundamental
-            .as_ref()
+            .evidence_fundamental()
             .and_then(|record| record.payload.pe_ratio),
         Some(999.0)
     );
@@ -422,7 +421,7 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
 
     // Inject a stale derived_valuation that should NOT survive into the next cycle.
     let mut initial_state = TradingState::new("AAPL", "2026-03-20");
-    initial_state.derived_valuation = Some(DerivedValuation {
+    initial_state.set_derived_valuation(DerivedValuation {
         asset_shape: AssetShape::Fund,
         scenario: ScenarioValuation::NotAssessed {
             reason: "stale_reason_from_prior_run".to_owned(),
@@ -448,7 +447,7 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
     // The stale NotAssessed valuation must not survive into the final state.
     // The stub AnalystTask does not inject derived_valuation, so it ends as None —
     // which is the correct cycle-safe outcome (reset happened).
-    if let Some(dv) = &final_state.derived_valuation {
+    if let Some(dv) = final_state.derived_valuation() {
         // If the runtime did re-derive a value, it must NOT be the stale one.
         assert_ne!(
             dv.asset_shape,
