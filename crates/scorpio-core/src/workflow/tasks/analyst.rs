@@ -102,10 +102,10 @@ fn active_analyst_ids(state: &TradingState) -> Vec<AnalystId> {
 
 fn input_missing(state: &TradingState, input: &str) -> bool {
     match input {
-        "fundamentals" => state.evidence_fundamental.is_none(),
-        "sentiment" => state.evidence_sentiment.is_none(),
-        "news" => state.evidence_news.is_none(),
-        "technical" => state.evidence_technical.is_none(),
+        "fundamentals" => state.evidence_fundamental().is_none(),
+        "sentiment" => state.evidence_sentiment().is_none(),
+        "news" => state.evidence_news().is_none(),
+        "technical" => state.evidence_technical().is_none(),
         _ => false,
     }
 }
@@ -654,9 +654,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_FUNDAMENTAL,
-                |state, data| state.fundamental_metrics = Some(data),
+                |state, data| state.set_fundamental_metrics(data),
                 |state, data| {
-                    state.evidence_fundamental = Some(EvidenceRecord {
+                    state.set_evidence_fundamental(EvidenceRecord {
                         kind: EvidenceKind::Fundamental,
                         payload: data,
                         sources: vec![stage1_source(
@@ -675,9 +675,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_SENTIMENT,
-                |state, data| state.market_sentiment = Some(data),
+                |state, data| state.set_market_sentiment(data),
                 |state, data| {
-                    state.evidence_sentiment = Some(EvidenceRecord {
+                    state.set_evidence_sentiment(EvidenceRecord {
                         kind: EvidenceKind::Sentiment,
                         payload: data,
                         sources: vec![stage1_source(
@@ -696,9 +696,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_NEWS,
-                |state, data| state.macro_news = Some(data),
+                |state, data| state.set_macro_news(data),
                 |state, data| {
-                    state.evidence_news = Some(EvidenceRecord {
+                    state.set_evidence_news(EvidenceRecord {
                         kind: EvidenceKind::News,
                         payload: data,
                         sources: vec![
@@ -717,9 +717,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_TECHNICAL,
-                |state, data| state.technical_indicators = Some(data),
+                |state, data| state.set_technical_indicators(data),
                 |state, data| {
-                    state.evidence_technical = Some(EvidenceRecord {
+                    state.set_evidence_technical(EvidenceRecord {
                         kind: EvidenceKind::Technical,
                         payload: data,
                         sources: vec![stage1_source(PROVIDER_YFINANCE, vec!["ohlcv".to_owned()])],
@@ -763,16 +763,16 @@ impl Task for AnalystSyncTask {
 
         // Derive ProvenanceSummary from providers attached to present evidence records.
         let mut providers: Vec<String> = Vec::new();
-        if let Some(rec) = &state.evidence_fundamental {
+        if let Some(rec) = state.evidence_fundamental() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
-        if let Some(rec) = &state.evidence_sentiment {
+        if let Some(rec) = state.evidence_sentiment() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
-        if let Some(rec) = &state.evidence_news {
+        if let Some(rec) = state.evidence_news() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
-        if let Some(rec) = &state.evidence_technical {
+        if let Some(rec) = state.evidence_technical() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
         providers.sort_unstable();
@@ -790,7 +790,7 @@ impl Task for AnalystSyncTask {
             fetch_valuation_inputs(&self.yfinance, &symbol, self.valuation_fetch_timeout).await;
         let current_price = state.current_price;
 
-        state.derived_valuation = Some(derive_valuation(
+        state.set_derived_valuation(derive_valuation(
             valuation_inputs.profile,
             valuation_inputs.cashflow.as_deref(),
             valuation_inputs.balance.as_deref(),
@@ -802,7 +802,7 @@ impl Task for AnalystSyncTask {
 
         info!(
             task = "analyst_sync",
-            asset_shape = ?state.derived_valuation.as_ref().map(|d| &d.asset_shape),
+            asset_shape = ?state.derived_valuation().map(|d| &d.asset_shape),
             "deterministic valuation derived"
         );
 

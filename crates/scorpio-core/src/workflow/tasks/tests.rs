@@ -209,26 +209,26 @@ async fn analyst_sync_all_succeed_returns_continue() {
     assert_eq!(result.next_action, NextAction::Continue);
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
-    assert!(recovered.fundamental_metrics.is_some());
-    assert!(recovered.market_sentiment.is_some());
-    assert!(recovered.macro_news.is_some());
-    assert!(recovered.technical_indicators.is_some());
+    assert!(recovered.fundamental_metrics().is_some());
+    assert!(recovered.market_sentiment().is_some());
+    assert!(recovered.macro_news().is_some());
+    assert!(recovered.technical_indicators().is_some());
 
     // Task 3.5 — typed evidence fields must all be Some.
     assert!(
-        recovered.evidence_fundamental.is_some(),
+        recovered.evidence_fundamental().is_some(),
         "evidence_fundamental must be populated"
     );
     assert!(
-        recovered.evidence_sentiment.is_some(),
+        recovered.evidence_sentiment().is_some(),
         "evidence_sentiment must be populated"
     );
     assert!(
-        recovered.evidence_news.is_some(),
+        recovered.evidence_news().is_some(),
         "evidence_news must be populated"
     );
     assert!(
-        recovered.evidence_technical.is_some(),
+        recovered.evidence_technical().is_some(),
         "evidence_technical must be populated"
     );
     // Coverage: no missing inputs.
@@ -559,11 +559,11 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
 
-    assert!(recovered.evidence_fundamental.is_some());
-    assert!(recovered.evidence_sentiment.is_some());
-    assert!(recovered.evidence_news.is_some());
+    assert!(recovered.evidence_fundamental().is_some());
+    assert!(recovered.evidence_sentiment().is_some());
+    assert!(recovered.evidence_news().is_some());
     assert!(
-        recovered.evidence_technical.is_none(),
+        recovered.evidence_technical().is_none(),
         "evidence_technical must remain None when technical analyst failed"
     );
 
@@ -708,12 +708,12 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     assert!(
-        recovered.fundamental_metrics.is_none(),
+        recovered.fundamental_metrics().is_none(),
         "unreadable payload must not be merged into state"
     );
-    assert!(recovered.market_sentiment.is_some());
-    assert!(recovered.macro_news.is_some());
-    assert!(recovered.technical_indicators.is_some());
+    assert!(recovered.market_sentiment().is_some());
+    assert!(recovered.macro_news().is_some());
+    assert!(recovered.technical_indicators().is_some());
 }
 
 #[tokio::test]
@@ -973,12 +973,12 @@ async fn analyst_sync_honours_restricted_required_inputs_without_phantom_failure
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     // Active analysts populated
-    assert!(recovered.fundamental_metrics.is_some());
-    assert!(recovered.macro_news.is_some());
+    assert!(recovered.fundamental_metrics().is_some());
+    assert!(recovered.macro_news().is_some());
     // Inactive analysts must stay None — they were never merged because the
     // registry-driven sync only processes ids in the active set.
-    assert!(recovered.market_sentiment.is_none());
-    assert!(recovered.technical_indicators.is_none());
+    assert!(recovered.market_sentiment().is_none());
+    assert!(recovered.technical_indicators().is_none());
     // Token-usage phase should have exactly two entries (one per active id).
     let phase = recovered
         .token_usage
@@ -1952,8 +1952,7 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     let derived = recovered
-        .derived_valuation
-        .as_ref()
+        .derived_valuation()
         .expect("derived_valuation must be Some after AnalystSyncTask runs");
     assert!(
         matches!(derived.scenario, ScenarioValuation::NotAssessed { .. }),
@@ -2136,8 +2135,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     let derived = recovered
-        .derived_valuation
-        .as_ref()
+        .derived_valuation()
         .expect("derived_valuation must be Some after AnalystSyncTask runs");
 
     match &derived.scenario {
