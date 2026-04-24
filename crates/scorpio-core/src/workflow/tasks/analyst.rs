@@ -159,8 +159,7 @@ impl Task for FundamentalAnalystTask {
         let analyst = FundamentalAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
         );
 
@@ -246,8 +245,7 @@ impl Task for SentimentAnalystTask {
         let analyst = SentimentAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
             cached_news_opt,
         );
@@ -337,8 +335,7 @@ impl Task for NewsAnalystTask {
             self.handle.clone(),
             self.finnhub.clone(),
             self.fred.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
             cached_news_opt,
         );
@@ -422,8 +419,7 @@ impl Task for TechnicalAnalystTask {
         let analyst = TechnicalAnalyst::new(
             self.handle.clone(),
             self.yfinance.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
         );
 
