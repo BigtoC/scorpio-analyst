@@ -999,6 +999,54 @@ fn build_prompt_context_user_prompt_includes_pack_context() {
     assert!(ctx.user_prompt.contains("Emphasis:"));
 }
 
+#[test]
+fn build_prompt_context_prefers_runtime_policy_trader_prompt_bundle() {
+    let mut state = empty_state();
+    let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+        .expect("baseline runtime policy should resolve");
+    policy.prompt_bundle.trader = "Pack-owned trader prompt for {ticker} at {current_date}.".into();
+    state.analysis_runtime_policy = Some(policy);
+
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+
+    assert!(
+        ctx.system_prompt
+            .contains("Pack-owned trader prompt for AAPL at 2026-03-15."),
+        "system prompt should render the runtime-policy trader prompt bundle: {}",
+        ctx.system_prompt
+    );
+    assert!(
+        !ctx.system_prompt
+            .contains("Your job is to synthesize the research consensus"),
+        "legacy trader prompt should not leak through when a pack override is present: {}",
+        ctx.system_prompt
+    );
+}
+
+#[test]
+fn build_prompt_context_renders_analysis_emphasis_from_runtime_policy_trader_prompt_bundle() {
+    let mut state = empty_state();
+    let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+        .expect("baseline runtime policy should resolve");
+    policy.analysis_emphasis = "prioritise valuation discipline".to_owned();
+    policy.prompt_bundle.trader = "Trader emphasis: {analysis_emphasis}.".into();
+    state.analysis_runtime_policy = Some(policy);
+
+    let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
+
+    assert!(
+        ctx.system_prompt
+            .contains("Trader emphasis: prioritise valuation discipline."),
+        "system prompt should substitute analysis_emphasis for pack-owned trader templates: {}",
+        ctx.system_prompt
+    );
+    assert!(
+        !ctx.system_prompt.contains("{analysis_emphasis}"),
+        "analysis_emphasis placeholder should not leak through unresolved: {}",
+        ctx.system_prompt
+    );
+}
+
 // ── Chunk 4: Valuation prompt integration ─────────────────────────────────────
 
 #[test]

@@ -1,9 +1,9 @@
 use crate::{
     agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-        build_evidence_context, build_pack_context, build_thesis_memory_context,
-        build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+        UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_data_quality_context,
+        build_enrichment_context, build_evidence_context, build_pack_context,
+        build_thesis_memory_context, build_valuation_context, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     state::TradingState,
 };
@@ -64,6 +64,15 @@ pub(super) struct PromptContext {
     pub(super) user_prompt: String,
 }
 
+fn trader_system_prompt_template(state: &TradingState) -> &str {
+    state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| policy.prompt_bundle.trader.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(TRADER_SYSTEM_PROMPT)
+}
+
 pub(super) fn build_prompt_context(
     state: &TradingState,
     symbol: &str,
@@ -83,9 +92,10 @@ pub(super) fn build_prompt_context(
         "All analyst inputs and the debate consensus are available for this run."
     };
 
-    let system_prompt = TRADER_SYSTEM_PROMPT
+    let system_prompt = trader_system_prompt_template(state)
         .replace("{ticker}", &symbol)
         .replace("{current_date}", &target_date)
+        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
         .replace(
             "{consensus_summary}",
             &sanitize_prompt_context(
