@@ -25,6 +25,7 @@ pub mod domain;
 pub mod error;
 pub mod indicators;
 pub mod observability;
+pub mod prompts;
 pub mod providers;
 pub mod rate_limit;
 pub mod settings;

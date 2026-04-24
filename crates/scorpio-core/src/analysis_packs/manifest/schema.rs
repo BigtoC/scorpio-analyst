@@ -1,4 +1,4 @@
-use crate::state::AssetShape;
+use crate::{prompts::PromptBundle, state::AssetShape};
 
 use super::{PackId, StrategyFocus, ValuationAssessment};
 
@@ -35,6 +35,14 @@ pub struct AnalysisPackManifest {
     pub report_strategy_label: String,
     /// Default valuation assessment for supported asset shapes (corporate equity).
     pub default_valuation: ValuationAssessment,
+    /// Per-role system prompts supplied by the pack.
+    ///
+    /// Introduced in Phase 4 of the asset-class generalization refactor.
+    /// Today the bundle is [`PromptBundle::empty`] for the baseline pack
+    /// because agents still read their own `const _SYSTEM_PROMPT`; the
+    /// follow-up migration fills these slots via `include_str!` on `.md`
+    /// files and rewires agents to read from here instead.
+    pub prompt_bundle: PromptBundle,
 }
 
 impl AnalysisPackManifest {

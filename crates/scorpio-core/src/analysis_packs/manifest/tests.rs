@@ -1,4 +1,4 @@
-use crate::state::AssetShape;
+use crate::{prompts::PromptBundle, state::AssetShape};
 
 use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
 
@@ -17,6 +17,7 @@ fn valid_manifest() -> AnalysisPackManifest {
         analysis_emphasis: "Test emphasis".to_owned(),
         report_strategy_label: "Test".to_owned(),
         default_valuation: ValuationAssessment::Full,
+        prompt_bundle: PromptBundle::empty(),
     }
 }
 

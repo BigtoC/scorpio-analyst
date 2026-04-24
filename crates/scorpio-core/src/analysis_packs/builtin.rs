@@ -3,6 +3,8 @@
 //! First-slice: only compile-time built-in packs. External manifests or
 //! hybrid loading can follow in a later slice if needed.
 
+use crate::prompts::PromptBundle;
+
 use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
 
 /// Resolve a [`PackId`] into its full [`AnalysisPackManifest`].
@@ -46,6 +48,10 @@ fn baseline_pack() -> AnalysisPackManifest {
             .to_owned(),
         report_strategy_label: "Balanced Institutional".to_owned(),
         default_valuation: ValuationAssessment::Full,
+        // Phase 4 scaffolding: empty bundle today because agents still read
+        // their own `const _SYSTEM_PROMPT`. The follow-up migration populates
+        // this via `include_str!` on `.md` files under `equity/prompts/`.
+        prompt_bundle: PromptBundle::empty(),
     }
 }
 
