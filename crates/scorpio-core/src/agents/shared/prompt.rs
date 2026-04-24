@@ -205,12 +205,12 @@ interpretation as established fact."
 /// Render a prompt-safe typed evidence snapshot in the Stage 4 contract shape.
 pub(crate) fn build_evidence_context(state: &TradingState) -> String {
     let fundamental =
-        serde_json::to_string(&state.evidence_fundamental).unwrap_or_else(|_| "null".to_owned());
+        serde_json::to_string(&state.evidence_fundamental()).unwrap_or_else(|_| "null".to_owned());
     let technical =
-        serde_json::to_string(&state.evidence_technical).unwrap_or_else(|_| "null".to_owned());
+        serde_json::to_string(&state.evidence_technical()).unwrap_or_else(|_| "null".to_owned());
     let sentiment =
-        serde_json::to_string(&state.evidence_sentiment).unwrap_or_else(|_| "null".to_owned());
-    let news = serde_json::to_string(&state.evidence_news).unwrap_or_else(|_| "null".to_owned());
+        serde_json::to_string(&state.evidence_sentiment()).unwrap_or_else(|_| "null".to_owned());
+    let news = serde_json::to_string(&state.evidence_news()).unwrap_or_else(|_| "null".to_owned());
 
     format!(
         "Typed evidence snapshot:\n\
@@ -439,7 +439,7 @@ mod tests {
         };
 
         let mut state = empty_state();
-        state.evidence_fundamental = Some(EvidenceRecord {
+        state.set_evidence_fundamental(EvidenceRecord {
             kind: EvidenceKind::Fundamental,
             payload: FundamentalData {
                 revenue_growth_pct: None,
