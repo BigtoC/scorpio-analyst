@@ -163,6 +163,42 @@ fn resolve_valuation_unknown_always_not_assessed() {
 }
 
 #[test]
+fn resolve_valuation_native_chain_asset_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::NativeChainAsset),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_erc20_token_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::Erc20Token),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_stablecoin_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::Stablecoin),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_lp_token_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::LpToken),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
 fn resolve_valuation_fund_ignores_pack_full_default() {
     let mut manifest = valid_manifest();
     manifest.default_valuation = ValuationAssessment::Full;

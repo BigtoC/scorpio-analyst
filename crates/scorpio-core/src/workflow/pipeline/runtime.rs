@@ -16,6 +16,7 @@ use crate::{
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
     data::{FinnhubClient, FredClient, YFinanceClient},
+    domain::Symbol,
     error::TradingError,
     providers::factory::CompletionModelHandle,
     state::{EnrichmentState, TradingState},
@@ -35,8 +36,8 @@ use crate::{
 
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
 
-pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<String, TradingError> {
-    Ok(crate::data::resolve_symbol(symbol)?.canonical_symbol)
+pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
+    Ok(crate::data::resolve_symbol(symbol)?.symbol)
 }
 
 pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
@@ -208,7 +209,8 @@ pub(super) async fn run_analysis_cycle(
 ) -> Result<TradingState, TradingError> {
     reset_cycle_outputs(&mut initial_state);
     initial_state.execution_id = Uuid::new_v4();
-    initial_state.asset_symbol = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
+    let canonical = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
+    initial_state.set_symbol(canonical);
 
     let runtime_policy =
         resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {

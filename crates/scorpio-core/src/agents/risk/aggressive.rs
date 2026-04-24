@@ -225,6 +225,7 @@ mod tests {
         TradingState {
             execution_id: Uuid::new_v4(),
             asset_symbol: "AAPL".to_owned(),
+            symbol: None,
             target_date: "2026-03-15".to_owned(),
             current_price: None,
             market_volatility: None,

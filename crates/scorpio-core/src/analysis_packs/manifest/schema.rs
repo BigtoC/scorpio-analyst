@@ -65,6 +65,7 @@ impl AnalysisPackManifest {
         match shape {
             AssetShape::CorporateEquity => self.default_valuation,
             AssetShape::Fund | AssetShape::Unknown => ValuationAssessment::NotAssessed,
+            _ => ValuationAssessment::NotAssessed,
         }
     }
 }
