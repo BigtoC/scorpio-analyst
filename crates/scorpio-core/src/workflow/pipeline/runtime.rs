@@ -109,15 +109,9 @@ fn build_analyst_task(
 
 pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.current_price = None;
-    state.market_volatility = None;
-    state.fundamental_metrics = None;
-    state.technical_indicators = None;
-    state.market_sentiment = None;
-    state.macro_news = None;
-    state.evidence_fundamental = None;
-    state.evidence_technical = None;
-    state.evidence_sentiment = None;
-    state.evidence_news = None;
+    // Drop the whole equity sub-state in one move — on the next cycle
+    // writers repopulate it lazily through the accessor setters.
+    state.clear_equity();
     state.enrichment_event_news = EnrichmentState::default();
     state.enrichment_consensus = EnrichmentState::default();
     state.data_coverage = None;
@@ -135,7 +129,6 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     // the current canonical symbol; FundManagerTask will set `current_thesis`.
     state.prior_thesis = None;
     state.current_thesis = None;
-    state.derived_valuation = None;
     state.analysis_pack_name = None;
     state.analysis_runtime_policy = None;
     state.token_usage = Default::default();
@@ -310,7 +303,7 @@ pub(super) async fn run_analysis_cycle(
     info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle started");
 
     let need_price = initial_state.current_price.is_none();
-    let need_vix = initial_state.market_volatility.is_none();
+    let need_vix = initial_state.market_volatility().is_none();
     let (price_result, vix_result, news_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
         tokio::join!(
@@ -346,7 +339,7 @@ pub(super) async fn run_analysis_cycle(
             trend = %vix.vix_trend,
             "fetched VIX market volatility context"
         );
-        initial_state.market_volatility = Some(vix);
+        initial_state.set_market_volatility(vix);
     } else if need_vix {
         info!("VIX data unavailable; continuing without volatility context");
     }
