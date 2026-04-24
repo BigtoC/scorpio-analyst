@@ -71,10 +71,10 @@ pub(super) fn build_prompt_context(
 ) -> PromptContext {
     let symbol = sanitize_symbol_for_prompt(symbol);
     let target_date = sanitize_date_for_prompt(target_date);
-    let missing_analyst_data = state.fundamental_metrics.is_none()
-        || state.technical_indicators.is_none()
-        || state.market_sentiment.is_none()
-        || state.macro_news.is_none();
+    let missing_analyst_data = state.fundamental_metrics().is_none()
+        || state.technical_indicators().is_none()
+        || state.market_sentiment().is_none()
+        || state.macro_news().is_none();
     let missing_consensus = state.consensus_summary.is_none();
 
     let data_quality_note = if missing_analyst_data || missing_consensus {
@@ -97,20 +97,23 @@ pub(super) fn build_prompt_context(
         )
         .replace(
             "{fundamental_report}",
-            &serialize_prompt_value(&state.fundamental_metrics),
+            &serialize_prompt_value(&state.fundamental_metrics()),
         )
         .replace(
             "{technical_report}",
-            &serialize_prompt_value(&state.technical_indicators),
+            &serialize_prompt_value(&state.technical_indicators()),
         )
         .replace(
             "{sentiment_report}",
-            &serialize_prompt_value(&state.market_sentiment),
+            &serialize_prompt_value(&state.market_sentiment()),
         )
-        .replace("{news_report}", &serialize_prompt_value(&state.macro_news))
+        .replace(
+            "{news_report}",
+            &serialize_prompt_value(&state.macro_news()),
+        )
         .replace(
             "{market_volatility_report}",
-            &serialize_prompt_value(&state.market_volatility),
+            &serialize_prompt_value(&state.market_volatility()),
         )
         .replace("{past_memory_str}", "see user context")
         .replace("{data_quality_note}", data_quality_note)

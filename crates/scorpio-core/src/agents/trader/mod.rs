@@ -164,10 +164,7 @@ impl TraderAgent {
         // The LLM must not author this field (validated above); the runtime stamps
         // the deterministic valuation computed before trader inference.
         let mut proposal = llm_proposal;
-        proposal.scenario_valuation = state
-            .derived_valuation
-            .as_ref()
-            .map(|dv| dv.scenario.clone());
+        proposal.scenario_valuation = state.derived_valuation().map(|dv| dv.scenario.clone());
 
         state.trader_proposal = Some(proposal);
         Ok(usage)
@@ -274,10 +271,10 @@ fn validate_trade_proposal_context(
     state: &TradingState,
     proposal: &TradeProposal,
 ) -> Result<(), TradingError> {
-    let missing_inputs = state.fundamental_metrics.is_none()
-        || state.technical_indicators.is_none()
-        || state.market_sentiment.is_none()
-        || state.macro_news.is_none()
+    let missing_inputs = state.fundamental_metrics().is_none()
+        || state.technical_indicators().is_none()
+        || state.market_sentiment().is_none()
+        || state.macro_news().is_none()
         || state.consensus_summary.is_none();
 
     if missing_inputs && !rationale_acknowledges_missing_data(&proposal.rationale) {
