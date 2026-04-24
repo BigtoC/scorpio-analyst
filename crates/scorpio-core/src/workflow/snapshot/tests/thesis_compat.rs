@@ -66,7 +66,11 @@ async fn load_prior_thesis_supports_legacy_rows_without_symbol_column_data() {
 }
 
 #[tokio::test]
-async fn load_prior_thesis_skips_rows_from_future_schema_versions() {
+async fn load_prior_thesis_skips_rows_with_mismatched_schema_version() {
+    // Same-version-only after the Phase 6 bump: any row whose stored
+    // `schema_version` does not equal `THESIS_MEMORY_SCHEMA_VERSION` is
+    // skipped before deserialization. Simulate a pre-v2 row by writing
+    // `schema_version = 1`.
     let store = in_memory_store().await;
     let mut state = TradingState::new("AAPL", "2026-04-07");
     state.current_thesis = Some(sample_thesis());
@@ -82,7 +86,7 @@ async fn load_prior_thesis_skips_rows_from_future_schema_versions() {
         .expect("save should succeed");
 
     sqlx::query(
-        "UPDATE phase_snapshots SET schema_version = 2 WHERE execution_id = ? AND phase_number = 5",
+        "UPDATE phase_snapshots SET schema_version = 1 WHERE execution_id = ? AND phase_number = 5",
     )
     .bind(state.execution_id.to_string())
     .execute(&store.pool)
@@ -96,7 +100,59 @@ async fn load_prior_thesis_skips_rows_from_future_schema_versions() {
 
     assert!(
         result.is_none(),
-        "unsupported future schema version must be skipped"
+        "rows with mismatched schema_version must be skipped"
+    );
+}
+
+#[tokio::test]
+async fn load_prior_thesis_prefers_newest_compatible_schema_row() {
+    // Seed two phase-5 rows for the same symbol: a stale v1 (incompatible)
+    // row inserted first, then a newer v2 row. The lookup must return the
+    // v2 thesis even though the v1 row is "newer" in insertion order only
+    // if the same-version filter is working.
+    let store = in_memory_store().await;
+    let mut stale = TradingState::new("AAPL", "2026-04-07");
+    stale.current_thesis = Some(sample_thesis());
+    let stale_exec = stale.execution_id.to_string();
+
+    store
+        .save_snapshot(&stale_exec, SnapshotPhase::FundManager, &stale, None)
+        .await
+        .expect("stale save should succeed");
+
+    // Backdate the stale row to a stored v1 schema_version.
+    sqlx::query(
+        "UPDATE phase_snapshots SET schema_version = 1 WHERE execution_id = ? AND phase_number = 5",
+    )
+    .bind(&stale_exec)
+    .execute(&store.pool)
+    .await
+    .expect("stale-version update should succeed");
+
+    // Write a fresh v2 row (the default version on save).
+    let mut fresh = TradingState::new("AAPL", "2026-04-08");
+    let mut fresh_thesis = sample_thesis();
+    fresh_thesis.action = "Sell".to_owned();
+    fresh.current_thesis = Some(fresh_thesis);
+    store
+        .save_snapshot(
+            &fresh.execution_id.to_string(),
+            SnapshotPhase::FundManager,
+            &fresh,
+            None,
+        )
+        .await
+        .expect("fresh save should succeed");
+
+    let loaded = store
+        .load_prior_thesis_for_symbol("AAPL", 30)
+        .await
+        .expect("query should succeed")
+        .expect("v2 row should be reused");
+
+    assert_eq!(
+        loaded.action, "Sell",
+        "lookup must return the v2 thesis, not the stale v1 row"
     );
 }
 

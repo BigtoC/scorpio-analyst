@@ -154,7 +154,7 @@ async fn evidence_fields_survive_snapshot_round_trip() {
     let mut state = crate::state::TradingState::new("TSLA", "2026-01-15");
     let exec_id = state.execution_id.to_string();
 
-    state.evidence_fundamental = Some(EvidenceRecord {
+    state.set_evidence_fundamental(EvidenceRecord {
         kind: EvidenceKind::Fundamental,
         payload: FundamentalData {
             revenue_growth_pct: None,
@@ -202,14 +202,13 @@ async fn evidence_fields_survive_snapshot_round_trip() {
         .expect("snapshot should exist");
 
     assert!(
-        loaded.state.evidence_fundamental.is_some(),
+        loaded.state.evidence_fundamental().is_some(),
         "evidence_fundamental must survive snapshot"
     );
     assert_eq!(
         loaded
             .state
-            .evidence_fundamental
-            .as_ref()
+            .evidence_fundamental()
             .unwrap()
             .payload
             .pe_ratio,
