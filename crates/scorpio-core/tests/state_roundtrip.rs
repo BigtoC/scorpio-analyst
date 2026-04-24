@@ -954,7 +954,8 @@ fn trading_state_with_legacy_root_equity_fields_deserializes_into_equity_substat
         Some("legacy fundamentals")
     );
     assert_eq!(
-        back.technical_indicators().map(|data| data.summary.as_str()),
+        back.technical_indicators()
+            .map(|data| data.summary.as_str()),
         Some("legacy technical")
     );
     assert_eq!(
@@ -966,7 +967,8 @@ fn trading_state_with_legacy_root_equity_fields_deserializes_into_equity_substat
         Some("legacy news")
     );
     assert_eq!(
-        back.market_volatility().map(|data| data.fetched_at.as_str()),
+        back.market_volatility()
+            .map(|data| data.fetched_at.as_str()),
         Some("2026-03-15")
     );
     assert!(back.derived_valuation().is_some());
