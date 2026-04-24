@@ -75,6 +75,7 @@ impl PreflightTask {
     }
 
     /// Create a new `PreflightTask` with a specific pack selection.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn with_pack(
         enrichment: crate::config::DataEnrichmentConfig,
         snapshot_store: Arc<SnapshotStore>,
@@ -178,10 +179,10 @@ impl Task for PreflightTask {
 
         // ── Resolve analysis pack into runtime policy ─────────────────────
         let runtime_policy = self.runtime_policy.as_ref().map_err(|e| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "PreflightTask: pack resolution failed: {e}"
-                ))
-            })?;
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: pack resolution failed: {e}"
+            ))
+        })?;
         debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
 
         state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());

@@ -22,10 +22,12 @@ use crate::{
     data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     state::{
-        AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, NewsData, PhaseTokenUsage, ProvenanceSummary, SentimentData,
-        TechnicalData, TradingState, derive_valuation,
+        AgentTokenUsage, AssetShape, DataCoverageReport, DerivedValuation, EvidenceKind,
+        EvidenceRecord, EvidenceSource, FundamentalData, NewsData, PhaseTokenUsage,
+        ProvenanceSummary, ScenarioValuation, SentimentData, TechnicalData, TradingState,
+        derive_valuation,
     },
+    valuation::ValuatorRegistry,
     workflow::{
         context_bridge::{
             deserialize_state_from_context, read_prefixed_result, serialize_state_to_context,
@@ -622,6 +624,64 @@ async fn merge_analyst_result<T, F, G>(
     }
 }
 
+fn no_valuator_selected(asset_shape: AssetShape) -> DerivedValuation {
+    DerivedValuation {
+        asset_shape,
+        scenario: ScenarioValuation::NotAssessed {
+            reason: "no_valuator_selected".to_owned(),
+        },
+    }
+}
+
+fn derive_runtime_valuation(
+    state: &TradingState,
+    valuation_inputs: &ValuationInputs,
+    current_price: Option<f64>,
+) -> DerivedValuation {
+    let provisional = derive_valuation(
+        valuation_inputs.profile.clone(),
+        valuation_inputs.cashflow.as_deref(),
+        valuation_inputs.balance.as_deref(),
+        valuation_inputs.income.as_deref(),
+        valuation_inputs.shares.as_deref(),
+        valuation_inputs.trend.as_deref(),
+        current_price,
+    );
+
+    let Some(policy) = state.analysis_runtime_policy.as_ref() else {
+        return provisional;
+    };
+
+    let Some(valuator_id) = policy
+        .valuator_selection
+        .get(&provisional.asset_shape)
+        .copied()
+    else {
+        return match provisional.asset_shape {
+            AssetShape::Fund | AssetShape::Unknown => provisional,
+            _ => no_valuator_selected(provisional.asset_shape),
+        };
+    };
+
+    let registry = ValuatorRegistry::equity_baseline();
+    let Some(valuator) = registry.get(valuator_id) else {
+        return no_valuator_selected(provisional.asset_shape);
+    };
+
+    valuator.assess(
+        crate::valuation::ValuationInputs {
+            profile: valuation_inputs.profile.clone(),
+            cashflow: valuation_inputs.cashflow.as_deref(),
+            balance: valuation_inputs.balance.as_deref(),
+            income: valuation_inputs.income.as_deref(),
+            shares: valuation_inputs.shares.as_deref(),
+            earnings_trend: valuation_inputs.trend.as_deref(),
+            current_price,
+        },
+        &provisional.asset_shape,
+    )
+}
+
 #[async_trait]
 impl Task for AnalystSyncTask {
     fn id(&self) -> &str {
@@ -790,13 +850,9 @@ impl Task for AnalystSyncTask {
             fetch_valuation_inputs(&self.yfinance, &symbol, self.valuation_fetch_timeout).await;
         let current_price = state.current_price;
 
-        state.set_derived_valuation(derive_valuation(
-            valuation_inputs.profile,
-            valuation_inputs.cashflow.as_deref(),
-            valuation_inputs.balance.as_deref(),
-            valuation_inputs.income.as_deref(),
-            valuation_inputs.shares.as_deref(),
-            valuation_inputs.trend.as_deref(),
+        state.set_derived_valuation(derive_runtime_valuation(
+            &state,
+            &valuation_inputs,
             current_price,
         ));
 
