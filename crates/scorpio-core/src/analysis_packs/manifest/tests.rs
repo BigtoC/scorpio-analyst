@@ -1,4 +1,6 @@
-use crate::{prompts::PromptBundle, state::AssetShape};
+use std::collections::HashMap;
+
+use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
 
 use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
 
@@ -18,6 +20,11 @@ fn valid_manifest() -> AnalysisPackManifest {
         report_strategy_label: "Test".to_owned(),
         default_valuation: ValuationAssessment::Full,
         prompt_bundle: PromptBundle::empty(),
+        valuator_selection: {
+            let mut m = HashMap::new();
+            m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
+            m
+        },
     }
 }
 

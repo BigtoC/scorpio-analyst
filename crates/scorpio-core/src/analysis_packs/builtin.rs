@@ -3,7 +3,9 @@
 //! First-slice: only compile-time built-in packs. External manifests or
 //! hybrid loading can follow in a later slice if needed.
 
-use crate::prompts::PromptBundle;
+use std::collections::HashMap;
+
+use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
 
 use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
 
@@ -52,6 +54,11 @@ fn baseline_pack() -> AnalysisPackManifest {
         // their own `const _SYSTEM_PROMPT`. The follow-up migration populates
         // this via `include_str!` on `.md` files under `equity/prompts/`.
         prompt_bundle: PromptBundle::empty(),
+        valuator_selection: {
+            let mut m = HashMap::new();
+            m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
+            m
+        },
     }
 }
 

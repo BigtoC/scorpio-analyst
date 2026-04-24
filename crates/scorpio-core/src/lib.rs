@@ -30,6 +30,7 @@ pub mod providers;
 pub mod rate_limit;
 pub mod settings;
 pub mod state;
+pub mod valuation;
 pub mod workflow;
 
 // Canonical re-export — the facade is the preferred entry point for new

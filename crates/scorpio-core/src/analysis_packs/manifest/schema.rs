@@ -1,4 +1,6 @@
-use crate::{prompts::PromptBundle, state::AssetShape};
+use std::collections::HashMap;
+
+use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
 
 use super::{PackId, StrategyFocus, ValuationAssessment};
 
@@ -15,7 +17,11 @@ pub struct EnrichmentIntent {
 /// Encodes coverage, enrichment intent, strategy focus, valuation policy, and
 /// metadata. Packs do not own execution, graph topology, or provider-factory
 /// routing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// Eq is intentionally not derived: the `valuator_selection` HashMap
+// carries runtime-only ordering and HashMap's PartialEq impl is sufficient
+// for the `assert_eq!` comparisons tests rely on. Manifests aren't used as
+// HashMap keys, so dropping `Eq` carries no behavioural impact.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnalysisPackManifest {
     /// Unique pack identifier.
     pub id: PackId,
@@ -43,6 +49,14 @@ pub struct AnalysisPackManifest {
     /// follow-up migration fills these slots via `include_str!` on `.md`
     /// files and rewires agents to read from here instead.
     pub prompt_bundle: PromptBundle,
+    /// Manifest-selected valuation strategy per asset shape.
+    ///
+    /// Introduced in Phase 5: packs declare which [`ValuatorId`] handles
+    /// each [`AssetShape`] they care about. Shapes not listed here fall
+    /// through to `ValuationReport::NotAssessed` with reason
+    /// `"no_valuator_selected"`. For the baseline equity pack the map
+    /// holds `CorporateEquity → EquityDefault`.
+    pub valuator_selection: HashMap<AssetShape, ValuatorId>,
 }
 
 impl AnalysisPackManifest {
