@@ -154,7 +154,8 @@ impl TradingPipeline {
     ) -> Self {
         let config = Arc::new(config);
         let snapshot_store = Arc::new(snapshot_store);
-        let runtime_policy = crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack).ok();
+        let runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack).ok();
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
