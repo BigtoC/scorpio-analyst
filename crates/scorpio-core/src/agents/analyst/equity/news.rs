@@ -13,8 +13,9 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::{
         agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
-        build_data_quality_prompt_rule, build_missing_data_prompt_rule,
+        build_data_quality_prompt_rule, build_missing_data_prompt_rule, sanitize_prompt_context,
     },
+    analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::NEWS_ANALYST_MAX_TURNS,
     data::{
@@ -22,7 +23,7 @@ use crate::{
     },
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, NewsData},
+    state::{AgentTokenUsage, NewsData, TradingState},
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
@@ -62,15 +63,31 @@ Do not include any trade recommendation, target price, or final transaction prop
 ///
 /// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
 /// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-pub(crate) fn build_news_system_prompt(symbol: &str, target_date: &str) -> String {
+fn news_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
+    policy
+        .map(|policy| policy.prompt_bundle.news_analyst.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(NEWS_SYSTEM_PROMPT)
+}
+
+pub(crate) fn build_news_system_prompt(
+    symbol: &str,
+    target_date: &str,
+    policy: Option<&RuntimePolicy>,
+) -> String {
+    let analysis_emphasis = policy
+        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
+        .unwrap_or_default();
+
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = NEWS_SYSTEM_PROMPT
+        base = news_system_prompt_template(policy)
             .replace("{ticker}", symbol)
-            .replace("{current_date}", target_date),
+            .replace("{current_date}", target_date)
+            .replace("{analysis_emphasis}", &analysis_emphasis),
         auth_rule = build_authoritative_source_prompt_rule(),
         missing_rule = build_missing_data_prompt_rule(),
         quality_rule = build_data_quality_prompt_rule(),
@@ -88,6 +105,7 @@ pub struct NewsAnalyst {
     fred: FredClient,
     symbol: String,
     target_date: String,
+    system_prompt: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
     /// Pre-fetched news from `run_analyst_team`.  When `Some`, a
@@ -103,7 +121,7 @@ impl NewsAnalyst {
     /// - `handle` – pre-constructed LLM completion model handle (`QuickThinking` tier).
     /// - `finnhub` – Finnhub client used to fetch news articles.
     /// - `symbol` – asset ticker symbol.
-    /// - `target_date` – analysis date string.
+    /// - `state` – current trading state, including any active runtime policy.
     /// - `llm_config` – LLM configuration, used for timeout.
     /// - `cached_news` – optional pre-fetched news; when `Some`, the live
     ///   [`GetNews`] tool is replaced with a zero-cost [`GetCachedNews`] tool.
@@ -111,12 +129,16 @@ impl NewsAnalyst {
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
         fred: FredClient,
-        symbol: impl Into<String>,
-        target_date: impl Into<String>,
+        state: &TradingState,
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
-        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+        let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let system_prompt = build_news_system_prompt(
+            &runtime.symbol,
+            &runtime.target_date,
+            state.analysis_runtime_policy.as_ref(),
+        );
 
         Self {
             handle,
@@ -124,6 +146,7 @@ impl NewsAnalyst {
             fred,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
+            system_prompt,
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
             cached_news,
@@ -150,9 +173,7 @@ impl NewsAnalyst {
         ];
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
-        let system_prompt = build_news_system_prompt(&self.symbol, &self.target_date);
-
-        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
+        let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
         let prompt = format!(
             "Analyse {} as of {}. Use get_news for company-specific developments, get_market_news for broader market context, and get_economic_indicators for macro data, then produce a NewsData JSON object.",
@@ -647,7 +668,7 @@ mod tests {
             build_missing_data_prompt_rule,
         };
 
-        let prompt = build_news_system_prompt("AAPL", "2026-01-01");
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01", None);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -672,6 +693,45 @@ mod tests {
         assert!(
             prompt.contains("Separate observed facts"),
             "rendered prompt must contain 'Separate observed facts'"
+        );
+    }
+
+    #[test]
+    fn news_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
+        use crate::{
+            agents::shared::{
+                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
+                build_missing_data_prompt_rule,
+            },
+            analysis_packs::resolve_runtime_policy,
+        };
+
+        let mut policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "prioritise decision-relevant catalysts".to_owned();
+        policy.prompt_bundle.news_analyst =
+            "Pack news prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01", Some(&policy));
+
+        assert!(
+            prompt.contains(
+                "Pack news prompt for AAPL at 2026-01-01. Emphasis: prioritise decision-relevant catalysts."
+            ),
+            "runtime-policy prompt bundle should override the legacy news template: {prompt}"
+        );
+        assert!(
+            !prompt.contains(
+                "Your job is to identify the most relevant recent company and macro developments"
+            ),
+            "legacy news template should not leak through when a pack override is present: {prompt}"
+        );
+        assert!(
+            prompt.contains(build_authoritative_source_prompt_rule())
+                && prompt.contains(build_missing_data_prompt_rule())
+                && prompt.contains(build_data_quality_prompt_rule()),
+            "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
         );
     }
 }
