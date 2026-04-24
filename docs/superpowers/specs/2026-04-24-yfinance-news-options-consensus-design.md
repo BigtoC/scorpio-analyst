@@ -435,7 +435,7 @@ No new user-facing config keys. Internal constants added to `constants.rs`:
 
 ### Live smoke test — `examples/yfinance_live_test.rs`
 
-Extend the existing manual smoke test (not in CI) with three new sections, preserving the pass/fail tracker format and exit-1-on-failure:
+Extend the existing manual smoke test (not in CI) with four new sections, preserving the pass/fail tracker format and exit-1-on-failure:
 
 - **Section 7 (new)**: `YFinanceNewsProvider::fetch(AAPL)` — assert non-empty `articles`, every `published_at` parses as RFC3339, URLs non-empty.
 - **Section 8 (new)**: extended `YFinanceEstimatesProvider::fetch_consensus(AAPL, today)` — assert `price_target.mean > 0` and at least one recommendation bucket > 0. Partial success (missing one extra endpoint) passes with a WARN line so the test is resilient to temporary per-endpoint outages.
