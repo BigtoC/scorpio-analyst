@@ -180,6 +180,7 @@ pub fn build_graph_from_pack(
 /// Grouping these into a struct keeps the constructor signature short and
 /// makes it obvious which pieces of state are shared vs owned by the
 /// pipeline.
+#[derive(Debug)]
 pub struct PipelineDeps {
     pub config: Config,
     pub finnhub: FinnhubClient,
