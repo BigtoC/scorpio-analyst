@@ -24,7 +24,7 @@ The codebase is ~70% symbol-agnostic at the type level — indicators, debate or
 3. **Prompts are inlined as `const X_SYSTEM_PROMPT: &str`.** 17 agent files own their own prompt literals. Swapping voice per asset class means either duplicating agent modules or pack-parameterizing the prompt source.
 4. **`TradingState` has equity-shaped fields at root.** `fundamental_metrics`, `market_volatility` (VIX-derived), `macro_news`, `market_sentiment`, `evidence_*` sit alongside domain-agnostic fields (`debate_history`, `trader_proposal`). A crypto pipeline would leave half unset and need orthogonal fields (unlock calendar, funding rate, on-chain flow).
 
-These four pain points are the full set. Everything else — indicators, rate limiter, snapshot store, token accounting, reporter crate, CLI — already operates on types that don't assume an asset class.
+These four pain points are the primary runtime hotspots. Most surrounding infrastructure — indicators, rate limiter, snapshot store, token accounting, and CLI — already operates on types that don't assume an asset class, while reporters need explicit compatibility work in Phase 6 because they read current `TradingState` root fields directly.
 
 ## Scope Boundaries
 
@@ -36,17 +36,16 @@ These four pain points are the full set. Everything else — indicators, rate li
 - `PromptBundle` on the pack manifest; prompts move to `.md` files loaded via `include_str!`.
 - `Valuator` trait; `derive_valuation` becomes a compat shim.
 - `TradingState` reshape (option C: coexisting optional `equity` / `crypto` / shared fields).
-- `analysis_packs/` → `packs/` rename.
 - `THESIS_MEMORY_SCHEMA_VERSION` bump (1 → 2) with explicit same-version-only snapshot handling.
 
 **Explicitly out of scope:**
 
-- **Actual crypto implementation.** All crypto analyst / provider / valuator / state files exist as empty placeholders with `// TODO: implement in crypto-pack change` comments. The crypto pack is registered but unreachable (empty `required_inputs`).
+- **Actual crypto implementation.** All crypto analyst / provider / valuator / state files exist as empty placeholders with `// TODO: implement in crypto-pack change` comments. The crypto pack is registered but not user-selectable in this slice; its manifest remains valid under existing pack validation.
 - **Workspace crate split.** No new `scorpio-domain`, `scorpio-providers`, or `scorpio-packs` crate.
 - **Prompt A/B framework.** `PromptBundle` is content-hashed; no eval harness or A/B routing.
 - **Runtime-loaded packs from filesystem.** `Cow<'static, str>` allows it; no loader code this slice.
 - **Removal of the transitional `asset_symbol: String` field.** Kept through Phase 6 for serde back-compat; removed in a later cleanup.
-- **Reporter crate changes.** Reporters stay unaffected — every moved module keeps its public path via `mod.rs` facade re-exports.
+- **Reporter crate feature expansion.** No new reporter formats or presentation features in this slice beyond the compatibility work required by the Phase 6 `TradingState` reshape.
 - **SQL migration for snapshot DB.** No SQL migration runs in this slice; pre-v2 snapshot rows become unsupported after Phase 6 and are skipped / rejected by schema-version checks.
 - **Automatic local snapshot cleanup.** Developers may delete `~/.scorpio-analyst/phase_snapshots.db` manually for a clean slate, but release behavior must not depend on truncating or deleting the DB.
 - **Backward-compat shim for `validate_symbol(&str)`.** Stays callable; CLI uses it for fail-fast UX.
@@ -63,12 +62,12 @@ These four pain points are the full set. Everything else — indicators, rate li
 - **Pack system shape is ready.** `AnalysisPackManifest` already distinguishes from `RuntimePolicy`. `PackId` is a single-variant enum awaiting extension. `required_inputs: Vec<String>` is already intended to drive fan-out.
 - **Data clients have no traits.** `FinnhubClient`, `YFinanceClient`, `FredClient` are concrete with inherent methods. Trait migration is in-place: add `impl FundamentalsProvider for FinnhubClient {}` without changing signatures.
 - **`derive_valuation`** unconditionally consumes `yfinance_rs::profile::Profile`. Phase 5 does not rip it out — it wraps it in a `DcfValuator` / `MultiplesValuator` trait impl, keeping the `pub fn` and its 16 tests intact.
-- **Reporter crate isolation.** `scorpio-reporters` imports `scorpio_core::state::TradingState` and `scorpio_core::data::adapters::EnrichmentStatus`. Every move in Phase 6 is covered by `pub use` re-exports from the `state/mod.rs` facade so these paths stay stable.
+- **Reporter crate coupling is shape-sensitive.** `scorpio-reporters` imports `scorpio_core::state::TradingState` and reads root fields like `asset_symbol`, `fundamental_metrics`, `market_sentiment`, `market_volatility`, `derived_valuation`, and `evidence_*` directly. Phase 6 therefore includes explicit reporter compatibility work in addition to `state/mod.rs` facade re-exports.
 - **Snapshot compat primitive exists.** `workflow/snapshot/thesis.rs:12` holds `THESIS_MEMORY_SCHEMA_VERSION: i64 = 1`. Phase 6 tightens the current future-version guard into same-version-only handling for thesis lookup and direct snapshot reads, so old rows are treated as unsupported before deserialization. No SQL migration is needed.
 
 ### Institutional Learnings
 
-- `docs/solutions/logic-errors/thesis-memory-deserialization-crash-on-stale-snapshot-2026-04-13.md` — The warn-and-skip path on deserialization failure is load-bearing; preserve its shape. Phase 6's schema bump relies on it.
+- `docs/solutions/logic-errors/thesis-memory-deserialization-crash-on-stale-snapshot-2026-04-13.md` — Fail-open handling for stale snapshots is load-bearing. Phase 6 now enforces explicit same-version-only checks instead of relying on deserialization failure, but the broader requirement remains: stale rows must never crash a live run.
 - `docs/solutions/best-practices/config-test-isolation-inline-toml-2026-04-11.md` — `ENV_LOCK` and inline TOML fixtures must be preserved; no direct Phase interaction but a reminder during any config-adjacent edit.
 
 ## Key Decisions
@@ -85,8 +84,7 @@ Five decisions must be locked before Phase 1 code begins. All five have recommen
 
 Other naming decisions locked by user on 2026-04-23:
 
-- `analysis_packs/` → `packs/` (keep type name `AnalysisPackManifest`).
-- Crypto pack name: **Digital Asset** (`PackId::CryptoDigitalAsset`, manifest in `packs/crypto/digital_asset.rs`).
+- Crypto pack name: **Digital Asset** (`PackId::CryptoDigitalAsset`, manifest under `analysis_packs/crypto/`).
 - `data/traits/macroeconomic.rs` (not `macro_.rs`).
 
 Review follow-ups locked on 2026-04-24:
@@ -322,6 +320,9 @@ Review follow-ups locked on 2026-04-24:
   - Shared fields stay at top level.
 - `crates/scorpio-core/src/workflow/snapshot/thesis.rs:12` — `THESIS_MEMORY_SCHEMA_VERSION: i64 = 1` → `2`.
 - `crates/scorpio-core/src/workflow/snapshot.rs` — `INSERT` binding moves from `.bind(1_i64)` to `.bind(2_i64)`; `load_snapshot` gains explicit incompatible-schema handling instead of attempting to deserialize pre-v2 rows.
+- `crates/scorpio-reporters/src/json.rs` — bump `JsonReport.schema_version`, keep emitting full `TradingState`, and update tests to assert the new schema version and reshaped state layout.
+- `crates/scorpio-reporters/src/terminal/final_report.rs` — switch root-field reads (`fundamental_metrics`, `market_sentiment`, `macro_news`, `technical_indicators`, `market_volatility`, `derived_valuation`) to `TradingState` accessors so terminal output remains behaviorally equivalent for equity runs.
+- `crates/scorpio-reporters/src/terminal/provenance.rs` and `crates/scorpio-reporters/src/terminal/valuation.rs` — route evidence / valuation reads through the new Phase 6 accessors.
 - ~40 call sites reading `state.fundamental_metrics` etc. — rewrite via accessor methods (`state.fundamental_metrics() -> Option<&FundamentalData>`, `state.equity_mut() -> &mut EquityState`).
 
 **Files moved/renamed:**
@@ -347,57 +348,48 @@ Review follow-ups locked on 2026-04-24:
 - `state/trading_state.rs` inline tests — assertions rewritten via accessor methods.
 - `tests/state_roundtrip.rs` — new: read a v1 snapshot row and confirm preflight thesis lookup returns `None` via schema-version skip without attempting deserialization.
 - `workflow/snapshot/tests/thesis_compat.rs` — add same-version-only coverage for `THESIS_MEMORY_SCHEMA_VERSION = 2`; direct snapshot reads of v1 rows now fail with an explicit incompatible-schema error.
+- `crates/scorpio-reporters/tests/json.rs` — update expected `JsonReport.schema_version`, assert the reshaped `TradingState` serializes as intended, and explicitly cover the preserved `asset_symbol` header field.
+- `crates/scorpio-reporters/src/terminal/*` tests — update valuation, provenance, and final-report fixtures to read equity-scoped data through accessors while preserving current rendered output for baseline equity runs.
 
 **Validation:** all cargo commands; smoke analyze on AAPL (fresh DB) AND on AAPL with a pre-existing `~/.scorpio-analyst/phase_snapshots.db` from a v1 run. Expected: prior thesis is not loaded from v1 rows, run completes, new row written with `schema_version = 2`.
 
-**Risk + mitigation:** 40+ call sites shift shape. Accessor methods (D4 decision) turn this into mechanical search-replace, each `cargo check`-verifiable independently.
+**Risk + mitigation:** 40+ call sites shift shape, including reporter code that currently reads equity-root fields directly. Accessor methods (D4 decision) turn this into mechanical search-replace across both `scorpio-core` and `scorpio-reporters`, with current terminal / JSON output preserved for baseline equity runs and a deliberate JSON schema-version bump for the reporter artifact.
 
-### Phase 7 — Workflow builder + pack rename
+### Phase 7 — Workflow builder
 
-**Goal:** Finalize dynamic pack composition; `analysis_packs/` → `packs/`.
+**Goal:** Finalize dynamic pack composition without renaming the existing `analysis_packs` namespace.
 
 **Files created:**
 
 - `crates/scorpio-core/src/workflow/builder.rs` — `impl TradingPipeline { pub fn from_pack(pack: &AnalysisPackManifest, deps: PipelineDeps) -> Self { ... } }` calling new `fn build_graph_from_pack(pack, ...)` that reads `pack.required_inputs`, looks up via `AnalystRegistry::for_inputs`, wires fan-out with selected analysts, inserts `DebateTask` / `RiskTask` / `FundManagerTask` unchanged.
-- `crates/scorpio-core/src/packs/registry.rs` — `fn resolve(id: PackId) -> AnalysisPackManifest` with `Baseline` (equity) and `CryptoDigitalAsset` (unreachable stub).
-- `crates/scorpio-core/src/packs/equity/mod.rs` — facade.
-- `crates/scorpio-core/src/packs/equity/baseline.rs` — `fn baseline_pack() -> AnalysisPackManifest` with `prompt_bundle` populated via `include_str!("prompts/...")`.
-- `crates/scorpio-core/src/packs/crypto/mod.rs` — facade.
-- `crates/scorpio-core/src/packs/crypto/digital_asset.rs` — stub manifest with empty `required_inputs: vec![]`, dummy prompt bundle. Unreachable via `build_graph_from_pack` because empty `required_inputs` short-circuits graph construction.
+- `crates/scorpio-core/src/analysis_packs/registry.rs` — `fn resolve(id: PackId) -> AnalysisPackManifest` with `Baseline` (equity) and `CryptoDigitalAsset` (valid but non-selectable stub).
+- `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` — `fn baseline_pack() -> AnalysisPackManifest` with `prompt_bundle` populated via `include_str!("prompts/...")`.
+- `crates/scorpio-core/src/analysis_packs/crypto/mod.rs` — facade.
+- `crates/scorpio-core/src/analysis_packs/crypto/digital_asset.rs` — stub manifest with a valid placeholder `required_inputs` list and dummy prompt bundle so manifest validation continues to pass. This pack is excluded from CLI / config selection in this slice, so no runtime path executes it yet.
 
 **Files modified:**
 
-- `crates/scorpio-core/src/lib.rs` — add `pub mod packs;`; remove `pub mod analysis_packs;` (or keep as deprecation shim — see Risk).
+- `crates/scorpio-core/src/lib.rs` — keep `pub mod analysis_packs;`; no namespace rename in this slice.
 - `crates/scorpio-core/src/workflow/pipeline/runtime.rs:77` — replace hand-wired `build_graph` with `workflow::builder::build_graph_from_pack(pack, ...)`.
-- `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs:9` — add `CryptoDigitalAsset` variant; update `FromStr` error message listing.
+- `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs:9` — add `CryptoDigitalAsset` variant, but keep `FromStr` / user-facing selection restricted to `baseline` in this slice so the stub pack remains non-selectable until crypto implementation lands.
 
 **Files moved/renamed:**
 
-- `analysis_packs/manifest/pack_id.rs` → `packs/manifest/pack_id.rs`
-- `analysis_packs/manifest/schema.rs` → `packs/manifest/schema.rs`
-- `analysis_packs/manifest/strategy.rs` → `packs/manifest/strategy.rs`
-- `analysis_packs/manifest/tests.rs` → `packs/manifest/tests.rs`
-- `analysis_packs/selection.rs` → `packs/selection.rs`
-- `analysis_packs/builtin.rs` — split into `packs/registry.rs` + `packs/equity/baseline.rs` (deleted).
-- `analysis_packs/equity/prompts/` → `packs/equity/prompts/` (from Phase 4).
+- `analysis_packs/builtin.rs` — split into `analysis_packs/registry.rs` + `analysis_packs/equity/baseline.rs` (deleted).
 
 **Files deleted:**
 
 - `analysis_packs/builtin.rs` (split across registry + equity/baseline).
 
-**Compatibility shim kept for one release cycle:**
-
-- `analysis_packs/mod.rs` — keep as `pub use crate::packs::*;` re-export shim during the deprecation window; remove in a separate later cleanup after downstreams migrate.
-
 **Tests affected:**
 
-- `analysis_packs/manifest/tests.rs` (24 tests) → `packs/manifest/tests.rs`; stay green.
-- `analysis_packs/builtin.rs` inline tests (lines 55-139) → `packs/equity/baseline.rs`; stay green.
-- New: `workflow/builder.rs` — `pipeline_from_baseline_pack_has_four_analyst_tasks`, `pipeline_from_empty_required_inputs_fails_fast`.
+- `analysis_packs/manifest/tests.rs` (24 tests) stay in place; extend for `CryptoDigitalAsset` validation and prompt / valuator additions.
+- `analysis_packs/builtin.rs` inline tests (lines 55-139) move to `analysis_packs/equity/baseline.rs`; stay green.
+- New: `workflow/builder.rs` — `pipeline_from_baseline_pack_has_four_analyst_tasks`, plus a guard test proving `CryptoDigitalAsset` is not user-selectable yet even though its manifest validates.
 
 **Validation:** all cargo commands; smoke analyze on AAPL; end-to-end backtest over a week of AAPL dates to confirm no behavioral regression vs. pre-refactor.
 
-**Risk + mitigation:** `analysis_packs` → `packs` rename breaks `scorpio-core::analysis_packs::*` imports. Keep `analysis_packs/mod.rs` as a one-line `pub use crate::packs::*;` facade for one release cycle; drop in a separate commit after downstreams migrate.
+**Risk + mitigation:** Keeping the existing `analysis_packs` namespace avoids downstream import churn and lets this phase focus only on dynamic builder composition.
 
 ## Ordering Rationale
 
@@ -453,11 +445,11 @@ Phase-specific smoke additions:
 
 Deliberately **not** in this refactor:
 
-- **Crypto implementation proper** — separate `crypto-pack-implementation` change populates analyst / provider / valuator stubs, adds real CAIP parsing to `Symbol::parse`, wires `packs::crypto::digital_asset` with real `required_inputs`.
+- **Crypto implementation proper** — separate `crypto-pack-implementation` change populates analyst / provider / valuator stubs, adds real CAIP parsing to `Symbol::parse`, wires `analysis_packs::crypto::digital_asset` with real `required_inputs`.
 - **Workspace crate split** — no `scorpio-domain`, `scorpio-providers`, `scorpio-packs` crate. If `scorpio-core` grows past ~80kLoC, a split becomes a separate concern.
 - **Prompt A/B framework** — `prompt_bundle` is content-hashed, but no built-in A/B routing or eval harness.
 - **Runtime-loaded packs from filesystem** — `Cow` allows it; `resolve_pack` only handles compile-time built-ins this cycle.
-- **`scorpio-reporters` changes** — reporters stay functionally unchanged; facade re-exports preserve paths. No new reporter, no schema changes visible from reporters beyond the additive `symbol: Option<Symbol>` field.
+- **Crypto reporter specialization** — no crypto-specific reporter formatting ships in this slice. Reporter work is limited to preserving baseline equity output across the Phase 6 `TradingState` reshape and bumping the JSON artifact schema version accordingly.
 - **`PackId` persistence-format shift** — `analysis_pack_name: Option<String>` continues to hold `PackId::as_str()` rendering.
 - **`validate_symbol(&str)` removal** — stays callable for CLI fail-fast UX.
 - **`asset_symbol: String` field removal** — kept through Phase 6 for serde back-compat; removed in v0.5.0 cleanup after v1 snapshots are confirmed deprecated.
