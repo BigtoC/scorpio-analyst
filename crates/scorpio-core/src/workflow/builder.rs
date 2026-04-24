@@ -215,7 +215,7 @@ impl TradingPipeline {
             .expect("from_pack requires a valid analysis pack manifest");
         let config = Arc::new(config);
         let snapshot_store = Arc::new(snapshot_store);
-        let registry = AnalystRegistry::equity_baseline();
+        let registry = AnalystRegistry::all_known();
         let graph = build_graph_from_pack(
             pack,
             Arc::clone(&config),
@@ -287,6 +287,23 @@ mod tests {
         assert!(
             ids.is_empty(),
             "equity-baseline registry must produce no analysts for the crypto stub pack"
+        );
+    }
+
+    #[test]
+    fn crypto_digital_asset_for_inputs_yields_placeholder_ids_on_all_known_registry() {
+        let pack = resolve_pack(PackId::CryptoDigitalAsset);
+        let registry = AnalystRegistry::all_known();
+        let ids = registry.for_inputs(pack.required_inputs.iter().map(String::as_str));
+        assert_eq!(
+            ids,
+            vec![
+                AnalystId::Tokenomics,
+                AnalystId::OnChain,
+                AnalystId::Social,
+                AnalystId::Derivatives,
+            ],
+            "all-known registry must preserve the crypto placeholder analyst ids declared by the pack"
         );
     }
 }
