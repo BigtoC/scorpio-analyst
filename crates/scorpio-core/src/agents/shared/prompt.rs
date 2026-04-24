@@ -173,6 +173,19 @@ pub(crate) fn build_thesis_memory_context(state: &TradingState) -> String {
     }
 }
 
+/// Return the active pack's analysis emphasis as a prompt-safe string.
+///
+/// Older snapshots may not carry runtime policy; in that case this degrades to
+/// the empty string so prompt templates can omit the slot without reparsing pack
+/// identifiers.
+pub(crate) fn analysis_emphasis_for_prompt(state: &TradingState) -> String {
+    state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
+        .unwrap_or_default()
+}
+
 // ─── Evidence-discipline static rule helpers ──────────────────────────────────
 
 /// Evidence-discipline rule: prefer authoritative runtime evidence, never infer unsupported claims.
