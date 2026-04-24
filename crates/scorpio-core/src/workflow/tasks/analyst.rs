@@ -15,7 +15,9 @@ use yfinance_rs::{
 };
 
 use crate::{
-    agents::analyst::{FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst},
+    agents::analyst::{
+        AnalystId, FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst,
+    },
     config::LlmConfig,
     data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
@@ -87,6 +89,15 @@ fn required_inputs_for_state(state: &TradingState) -> Vec<String> {
                 "technical".to_owned(),
             ]
         })
+}
+
+/// Resolve the active analyst id set for this cycle from the pack's
+/// `required_inputs`. Entries that don't map to a known analyst are dropped.
+fn active_analyst_ids(state: &TradingState) -> Vec<AnalystId> {
+    required_inputs_for_state(state)
+        .iter()
+        .filter_map(|s| AnalystId::from_required_input(s))
+        .collect()
 }
 
 fn input_missing(state: &TradingState, input: &str) -> bool {
@@ -627,90 +638,112 @@ impl Task for AnalystSyncTask {
                 ))
             })?;
 
+        let active_ids = active_analyst_ids(&state);
+        let active_total = active_ids.len();
         let mut failures = Vec::new();
 
-        merge_analyst_result::<FundamentalData, _, _>(
-            &context,
-            &mut state,
-            &mut failures,
-            ANALYST_FUNDAMENTAL,
-            |state, data| state.fundamental_metrics = Some(data),
-            |state, data| {
-                state.evidence_fundamental = Some(EvidenceRecord {
-                    kind: EvidenceKind::Fundamental,
-                    payload: data,
-                    sources: vec![stage1_source(
-                        PROVIDER_FINNHUB,
-                        vec!["fundamentals".to_owned()],
-                    )],
-                    quality_flags: vec![],
-                });
-            },
-        )
-        .await;
-        merge_analyst_result::<SentimentData, _, _>(
-            &context,
-            &mut state,
-            &mut failures,
-            ANALYST_SENTIMENT,
-            |state, data| state.market_sentiment = Some(data),
-            |state, data| {
-                state.evidence_sentiment = Some(EvidenceRecord {
-                    kind: EvidenceKind::Sentiment,
-                    payload: data,
-                    sources: vec![stage1_source(
-                        PROVIDER_FINNHUB,
-                        vec!["company_news_sentiment_inputs".to_owned()],
-                    )],
-                    quality_flags: vec![],
-                });
-            },
-        )
-        .await;
-        merge_analyst_result::<NewsData, _, _>(
-            &context,
-            &mut state,
-            &mut failures,
-            ANALYST_NEWS,
-            |state, data| state.macro_news = Some(data),
-            |state, data| {
-                state.evidence_news = Some(EvidenceRecord {
-                    kind: EvidenceKind::News,
-                    payload: data,
-                    sources: vec![
-                        stage1_source(PROVIDER_FINNHUB, vec!["company_news".to_owned()]),
-                        stage1_source(PROVIDER_FRED, vec!["macro_indicators".to_owned()]),
-                    ],
-                    quality_flags: vec![],
-                });
-            },
-        )
-        .await;
-        merge_analyst_result::<TechnicalData, _, _>(
-            &context,
-            &mut state,
-            &mut failures,
-            ANALYST_TECHNICAL,
-            |state, data| state.technical_indicators = Some(data),
-            |state, data| {
-                state.evidence_technical = Some(EvidenceRecord {
-                    kind: EvidenceKind::Technical,
-                    payload: data,
-                    sources: vec![stage1_source(PROVIDER_YFINANCE, vec!["ohlcv".to_owned()])],
-                    quality_flags: vec![],
-                });
-            },
-        )
-        .await;
+        // Only merge for analysts the active pack declared — keeps byte-
+        // identical behaviour for the equity baseline (all four active) while
+        // preventing phantom "missing analyst" failures for packs that
+        // intentionally omit one. Each arm is still type-specialised because
+        // each analyst writes a differently-shaped payload into state; the
+        // registry-driven aggregation is the per-id gate here, not the types.
+        if active_ids.contains(&AnalystId::Fundamental) {
+            merge_analyst_result::<FundamentalData, _, _>(
+                &context,
+                &mut state,
+                &mut failures,
+                ANALYST_FUNDAMENTAL,
+                |state, data| state.fundamental_metrics = Some(data),
+                |state, data| {
+                    state.evidence_fundamental = Some(EvidenceRecord {
+                        kind: EvidenceKind::Fundamental,
+                        payload: data,
+                        sources: vec![stage1_source(
+                            PROVIDER_FINNHUB,
+                            vec!["fundamentals".to_owned()],
+                        )],
+                        quality_flags: vec![],
+                    });
+                },
+            )
+            .await;
+        }
+        if active_ids.contains(&AnalystId::Sentiment) {
+            merge_analyst_result::<SentimentData, _, _>(
+                &context,
+                &mut state,
+                &mut failures,
+                ANALYST_SENTIMENT,
+                |state, data| state.market_sentiment = Some(data),
+                |state, data| {
+                    state.evidence_sentiment = Some(EvidenceRecord {
+                        kind: EvidenceKind::Sentiment,
+                        payload: data,
+                        sources: vec![stage1_source(
+                            PROVIDER_FINNHUB,
+                            vec!["company_news_sentiment_inputs".to_owned()],
+                        )],
+                        quality_flags: vec![],
+                    });
+                },
+            )
+            .await;
+        }
+        if active_ids.contains(&AnalystId::News) {
+            merge_analyst_result::<NewsData, _, _>(
+                &context,
+                &mut state,
+                &mut failures,
+                ANALYST_NEWS,
+                |state, data| state.macro_news = Some(data),
+                |state, data| {
+                    state.evidence_news = Some(EvidenceRecord {
+                        kind: EvidenceKind::News,
+                        payload: data,
+                        sources: vec![
+                            stage1_source(PROVIDER_FINNHUB, vec!["company_news".to_owned()]),
+                            stage1_source(PROVIDER_FRED, vec!["macro_indicators".to_owned()]),
+                        ],
+                        quality_flags: vec![],
+                    });
+                },
+            )
+            .await;
+        }
+        if active_ids.contains(&AnalystId::Technical) {
+            merge_analyst_result::<TechnicalData, _, _>(
+                &context,
+                &mut state,
+                &mut failures,
+                ANALYST_TECHNICAL,
+                |state, data| state.technical_indicators = Some(data),
+                |state, data| {
+                    state.evidence_technical = Some(EvidenceRecord {
+                        kind: EvidenceKind::Technical,
+                        payload: data,
+                        sources: vec![stage1_source(PROVIDER_YFINANCE, vec!["ohlcv".to_owned()])],
+                        quality_flags: vec![],
+                    });
+                },
+            )
+            .await;
+        }
 
         let failure_count = failures.len();
-        if failure_count >= 2 {
+        // Omission-aware degradation: the threshold is still "2+ failures
+        // abort" per `check_analyst_degradation`, but the denominator is the
+        // active analyst count, not a hard-coded 4. For the equity baseline
+        // these are equivalent; for packs that omit an analyst, a single
+        // failure out of three remains graceful-degradation territory.
+        if failure_count >= 2 || (active_total > 0 && failure_count == active_total) {
             error!(
                 failures = ?failures,
-                "AnalystSyncTask: {failure_count}/4 analysts failed — aborting pipeline"
+                active_total,
+                "AnalystSyncTask: {failure_count}/{active_total} analysts failed — aborting pipeline"
             );
             return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
-                "AnalystSyncTask: {failure_count}/4 analysts failed — pipeline aborted"
+                "AnalystSyncTask: {failure_count}/{active_total} analysts failed — pipeline aborted"
             )));
         }
 
@@ -773,12 +806,13 @@ impl Task for AnalystSyncTask {
             "deterministic valuation derived"
         );
 
-        let token_usages = vec![
-            read_analyst_usage(&context, ANALYST_FUNDAMENTAL, "Fundamental Analyst").await,
-            read_analyst_usage(&context, ANALYST_SENTIMENT, "Sentiment Analyst").await,
-            read_analyst_usage(&context, ANALYST_NEWS, "News Analyst").await,
-            read_analyst_usage(&context, ANALYST_TECHNICAL, "Technical Analyst").await,
-        ];
+        // Dynamic token accounting: one usage entry per active analyst so
+        // phase totals reconcile against whatever fan-out the pack selected.
+        let mut token_usages: Vec<AgentTokenUsage> = Vec::with_capacity(active_total);
+        for id in &active_ids {
+            token_usages
+                .push(read_analyst_usage(&context, id.context_key(), id.display_name()).await);
+        }
         let phase_duration_ms = token_usages
             .iter()
             .map(|usage| usage.latency_ms)

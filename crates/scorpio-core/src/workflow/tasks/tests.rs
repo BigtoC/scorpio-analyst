@@ -897,6 +897,103 @@ fn task_ids_are_correct() {
 }
 
 #[tokio::test]
+async fn analyst_sync_honours_restricted_required_inputs_without_phantom_failures() {
+    // Phase 2 dynamic analyst dispatch: a pack that declares only
+    // `["fundamentals", "news"]` must not register sentiment + technical as
+    // failures just because their context entries are missing.
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let mut state = sample_state();
+    // Start from the real baseline policy and narrow `required_inputs` to just
+    // the two analysts we want active. Constructing `RuntimePolicy` by field
+    // would require public access to `RuntimeEnrichmentIntent`, which the
+    // module keeps scoped; mutating the resolved policy is the cleaner shape.
+    let mut policy = resolve_runtime_policy("baseline").expect("baseline pack should resolve");
+    policy.required_inputs = vec!["fundamentals".to_owned(), "news".to_owned()];
+    state.analysis_runtime_policy = Some(policy);
+    seed_state(&ctx, &state).await;
+
+    // Only the two active analysts get their ok flags + payloads seeded.
+    for analyst_key in [common::ANALYST_FUNDAMENTAL, common::ANALYST_NEWS] {
+        ctx.set(
+            format!(
+                "{}.{}.{}",
+                common::ANALYST_PREFIX,
+                analyst_key,
+                common::OK_SUFFIX
+            ),
+            true,
+        )
+        .await;
+    }
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let task = AnalystSyncTask::new(store);
+    let result = task
+        .run(ctx.clone())
+        .await
+        .expect("partial-pack sync should succeed — inactive analysts are skipped");
+    assert_eq!(result.next_action, NextAction::Continue);
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    // Active analysts populated
+    assert!(recovered.fundamental_metrics.is_some());
+    assert!(recovered.macro_news.is_some());
+    // Inactive analysts must stay None — they were never merged because the
+    // registry-driven sync only processes ids in the active set.
+    assert!(recovered.market_sentiment.is_none());
+    assert!(recovered.technical_indicators.is_none());
+    // Token-usage phase should have exactly two entries (one per active id).
+    let phase = recovered
+        .token_usage
+        .phase_usage
+        .iter()
+        .find(|p| p.phase_name == "Analyst Fan-Out")
+        .expect("analyst phase recorded");
+    assert_eq!(
+        phase.agent_usage.len(),
+        2,
+        "token usage must be sized to active analyst count"
+    );
+}
+
+#[tokio::test]
 async fn stub_researchers_use_production_role_names() {
     let ctx = Context::new();
     seed_state(&ctx, &sample_state()).await;
