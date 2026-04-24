@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
+
 use super::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
     registry::resolve_pack,
@@ -32,8 +34,14 @@ pub struct RuntimePolicy {
     pub analysis_emphasis: String,
     /// Label for the report header.
     pub report_strategy_label: String,
+    /// Per-role prompt templates selected by the pack.
+    #[serde(default)]
+    pub prompt_bundle: PromptBundle,
     /// Default valuation assessment for corporate equities.
     pub default_valuation: ValuationAssessment,
+    /// Manifest-selected valuation strategy per asset shape.
+    #[serde(default)]
+    pub valuator_selection: std::collections::HashMap<AssetShape, ValuatorId>,
 }
 
 /// Serializable enrichment intent (mirrors [`EnrichmentIntent`] but with serde).
@@ -80,7 +88,9 @@ pub(crate) fn resolve_runtime_policy_for_manifest(
         strategy_focus: manifest.strategy_focus,
         analysis_emphasis: manifest.analysis_emphasis.clone(),
         report_strategy_label: manifest.report_strategy_label.clone(),
+        prompt_bundle: manifest.prompt_bundle.clone(),
         default_valuation: manifest.default_valuation,
+        valuator_selection: manifest.valuator_selection.clone(),
     })
 }
 
@@ -134,6 +144,22 @@ mod tests {
             !policy.report_strategy_label.is_empty(),
             "report_strategy_label must not be empty"
         );
+    }
+
+    #[test]
+    fn resolve_baseline_copies_prompt_bundle_from_manifest() {
+        let policy = resolve_runtime_policy("baseline").expect("should resolve");
+        let manifest = resolve_pack(PackId::Baseline);
+
+        assert_eq!(policy.prompt_bundle, manifest.prompt_bundle);
+    }
+
+    #[test]
+    fn resolve_baseline_copies_valuator_selection_from_manifest() {
+        let policy = resolve_runtime_policy("baseline").expect("should resolve");
+        let manifest = resolve_pack(PackId::Baseline);
+
+        assert_eq!(policy.valuator_selection, manifest.valuator_selection);
     }
 
     // ── Error paths ─────────────────────────────────────────────────────
