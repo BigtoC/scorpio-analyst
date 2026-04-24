@@ -1,4 +1,4 @@
-pub(super) struct TaskIds {
+pub(crate) struct TaskIds {
     pub preflight: &'static str,
     pub analyst_fan_out: &'static str,
     pub analyst_sync: &'static str,
@@ -13,7 +13,7 @@ pub(super) struct TaskIds {
     pub fund_manager: &'static str,
 }
 
-pub(super) const TASKS: TaskIds = TaskIds {
+pub(crate) const TASKS: TaskIds = TaskIds {
     preflight: "preflight",
     analyst_fan_out: "analyst_fanout",
     analyst_sync: "analyst_sync",

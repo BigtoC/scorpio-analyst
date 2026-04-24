@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use graph_flow::{
     ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage, Session, SessionStorage,
-    fanout::FanOutTask,
 };
 use tracing::{error, info, instrument};
 use uuid::Uuid;
 
 use crate::{
     agents::analyst::{AnalystId, AnalystRegistry},
-    analysis_packs::resolve_runtime_policy,
+    analysis_packs::{PackId, resolve_pack, resolve_runtime_policy},
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
@@ -25,12 +24,9 @@ use crate::{
         SnapshotStore,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         tasks::{
-            AggressiveRiskTask, AnalystSyncTask, BearishResearcherTask, BullishResearcherTask,
-            ConservativeRiskTask, DebateModeratorTask, FundManagerTask, FundamentalAnalystTask,
-            KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS, KEY_DEBATE_ROUND,
-            KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND, NeutralRiskTask,
-            NewsAnalystTask, PreflightTask, RiskModeratorTask, SentimentAnalystTask,
-            TechnicalAnalystTask, TraderTask,
+            FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
+            KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
+            NewsAnalystTask, SentimentAnalystTask, TechnicalAnalystTask,
         },
     },
 };
@@ -52,7 +48,7 @@ pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, Tradin
 /// For the baseline pack's input list (`["fundamentals", "sentiment",
 /// "news", "technical"]`) this reproduces the previous hard-coded
 /// four-analyst vector byte-for-byte.
-fn build_analyst_tasks(
+pub(crate) fn build_analyst_tasks(
     registry: &AnalystRegistry,
     required_inputs: &[String],
     finnhub: &FinnhubClient,
@@ -143,135 +139,25 @@ pub(super) fn build_graph(
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
 ) -> Arc<Graph> {
-    let graph = Arc::new(Graph::new("trading_pipeline"));
-
-    let preflight = PreflightTask::with_pack(
-        config.enrichment.clone(),
-        Arc::clone(&snapshot_store),
-        config.analysis_pack.clone(),
-    );
-    graph.add_task(Arc::new(preflight));
-
-    // Resolve `required_inputs` from the active pack so the fan-out is data-
-    // driven. If the pack id fails to resolve (invalid config, validation
-    // failure) fall back to the equity-baseline four-analyst vector so
-    // behaviour matches the pre-refactor graph for misconfigured runs — the
-    // downstream `run_analysis_cycle` re-resolves and raises a proper error.
+    // Phase 7 synthesis: delegate to the pack-driven builder after
+    // resolving the active pack id. If the config selects an unknown pack
+    // or a non-selectable stub, fall back to the baseline manifest so the
+    // graph still builds for misconfigured runs — `run_analysis_cycle`
+    // re-resolves and surfaces a proper error downstream.
+    let pack_id: PackId = config.analysis_pack.parse().unwrap_or(PackId::Baseline);
+    let pack = resolve_pack(pack_id);
     let registry = AnalystRegistry::equity_baseline();
-    let required_inputs: Vec<String> = resolve_runtime_policy(&config.analysis_pack)
-        .map(|policy| policy.required_inputs)
-        .unwrap_or_else(|_| {
-            vec![
-                "fundamentals".to_owned(),
-                "sentiment".to_owned(),
-                "news".to_owned(),
-                "technical".to_owned(),
-            ]
-        });
-    let analyst_tasks = build_analyst_tasks(
+    crate::workflow::builder::build_graph_from_pack(
+        &pack,
+        config,
         &registry,
-        &required_inputs,
         finnhub,
         fred,
         yfinance,
+        snapshot_store,
         quick_handle,
-        &config.llm,
-    );
-    let fan_out = FanOutTask::new(TASKS.analyst_fan_out, analyst_tasks);
-    graph.add_task(fan_out);
-    graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
-
-    let analyst_sync = AnalystSyncTask::with_yfinance(
-        Arc::clone(&snapshot_store),
-        yfinance.clone(),
-        std::time::Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
-    );
-    graph.add_task(analyst_sync);
-    graph.add_edge(TASKS.analyst_fan_out, TASKS.analyst_sync);
-
-    graph.add_conditional_edge(
-        TASKS.analyst_sync,
-        |ctx| ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0) > 0,
-        TASKS.bullish_researcher,
-        TASKS.debate_moderator,
-    );
-
-    graph.add_task(BullishResearcherTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(BearishResearcherTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(DebateModeratorTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-        Arc::clone(&snapshot_store),
-    ));
-
-    graph.add_edge(TASKS.bullish_researcher, TASKS.bearish_researcher);
-    graph.add_edge(TASKS.bearish_researcher, TASKS.debate_moderator);
-    graph.add_conditional_edge(
-        TASKS.debate_moderator,
-        |ctx| {
-            let round = ctx.get_sync::<u32>(KEY_DEBATE_ROUND).unwrap_or(0);
-            let max = ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
-            round < max
-        },
-        TASKS.bullish_researcher,
-        TASKS.trader,
-    );
-
-    graph.add_task(TraderTask::new(
-        Arc::clone(&config),
-        Arc::clone(&snapshot_store),
-    ));
-    graph.add_conditional_edge(
-        TASKS.trader,
-        |ctx| ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0) > 0,
-        TASKS.aggressive_risk,
-        TASKS.risk_moderator,
-    );
-
-    graph.add_task(AggressiveRiskTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(ConservativeRiskTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(NeutralRiskTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(RiskModeratorTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-        Arc::clone(&snapshot_store),
-    ));
-
-    graph.add_edge(TASKS.aggressive_risk, TASKS.conservative_risk);
-    graph.add_edge(TASKS.conservative_risk, TASKS.neutral_risk);
-    graph.add_edge(TASKS.neutral_risk, TASKS.risk_moderator);
-    graph.add_conditional_edge(
-        TASKS.risk_moderator,
-        |ctx| {
-            let round = ctx.get_sync::<u32>(KEY_RISK_ROUND).unwrap_or(0);
-            let max = ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
-            round < max
-        },
-        TASKS.aggressive_risk,
-        TASKS.fund_manager,
-    );
-
-    graph.add_task(FundManagerTask::new(
-        Arc::clone(&config),
-        Arc::clone(&snapshot_store),
-    ));
-    graph.set_start_task(TASKS.preflight);
-    graph
+        deep_handle,
+    )
 }
 
 #[instrument(skip(pipeline, initial_state), fields(symbol = %initial_state.asset_symbol, date = %initial_state.target_date))]

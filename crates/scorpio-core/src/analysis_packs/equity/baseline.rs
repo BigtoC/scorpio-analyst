@@ -1,30 +1,19 @@
-//! Built-in analysis pack definitions.
+//! Baseline equity pack — the default analysis profile.
 //!
-//! First-slice: only compile-time built-in packs. External manifests or
-//! hybrid loading can follow in a later slice if needed.
+//! Reproduces current runtime behavior as the default analysis profile.
+//! Corporate equities receive full deterministic valuation; ETFs and
+//! unsupported shapes fall back to valuation-not-assessed.
 
 use std::collections::HashMap;
 
 use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
 
-use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
+use super::super::{
+    AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
+};
 
-/// Resolve a [`PackId`] into its full [`AnalysisPackManifest`].
-///
-/// First-slice: only built-in packs. This is a pure function with
-/// negligible cost (no I/O, no file loading).
-pub fn resolve_pack(id: PackId) -> AnalysisPackManifest {
-    match id {
-        PackId::Baseline => baseline_pack(),
-    }
-}
-
-/// The baseline pack: balanced institutional strategy.
-///
-/// Reproduces current runtime behavior as the default analysis profile.
-/// Corporate equities receive full deterministic valuation; ETFs and
-/// unsupported shapes fall back to valuation-not-assessed.
-fn baseline_pack() -> AnalysisPackManifest {
+/// Build the baseline pack manifest.
+pub fn baseline_pack() -> AnalysisPackManifest {
     AnalysisPackManifest {
         id: PackId::Baseline,
         name: "Balanced Institutional".to_owned(),
@@ -62,12 +51,14 @@ fn baseline_pack() -> AnalysisPackManifest {
     }
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::AssetShape;
+
+    fn resolve_pack(id: PackId) -> AnalysisPackManifest {
+        super::super::super::registry::resolve_pack(id)
+    }
 
     #[test]
     fn baseline_pack_validates_successfully() {
@@ -146,7 +137,6 @@ mod tests {
 
     #[test]
     fn resolve_pack_returns_matching_id() {
-        // Exhaustive: every PackId variant should resolve to a manifest with that id.
         let pack = resolve_pack(PackId::Baseline);
         assert_eq!(pack.id, PackId::Baseline);
     }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
-    builtin::resolve_pack,
+    registry::resolve_pack,
 };
 
 /// Typed runtime policy derived from a resolved analysis pack.

@@ -34,9 +34,9 @@
 //! FundManagerTask
 //! ```
 
-mod constants;
+pub(crate) mod constants;
 mod errors;
-mod runtime;
+pub(crate) mod runtime;
 
 #[cfg(test)]
 mod tests;
@@ -159,6 +159,35 @@ impl TradingPipeline {
             &quick_handle,
             &deep_handle,
         );
+        Self {
+            config,
+            finnhub,
+            fred,
+            yfinance,
+            snapshot_store,
+            quick_handle,
+            deep_handle,
+            graph,
+        }
+    }
+
+    /// Assemble a pipeline from pre-built parts, including the graph.
+    ///
+    /// Used by `workflow::builder::TradingPipeline::from_pack` so the Phase 7
+    /// pack-driven entry point can share the same field layout without
+    /// re-exposing the private fields.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn __from_parts(
+        config: Arc<Config>,
+        finnhub: FinnhubClient,
+        fred: FredClient,
+        yfinance: YFinanceClient,
+        snapshot_store: Arc<SnapshotStore>,
+        quick_handle: CompletionModelHandle,
+        deep_handle: CompletionModelHandle,
+        graph: Arc<Graph>,
+    ) -> Self {
         Self {
             config,
             finnhub,
