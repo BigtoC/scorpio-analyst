@@ -6,13 +6,15 @@
 //! in the plan.
 use std::borrow::Cow;
 
+use serde::{Deserialize, Serialize};
+
 /// Canonical set of prompt slots every pack fills.
 ///
 /// Each slot is the *unmodified* system-prompt template as stored in the
 /// pack's `prompts/` directory. Placeholders (`{ticker}`,
 /// `{current_date}`, `{analysis_emphasis}`) are expanded at the call site
 /// via [`super::templating::render`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptBundle {
     pub fundamental_analyst: Cow<'static, str>,
     pub sentiment_analyst: Cow<'static, str>,

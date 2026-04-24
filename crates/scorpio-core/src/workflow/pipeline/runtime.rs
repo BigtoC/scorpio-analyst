@@ -146,7 +146,7 @@ pub(super) fn build_graph(
     // re-resolves and surfaces a proper error downstream.
     let pack_id: PackId = config.analysis_pack.parse().unwrap_or(PackId::Baseline);
     let pack = resolve_pack(pack_id);
-    let registry = AnalystRegistry::equity_baseline();
+    let registry = AnalystRegistry::all_known();
     crate::workflow::builder::build_graph_from_pack(
         &pack,
         config,
