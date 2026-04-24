@@ -40,9 +40,16 @@ Available inputs:
 
 Current market price: {current_price}
 
+**Action Scale** (use exactly one):
+- **Buy**: High-conviction approval to initiate or add exposure at current or near-term levels
+- **Underweight**: Reduce allocation or trim exposure because risk/reward is unfavorable relative to alternatives
+- **Hold**: Do not add or reduce exposure now; maintain current allocation while monitoring for a better entry or clearer confirmation
+- **Overweight**: Positive outlook; increase allocation gradually, but size the position below full-conviction Buy
+- **Sell**: Exit exposure or avoid initiating a position because downside risk, valuation, or trend is materially unfavorable
+
 Return ONLY a JSON object matching `ExecutionStatus`:
 - `decision`: `Approved` or `Rejected`
-- `action`: one of `Buy`, `Sell`, `Hold`
+- `action`: one of `Buy`, `Underweight`, `Hold`, `Overweight`, `Sell`
 - `rationale`: concise audit-ready explanation
 - `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
 - `entry_guidance`: (required when action is Hold or Sell) a specific tactical entry condition, \
