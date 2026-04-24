@@ -94,6 +94,7 @@ impl<T> Default for EnrichmentState<T> {
 /// `equity` directly, so a later cleanup that retires the string-form
 /// `asset_symbol` or reshapes storage further stays source-compatible.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "TradingStateWire")]
 pub struct TradingState {
     pub execution_id: Uuid,
     /// Raw string form of the instrument symbol. Transitional mirror of
@@ -162,6 +163,153 @@ pub struct TradingState {
 
     /// Token accounting.
     pub token_usage: TokenUsageTracker,
+}
+
+#[derive(Debug, Deserialize)]
+struct TradingStateWire {
+    execution_id: Uuid,
+    asset_symbol: String,
+    #[serde(default)]
+    symbol: Option<Symbol>,
+    target_date: String,
+    current_price: Option<f64>,
+    #[serde(default)]
+    equity: Option<EquityState>,
+    #[serde(default)]
+    crypto: Option<CryptoState>,
+    #[serde(default)]
+    fundamental_metrics: Option<FundamentalData>,
+    #[serde(default)]
+    technical_indicators: Option<TechnicalData>,
+    #[serde(default)]
+    market_sentiment: Option<SentimentData>,
+    #[serde(default)]
+    macro_news: Option<NewsData>,
+    #[serde(default)]
+    evidence_fundamental: Option<EvidenceRecord<FundamentalData>>,
+    #[serde(default)]
+    evidence_technical: Option<EvidenceRecord<TechnicalData>>,
+    #[serde(default)]
+    evidence_sentiment: Option<EvidenceRecord<SentimentData>>,
+    #[serde(default)]
+    evidence_news: Option<EvidenceRecord<NewsData>>,
+    #[serde(default)]
+    market_volatility: Option<MarketVolatilityData>,
+    #[serde(default)]
+    derived_valuation: Option<DerivedValuation>,
+    #[serde(default)]
+    enrichment_event_news: EnrichmentState<Vec<EventNewsEvidence>>,
+    #[serde(default)]
+    enrichment_consensus: EnrichmentState<ConsensusEvidence>,
+    data_coverage: Option<DataCoverageReport>,
+    provenance_summary: Option<ProvenanceSummary>,
+    debate_history: Vec<DebateMessage>,
+    consensus_summary: Option<String>,
+    trader_proposal: Option<TradeProposal>,
+    risk_discussion_history: Vec<DebateMessage>,
+    aggressive_risk_report: Option<RiskReport>,
+    neutral_risk_report: Option<RiskReport>,
+    conservative_risk_report: Option<RiskReport>,
+    final_execution_status: Option<ExecutionStatus>,
+    #[serde(default)]
+    prior_thesis: Option<ThesisMemory>,
+    #[serde(default)]
+    current_thesis: Option<ThesisMemory>,
+    #[serde(default)]
+    analysis_pack_name: Option<String>,
+    #[serde(default)]
+    analysis_runtime_policy: Option<RuntimePolicy>,
+    token_usage: TokenUsageTracker,
+}
+
+impl From<TradingStateWire> for TradingState {
+    fn from(wire: TradingStateWire) -> Self {
+        let legacy_equity = EquityState {
+            fundamental_metrics: wire.fundamental_metrics,
+            technical_indicators: wire.technical_indicators,
+            market_sentiment: wire.market_sentiment,
+            macro_news: wire.macro_news,
+            evidence_fundamental: wire.evidence_fundamental,
+            evidence_technical: wire.evidence_technical,
+            evidence_sentiment: wire.evidence_sentiment,
+            evidence_news: wire.evidence_news,
+            market_volatility: wire.market_volatility,
+            derived_valuation: wire.derived_valuation,
+        };
+
+        Self {
+            execution_id: wire.execution_id,
+            asset_symbol: wire.asset_symbol,
+            symbol: wire.symbol,
+            target_date: wire.target_date,
+            current_price: wire.current_price,
+            equity: merge_legacy_equity_fields(wire.equity, legacy_equity),
+            crypto: wire.crypto,
+            enrichment_event_news: wire.enrichment_event_news,
+            enrichment_consensus: wire.enrichment_consensus,
+            data_coverage: wire.data_coverage,
+            provenance_summary: wire.provenance_summary,
+            debate_history: wire.debate_history,
+            consensus_summary: wire.consensus_summary,
+            trader_proposal: wire.trader_proposal,
+            risk_discussion_history: wire.risk_discussion_history,
+            aggressive_risk_report: wire.aggressive_risk_report,
+            neutral_risk_report: wire.neutral_risk_report,
+            conservative_risk_report: wire.conservative_risk_report,
+            final_execution_status: wire.final_execution_status,
+            prior_thesis: wire.prior_thesis,
+            current_thesis: wire.current_thesis,
+            analysis_pack_name: wire.analysis_pack_name,
+            analysis_runtime_policy: wire.analysis_runtime_policy,
+            token_usage: wire.token_usage,
+        }
+    }
+}
+
+fn merge_legacy_equity_fields(
+    equity: Option<EquityState>,
+    legacy_equity: EquityState,
+) -> Option<EquityState> {
+    if legacy_equity == EquityState::default() {
+        return equity;
+    }
+
+    match equity {
+        Some(mut equity) => {
+            if equity.fundamental_metrics.is_none() {
+                equity.fundamental_metrics = legacy_equity.fundamental_metrics;
+            }
+            if equity.technical_indicators.is_none() {
+                equity.technical_indicators = legacy_equity.technical_indicators;
+            }
+            if equity.market_sentiment.is_none() {
+                equity.market_sentiment = legacy_equity.market_sentiment;
+            }
+            if equity.macro_news.is_none() {
+                equity.macro_news = legacy_equity.macro_news;
+            }
+            if equity.evidence_fundamental.is_none() {
+                equity.evidence_fundamental = legacy_equity.evidence_fundamental;
+            }
+            if equity.evidence_technical.is_none() {
+                equity.evidence_technical = legacy_equity.evidence_technical;
+            }
+            if equity.evidence_sentiment.is_none() {
+                equity.evidence_sentiment = legacy_equity.evidence_sentiment;
+            }
+            if equity.evidence_news.is_none() {
+                equity.evidence_news = legacy_equity.evidence_news;
+            }
+            if equity.market_volatility.is_none() {
+                equity.market_volatility = legacy_equity.market_volatility;
+            }
+            if equity.derived_valuation.is_none() {
+                equity.derived_valuation = legacy_equity.derived_valuation;
+            }
+            Some(equity)
+        }
+        None => Some(legacy_equity),
+    }
 }
 
 /// Concurrent write handles for the analyst-owned Phase 1 fields.
