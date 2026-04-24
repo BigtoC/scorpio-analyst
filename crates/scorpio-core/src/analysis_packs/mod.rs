@@ -27,3 +27,4 @@ pub use manifest::{
 };
 pub use registry::resolve_pack;
 pub use selection::{RuntimePolicy, resolve_runtime_policy};
+pub(crate) use selection::resolve_runtime_policy_for_manifest;

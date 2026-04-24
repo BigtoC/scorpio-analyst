@@ -64,14 +64,15 @@ pub fn resolve_runtime_policy(pack_id_str: &str) -> Result<RuntimePolicy, String
     let pack_id: PackId = pack_id_str.parse()?;
     let manifest: AnalysisPackManifest = resolve_pack(pack_id);
 
-    manifest.validate()?;
-
-    Ok(hydrate_policy(&manifest))
+    resolve_runtime_policy_for_manifest(&manifest)
 }
 
-/// Hydrate a [`RuntimePolicy`] from a validated manifest.
-fn hydrate_policy(manifest: &AnalysisPackManifest) -> RuntimePolicy {
-    RuntimePolicy {
+pub(crate) fn resolve_runtime_policy_for_manifest(
+    manifest: &AnalysisPackManifest,
+) -> Result<RuntimePolicy, String> {
+    manifest.validate()?;
+
+    Ok(RuntimePolicy {
         pack_id: manifest.id,
         pack_name: manifest.name.clone(),
         required_inputs: manifest.required_inputs.clone(),
@@ -80,7 +81,7 @@ fn hydrate_policy(manifest: &AnalysisPackManifest) -> RuntimePolicy {
         analysis_emphasis: manifest.analysis_emphasis.clone(),
         report_strategy_label: manifest.report_strategy_label.clone(),
         default_valuation: manifest.default_valuation,
-    }
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
