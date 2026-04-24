@@ -49,7 +49,7 @@ async fn json_reporter_writes_valid_file_with_correct_schema_version() {
 
     let content = std::fs::read_to_string(entries[0].path()).unwrap();
     let report: JsonReport = serde_json::from_str(&content).expect("file must deserialize");
-    assert_eq!(report.schema_version, 1);
+    assert_eq!(report.schema_version, 2);
     assert_eq!(report.trading_state.asset_symbol, "AAPL");
 }
 

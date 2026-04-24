@@ -270,39 +270,33 @@ fn write_analyst_snapshot(out: &mut String, state: &TradingState) {
 
     // `MarketVolatilityData::summary()` returns an owned `String`, so bind it
     // here to extend its lifetime to match the borrow in `analysts`.
-    let vix_summary = state.market_volatility.as_ref().map(|v| v.summary());
+    let vix_summary = state.market_volatility().map(|v| v.summary());
 
     let analysts: Vec<(&str, Option<&str>, bool)> = vec![
         (
             "Fundamentals",
-            state
-                .fundamental_metrics
-                .as_ref()
-                .map(|d| d.summary.as_str()),
-            state.fundamental_metrics.is_some(),
+            state.fundamental_metrics().map(|d| d.summary.as_str()),
+            state.fundamental_metrics().is_some(),
         ),
         (
             "Sentiment",
-            state.market_sentiment.as_ref().map(|d| d.summary.as_str()),
-            state.market_sentiment.is_some(),
+            state.market_sentiment().map(|d| d.summary.as_str()),
+            state.market_sentiment().is_some(),
         ),
         (
             "News",
-            state.macro_news.as_ref().map(|d| d.summary.as_str()),
-            state.macro_news.is_some(),
+            state.macro_news().map(|d| d.summary.as_str()),
+            state.macro_news().is_some(),
         ),
         (
             "Technical",
-            state
-                .technical_indicators
-                .as_ref()
-                .map(|d| d.summary.as_str()),
-            state.technical_indicators.is_some(),
+            state.technical_indicators().map(|d| d.summary.as_str()),
+            state.technical_indicators().is_some(),
         ),
         (
             "VIX",
             vix_summary.as_deref(),
-            state.market_volatility.is_some(),
+            state.market_volatility().is_some(),
         ),
     ];
 
@@ -812,7 +806,7 @@ mod tests {
     #[test]
     fn format_final_report_valuation_renders_metrics_when_present() {
         let mut state = minimal_state();
-        state.derived_valuation = Some(DerivedValuation {
+        state.set_derived_valuation(DerivedValuation {
             asset_shape: AssetShape::CorporateEquity,
             scenario: ScenarioValuation::CorporateEquity(CorporateEquityValuation {
                 dcf: Some(DcfValuation {
@@ -842,7 +836,7 @@ mod tests {
     #[test]
     fn format_final_report_valuation_renders_not_assessed_for_fund() {
         let mut state = minimal_state();
-        state.derived_valuation = Some(DerivedValuation {
+        state.set_derived_valuation(DerivedValuation {
             asset_shape: AssetShape::Fund,
             scenario: ScenarioValuation::NotAssessed {
                 reason: "fund_style_asset".to_owned(),
@@ -880,7 +874,7 @@ mod tests {
         let scenario = ScenarioValuation::NotAssessed {
             reason: "fund_style_asset".to_owned(),
         };
-        state.derived_valuation = Some(DerivedValuation {
+        state.set_derived_valuation(DerivedValuation {
             asset_shape: AssetShape::Fund,
             scenario: scenario.clone(),
         });
@@ -906,7 +900,7 @@ mod tests {
             forward_pe: None,
             peg: None,
         });
-        state.derived_valuation = Some(DerivedValuation {
+        state.set_derived_valuation(DerivedValuation {
             asset_shape: AssetShape::CorporateEquity,
             scenario: scenario.clone(),
         });
@@ -931,7 +925,7 @@ mod tests {
             forward_pe: None,
             peg: None,
         });
-        state.derived_valuation = Some(DerivedValuation {
+        state.set_derived_valuation(DerivedValuation {
             asset_shape: AssetShape::CorporateEquity,
             scenario: scenario.clone(),
         });
