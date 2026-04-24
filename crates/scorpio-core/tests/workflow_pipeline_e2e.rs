@@ -8,6 +8,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_core::{
+    analysis_packs::{PackId, resolve_pack},
     error::TradingError,
     state::{
         AssetShape, DataCoverageReport, Decision, DerivedValuation, EvidenceKind, EvidenceRecord,
@@ -15,7 +16,9 @@ use scorpio_core::{
         TradingState,
     },
 };
-use workflow_pipeline_e2e_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
+use workflow_pipeline_e2e_support::{
+    make_pipeline, make_pipeline_from_pack, phase_from_number, run_stubbed_pipeline,
+};
 
 #[tokio::test]
 async fn run_analysis_cycle_success_path_populates_all_phases() {
@@ -213,6 +216,79 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
         assert!(snap_1.is_some());
         assert!(snap_2.is_some());
     }
+}
+
+#[tokio::test]
+async fn from_pack_ignores_invalid_config_analysis_pack_and_runs_with_provided_pack() {
+    let pack = resolve_pack(PackId::Baseline);
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "from-pack-invalid-config.db",
+        "from-pack-invalid-config",
+        "not_a_real_pack",
+        1,
+        1,
+    )
+    .await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let final_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("from_pack should honor the provided baseline pack even when config is invalid");
+
+    assert_eq!(final_state.analysis_pack_name.as_deref(), Some("baseline"));
+    assert_eq!(
+        final_state
+            .analysis_runtime_policy
+            .as_ref()
+            .map(|policy| policy.pack_id),
+        Some(PackId::Baseline)
+    );
+}
+
+#[tokio::test]
+async fn from_pack_runs_registered_non_selectable_pack_without_reparsing_config_boundary() {
+    let pack = resolve_pack(PackId::CryptoDigitalAsset);
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "from-pack-crypto.db",
+        "from-pack-crypto",
+        "baseline",
+        0,
+        0,
+    )
+    .await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let final_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("from_pack should allow directly resolved registered packs");
+
+    assert_eq!(
+        final_state.analysis_pack_name.as_deref(),
+        Some("crypto_digital_asset")
+    );
+    assert_eq!(
+        final_state
+            .analysis_runtime_policy
+            .as_ref()
+            .map(|policy| policy.pack_id),
+        Some(PackId::CryptoDigitalAsset)
+    );
+    assert_eq!(
+        final_state
+            .data_coverage
+            .as_ref()
+            .expect("data coverage must be computed")
+            .required_inputs,
+        vec!["tokenomics", "onchain", "social", "derivatives"]
+    );
 }
 
 #[tokio::test]
