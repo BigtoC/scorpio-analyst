@@ -165,6 +165,7 @@ Behavior:
 - If `endpoints.api` is present, cache it as the runtime API base
 - If the response has no `endpoints.api`, fall back to `https://api.githubcopilot.com`
 - Cache the discovered API base in memory for later `chat` and `models` calls
+- On later runtime requests, `endpoints.rs` should mirror `cc-switch`'s lazy behavior: return the cached endpoint when present, query `/copilot_internal/user` on cache miss, and refresh the cached endpoint again when usage fetches run
 - Reuse the `/copilot_internal/user` response to power Copilot usage/quota reporting instead of making a separate usage-only code path
 
 This is intentionally provider-managed behavior, not a user-configurable `base_url` override.
@@ -236,26 +237,53 @@ Display strings must continue to match the current retry classifier where needed
 
 - Delete `resolve_copilot_exe_path`, `validate_copilot_cli_path`, `resolve_copilot_exe_path_from`, the `SCORPIO_COPILOT_CLI_PATH` env contract, and all associated tests
 - `create_provider_client_for` `ProviderId::Copilot` branch no longer uses the generic API-key path
-- Replace it with provider-specific construction that loads `copilot_auth.json`, validates that Copilot auth is present, and constructs `CopilotProviderClient::new(model_id)` (or equivalent provider-owned constructor)
-- `preflight_copilot_if_configured` should verify that persisted Copilot auth can be loaded, that a Copilot token exchange succeeds, and that `/copilot_internal/user` can be queried to seed the runtime endpoint cache; failure surfaces through `TradingError::Rig` with sanitized provider-specific messaging
+- Introduce a provider-owned `CopilotAuthManager`-style type that is initialized once from the Scorpio data directory and reused across the process. It owns `copilot_auth.json`, token exchange, endpoint discovery, model/usage fetches, and the in-memory caches/locks that support them.
+- Hoist that manager to an app-scoped/shared lifetime so preflight, quick-thinking Copilot, deep-thinking Copilot, and later runtime requests all observe the same caches in one process.
+- Construct `CopilotProviderClient` with the requested `model_id` plus a shared handle to that `CopilotAuthManager`, rather than passing token or endpoint values directly. This mirrors `cc-switch`'s runtime shape, where authorized requests resolve endpoint + token from manager-owned state immediately before send.
+- `preflight_copilot_if_configured` should run only when `copilot` is selected as the quick-thinking or deep-thinking provider. In that case it must verify that persisted Copilot auth can be loaded, that a Copilot token exchange succeeds, and that `/copilot_internal/user` can be queried to seed the runtime endpoint cache; failure surfaces through `TradingError::Rig` with sanitized provider-specific messaging
 
 ### CLI wizard — `crates/scorpio-cli/src/cli/setup/steps.rs`
 
-Copilot stays out of the generic API-key picker, but it should be an explicit step in the setup wizard.
+Copilot should be configured during the existing provider-key step for consistency with the rest of setup, even though it does not use an API key.
 
-Add a Copilot-specific wizard step that:
+Wizard behavior:
 
-1. Starts device flow
-2. Prints `user_code` + `verification_uri`
-3. Polls until success/denial/expiry
-4. Persists `copilot_auth.json`
+1. Include `ProviderId::Copilot` in the provider-selection flow alongside the API-key providers.
+2. When the user selects Copilot, do not prompt for a secret string.
+3. Instead, launch the Copilot-specific device flow inline:
+   - start device flow
+   - print `user_code` + `verification_uri`
+   - poll until success/denial/expiry
+   - persist `copilot_auth.json`
+4. After successful auth, mark Copilot as configured for the purpose of provider selection/routing.
 
-This step is intentionally separate from `PartialConfig`, because Copilot is not a normal API-key provider anymore.
+Picker label behavior:
+
+- When no Copilot auth exists yet, render the provider choice as plain `Copilot`.
+- When `copilot_auth.json` exists and is readable, render it as `Copilot [authenticated as <login>]`, mirroring the existing `[already set]` affordance used by API-key providers but with Copilot-specific identity context.
+- When `copilot_auth.json` exists but Copilot preflight/token validation fails, render it as `Copilot [auth needs refresh]` so setup communicates that saved auth state exists but is no longer usable.
+
+This keeps the setup UX consistent while still storing Copilot auth outside `PartialConfig`.
+
+Implementation note for setup wiring:
+
+- Keep the existing `provider_key` / `set_provider_key` helpers focused on key-based providers only.
+- Do **not** try to model Copilot as a fake key-bearing provider inside those helpers.
+- Special-case `ProviderId::Copilot` in the provider-key step flow so selecting it runs the device-flow UX inline and checks `copilot_auth.json` directly.
+- `copilot_auth.json` is Copilot-specific state only; no other provider should read from it or share its helper paths.
+- Replace key-only setup gating with a configured-provider abstraction for the wizard flow. That abstraction should treat API-key providers as configured when their key is present and Copilot as configured when its auth state is usable enough for routing/setup purposes.
+- Step 3 minimum validation, provider choice labels, and Step 4 routing eligibility should all use that configured-provider abstraction rather than `provider_key(...)` alone.
 
 ### Missing-auth messaging
 
 - `ProviderId::missing_key_hint` should no longer pretend Copilot is API-key based
 - Missing-auth guidance should come from Copilot-specific errors and preflight messages, e.g. “Run Copilot authentication via setup to create `~/.scorpio-analyst/copilot_auth.json`”
+
+### Provider selection and readiness
+
+- In runtime readiness, Copilot is considered relevant only when the user selected `copilot` as either the quick-thinking or deep-thinking provider in runtime settings
+- If neither selected tier uses Copilot, Scorpio does not run Copilot auth/token/endpoint preflight and the absence of `copilot_auth.json` is irrelevant to readiness
+- If either selected tier uses Copilot, analysis readiness must include successful Copilot preflight before the run starts
 
 ## What stays unchanged
 
@@ -270,10 +298,11 @@ Drop the subprocess/mock-script tests. Replace with:
 
 - **`auth.rs`**: unit tests against `wiremock` for device flow, polling states, GitHub user fetch, auth-file read/write, and atomic persistence semantics
 - **`tokens.rs`**: unit tests for expired-token refresh, near-expiry pre-request refresh, and single-flight refresh under concurrency
-- **`endpoints.rs`**: unit tests for `/copilot_internal/user` parsing, `endpoints.api` discovery, cache fill during preflight, and default fallback to `https://api.githubcopilot.com`
+- **`endpoints.rs`**: unit tests for `/copilot_internal/user` parsing, `endpoints.api` discovery, cache fill during preflight, cache-miss rediscovery, usage-path refresh, and default fallback to `https://api.githubcopilot.com`
 - **`http.rs`**: header assertions, `chat_completion` happy path, upstream `401 -> Unauthorized`, `429 -> transient classifier`, `models` fetch via discovered endpoint, usage fetch via `/copilot_internal/user`
 - **`rig_impl.rs`**: migrate existing `build_prompt_text` tests to the new message translation path and assert that token usage is mapped from the real Copilot response
-- **Factory/preflight**: replace CLI-path tests with missing-auth, invalid-auth, token-exchange, and `/copilot_internal/user` endpoint-seeding coverage specific to `copilot_auth.json`
+- **Wizard/setup**: add tests for a Copilot-only setup path that completes Step 3, exposes Copilot in Step 4 routing, and preserves the special-case picker label states (`Copilot`, `Copilot [authenticated as <login>]`, `Copilot [auth needs refresh]`)
+- **Factory/preflight**: replace CLI-path tests with missing-auth, invalid-auth, token-exchange, `/copilot_internal/user` endpoint-seeding coverage specific to `copilot_auth.json`, and a shared-manager test proving preflight-populated endpoint state is visible to a later runtime handle
 
 Dependencies:
 
@@ -283,7 +312,7 @@ Dependencies:
 
 ## Phasing (suggested PR breakdown)
 
-1. **PR 1 — provider scaffolding + auth bootstrap**: add `providers/copilot/` modules for auth/tokens/endpoints/errors/http, introduce `copilot_auth.json` handling using the v3 `accounts` / `default_account_id` envelope, and land the Copilot-specific wizard step needed to create that auth file. Keep old ACP runtime active. No cutover yet.
+1. **PR 1 — provider scaffolding + auth bootstrap**: add `providers/copilot/` modules for auth/tokens/endpoints/errors/http, introduce `copilot_auth.json` handling using the v3 `accounts` / `default_account_id` envelope, and integrate Copilot auth into the existing provider-key setup step so choosing Copilot performs the device flow inline. Keep old ACP runtime active. No cutover yet.
 2. **PR 2 — runtime cutover**: switch `CopilotProviderClient` / `rig_impl` / factory wiring to the new direct HTTPS backend, add dynamic endpoint discovery, remove `providers/acp.rs`, delete ACP tests. CI must stay green.
 3. **PR 3 — docs + UX polish**: refine the Copilot setup UX if needed, update `CLAUDE.md` / `README.md` / onboarding docs to describe `copilot_auth.json`, experimental support tier, and the direct GitHub/Copilot runtime.
 
