@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Populated from `yfinance_rs::profile::Profile` when available, falling back
 /// to data-shape detection when the profile is absent or inconclusive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AssetShape {
     /// Standard corporate equity — EPS, revenue, FCF, and balance-sheet inputs
     /// are expected.
@@ -41,6 +42,15 @@ pub enum AssetShape {
     Fund,
     /// Asset shape could not be determined from profile or data signals.
     Unknown,
+    /// A blockchain's native asset (e.g. BTC, ETH, SOL). Placeholder; crypto
+    /// valuation logic lands with the crypto pack implementation.
+    NativeChainAsset,
+    /// An ERC-20-style fungible token on an EVM-compatible chain. Placeholder.
+    Erc20Token,
+    /// A stablecoin — fiat- or crypto-collateralised. Placeholder.
+    Stablecoin,
+    /// A liquidity-provider position (AMM LP token, vault receipt). Placeholder.
+    LpToken,
 }
 
 // ─── Typed metric sub-structures (JsonSchema for proposal schema exposure) ────
@@ -345,6 +355,71 @@ mod tests {
     }
 
     // ── Proposal validation: inconsistent valuation ───────────────────────
+
+    // ── New AssetShape variants round-trip cleanly ───────────────────────
+
+    #[test]
+    fn derived_valuation_native_chain_asset_roundtrips_json() {
+        let val = DerivedValuation {
+            asset_shape: AssetShape::NativeChainAsset,
+            scenario: ScenarioValuation::NotAssessed {
+                reason: "unsupported_asset_shape".to_owned(),
+            },
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn derived_valuation_erc20_token_roundtrips_json() {
+        let val = DerivedValuation {
+            asset_shape: AssetShape::Erc20Token,
+            scenario: ScenarioValuation::NotAssessed {
+                reason: "unsupported_asset_shape".to_owned(),
+            },
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn derived_valuation_stablecoin_roundtrips_json() {
+        let val = DerivedValuation {
+            asset_shape: AssetShape::Stablecoin,
+            scenario: ScenarioValuation::NotAssessed {
+                reason: "unsupported_asset_shape".to_owned(),
+            },
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn derived_valuation_lp_token_roundtrips_json() {
+        let val = DerivedValuation {
+            asset_shape: AssetShape::LpToken,
+            scenario: ScenarioValuation::NotAssessed {
+                reason: "unsupported_asset_shape".to_owned(),
+            },
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn asset_shape_crypto_variants_preserve_pascalcase_in_json() {
+        // Guard against an accidental `rename_all` drift — old snapshots store
+        // variant names in PascalCase, so any serde attribute change would
+        // silently break snapshot compat. This test fails loudly if someone
+        // adds `rename_all` to AssetShape.
+        let val = AssetShape::NativeChainAsset;
+        let json = serde_json::to_string(&val).expect("serialize");
+        assert_eq!(json, "\"NativeChainAsset\"");
+    }
 
     #[test]
     fn scenario_valuation_not_assessed_with_empty_reason_is_representable() {

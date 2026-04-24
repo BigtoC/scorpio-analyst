@@ -199,7 +199,7 @@ fn map_graph_error_extracts_fanout_child_identity() {
 #[test]
 fn canonicalizes_runtime_symbol_before_prefetch() {
     let canonical = canonicalize_runtime_symbol(" nvda ").expect("valid lowercase symbol");
-    assert_eq!(canonical, "NVDA");
+    assert_eq!(canonical.to_string(), "NVDA");
 }
 
 #[test]

@@ -203,6 +203,7 @@ cargo run -p scorpio-cli -- analyze AAPL --no-terminal --json --output-dir /tmp/
 ![Final report — page 1](docs/images/report-example/final_report_1.png)
 ![Final report — page 2](docs/images/report-example/final_report_2.png)
 ![Final report — page 3](docs/images/report-example/final_report_3.png)
+![Final report — page 4](docs/images/report-example/final_report_4.png)
 
 > Full CLI usage and a TUI interface are planned for subsequent phases.
 

@@ -1,30 +1,33 @@
-//! Analyst team: four parallel specialist agents that produce structured data
-//! for the downstream debate and trading pipeline.
+//! Analyst team: specialist agents that produce structured data for the
+//! downstream debate and trading pipeline.
 //!
 //! # Fan-out execution
 //!
-//! [`run_analyst_team`] spawns all four analysts concurrently via [`tokio::spawn`]
-//! and collects results. The degradation policy tolerates one failure
-//! (partial data continues); two or more failures abort the cycle with
-//! [`TradingError::AnalystError`].
+//! [`run_analyst_team`] spawns the equity analyst set concurrently via
+//! [`tokio::spawn`] and collects results. The degradation policy tolerates
+//! one failure (partial data continues); two or more failures abort the
+//! cycle with [`TradingError::AnalystError`].
 //!
-//! # Sub-modules
+//! # Module layout
 //!
-//! - [`fundamental`] – Fundamental Analyst (earnings, ratios, insider activity)
-//! - [`sentiment`] – Sentiment Analyst (news-based, MVP)
-//! - [`news`] – News Analyst (articles and macro events)
-//! - [`technical`] – Technical Analyst (OHLCV → indicators → LLM summary)
+//! - [`traits`] — [`Analyst`], [`AnalystId`], [`DataNeed`] (shared across
+//!   asset-class packs).
+//! - [`registry`] — [`AnalystRegistry`] catalog of analysts the pipeline
+//!   can dispatch to, consumed by `workflow/pipeline/runtime::build_graph`.
+//! - [`equity`] — the four analysts that ship today
+//!   ([`FundamentalAnalyst`], [`SentimentAnalyst`], [`NewsAnalyst`],
+//!   [`TechnicalAnalyst`]).
+//! - [`crypto`] — empty stubs for the crypto pack slice; none are wired
+//!   into a live graph in this refactor.
 
-mod common;
-mod fundamental;
-mod news;
-mod sentiment;
-mod technical;
+pub mod crypto;
+pub mod equity;
+pub mod registry;
+pub mod traits;
 
-pub use fundamental::FundamentalAnalyst;
-pub use news::NewsAnalyst;
-pub use sentiment::SentimentAnalyst;
-pub use technical::TechnicalAnalyst;
+pub use equity::{FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst};
+pub use registry::AnalystRegistry;
+pub use traits::{Analyst, AnalystId, DataNeed};
 
 use std::sync::Arc;
 use std::time::Duration;

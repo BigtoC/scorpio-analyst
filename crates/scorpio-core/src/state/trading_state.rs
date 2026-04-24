@@ -7,6 +7,7 @@ use crate::analysis_packs::RuntimePolicy;
 use crate::data::adapters::{
     EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
 };
+use crate::domain::Symbol;
 
 use super::{
     DataCoverageReport, DerivedValuation, EvidenceRecord, ExecutionStatus, FundamentalData,
@@ -82,7 +83,21 @@ impl<T> Default for EnrichmentState<T> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TradingState {
     pub execution_id: Uuid,
+    /// Raw string form of the instrument symbol.
+    ///
+    /// Transitional: during the Phase 1 asset-class refactor, `symbol` is the
+    /// typed source of truth and this field is a derived mirror kept for serde
+    /// back-compat with pre-refactor snapshots and external report consumers.
+    /// Writers must use [`TradingState::set_symbol`] to keep both fields in
+    /// sync. A later cleanup removes this field once v1 snapshots are retired.
     pub asset_symbol: String,
+    /// Typed, class-aware view of [`Self::asset_symbol`].
+    ///
+    /// Populated by the constructor and [`TradingState::set_symbol`] from the
+    /// raw string; `None` only when the input failed to parse or when the
+    /// field was absent from a pre-Phase-1 snapshot.
+    #[serde(default)]
+    pub symbol: Option<Symbol>,
     pub target_date: String,
 
     // Market price and volatility context at the time of analysis
@@ -168,10 +183,24 @@ pub struct AnalystStateHandles {
 
 impl TradingState {
     /// Create a new empty state for a trading cycle.
+    ///
+    /// The raw symbol string is parsed into a typed [`Symbol`] via
+    /// [`Symbol::parse`]; on success the typed form becomes the source of
+    /// truth and the stored `asset_symbol` is its canonical string rendering.
+    /// On parse failure the raw input is preserved and `symbol` is `None` so
+    /// fixture-driven callers that pass deliberately unusual strings still
+    /// succeed.
     pub fn new(asset_symbol: impl Into<String>, target_date: impl Into<String>) -> Self {
+        let raw = asset_symbol.into();
+        let symbol = Symbol::parse(&raw).ok();
+        let asset_symbol = match &symbol {
+            Some(s) => s.to_string(),
+            None => raw,
+        };
         Self {
             execution_id: Uuid::new_v4(),
-            asset_symbol: asset_symbol.into(),
+            asset_symbol,
+            symbol,
             target_date: target_date.into(),
             current_price: None,
             market_volatility: None,
@@ -202,6 +231,18 @@ impl TradingState {
             analysis_runtime_policy: None,
             token_usage: TokenUsageTracker::default(),
         }
+    }
+
+    /// Set the instrument identity from a typed [`Symbol`], keeping the raw
+    /// `asset_symbol` mirror in sync.
+    ///
+    /// This is the single supported write path for identity mutations —
+    /// callers that need to canonicalize or upgrade a symbol (e.g. the
+    /// preflight task or the pipeline's input canonicalizer) must go through
+    /// here so the typed and string forms cannot drift.
+    pub fn set_symbol(&mut self, symbol: Symbol) {
+        self.asset_symbol = symbol.to_string();
+        self.symbol = Some(symbol);
     }
 
     /// Create per-field async locks for concurrent analyst fan-out writes.

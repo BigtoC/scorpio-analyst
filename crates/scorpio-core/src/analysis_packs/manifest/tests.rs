@@ -1,4 +1,6 @@
-use crate::state::AssetShape;
+use std::collections::HashMap;
+
+use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
 
 use super::{AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment};
 
@@ -17,6 +19,12 @@ fn valid_manifest() -> AnalysisPackManifest {
         analysis_emphasis: "Test emphasis".to_owned(),
         report_strategy_label: "Test".to_owned(),
         default_valuation: ValuationAssessment::Full,
+        prompt_bundle: PromptBundle::empty(),
+        valuator_selection: {
+            let mut m = HashMap::new();
+            m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
+            m
+        },
     }
 }
 
@@ -158,6 +166,42 @@ fn resolve_valuation_unknown_always_not_assessed() {
     let manifest = valid_manifest();
     assert_eq!(
         manifest.resolve_valuation(&AssetShape::Unknown),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_native_chain_asset_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::NativeChainAsset),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_erc20_token_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::Erc20Token),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_stablecoin_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::Stablecoin),
+        ValuationAssessment::NotAssessed
+    );
+}
+
+#[test]
+fn resolve_valuation_lp_token_not_assessed() {
+    let manifest = valid_manifest();
+    assert_eq!(
+        manifest.resolve_valuation(&AssetShape::LpToken),
         ValuationAssessment::NotAssessed
     );
 }

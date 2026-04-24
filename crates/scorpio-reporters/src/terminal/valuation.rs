@@ -39,6 +39,13 @@ fn asset_shape_label(asset_shape: &AssetShape) -> &'static str {
         AssetShape::CorporateEquity => "Corporate equity",
         AssetShape::Fund => "Fund",
         AssetShape::Unknown => "Unknown",
+        AssetShape::NativeChainAsset => "Native chain asset",
+        AssetShape::Erc20Token => "ERC-20 token",
+        AssetShape::Stablecoin => "Stablecoin",
+        AssetShape::LpToken => "LP token",
+        // `AssetShape` is `#[non_exhaustive]`; any future variant falls back to
+        // a neutral label so the reporter keeps rendering without source edits.
+        _ => "Unknown",
     }
 }
 

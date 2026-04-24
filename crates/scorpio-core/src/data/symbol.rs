@@ -3,7 +3,7 @@
 //! Centralizing this logic keeps provider adapters consistent and avoids subtle
 //! drift in accepted ticker formats or error messages.
 
-use crate::error::TradingError;
+use crate::{domain::Symbol, error::TradingError};
 
 /// Validate and normalize a stock or index symbol.
 ///
@@ -29,6 +29,20 @@ pub fn validate_symbol(symbol: &str) -> Result<&str, TradingError> {
     }
 
     Ok(symbol)
+}
+
+/// Parse a raw symbol string into the typed [`Symbol`] form.
+///
+/// This is a thin wrapper over [`Symbol::parse`] exposed at the original
+/// `data::symbol` module path so call sites can migrate incrementally without
+/// reaching into `crate::domain` directly.
+///
+/// # Errors
+///
+/// Returns [`TradingError::SchemaViolation`] when the input does not match any
+/// supported asset-class grammar.
+pub fn parse_symbol(symbol: &str) -> Result<Symbol, TradingError> {
+    Symbol::parse(symbol)
 }
 
 #[cfg(test)]

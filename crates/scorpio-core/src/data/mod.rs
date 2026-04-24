@@ -30,7 +30,10 @@ pub mod adapters;
 pub mod entity;
 pub mod finnhub;
 pub mod fred;
+mod provider_impls;
+pub mod routing;
 pub mod symbol;
+pub mod traits;
 pub mod yfinance;
 
 pub use entity::{ResolvedInstrument, resolve_symbol};

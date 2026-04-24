@@ -8,6 +8,7 @@ use tracing::{error, info, instrument};
 use uuid::Uuid;
 
 use crate::{
+    agents::analyst::{AnalystId, AnalystRegistry},
     analysis_packs::resolve_runtime_policy,
     config::Config,
     data::adapters::{
@@ -16,6 +17,7 @@ use crate::{
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
     data::{FinnhubClient, FredClient, YFinanceClient},
+    domain::Symbol,
     error::TradingError,
     providers::factory::CompletionModelHandle,
     state::{EnrichmentState, TradingState},
@@ -35,8 +37,74 @@ use crate::{
 
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
 
-pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<String, TradingError> {
-    Ok(crate::data::resolve_symbol(symbol)?.canonical_symbol)
+pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
+    Ok(crate::data::resolve_symbol(symbol)?.symbol)
+}
+
+/// Construct the ordered list of analyst fan-out tasks for `required_inputs`.
+///
+/// For each entry of `required_inputs` that resolves to an [`AnalystId`]
+/// registered in `registry`, the matching concrete `Task` is built and pushed
+/// in input order. Unknown inputs and analysts that are not registered are
+/// silently dropped — consistent with the graceful-degradation contract
+/// already enforced in `AnalystSyncTask::input_missing`.
+///
+/// For the baseline pack's input list (`["fundamentals", "sentiment",
+/// "news", "technical"]`) this reproduces the previous hard-coded
+/// four-analyst vector byte-for-byte.
+fn build_analyst_tasks(
+    registry: &AnalystRegistry,
+    required_inputs: &[String],
+    finnhub: &FinnhubClient,
+    fred: &FredClient,
+    yfinance: &YFinanceClient,
+    quick_handle: &CompletionModelHandle,
+    llm_config: &crate::config::LlmConfig,
+) -> Vec<Arc<dyn graph_flow::Task>> {
+    registry
+        .for_inputs(required_inputs.iter().map(String::as_str))
+        .into_iter()
+        .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, llm_config))
+        .collect()
+}
+
+fn build_analyst_task(
+    id: AnalystId,
+    finnhub: &FinnhubClient,
+    fred: &FredClient,
+    yfinance: &YFinanceClient,
+    quick_handle: &CompletionModelHandle,
+    llm_config: &crate::config::LlmConfig,
+) -> Option<Arc<dyn graph_flow::Task>> {
+    // Each arm clones the provider / handle because Task construction takes
+    // ownership. The crypto variants are registered (for identity) but not
+    // spawnable until the crypto pack implementation lands.
+    match id {
+        AnalystId::Fundamental => Some(FundamentalAnalystTask::new(
+            quick_handle.clone(),
+            finnhub.clone(),
+            llm_config.clone(),
+        )),
+        AnalystId::Sentiment => Some(SentimentAnalystTask::new(
+            quick_handle.clone(),
+            finnhub.clone(),
+            llm_config.clone(),
+        )),
+        AnalystId::News => Some(NewsAnalystTask::new(
+            quick_handle.clone(),
+            finnhub.clone(),
+            fred.clone(),
+            llm_config.clone(),
+        )),
+        AnalystId::Technical => Some(TechnicalAnalystTask::new(
+            quick_handle.clone(),
+            yfinance.clone(),
+            llm_config.clone(),
+        )),
+        AnalystId::Tokenomics | AnalystId::OnChain | AnalystId::Social | AnalystId::Derivatives => {
+            None
+        }
+    }
 }
 
 pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
@@ -91,20 +159,32 @@ pub(super) fn build_graph(
     );
     graph.add_task(Arc::new(preflight));
 
-    let fan_out = FanOutTask::new(
-        TASKS.analyst_fan_out,
-        vec![
-            FundamentalAnalystTask::new(quick_handle.clone(), finnhub.clone(), config.llm.clone()),
-            SentimentAnalystTask::new(quick_handle.clone(), finnhub.clone(), config.llm.clone()),
-            NewsAnalystTask::new(
-                quick_handle.clone(),
-                finnhub.clone(),
-                fred.clone(),
-                config.llm.clone(),
-            ),
-            TechnicalAnalystTask::new(quick_handle.clone(), yfinance.clone(), config.llm.clone()),
-        ],
+    // Resolve `required_inputs` from the active pack so the fan-out is data-
+    // driven. If the pack id fails to resolve (invalid config, validation
+    // failure) fall back to the equity-baseline four-analyst vector so
+    // behaviour matches the pre-refactor graph for misconfigured runs — the
+    // downstream `run_analysis_cycle` re-resolves and raises a proper error.
+    let registry = AnalystRegistry::equity_baseline();
+    let required_inputs: Vec<String> = resolve_runtime_policy(&config.analysis_pack)
+        .map(|policy| policy.required_inputs)
+        .unwrap_or_else(|_| {
+            vec![
+                "fundamentals".to_owned(),
+                "sentiment".to_owned(),
+                "news".to_owned(),
+                "technical".to_owned(),
+            ]
+        });
+    let analyst_tasks = build_analyst_tasks(
+        &registry,
+        &required_inputs,
+        finnhub,
+        fred,
+        yfinance,
+        quick_handle,
+        &config.llm,
     );
+    let fan_out = FanOutTask::new(TASKS.analyst_fan_out, analyst_tasks);
     graph.add_task(fan_out);
     graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
 
@@ -208,7 +288,8 @@ pub(super) async fn run_analysis_cycle(
 ) -> Result<TradingState, TradingError> {
     reset_cycle_outputs(&mut initial_state);
     initial_state.execution_id = Uuid::new_v4();
-    initial_state.asset_symbol = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
+    let canonical = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
+    initial_state.set_symbol(canonical);
 
     let runtime_policy =
         resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {

@@ -105,8 +105,9 @@ impl Task for PreflightTask {
             ))
         })?;
 
-        // Write the canonical symbol back into TradingState.
-        state.asset_symbol = instrument.canonical_symbol.clone();
+        // Write the canonical symbol back into TradingState via the typed
+        // setter so `asset_symbol` and `symbol` cannot drift.
+        state.set_symbol(instrument.symbol.clone());
 
         // ── Load prior thesis memory (fail-open) ──────────────────────────
         let prior_thesis = self

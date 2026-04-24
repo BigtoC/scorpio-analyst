@@ -108,6 +108,17 @@ pub fn derive_valuation(
             };
         }
         AssetShape::CorporateEquity => {}
+        // Crypto variants are placeholders in this slice; they resolve to
+        // `NotAssessed` so the corporate-equity pipeline cannot be fed crypto
+        // inputs by accident.
+        _ => {
+            return DerivedValuation {
+                asset_shape,
+                scenario: ScenarioValuation::NotAssessed {
+                    reason: "unsupported_asset_shape".to_owned(),
+                },
+            };
+        }
     }
 
     // ── 3. Compute each metric ────────────────────────────────────────────────
