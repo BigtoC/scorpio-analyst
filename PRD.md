@@ -255,6 +255,7 @@ parameter.
 │  PreflightTask                                          │
 │  • Validates & canonicalizes symbol ("nvda" → "NVDA")   │
 │  • Writes ResolvedInstrument to context                 │
+│  • Loads prior thesis memory for the same symbol        │
 │  • Derives ProviderCapabilities from config             │
 │  • Seeds cache keys with null placeholders              │
 │  • Hard-fails on invalid symbol                         │
@@ -380,6 +381,10 @@ pub struct TradingState {
     // Phase 5: Final Execution
     pub final_execution_status: Option<ExecutionStatus>,
 
+    // Thesis memory continuity across runs
+    pub prior_thesis: Option<ThesisMemory>,
+    pub current_thesis: Option<ThesisMemory>,
+
     // Evidence and Provenance (Stage 1 — dual-write alongside legacy fields above)
     pub evidence_fundamental: Option<EvidenceRecord<FundamentalData>>,
     pub evidence_technical: Option<EvidenceRecord<TechnicalData>>,
@@ -450,6 +455,18 @@ pub struct ProvenanceSummary {
     pub caveats: Vec<String>,
 }
 
+/// Compact cross-run memory captured from the most recent completed thesis.
+pub struct ThesisMemory {
+    pub symbol: String,
+    pub action: String,
+    pub decision: String,
+    pub rationale: String,
+    pub summary: Option<String>,
+    pub execution_id: String,
+    pub target_date: String,
+    pub captured_at: String,
+}
+
 /// Tracks token consumption per agent, per phase, and for the entire run.
 pub struct TokenUsageTracker {
     pub phase_usage: Vec<PhaseTokenUsage>,
@@ -481,6 +498,20 @@ By enforcing this structural schema, the Trader Agent does not need to parse a m
 Margin; it directly accesses `context.fundamental_metrics.gross_margin`, radically reducing token consumption and
 hallucination probabilities.
 
+#### Thesis Memory Continuity
+
+In addition to same-run state passing, the system maintains a lightweight thesis-memory channel across runs for the same
+canonical symbol. `TradingState.prior_thesis` is populated during `PreflightTask` by loading the most recent compatible
+phase-5 snapshot for that symbol within a bounded staleness window. `TradingState.current_thesis` is captured at the
+end of the current run so it can be reused by future analyses. The payload is intentionally compact — action,
+decision, rationale, summary, and capture metadata — so downstream prompts receive a concise historical thesis rather
+than an entire prior chat transcript.
+
+This memory is treated as **reference context only**, not as authoritative instruction. Prompt builders must frame it
+as untrusted historical context to prevent positive-feedback loops where the system blindly repeats its own previous
+conclusions. If no prior snapshot exists, if the snapshot is too old, or if schema evolution renders it incompatible,
+the pipeline degrades gracefully and continues with `prior_thesis = None`.
+
 #### Evidence Provenance and Dual-Write Transition
 
 The `evidence_*` fields wrap the same analyst payload types (`FundamentalData`, `TechnicalData`, etc.) inside
@@ -499,10 +530,12 @@ execution at the entry point and routes the `TradingState` through the necessary
 
 1. **Preflight Validation (The PreflightTask)**: Before any analyst work begins, a `PreflightTask` validates and
    canonicalizes the input symbol via entity resolution (`crates/scorpio-core/src/data/entity.rs`), writes the canonical
-   `ResolvedInstrument` to the workflow context, derives `ProviderCapabilities` from the `DataEnrichmentConfig`, writes
+   `ResolvedInstrument` to the workflow context, loads the most recent compatible thesis memory for that canonical
+   symbol from a prior phase-5 snapshot, derives `ProviderCapabilities` from the `DataEnrichmentConfig`, writes
    baseline coverage expectations, and seeds enrichment cache keys with explicit `null` placeholders. If the symbol is
-   invalid, the pipeline fails immediately rather than wasting LLM calls on a bad input. This step also establishes the
-   data-quality contract that downstream agents can reference.
+   invalid, the pipeline fails immediately rather than wasting LLM calls on a bad input. Missing, stale, or
+   schema-incompatible thesis memory is a fail-open condition: the run continues with no prior thesis attached. This
+   step also establishes the data-quality contract that downstream agents can reference.
 2. **Parallel Data Ingestion (The Fan-Out Pattern)**: The workflow proceeds by utilizing a `FanOutTask`, a composite task
    provided by `graph-flow `that executes multiple child tasks simultaneously. The Fundamental, Sentiment, News, and
    Technical tasks are executed concurrently using `tokio::spawn`. Each task invokes the respective external application
@@ -1024,7 +1057,9 @@ allocation. The Rust implementation will integrate the `tracing` and `tracing-su
 for every state transition, tool call, and LLM prompt hook. By persisting the complete `TradingState` across sessions
 via`graph-flow`'s storage backend (e.g., PostgreSQL JSONB), quantitative researchers can historically audit the exact
 sequence of debate arguments and risk assessments that led to a specific trade, ensuring total regulatory compliance and
-facilitating continuous framework optimization.
+facilitating continuous framework optimization. The same snapshot trail also enables thesis memory: future runs can load
+the last compatible same-symbol thesis as bounded historical context, while schema-version checks and fail-open
+deserialization rules ensure stale or incompatible memories never block execution.
 
 ### Token Usage Tracking and Run Statistics
 
