@@ -248,7 +248,7 @@ fn build_user_prompt(
         &format!(
             "Fundamental data: {}",
             serialize_optional_value_with_missing_note(
-                &state.fundamental_metrics,
+                &state.fundamental_metrics(),
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
@@ -259,7 +259,7 @@ fn build_user_prompt(
         &format!(
             "Technical data: {}",
             serialize_optional_value_with_missing_note(
-                &state.technical_indicators,
+                &state.technical_indicators(),
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
@@ -270,7 +270,7 @@ fn build_user_prompt(
         &format!(
             "Sentiment data: {}",
             serialize_optional_value_with_missing_note(
-                &state.market_sentiment,
+                &state.market_sentiment(),
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
@@ -281,7 +281,7 @@ fn build_user_prompt(
         &format!(
             "News data: {}",
             serialize_optional_value_with_missing_note(
-                &state.macro_news,
+                &state.macro_news(),
                 MISSING_ANALYST_DATA_NOTE,
             )
         ),
@@ -398,7 +398,7 @@ mod tests {
         state.aggressive_risk_report = Some(no_violation_risk_report(RiskLevel::Aggressive));
         state.neutral_risk_report = Some(no_violation_risk_report(RiskLevel::Neutral));
         state.conservative_risk_report = Some(no_violation_risk_report(RiskLevel::Conservative));
-        state.fundamental_metrics = Some(FundamentalData {
+        state.set_fundamental_metrics(FundamentalData {
             revenue_growth_pct: Some(0.12),
             pe_ratio: Some(28.5),
             eps: Some(6.1),
@@ -409,7 +409,7 @@ mod tests {
             insider_transactions: Vec::new(),
             summary: "Strong margins.".to_owned(),
         });
-        state.technical_indicators = Some(TechnicalData {
+        state.set_technical_indicators(TechnicalData {
             rsi: Some(58.0),
             macd: None,
             atr: Some(3.1),
@@ -424,7 +424,7 @@ mod tests {
             volume_avg: Some(65_000_000.0),
             summary: "Momentum constructive.".to_owned(),
         });
-        state.market_sentiment = Some(SentimentData {
+        state.set_market_sentiment(SentimentData {
             overall_score: 0.34,
             source_breakdown: vec![SentimentSource {
                 source_name: "news".to_owned(),
@@ -434,7 +434,7 @@ mod tests {
             engagement_peaks: Vec::new(),
             summary: "Modestly positive.".to_owned(),
         });
-        state.macro_news = Some(NewsData {
+        state.set_macro_news(NewsData {
             articles: vec![NewsArticle {
                 title: "Apple outlook improves".to_owned(),
                 source: "Reuters".to_owned(),
