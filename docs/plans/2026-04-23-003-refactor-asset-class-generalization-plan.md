@@ -11,7 +11,7 @@ date: 2026-04-23
 
 Reshape `scorpio-core` so that adding new asset classes (crypto first, later commodities / FX) becomes purely additive. The refactor lifts equity-specific framing out of seven architectural layers — domain types, analyst composition, data providers, prompts, valuation, state shape, and workflow assembly — replacing hard-coded call graphs with trait-driven registries that the analysis pack drives at runtime.
 
-The refactor is **behavior-preserving** for the equity (baseline) pipeline at every phase boundary. Crypto lands as file-level scaffolding only (empty stubs, unreachable pack) so the abstractions are exercised by two consumers during design but only one produces output. A follow-up change populates the crypto pack.
+The refactor is **behavior-preserving** for fresh equity (baseline) runs at every phase boundary. Thesis-memory continuity across the Phase 6 upgrade is an accepted breaking change: pre-v2 snapshot rows become unsupported and are not carried forward. Crypto lands as file-level scaffolding only (empty stubs, unreachable pack) so the abstractions are exercised by two consumers during design but only one produces output. A follow-up change populates the crypto pack.
 
 No new workspace member is introduced; the existing three-crate layout (`scorpio-core`, `scorpio-cli`, `scorpio-reporters`) is preserved.
 
@@ -37,7 +37,7 @@ These four pain points are the full set. Everything else — indicators, rate li
 - `Valuator` trait; `derive_valuation` becomes a compat shim.
 - `TradingState` reshape (option C: coexisting optional `equity` / `crypto` / shared fields).
 - `analysis_packs/` → `packs/` rename.
-- `THESIS_MEMORY_SCHEMA_VERSION` bump (1 → 2) with graceful-skip compat.
+- `THESIS_MEMORY_SCHEMA_VERSION` bump (1 → 2) with explicit same-version-only snapshot handling.
 
 **Explicitly out of scope:**
 
@@ -47,7 +47,8 @@ These four pain points are the full set. Everything else — indicators, rate li
 - **Runtime-loaded packs from filesystem.** `Cow<'static, str>` allows it; no loader code this slice.
 - **Removal of the transitional `asset_symbol: String` field.** Kept through Phase 6 for serde back-compat; removed in a later cleanup.
 - **Reporter crate changes.** Reporters stay unaffected — every moved module keeps its public path via `mod.rs` facade re-exports.
-- **SQL migration for snapshot DB.** Compat story relies on the existing warn-and-skip deserialization path (see "Snapshot Compatibility" below).
+- **SQL migration for snapshot DB.** No SQL migration runs in this slice; pre-v2 snapshot rows become unsupported after Phase 6 and are skipped / rejected by schema-version checks.
+- **Automatic local snapshot cleanup.** Developers may delete `~/.scorpio-analyst/phase_snapshots.db` manually for a clean slate, but release behavior must not depend on truncating or deleting the DB.
 - **Backward-compat shim for `validate_symbol(&str)`.** Stays callable; CLI uses it for fail-fast UX.
 
 ## Context & Research
@@ -63,7 +64,7 @@ These four pain points are the full set. Everything else — indicators, rate li
 - **Data clients have no traits.** `FinnhubClient`, `YFinanceClient`, `FredClient` are concrete with inherent methods. Trait migration is in-place: add `impl FundamentalsProvider for FinnhubClient {}` without changing signatures.
 - **`derive_valuation`** unconditionally consumes `yfinance_rs::profile::Profile`. Phase 5 does not rip it out — it wraps it in a `DcfValuator` / `MultiplesValuator` trait impl, keeping the `pub fn` and its 16 tests intact.
 - **Reporter crate isolation.** `scorpio-reporters` imports `scorpio_core::state::TradingState` and `scorpio_core::data::adapters::EnrichmentStatus`. Every move in Phase 6 is covered by `pub use` re-exports from the `state/mod.rs` facade so these paths stay stable.
-- **Snapshot compat primitive exists.** `workflow/snapshot/thesis.rs:12` holds `THESIS_MEMORY_SCHEMA_VERSION: i64 = 1`. The thesis-lookup has an explicit guard (`if schema_version > THESIS_MEMORY_SCHEMA_VERSION`) and a warn-and-skip `Err` branch on deserialization failure. Phase 6 leverages both; no SQL migration needed.
+- **Snapshot compat primitive exists.** `workflow/snapshot/thesis.rs:12` holds `THESIS_MEMORY_SCHEMA_VERSION: i64 = 1`. Phase 6 tightens the current future-version guard into same-version-only handling for thesis lookup and direct snapshot reads, so old rows are treated as unsupported before deserialization. No SQL migration is needed.
 
 ### Institutional Learnings
 
@@ -74,19 +75,25 @@ These four pain points are the full set. Everything else — indicators, rate li
 
 Five decisions must be locked before Phase 1 code begins. All five have recommended defaults; users confirmed the full set on 2026-04-23.
 
-| ID | Question | Decision |
-|----|----------|----------|
-| D1 | `AnalystId` as enum vs. string-newtype? | **Enum with `#[non_exhaustive]`** — compile-time exhaustive dispatch, SemVer-safe for external packs. |
-| D2 | `DataNeed` granularity — coarse (`Fundamentals`, `News`, `PriceHistory`) or fine (`RevenueGrowth`, `EpsForwardEstimate`)? | **Coarse** — matches today's `required_inputs: Vec<String>` vocabulary. Fine granularity is a v2 concern. |
-| D3 | `PromptBundle` slot type — `&'static str`, `Cow<'static, str>`, or `String`? | **`Cow<'static, str>`** — baseline stays zero-alloc via `include_str!`; runtime-loaded packs supported via `Cow::Owned`. |
-| D4 | Phase 6 access pattern — accessor methods, or require call sites to pattern-match `state.equity`? | **Accessor methods** (`state.fundamental_metrics() -> Option<&FundamentalData>`) — turns 40 structural edits into mechanical search-replace. Accessors can be dropped in a later cleanup. |
-| D5 | Reporters merge ordering? | **Non-issue.** Reporters already merged (commit `ecf73c6`). Start fresh from the current branch. |
+| ID | Question                                                                                                                  | Decision                                                                                                                                                                                  |
+|----|---------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| D1 | `AnalystId` as enum vs. string-newtype?                                                                                   | **Enum with `#[non_exhaustive]`** — compile-time exhaustive dispatch, SemVer-safe for external packs.                                                                                     |
+| D2 | `DataNeed` granularity — coarse (`Fundamentals`, `News`, `PriceHistory`) or fine (`RevenueGrowth`, `EpsForwardEstimate`)? | **Coarse** — matches today's `required_inputs: Vec<String>` vocabulary. Fine granularity is a v2 concern.                                                                                 |
+| D3 | `PromptBundle` slot type — `&'static str`, `Cow<'static, str>`, or `String`?                                              | **`Cow<'static, str>`** — baseline stays zero-alloc via `include_str!`; runtime-loaded packs supported via `Cow::Owned`.                                                                  |
+| D4 | Phase 6 access pattern — accessor methods, or require call sites to pattern-match `state.equity`?                         | **Accessor methods** (`state.fundamental_metrics() -> Option<&FundamentalData>`) — turns 40 structural edits into mechanical search-replace. Accessors can be dropped in a later cleanup. |
+| D5 | Reporters merge ordering?                                                                                                 | **Non-issue.** Reporters already merged (commit `ecf73c6`). Start fresh from the current branch.                                                                                          |
 
 Other naming decisions locked by user on 2026-04-23:
 
 - `analysis_packs/` → `packs/` (keep type name `AnalysisPackManifest`).
 - Crypto pack name: **Digital Asset** (`PackId::CryptoDigitalAsset`, manifest in `packs/crypto/digital_asset.rs`).
 - `data/traits/macroeconomic.rs` (not `macro_.rs`).
+
+Review follow-ups locked on 2026-04-24:
+
+- Thesis-memory continuity across the Phase 6 upgrade is an accepted breaking change. Migration semantics are same-version-only; v1 snapshot rows are unsupported after the schema bump. Deleting `~/.scorpio-analyst/phase_snapshots.db` is optional local cleanup, not a required migration step.
+- Phase 5 uses a composite `ValuatorId` selection model. Packs choose one strategy id per `AssetShape` (for example `CorporateEquity → ValuatorId::EquityDefault`), and the registry hides any internal composition such as DCF + multiples.
+- Phase 4 preserves current placeholder tokens in the baseline prompt bundle. The new renderer must support `{ticker}` / `{current_date}` as-is so prompt extraction can remain byte-identical.
 
 ## Phased Implementation
 
@@ -211,7 +218,7 @@ Other naming decisions locked by user on 2026-04-23:
 
 - `crates/scorpio-core/src/prompts/mod.rs` — facade.
 - `crates/scorpio-core/src/prompts/bundle.rs` — `pub struct PromptBundle { fundamental_analyst: Cow<'static, str>, sentiment_analyst: ..., news_analyst: ..., technical_analyst: ..., bullish_researcher: ..., bearish_researcher: ..., debate_moderator: ..., trader: ..., aggressive_risk: ..., conservative_risk: ..., neutral_risk: ..., risk_moderator: ..., fund_manager: ... }`.
-- `crates/scorpio-core/src/prompts/templating.rs` — `fn render(template: &str, vars: &HashMap<&str, &str>) -> String` for `{symbol}`, `{current_date}`, `{asset_class}`, `{analysis_emphasis}`.
+- `crates/scorpio-core/src/prompts/templating.rs` — `fn render(template: &str, vars: &HashMap<&str, &str>) -> String` supporting current baseline placeholders `{ticker}` / `{current_date}` as-is, plus `{asset_class}` / `{analysis_emphasis}` for future packs.
 - `crates/scorpio-core/src/prompts/versioning.rs` — `fn content_hash(bundle: &PromptBundle) -> String` (blake3 / sha256 of concatenated slots).
 - `crates/scorpio-core/src/analysis_packs/equity/mod.rs` — pack facade.
 - `crates/scorpio-core/src/analysis_packs/equity/prompts/fundamental_analyst.md` — extracted from current `const FUNDAMENTAL_SYSTEM_PROMPT`.
@@ -230,39 +237,41 @@ Other naming decisions locked by user on 2026-04-23:
 **Tests affected:**
 
 - Agent test fixtures gain a `crates/scorpio-core/src/prompts/testing.rs` with `fn sample_bundle() -> PromptBundle` gated on `#[cfg(test)]`.
-- New: `prompts/templating.rs` — `renders_symbol`, `renders_current_date`, `unknown_placeholder_passes_through`.
+- New: `prompts/templating.rs` — `renders_ticker`, `renders_current_date`, `unknown_placeholder_passes_through`.
 - New: `prompts/versioning.rs` — `same_bundle_same_hash`, `different_slot_different_hash`, `hash_is_stable_across_runs`.
 - New one-shot diff test: render the new templating engine output against the old `build_fundamental_system_prompt` helper with fixed ticker / date — must be byte-identical.
 
 **Validation:** all cargo commands; smoke analyze on AAPL; compare final report to a recorded baseline to confirm byte-identical migration.
 
-**Risk + mitigation:** Prompt literals contain `{ticker}` / `{current_date}` markers today rendered via `.replace()`. Any typo during extraction reshapes what the LLM sees. The byte-identical diff test listed above gates the phase.
+**Risk + mitigation:** Baseline prompt files retain the current `{ticker}` / `{current_date}` placeholder vocabulary during extraction. Any typo during extraction or renderer wiring reshapes what the LLM sees. The byte-identical diff test listed above gates the phase.
 
 ### Phase 5 — `Valuator` trait
 
-**Goal:** Replace `ValuationAssessment` enum variants with pluggable strategies keyed on `AssetShape`.
+**Goal:** Replace `ValuationAssessment` enum variants with pluggable composite strategies keyed on `AssetShape`.
 
 **Files created:**
 
-- `crates/scorpio-core/src/valuation/mod.rs` — facade; `trait Valuator { fn assess(&self, state: &TradingState, shape: &AssetShape) -> ValuationReport; }` and `ValuationReport` enum.
+- `crates/scorpio-core/src/valuation/mod.rs` — facade; `trait Valuator { fn assess(&self, state: &TradingState, shape: &AssetShape) -> ValuationReport; }`, `ValuationReport` enum, and `ValuatorId` enum (`EquityDefault`, placeholders for crypto strategies).
 - `crates/scorpio-core/src/valuation/equity/mod.rs` — facade.
+- `crates/scorpio-core/src/valuation/equity/default.rs` — `struct EquityDefaultValuator` composing existing DCF + multiples logic.
 - `crates/scorpio-core/src/valuation/equity/dcf.rs` — `struct DcfValuator` with existing DCF logic factored in.
 - `crates/scorpio-core/src/valuation/equity/multiples.rs` — `struct MultiplesValuator` for EV/EBITDA, P/E, PEG.
 - `crates/scorpio-core/src/valuation/crypto/mod.rs` — empty facade.
 - `crates/scorpio-core/src/valuation/crypto/tokenomics.rs` — stub.
 - `crates/scorpio-core/src/valuation/crypto/network_value.rs` — stub.
-- `crates/scorpio-core/src/valuation/registry.rs` — maps `AssetShape → Arc<dyn Valuator>`.
+- `crates/scorpio-core/src/valuation/registry.rs` — resolves `ValuatorId → Arc<dyn Valuator>` so composition stays hidden behind a single manifest-selected strategy id.
 
 **Files modified:**
 
 - `crates/scorpio-core/src/lib.rs` — add `pub mod valuation;`.
-- `crates/scorpio-core/src/state/valuation_derive.rs` — `pub fn derive_valuation(...)` becomes a compat shim internally using `DcfValuator` + `MultiplesValuator`; its 16 tests continue to pass.
-- `crates/scorpio-core/src/analysis_packs/manifest/schema.rs` — `AnalysisPackManifest` gains `pub valuator_selection: HashMap<AssetShape, ValuatorId>` defaulting to `CorporateEquity → [Dcf, Multiples]` for baseline.
-- `crates/scorpio-core/src/workflow/tasks/analyst.rs` (`AnalystSyncTask` portion calling `derive_valuation`) — routes through registry for `AssetShape::CorporateEquity`; falls through to `ValuationReport::NotAssessed` otherwise.
+- `crates/scorpio-core/src/state/valuation_derive.rs` — `pub fn derive_valuation(...)` becomes a compat shim internally using `EquityDefaultValuator`; its 16 tests continue to pass.
+- `crates/scorpio-core/src/analysis_packs/manifest/schema.rs` — `AnalysisPackManifest` gains `pub valuator_selection: HashMap<AssetShape, ValuatorId>` defaulting to `CorporateEquity → ValuatorId::EquityDefault` for baseline.
+- `crates/scorpio-core/src/workflow/tasks/analyst.rs` (`AnalystSyncTask` portion calling `derive_valuation`) — routes through the manifest-selected `ValuatorId` for the resolved `AssetShape`; falls through to `ValuationReport::NotAssessed` otherwise.
 
 **Tests affected:**
 
 - Every `derive_valuation` test in `state/valuation_derive.rs` stays green (shim preserves behavior).
+- New: `valuation/equity/default.rs` — composition tests ensuring `EquityDefaultValuator` matches today's combined DCF + multiples output.
 - New: `valuation/equity/dcf.rs` — DCF tests moved from `valuation_derive.rs`.
 - New: `valuation/equity/multiples.rs` — EV/EBITDA, P/E, PEG tests moved from existing inline tests.
 
@@ -312,7 +321,7 @@ Other naming decisions locked by user on 2026-04-23:
   - New `pub crypto: Option<CryptoState>` (`#[serde(default)]`), always `None` this slice.
   - Shared fields stay at top level.
 - `crates/scorpio-core/src/workflow/snapshot/thesis.rs:12` — `THESIS_MEMORY_SCHEMA_VERSION: i64 = 1` → `2`.
-- `crates/scorpio-core/src/workflow/snapshot.rs:184` — `INSERT` binding `.bind(1_i64)` → `.bind(2_i64)`.
+- `crates/scorpio-core/src/workflow/snapshot.rs` — `INSERT` binding moves from `.bind(1_i64)` to `.bind(2_i64)`; `load_snapshot` gains explicit incompatible-schema handling instead of attempting to deserialize pre-v2 rows.
 - ~40 call sites reading `state.fundamental_metrics` etc. — rewrite via accessor methods (`state.fundamental_metrics() -> Option<&FundamentalData>`, `state.equity_mut() -> &mut EquityState`).
 
 **Files moved/renamed:**
@@ -336,10 +345,10 @@ Other naming decisions locked by user on 2026-04-23:
 **Tests affected:**
 
 - `state/trading_state.rs` inline tests — assertions rewritten via accessor methods.
-- `tests/state_roundtrip.rs` — new: read a v1 snapshot JSON blob and confirm preflight thesis lookup returns `None` (warn-and-skip) without panicking.
-- `workflow/snapshot/tests/thesis_compat.rs` — add symmetric case for `THESIS_MEMORY_SCHEMA_VERSION = 2`; existing `load_prior_thesis_skips_rows_from_future_schema_versions` stays green.
+- `tests/state_roundtrip.rs` — new: read a v1 snapshot row and confirm preflight thesis lookup returns `None` via schema-version skip without attempting deserialization.
+- `workflow/snapshot/tests/thesis_compat.rs` — add same-version-only coverage for `THESIS_MEMORY_SCHEMA_VERSION = 2`; direct snapshot reads of v1 rows now fail with an explicit incompatible-schema error.
 
-**Validation:** all cargo commands; smoke analyze on AAPL (fresh DB) AND on AAPL with a pre-existing `~/.scorpio-analyst/phase_snapshots.db` from a v1 run. Expected: warn log about deserialization failure, run completes, new row written with `schema_version = 2`.
+**Validation:** all cargo commands; smoke analyze on AAPL (fresh DB) AND on AAPL with a pre-existing `~/.scorpio-analyst/phase_snapshots.db` from a v1 run. Expected: prior thesis is not loaded from v1 rows, run completes, new row written with `schema_version = 2`.
 
 **Risk + mitigation:** 40+ call sites shift shape. Accessor methods (D4 decision) turn this into mechanical search-replace, each `cargo check`-verifiable independently.
 
@@ -375,7 +384,10 @@ Other naming decisions locked by user on 2026-04-23:
 **Files deleted:**
 
 - `analysis_packs/builtin.rs` (split across registry + equity/baseline).
-- `analysis_packs/mod.rs` — after one-release deprecation cycle; initially kept as `pub use crate::packs::*;` re-export shim.
+
+**Compatibility shim kept for one release cycle:**
+
+- `analysis_packs/mod.rs` — keep as `pub use crate::packs::*;` re-export shim during the deprecation window; remove in a separate later cleanup after downstreams migrate.
 
 **Tests affected:**
 
@@ -400,19 +412,22 @@ Intermediate-state safety: after **every** phase, `cargo nextest run` is green a
 
 ## Snapshot Compatibility
 
-Only Phase 6 is schema-incompatible. The existing warn-and-skip infrastructure handles compat without a SQL migration.
+Only Phase 6 is schema-incompatible. This plan accepts a one-time breaking change for thesis-memory continuity across the upgrade.
 
 - **Current state**: `THESIS_MEMORY_SCHEMA_VERSION = 1`. All written rows carry `schema_version = 1`.
 - **After Phase 6**: `THESIS_MEMORY_SCHEMA_VERSION = 2`. Newly written rows carry `schema_version = 2`.
-- **Behavior on old snapshots**:
+- **Compatibility contract after the bump:**
+  1. `SnapshotStore::load_prior_thesis_for_symbol` treats any row whose `schema_version != THESIS_MEMORY_SCHEMA_VERSION` as incompatible and skips it before deserializing `TradingState`.
+  2. `SnapshotStore::load_snapshot` is same-version-only after Phase 6: incompatible rows return a clear unsupported-schema error instead of attempting deserialization.
+  3. Newly written rows use `schema_version = 2` and become the only rows eligible for thesis-memory reuse.
+- **Behavior on old snapshots:**
   1. User's existing `~/.scorpio-analyst/phase_snapshots.db` has v1 rows.
   2. On next `scorpio analyze <SYMBOL>`, preflight calls `SnapshotStore::load_prior_thesis_for_symbol`.
-  3. v1 rows are not skipped by the `schema_version > 2` guard (1 is not > 2), so deserialization is attempted.
-  4. `serde_json::from_str::<TradingState>(&state_json)` fails because v1 JSON has `asset_symbol: "AAPL"` with no `symbol` / `equity` / `crypto` fields — serde rejects the shape.
-  5. The `Err` branch catches (`warn!(...); continue;`) and moves to the next row.
-  6. With no matching rows, preflight returns `None` → pipeline runs with `prior_thesis = None` (fresh start, no crash).
-- **Migration approach**: **No SQL migration.** Graceful-skip IS the migration. After a single run, the DB holds both v1 (ignored forever) and v2 (canonical) rows. v1 can be pruned manually later if disk space matters.
-- **User-visible impact**: On the first post-refactor run, users see one `warn` log line per historical phase-5 snapshot. No data loss, no crash, no reconfigure.
+  3. v1 rows are skipped immediately by the same-version check and are never deserialized.
+  4. With no matching v2 rows, preflight returns `None` → pipeline runs with `prior_thesis = None`.
+  5. The completed run writes fresh v2 rows that future runs can reuse.
+- **Migration approach**: **No SQL migration.** Older rows remain on disk but are intentionally unsupported after the bump. Developers may optionally delete `~/.scorpio-analyst/phase_snapshots.db` locally for a clean slate, but release behavior must not depend on DB truncation or file deletion.
+- **User-visible impact**: On the first post-refactor run, prior thesis continuity is reset once. No crash is expected; the next successful run seeds new v2 thesis-memory rows.
 - **Release note**: Call out as schema-breaking in v0.4.0 release notes — "existing thesis-memory continuity is reset; prior-run theses will not be carried forward."
 
 ## Validation Strategy
@@ -429,9 +444,9 @@ cargo run -p scorpio-cli -- analyze AAPL --no-terminal  # smoke
 Phase-specific smoke additions:
 
 - Phase 3: BRK.B (dot-suffix ticker) to exercise `Symbol::Equity` edge case.
-- Phase 4: byte-identical prompt-diff test (new templating output vs. recorded baseline).
+- Phase 4: byte-identical prompt-diff test (new templating output vs. recorded baseline, preserving `{ticker}` / `{current_date}` placeholders in baseline prompt files).
 - Phase 5: SPY (ETF → `Fund → NotAssessed`).
-- Phase 6: AAPL against a pre-existing v1 `phase_snapshots.db` to confirm graceful-skip.
+- Phase 6: AAPL against a pre-existing v1 `phase_snapshots.db` to confirm same-version-only skip semantics.
 - Phase 7: end-to-end backtest over a week of AAPL dates comparing final reports to pre-refactor baseline.
 
 ## Out-of-Scope Followups
