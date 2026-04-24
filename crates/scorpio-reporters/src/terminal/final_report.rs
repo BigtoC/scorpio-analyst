@@ -147,10 +147,18 @@ fn write_header(out: &mut String, state: &TradingState) {
             .on_bright_black()
     );
     let strategy_label = state
-        .analysis_pack_name
-        .as_deref()
-        .and_then(|pack_name| scorpio_core::analysis_packs::resolve_runtime_policy(pack_name).ok())
-        .map(|policy| policy.report_strategy_label)
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| policy.report_strategy_label.clone())
+        .or_else(|| {
+            state
+                .analysis_pack_name
+                .as_deref()
+                .and_then(|pack_name| {
+                    scorpio_core::analysis_packs::resolve_runtime_policy(pack_name).ok()
+                })
+                .map(|policy| policy.report_strategy_label)
+        })
         .unwrap_or_else(|| {
             state
                 .analysis_pack_name
@@ -936,6 +944,18 @@ mod tests {
         assert!(
             !report.contains("Model-authored assessment omitted because deterministic valuation")
         );
+    }
+
+    #[test]
+    fn format_final_report_prefers_runtime_policy_strategy_label() {
+        let mut state = minimal_state();
+        state.analysis_pack_name = Some("not_a_real_pack".to_owned());
+        state.analysis_runtime_policy =
+            scorpio_core::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let report = format_final_report(&state);
+
+        assert!(report.contains("Strategy: Balanced Institutional"));
     }
 
     #[test]
