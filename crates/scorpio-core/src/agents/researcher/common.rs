@@ -102,19 +102,19 @@ pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingErr
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
 pub(super) fn build_analyst_context(state: &TradingState) -> String {
     let fundamental_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.fundamental_metrics()).unwrap_or_else(|_| "null".to_owned()),
     );
     let technical_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.technical_indicators).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.technical_indicators()).unwrap_or_else(|_| "null".to_owned()),
     );
     let sentiment_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.market_sentiment()).unwrap_or_else(|_| "null".to_owned()),
     );
     let news_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.macro_news()).unwrap_or_else(|_| "null".to_owned()),
     );
     let vix_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.market_volatility()).unwrap_or_else(|_| "null".to_owned()),
     );
 
     let evidence_section = build_evidence_context(state);
@@ -418,11 +418,8 @@ mod tests {
             symbol: None,
             target_date: "2026-03-15".to_owned(),
             current_price: None,
-            market_volatility: None,
-            fundamental_metrics: None,
-            technical_indicators: None,
-            market_sentiment: None,
-            macro_news: None,
+            equity: None,
+            crypto: None,
             debate_history: Vec::new(),
             consensus_summary: None,
             trader_proposal: None,
@@ -431,10 +428,6 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
-            evidence_fundamental: None,
-            evidence_technical: None,
-            evidence_sentiment: None,
-            evidence_news: None,
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
             data_coverage: None,
@@ -442,7 +435,6 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
-            derived_valuation: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
         };
