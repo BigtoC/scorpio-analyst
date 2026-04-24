@@ -51,6 +51,7 @@ use graph_flow::Graph;
 use thiserror::Error;
 
 use crate::{
+    analysis_packs::RuntimePolicy,
     config::Config,
     data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
@@ -104,6 +105,8 @@ pub struct TradingPipeline {
     pub(super) quick_handle: CompletionModelHandle,
     /// Handle for deep-thinking agents (Researcher, Trader, Risk Team, Fund Manager).
     pub(super) deep_handle: CompletionModelHandle,
+    /// Pack-derived runtime policy when the pipeline was built from a resolved pack.
+    pub(super) runtime_policy: Option<RuntimePolicy>,
     /// Pre-built graph - stateless, safe to share across analysis cycles.
     pub(super) graph: Arc<Graph>,
 }
@@ -118,6 +121,7 @@ impl std::fmt::Debug for TradingPipeline {
             .field("snapshot_store", &self.snapshot_store)
             .field("quick_handle", &self.quick_handle)
             .field("deep_handle", &self.deep_handle)
+            .field("runtime_policy", &self.runtime_policy)
             .field("graph", &"Arc<Graph>")
             .finish()
     }
@@ -150,6 +154,7 @@ impl TradingPipeline {
     ) -> Self {
         let config = Arc::new(config);
         let snapshot_store = Arc::new(snapshot_store);
+        let runtime_policy = crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack).ok();
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
@@ -167,6 +172,7 @@ impl TradingPipeline {
             snapshot_store,
             quick_handle,
             deep_handle,
+            runtime_policy,
             graph,
         }
     }
@@ -187,6 +193,7 @@ impl TradingPipeline {
         quick_handle: CompletionModelHandle,
         deep_handle: CompletionModelHandle,
         graph: Arc<Graph>,
+        runtime_policy: Option<RuntimePolicy>,
     ) -> Self {
         Self {
             config,
@@ -196,6 +203,7 @@ impl TradingPipeline {
             snapshot_store,
             quick_handle,
             deep_handle,
+            runtime_policy,
             graph,
         }
     }

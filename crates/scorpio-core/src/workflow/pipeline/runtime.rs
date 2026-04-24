@@ -170,17 +170,19 @@ pub(super) async fn run_analysis_cycle(
     let canonical = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
     initial_state.set_symbol(canonical);
 
-    let runtime_policy =
-        resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {
+    let runtime_policy = match pipeline.runtime_policy.clone() {
+        Some(policy) => policy,
+        None => resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {
             TradingError::Config(anyhow::anyhow!(
                 "analysis pack resolution failed for '{}': {cause}",
                 pipeline.config.analysis_pack
             ))
-        })?;
+        })?,
+    };
 
     // Persist pack metadata and the resolved runtime policy on state so all
     // downstream consumers can read the same typed policy surface.
-    initial_state.analysis_pack_name = Some(pipeline.config.analysis_pack.clone());
+    initial_state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
     initial_state.analysis_runtime_policy = Some(runtime_policy.clone());
 
     let symbol = initial_state.asset_symbol.clone();
