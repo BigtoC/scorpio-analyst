@@ -204,6 +204,12 @@ mod tests {
                 template.contains("{current_date}"),
                 "baseline {label} prompt should preserve the {{current_date}} placeholder"
             );
+            // `{analysis_emphasis}` is intentionally not in the baseline
+            // assets today — renderers substitute it post-hoc for tests and
+            // future packs that opt into it. The completeness predicate
+            // (`is_effectively_empty`) handles the placeholder-only case
+            // separately, so a future asset that adds `{analysis_emphasis}`
+            // continues to render correctly.
         }
     }
 
