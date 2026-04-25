@@ -10,7 +10,7 @@ Available inputs:
 - Risk discussion history: {risk_history}
 - Conservative's latest view: {conservative_response}
 - Neutral's latest view: {neutral_response}
-- Past learnings: {past_memory_str}
+- Past learnings: see untrusted user context
 
 Return ONLY a JSON object matching `RiskReport`:
 - `risk_level`: `Aggressive`

@@ -1,10 +1,10 @@
 //! Unit 5: Second-Consumer API-Shape Contract Test (R8).
 //!
 //! Constructs a synthetic non-baseline `AnalysisPackManifest` in test code
-//! and asserts that the topology abstraction's API surface
-//! (`validate_active_pack_completeness`, `required_prompt_slots`) accepts a
-//! non-baseline manifest shape and derives the correct subsets across
-//! topology variants.
+//! and asserts that the topology abstraction's currently-shipped API surface
+//! (`validate_active_pack_completeness`, `required_prompt_slots`,
+//! `build_run_topology`) accepts a non-baseline manifest shape and derives
+//! the correct subsets across topology variants.
 //!
 //! **Honest framing:** this test verifies the topology functions are total
 //! over the `Role` enum and accept a non-baseline manifest shape; it does
@@ -14,9 +14,9 @@
 //! fitness validation is deferred until a real second pack lands.
 //!
 //! The maximal-children fan-out claim from the plan (Unit 5 Approach claim
-//! 4) requires Unit 4b's `RoutingFlags`-gated per-child no-op machinery,
-//! which is not yet wired through the analyst tasks. That assertion lands
-//! in a follow-up alongside Unit 4b.
+//! 4) still depends on Unit 4b's `RoutingFlags`-gated per-child no-op
+//! machinery. This file therefore limits itself to the pre-4b API-shape
+//! claims that are truthful on the current branch.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ use scorpio_core::analysis_packs::{
     validate_active_pack_completeness,
 };
 use scorpio_core::prompts::PromptBundle;
-use scorpio_core::workflow::topology::{PromptSlot, build_run_topology, required_prompt_slots};
+use scorpio_core::workflow::{PromptSlot, Role, build_run_topology, required_prompt_slots};
 
 /// Build a synthetic non-baseline manifest with a one-role analyst roster
 /// (`news` only) and a `PromptBundle` populated *only* for the slots that
@@ -158,6 +158,26 @@ fn synthetic_manifest_completeness_scales_with_topology_enable_flags() {
 }
 
 #[test]
+fn one_role_topology_tracks_only_the_declared_spawned_analyst() {
+    let manifest = synthetic_one_role_manifest();
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    assert_eq!(topology.spawned_analysts.len(), 1);
+    assert!(topology.spawned_analysts.contains(&Role::NewsAnalyst));
+    assert!(topology.unknown_inputs.is_empty());
+}
+
+#[test]
+fn synthetic_manifest_fails_closed_when_required_inputs_include_unknown_entry() {
+    let mut manifest = synthetic_one_role_manifest();
+    manifest.required_inputs.push("tokenomics".to_owned());
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let err = validate_active_pack_completeness(&manifest, &topology)
+        .expect_err("unknown required_inputs must fail this API-shape contract test");
+    assert_eq!(err.missing_slots, Vec::<PromptSlot>::new());
+    assert_eq!(err.unknown_inputs, vec!["tokenomics".to_owned()]);
+}
+
+#[test]
 fn synthetic_manifest_uses_distinct_prose_from_baseline() {
     // Sanity: confirm the fixture is not accidentally aliased to baseline
     // content. If the fixture were to copy baseline strings, this test
@@ -165,8 +185,7 @@ fn synthetic_manifest_uses_distinct_prose_from_baseline() {
     let synthetic = synthetic_one_role_manifest();
     let baseline = scorpio_core::analysis_packs::resolve_pack(PackId::Baseline);
     assert_ne!(
-        synthetic.prompt_bundle.news_analyst,
-        baseline.prompt_bundle.news_analyst,
+        synthetic.prompt_bundle.news_analyst, baseline.prompt_bundle.news_analyst,
         "synthetic news_analyst must differ from baseline so the abstraction is exercised \
          against genuinely non-baseline content"
     );

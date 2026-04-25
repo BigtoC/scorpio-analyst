@@ -11,7 +11,7 @@ Available inputs:
 - Technical data: {technical_report}
 - Sentiment data: {sentiment_report}
 - News data: {news_report}
-- Past learnings: {past_memory_str}
+- Past learnings: see untrusted user context
 
 Instructions:
 1. Identify the main agreement points and the true blockers.

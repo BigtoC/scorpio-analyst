@@ -1,19 +1,21 @@
+#![cfg(feature = "test-helpers")]
+
 //! Prompt-bundle regression gate.
 //!
-//! Captures the rendered output of every baseline prompt template after
-//! applying canonical placeholder substitutions (`{ticker}`, `{current_date}`)
-//! and asserts byte-for-byte equality against on-disk golden fixtures under
-//! `tests/fixtures/prompt_bundle/`. The gate exists to lock prompt-asset
-//! content across the Unit 4a/4b runtime-contract migration: the renderer
-//! signature changes (legacy `&str` template → `&RuntimePolicy`), but the
-//! *template render* must remain byte-identical.
+//! Captures the rendered output of every baseline prompt builder through the
+//! test-only `RuntimePolicy` hydration path and asserts byte-for-byte equality
+//! against on-disk golden fixtures under `tests/fixtures/prompt_bundle/`.
+//! The gate exists to lock prompt behavior across the Unit 4a/4b runtime-
+//! contract migration: prompt-builder signatures and wiring may change, but
+//! the rendered baseline system prompts for the canonical fixture state must
+//! remain byte-identical.
 //!
 //! **Updating fixtures:** when a baseline prompt template intentionally
 //! changes, regenerate the golden bytes by setting `UPDATE_FIXTURES=1` and
 //! re-running this test:
 //!
 //! ```bash
-//! UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate
+//! UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers
 //! ```
 //!
 //! The regenerated files must then be reviewed in the PR — golden bytes are
@@ -22,14 +24,27 @@
 use std::fs;
 use std::path::PathBuf;
 
-use scorpio_core::analysis_packs::{PackId, resolve_pack};
-use scorpio_core::testing::baseline_pack_prompt_for_role;
-use scorpio_core::workflow::topology::Role;
+use scorpio_core::{
+    analysis_packs::{PackId, resolve_pack, validate_active_pack_completeness},
+    testing::{PromptRenderScenario, canonical_fixture_identity, render_baseline_prompt_for_role},
+    workflow::{Role, build_run_topology},
+};
 
-/// Canonical placeholder values used when capturing fixtures. Stable across
-/// runs so the same input always produces the same output bytes.
-const FIXTURE_TICKER: &str = "AAPL";
-const FIXTURE_DATE: &str = "2026-04-25";
+const LIVE_ROLES: [Role; 13] = [
+    Role::FundamentalAnalyst,
+    Role::SentimentAnalyst,
+    Role::NewsAnalyst,
+    Role::TechnicalAnalyst,
+    Role::BullishResearcher,
+    Role::BearishResearcher,
+    Role::DebateModerator,
+    Role::Trader,
+    Role::AggressiveRisk,
+    Role::ConservativeRisk,
+    Role::NeutralRisk,
+    Role::RiskModerator,
+    Role::FundManager,
+];
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -57,17 +72,6 @@ fn fixture_path(role: Role) -> PathBuf {
     fixtures_dir().join(filename)
 }
 
-/// Render the baseline pack's prompt for `role` with canonical placeholder
-/// substitutions applied. The signature is intentionally minimal — Unit 4a
-/// rewrites this helper to take `&RuntimePolicy` instead, but the rendered
-/// bytes that result must continue to match the golden fixtures.
-fn render_baseline_prompt(role: Role) -> String {
-    let template = baseline_pack_prompt_for_role(role);
-    template
-        .replace("{ticker}", FIXTURE_TICKER)
-        .replace("{current_date}", FIXTURE_DATE)
-}
-
 fn update_fixtures_enabled() -> bool {
     std::env::var("UPDATE_FIXTURES")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -87,7 +91,7 @@ fn assert_or_update(role: Role, rendered: &str) {
         panic!(
             "missing fixture for {role:?} at {}: {e}.\n\
              Generate it by running:\n  \
-             UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate",
+             UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers",
             path.display()
         )
     });
@@ -103,49 +107,38 @@ fn assert_or_update(role: Role, rendered: &str) {
 #[test]
 fn baseline_pack_renders_match_golden_fixtures_all_inputs_present() {
     // The "all inputs present" scenario: every role under the fully-enabled
-    // baseline topology renders with canonical placeholder substitutions and
-    // matches its on-disk golden bytes exactly.
-    for role in [
-        Role::FundamentalAnalyst,
-        Role::SentimentAnalyst,
-        Role::NewsAnalyst,
-        Role::TechnicalAnalyst,
-        Role::BullishResearcher,
-        Role::BearishResearcher,
-        Role::DebateModerator,
-        Role::Trader,
-        Role::AggressiveRisk,
-        Role::ConservativeRisk,
-        Role::NeutralRisk,
-        Role::RiskModerator,
-        Role::FundManager,
-    ] {
-        let rendered = render_baseline_prompt(role);
+    // baseline topology renders through the real prompt-builder + RuntimePolicy
+    // path and matches its on-disk golden bytes exactly.
+    for role in LIVE_ROLES {
+        let rendered =
+            render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
         assert_or_update(role, &rendered);
     }
 }
 
 #[test]
 fn fixtures_contain_canonical_substitutions() {
-    // Cross-check: every captured fixture must contain the canonical
-    // `FIXTURE_TICKER` and `FIXTURE_DATE` strings (and must not contain the
-    // unrendered `{ticker}` / `{current_date}` placeholders). This catches
-    // fixture-generation bugs where placeholders were not substituted.
+    // Cross-check: every captured fixture must contain the canonical ticker and
+    // date strings (and must not contain unrendered `{ticker}` /
+    // `{current_date}` placeholders). This catches fixture-generation bugs
+    // where prompt builders were bypassed or substitutions failed.
     if update_fixtures_enabled() {
         // Skip the cross-check when regenerating — the fixture files are
         // about to be overwritten in this run.
         return;
     }
-    for role in [Role::Trader, Role::FundManager] {
+    let (fixture_ticker, fixture_date) = canonical_fixture_identity();
+
+    for role in LIVE_ROLES {
         let path = fixture_path(role);
         let content = fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("fixture missing for {role:?} at {}", path.display()));
         assert!(
-            content.contains(FIXTURE_TICKER),
+            content.contains(fixture_ticker),
             "{role:?} fixture should contain the canonical ticker"
         );
         assert!(
-            content.contains(FIXTURE_DATE),
+            content.contains(fixture_date),
             "{role:?} fixture should contain the canonical date"
         );
         assert!(
@@ -160,14 +153,50 @@ fn fixtures_contain_canonical_substitutions() {
 }
 
 #[test]
+fn trader_prompt_scenarios_capture_missing_input_states() {
+    let all_inputs =
+        render_baseline_prompt_for_role(Role::Trader, PromptRenderScenario::AllInputsPresent);
+    let zero_debate =
+        render_baseline_prompt_for_role(Role::Trader, PromptRenderScenario::ZeroDebate);
+    let zero_risk = render_baseline_prompt_for_role(Role::Trader, PromptRenderScenario::ZeroRisk);
+    let missing_analyst_data =
+        render_baseline_prompt_for_role(Role::Trader, PromptRenderScenario::MissingAnalystData);
+
+    assert_ne!(
+        all_inputs, zero_debate,
+        "missing debate consensus should change the trader system prompt"
+    );
+    assert!(
+        zero_debate
+            .contains("(no debate consensus available - base the proposal on analyst data alone)"),
+        "zero-debate trader prompt should surface the explicit missing-consensus note"
+    );
+
+    assert_eq!(
+        all_inputs, zero_risk,
+        "trader system prompt should be independent of downstream risk-stage output"
+    );
+
+    assert_ne!(
+        all_inputs, missing_analyst_data,
+        "missing analyst inputs should change the trader system prompt"
+    );
+    assert!(
+        missing_analyst_data.contains("One or more upstream inputs are missing."),
+        "missing-analyst-data trader prompt should carry the degraded data-quality note"
+    );
+    assert!(
+        missing_analyst_data.contains("null"),
+        "missing-analyst-data trader prompt should serialize absent analyst inputs explicitly"
+    );
+}
+
+#[test]
 fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // Sanity: the regression gate is only meaningful if the baseline pack
     // actually populates every required slot. This is also asserted in the
     // unit test in completeness.rs but mirrored here so a workspace-level
     // run still proves it.
-    use scorpio_core::analysis_packs::validate_active_pack_completeness;
-    use scorpio_core::workflow::topology::build_run_topology;
-
     let manifest = resolve_pack(PackId::Baseline);
     let topology = build_run_topology(&manifest.required_inputs, 1, 1);
     let result = validate_active_pack_completeness(&manifest, &topology);
