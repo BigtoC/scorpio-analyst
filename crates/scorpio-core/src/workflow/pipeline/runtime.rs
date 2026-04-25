@@ -180,11 +180,6 @@ pub(super) async fn run_analysis_cycle(
         })?,
     };
 
-    // Persist pack metadata and the resolved runtime policy on state so all
-    // downstream consumers can read the same typed policy surface.
-    initial_state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
-    initial_state.analysis_runtime_policy = Some(runtime_policy.clone());
-
     let symbol = initial_state.asset_symbol.clone();
     let date = initial_state.target_date.clone();
     let execution_id = initial_state.execution_id.to_string();
