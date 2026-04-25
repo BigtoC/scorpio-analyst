@@ -242,9 +242,12 @@ impl Task for PreflightTask {
         // rejected at preflight before any model call fires.
         let manifest = crate::analysis_packs::resolve_pack(runtime_policy.pack_id);
         if let Err(err) = validate_active_pack_completeness(&manifest, &topology) {
+            let missing_slots: Vec<&'static str> =
+                err.missing_slots.iter().map(|slot| slot.name()).collect();
             tracing::warn!(
                 pack_id = %err.pack_id,
                 missing_slot_count = err.missing_slots.len(),
+                missing_slots = ?missing_slots,
                 "active pack failed completeness validation under runtime topology \
                  (non-fatal in 4a; Unit 4b promotes this to TaskExecutionFailed)"
             );
