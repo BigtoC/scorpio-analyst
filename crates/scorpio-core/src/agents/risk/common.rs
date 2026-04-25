@@ -101,8 +101,9 @@ impl RiskAgentCore {
 
 // ─── Dual-risk tri-state signal ───────────────────────────────────────────────
 
-/// Tri-state signal summarising whether both Conservative and Neutral risk agents
-/// flagged a material violation.
+/// Four-state signal summarising whether both Conservative and Neutral risk agents
+/// flagged a material violation, distinguishing degraded missing-data state
+/// (`Unknown`) from a deliberately disabled risk stage (`StageDisabled`).
 ///
 /// Used by the Risk Moderator to record the escalation status and by the Fund Manager
 /// to enforce the rationale first-line contract.
@@ -112,11 +113,28 @@ pub(crate) enum DualRiskStatus {
     Present,
     /// Both reports exist but not both flag a violation.
     Absent,
-    /// Either report (or both) is missing.
+    /// Either report (or both) is missing — degraded state, the run *expected*
+    /// risk but it could not be produced.
     Unknown,
+    /// The risk stage was deliberately bypassed because the configured
+    /// `max_risk_rounds` was zero (or the topology otherwise marks the stage
+    /// disabled). Distinct from `Unknown` so the fund manager's first-line
+    /// rationale can use the dedicated "stage-disabled because " prefix and
+    /// downstream consumers do not mistake a deliberate bypass for missing
+    /// data.
+    ///
+    /// **Currently constructed only from tests.** Unit 4b wires
+    /// [`from_reports_with_topology`](Self::from_reports_with_topology) into
+    /// `fund_manager::agent` via the topology computed by `PreflightTask`,
+    /// at which point the production caller materializes.
+    #[allow(dead_code)]
+    StageDisabled,
 }
 
 impl DualRiskStatus {
+    /// Derive a status from optional risk reports, treating the risk stage
+    /// as enabled. Use [`from_reports_with_topology`] when the topology may
+    /// have disabled the stage entirely.
     pub(crate) fn from_reports(
         conservative: Option<&RiskReport>,
         neutral: Option<&RiskReport>,
@@ -128,11 +146,33 @@ impl DualRiskStatus {
         }
     }
 
+    /// Topology-aware constructor: returns [`StageDisabled`](Self::StageDisabled)
+    /// when `risk_stage_enabled == false`, otherwise delegates to
+    /// [`from_reports`]. Lets fund-manager and risk-moderator code distinguish
+    /// "we didn't run the stage" from "we ran the stage but data is missing."
+    ///
+    /// **Currently invoked only from tests.** Unit 4b switches
+    /// `fund_manager::agent` from [`from_reports`](Self::from_reports) to
+    /// this topology-aware variant once `PreflightTask` writes the topology
+    /// to context.
+    #[allow(dead_code)]
+    pub(crate) fn from_reports_with_topology(
+        conservative: Option<&RiskReport>,
+        neutral: Option<&RiskReport>,
+        risk_stage_enabled: bool,
+    ) -> Self {
+        if !risk_stage_enabled {
+            return Self::StageDisabled;
+        }
+        Self::from_reports(conservative, neutral)
+    }
+
     pub(crate) fn as_prompt_value(self) -> &'static str {
         match self {
             Self::Present => "present",
             Self::Absent => "absent",
             Self::Unknown => "unknown",
+            Self::StageDisabled => "stage_disabled",
         }
     }
 }
@@ -353,6 +393,13 @@ pub(super) fn expected_moderator_violation_sentence(status: DualRiskStatus) -> &
         DualRiskStatus::Absent => "Violation status: dual-risk escalation absent.",
         DualRiskStatus::Unknown => {
             "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report."
+        }
+        DualRiskStatus::StageDisabled => {
+            // The risk stage was bypassed by topology — moderators do not run
+            // in this case, but the helper must still be total. Returning a
+            // distinct sentence preserves the audit trail if anything ever
+            // calls this with a stage-disabled status.
+            "Violation status: dual-risk escalation stage-disabled (zero risk rounds configured)."
         }
     }
 }
