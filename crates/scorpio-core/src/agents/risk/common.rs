@@ -290,7 +290,7 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
     )
 }
 
-pub(super) fn render_risk_system_prompt(
+pub(crate) fn render_risk_system_prompt(
     legacy_template: &str,
     state: &TradingState,
     bundle_slot: fn(&PromptBundle) -> &str,

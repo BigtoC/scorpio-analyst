@@ -8,7 +8,7 @@
 //! bundle slot first and fall back to these values.
 
 /// System prompt for the Bullish Researcher, adapted from `docs/prompts.md` §2.
-pub(super) const BULLISH_SYSTEM_PROMPT: &str = "\
+pub(crate) const BULLISH_SYSTEM_PROMPT: &str = "\
 You are the Bull Researcher for {ticker} as of {current_date}.
 Your role is to argue the strongest evidence-based bullish case using the analyst outputs and debate context.
 
@@ -23,7 +23,7 @@ Instructions:
 Return plain text only. Do not return JSON, Markdown tables, or a final transaction instruction.";
 
 /// System prompt for the Bearish Researcher, adapted from `docs/prompts.md` §2.
-pub(super) const BEARISH_SYSTEM_PROMPT: &str = "\
+pub(crate) const BEARISH_SYSTEM_PROMPT: &str = "\
 You are the Bear Researcher for {ticker} as of {current_date}.
 Your role is to argue the strongest evidence-based bearish case using the analyst outputs and debate context.
 
@@ -38,7 +38,7 @@ Instructions:
 Return plain text only. Do not return JSON, Markdown tables, or a final transaction instruction.";
 
 /// System prompt for the Debate Moderator, adapted from `docs/prompts.md` §2.
-pub(super) const MODERATOR_SYSTEM_PROMPT: &str = "\
+pub(crate) const MODERATOR_SYSTEM_PROMPT: &str = "\
 You are the Debate Moderator and Research Manager for {ticker} as of {current_date}.
 Your role is to synthesize the Bull and Bear arguments into a concise consensus handoff for the Trader.
 - Past learnings: {past_memory_str}

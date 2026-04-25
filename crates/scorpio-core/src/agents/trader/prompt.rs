@@ -59,9 +59,13 @@ Do NOT fabricate DCF, EV/EBITDA, Forward P/E, or PEG numbers that are not in the
 
 This proposal will be forwarded to the Risk Management Team. Do not make the final execution decision yourself.";
 
-pub(super) struct PromptContext {
-    pub(super) system_prompt: String,
-    pub(super) user_prompt: String,
+#[cfg_attr(
+    any(test, feature = "test-helpers"),
+    derive(Debug, Clone, PartialEq, Eq)
+)]
+pub(crate) struct PromptContext {
+    pub(crate) system_prompt: String,
+    pub(crate) user_prompt: String,
 }
 
 fn trader_system_prompt_template(state: &TradingState) -> &str {
@@ -73,7 +77,7 @@ fn trader_system_prompt_template(state: &TradingState) -> &str {
         .unwrap_or(TRADER_SYSTEM_PROMPT)
 }
 
-pub(super) fn build_prompt_context(
+pub(crate) fn build_prompt_context(
     state: &TradingState,
     symbol: &str,
     target_date: &str,

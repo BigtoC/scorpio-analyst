@@ -29,6 +29,14 @@ mod neutral;
 mod prompt;
 
 pub(crate) use self::common::DualRiskStatus;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use self::common::render_risk_system_prompt;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use self::moderator::RISK_MODERATOR_SYSTEM_PROMPT;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use self::prompt::{
+    AGGRESSIVE_SYSTEM_PROMPT, CONSERVATIVE_SYSTEM_PROMPT, NEUTRAL_SYSTEM_PROMPT,
+};
 pub use aggressive::AggressiveRiskAgent;
 pub use conservative::ConservativeRiskAgent;
 pub use moderator::RiskModerator;

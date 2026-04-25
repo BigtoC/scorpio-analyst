@@ -104,7 +104,7 @@ fn fund_manager_system_prompt_template(state: &TradingState) -> &str {
         .unwrap_or(FUND_MANAGER_SYSTEM_PROMPT)
 }
 
-pub(super) fn build_prompt_context(
+pub(crate) fn build_prompt_context(
     state: &TradingState,
     symbol: &str,
     target_date: &str,

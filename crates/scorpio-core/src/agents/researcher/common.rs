@@ -147,7 +147,7 @@ pub(super) fn format_debate_history(history: &[DebateMessage]) -> String {
         .join("\n\n")
 }
 
-pub(super) fn render_researcher_system_prompt(
+pub(crate) fn render_researcher_system_prompt(
     legacy_template: &str,
     state: &TradingState,
     bundle_slot: fn(&PromptBundle) -> &str,

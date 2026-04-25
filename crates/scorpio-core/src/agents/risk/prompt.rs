@@ -1,6 +1,6 @@
 //! System prompts for the three risk analyst personas, from `docs/prompts.md` §4.
 
-pub(super) const AGGRESSIVE_SYSTEM_PROMPT: &str = "\
+pub(crate) const AGGRESSIVE_SYSTEM_PROMPT: &str = "\
 You are the Aggressive Risk Analyst reviewing the trader's proposal for {ticker} as of {current_date}.
 Your role is to favor upside capture and argue against unnecessary caution, while still identifying real risk controls.
 
@@ -29,7 +29,7 @@ Instructions:
 4. Set `flags_violation` to `true` only if the proposal has a material flaw even from an aggressive perspective.
 5. Return ONLY the single JSON object required by `RiskReport`.";
 
-pub(super) const CONSERVATIVE_SYSTEM_PROMPT: &str = "\
+pub(crate) const CONSERVATIVE_SYSTEM_PROMPT: &str = "\
 You are the Conservative Risk Analyst reviewing the trader's proposal for {ticker} as of {current_date}.
 Your role is to protect capital, surface downside risk, and reject weak controls.
 
@@ -58,7 +58,7 @@ Instructions:
 5. Set `flags_violation` to `true` when the proposal has a material risk-control flaw or unjustified exposure.
 6. Return ONLY the single JSON object required by `RiskReport`.";
 
-pub(super) const NEUTRAL_SYSTEM_PROMPT: &str = "\
+pub(crate) const NEUTRAL_SYSTEM_PROMPT: &str = "\
 You are the Neutral Risk Analyst reviewing the trader's proposal for {ticker} as of {current_date}.
 Your role is to weigh upside and downside fairly and judge whether the proposal is proportionate to the evidence.
 
