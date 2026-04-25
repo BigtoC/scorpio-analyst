@@ -26,4 +26,4 @@ pub mod validation;
 
 pub use bundle::PromptBundle;
 pub use templating::render;
-pub use validation::is_effectively_empty;
+pub use validation::{ANALYSIS_EMPHASIS_MAX_LEN, is_effectively_empty, sanitize_analysis_emphasis};
