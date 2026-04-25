@@ -58,8 +58,17 @@ pub const KEY_CACHED_EVENT_FEED: &str = "cached_event_feed";
 
 /// Context key for the pack-derived [`RuntimePolicy`] written by [`PreflightTask`].
 ///
-/// Value: JSON-serialised [`crate::analysis_packs::RuntimePolicy`].
+/// Value: JSON-serialized [`crate::analysis_packs::RuntimePolicy`].
 pub const KEY_RUNTIME_POLICY: &str = "runtime_policy";
+
+/// Context key for the per-run routing decisions written by [`PreflightTask`].
+///
+/// Value: JSON-serialized [`crate::workflow::topology::RoutingFlags`].
+/// Replaces the raw `KEY_MAX_DEBATE_ROUNDS` / `KEY_MAX_RISK_ROUNDS` reads in
+/// builder closures — *entry* into the debate and risk stages is governed by
+/// these flags. Loop-back conditionals (`round < max`) keep using the
+/// per-iteration counters.
+pub const KEY_ROUTING_FLAGS: &str = "routing_flags";
 
 pub(super) const ANALYST_PREFIX: &str = "analyst";
 pub(super) const OK_SUFFIX: &str = "ok";

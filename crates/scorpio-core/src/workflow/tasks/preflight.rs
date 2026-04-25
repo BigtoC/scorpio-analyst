@@ -23,17 +23,19 @@ use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::debug;
 
 use crate::{
-    analysis_packs::RuntimePolicy,
+    analysis_packs::{RuntimePolicy, validate_active_pack_completeness},
     data::{adapters::ProviderCapabilities, resolve_symbol},
     workflow::{
         SnapshotStore,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+        topology::{RoutingFlags, build_run_topology},
     },
 };
 
 use super::common::{
-    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_PROVIDER_CAPABILITIES,
-    KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_RUNTIME_POLICY,
+    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_MAX_DEBATE_ROUNDS,
+    KEY_MAX_RISK_ROUNDS, KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS,
+    KEY_RESOLVED_INSTRUMENT, KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY,
 };
 
 const TASK_ID: &str = "preflight";
@@ -210,6 +212,43 @@ impl Task for PreflightTask {
             ))
         })?;
         context.set(KEY_RUNTIME_POLICY, policy_json).await;
+
+        // ── Build per-run topology + routing flags ───────────────────────
+        // Read the configured round counts already written into context by
+        // `run_analysis_cycle`. Falling back to zero on a missing key is
+        // structurally safe because the conditional-edge closures already
+        // tolerate `None` the same way; in practice both keys are present
+        // for every active pipeline run.
+        let max_debate_rounds = context.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
+        let max_risk_rounds = context.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
+        let topology = build_run_topology(
+            &runtime_policy.required_inputs,
+            max_debate_rounds,
+            max_risk_rounds,
+        );
+        let routing_flags = RoutingFlags::from_topology(&topology);
+        let routing_json = serde_json::to_string(&routing_flags).map_err(|e| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: orchestration corruption: RoutingFlags serialization failed: {e}"
+            ))
+        })?;
+        context.set(KEY_ROUTING_FLAGS, routing_json).await;
+
+        // ── Active-pack completeness diagnostic (Unit 4a: log-only) ──────
+        // Look up the resolved manifest for the active pack id and validate
+        // the prompt bundle against the topology. In Unit 4a this is a
+        // **non-fatal warning** to keep the unit behavior-neutral; Unit 4b
+        // promotes it to a hard failure so an incomplete active pack is
+        // rejected at preflight before any model call fires.
+        let manifest = crate::analysis_packs::resolve_pack(runtime_policy.pack_id);
+        if let Err(err) = validate_active_pack_completeness(&manifest, &topology) {
+            tracing::warn!(
+                pack_id = %err.pack_id,
+                missing_slot_count = err.missing_slots.len(),
+                "active pack failed completeness validation under runtime topology \
+                 (non-fatal in 4a; Unit 4b promotes this to TaskExecutionFailed)"
+            );
+        }
 
         // ── Seed typed null placeholders for cache keys ───────────────────
         // Each key is always present after preflight so downstream consumers can
