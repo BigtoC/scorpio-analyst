@@ -291,7 +291,7 @@ Directional notes:
 - Baseline and crypto manifests still resolve successfully; the crypto stub emits no `info!` diagnostics on startup.
 - No active runtime behavior has changed yet.
 
-- [ ] **Unit 2: Baseline Pack Completeness And Prompt Oracles**
+- [x] **Unit 2: Baseline Pack Completeness And Prompt Oracles**
 
 **Goal:** Make the baseline pack definitively complete for the active-role roster and establish pack-owned prompt assets as the oracle for later fallback removal. Unit 2 prepares R1 by establishing the oracle; R1 enforcement (no fallbacks, exclusive pack-owned loading) lands in Unit 4b.
 
@@ -330,7 +330,7 @@ Directional notes:
 - The baseline pack produces no missing-slot diagnostics under the fully enabled topology.
 - Pack-owned prompt assets are now the stable oracle for future regression gates.
 
-- [ ] **Unit 3: Stage-Disabled Semantics And Absence-Prose Migration**
+- [x] **Unit 3: Stage-Disabled Semantics And Absence-Prose Migration** _(Phase A: StageDisabled enum + validation arm + topology-aware constructor — DONE. Phase B: golden-byte regression gate at `tests/prompt_bundle_regression_gate.rs` with 13 fixtures under `tests/fixtures/prompt_bundle/` — DONE. Phase C: absence-prose migration deferred into Unit 4a where prompt-builder signatures are already changing.)_
 
 **Goal:** Move substantive stage-bypass prose into pack assets and establish explicit zero-round semantics. R5 in this unit owns both the prose move *and* the `DualRiskStatus::StageDisabled` enum extension; the latter is a domain-model change with its own match-site fan-out and is called out explicitly rather than treated as incidental.
 
@@ -379,7 +379,7 @@ Directional notes:
 - Stage-disabled semantics are explicit in pack assets and validation rules.
 - Golden-byte regression fixtures exist on disk and the harness asserts equality against them; Unit 4a inherits the bytes, rewrites the harness for the new API, and uses the same files as the merge gate.
 
-- [ ] **Unit 4a: Structural Authority Migration**
+- [~] **Unit 4a: Structural Authority Migration** _(Step 1: `sanitize_analysis_emphasis` helper + `KEY_ROUTING_FLAGS` constant — DONE. Step 2: `PreflightTask` computes `RunRoleTopology`, derives `RoutingFlags`, writes them to context, and runs `validate_active_pack_completeness` as a non-fatal `warn!` — DONE. Step 3: prompt-builder signature flip across ~13 call sites + activation-path audit + golden-byte harness rewrite — DEFERRED to a focused follow-up PR. Behavior-neutral so far: 1415 tests pass, regression gate green.)_
 
 **Goal:** Migrate the prompt-builder signature contract, make `PreflightTask` the sole writer of runtime policy, ship the `{analysis_emphasis}` sanitization helpers as preparatory infrastructure (no enforcement), and land the activation-path audit as integration coverage. **No user-visible behavior change.** Zero-round bypass, schema bump, fallback removal, invalid-pack-id flip, and `{analysis_emphasis}` enforcement are explicitly **out of scope** for 4a; those are 4b's responsibility. No ticker validator is added in 4a or 4b — `{ticker}` flows through the existing `validate_symbol` + data-API chain. The behavior-neutral promise is checked by the regression-gate byte-equality assertion: every Unit 3 golden-byte fixture renders identically before and after 4a.
 
@@ -501,7 +501,7 @@ Directional notes:
 - `analysis_emphasis` sanitization is enforced at preflight; out-of-contract pack-author values fail with `TradingError::Config`. (Ticker validity continues to flow through `validate_symbol` + data-API existence — no new ticker validator at preflight.)
 - The prompt-regression gate, snapshot-compatibility coverage, and activation-path audit are all green.
 
-- [ ] **Unit 5: Second-Consumer API-Shape Contract Test (Fixture-Only)**
+- [x] **Unit 5: Second-Consumer API-Shape Contract Test (Fixture-Only)** _(R8 satisfied via 6 fixture tests in `tests/second_consumer_abstraction.rs`. The maximal-children fan-out + spawned_roles gating claim depends on Unit 4b's per-child no-op machinery and lands in that follow-up.)_
 
 **Goal:** Cover R8 — exercise the topology abstraction's API shape against a non-baseline pack manifest — with a single fixture-only integration test. No Cargo feature, no real second pack, no production binary changes. **Honest framing:** this test verifies the topology functions are total over the `Role` enum and accept a non-baseline manifest shape; it does *not* empirically validate that the abstraction is right for real-world second packs. A synthetic manifest authored in the same PR as the topology mapping cannot surface gaps the author didn't already imagine. The empirical validation deferral is documented in the post-merge `docs/solutions/` entry so the next asset-class refactor begins from "we shipped the API-shape test; real-world fitness is yet to be proven" rather than "this was already validated."
 
@@ -537,7 +537,7 @@ Directional notes:
 - No new Cargo features, no CI matrix expansion.
 - The post-merge `docs/solutions/` entry will explicitly note that real-world abstraction fitness is deferred until a real second pack lands — this prevents the next asset-class refactor from inheriting the misimpression that the abstraction has been empirically validated.
 
-- [ ] **Unit 6: Dead Constant And Documentation Cleanup**
+- [~] **Unit 6: Dead Constant And Documentation Cleanup** _(`docs/solutions/logic-errors/prompt-bundle-centralization-runtime-contract-2026-04-25.md` stub landed with a `stub-pending-completion` status frontmatter. Dead-constant deletion + README/CLAUDE.md refresh are gated on Unit 4b removing the fallback constants from the active runtime — they ride along with that follow-up.)_
 
 **Goal:** Remove obsolete fallback constants and refresh project documentation after the runtime-contract flip and the second-consumer abstraction test have shipped. Unit 6 is a small, low-risk cleanup PR; it intentionally lands separately from 4b for review locality, not because it requires its own behavior change.
 
