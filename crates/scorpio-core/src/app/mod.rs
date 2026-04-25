@@ -73,6 +73,13 @@ impl AnalysisRuntime {
     /// - Quick- or deep-thinking completion-model handle creation.
     /// - Finnhub or FRED client construction.
     pub async fn new(cfg: Config) -> anyhow::Result<Self> {
+        // Emit non-blocking startup diagnostics for any active pack whose
+        // prompt bundle is incomplete under the fully-enabled would-be
+        // topology. Stub packs (PromptBundle::empty()) are skipped so log
+        // output is silent today; future packs that ship partial bundles
+        // surface as `info!` lines without blocking startup.
+        crate::analysis_packs::init_diagnostics();
+
         let quick_provider = cfg.llm.quick_thinking_provider.clone();
         let deep_provider = cfg.llm.deep_thinking_provider.clone();
         let rate_limiters = ProviderRateLimiters::from_config(&cfg.providers);
