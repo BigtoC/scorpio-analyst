@@ -163,6 +163,7 @@ impl PromptSlot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRoleTopology {
     pub spawned_analysts: BTreeSet<Role>,
+    pub unknown_inputs: Vec<String>,
     pub debate_enabled: bool,
     pub risk_enabled: bool,
 }
@@ -221,12 +222,21 @@ pub fn build_run_topology(
     max_debate_rounds: u32,
     max_risk_rounds: u32,
 ) -> RunRoleTopology {
-    let spawned_analysts: BTreeSet<Role> = required_inputs
-        .iter()
-        .filter_map(|input| analyst_role_for_input(input))
-        .collect();
+    let mut spawned_analysts: BTreeSet<Role> = BTreeSet::new();
+    let mut unknown_inputs: Vec<String> = Vec::new();
+
+    for input in required_inputs {
+        match analyst_role_for_input(input) {
+            Some(role) => {
+                spawned_analysts.insert(role);
+            }
+            None => unknown_inputs.push(input.clone()),
+        }
+    }
+
     RunRoleTopology {
         spawned_analysts,
+        unknown_inputs,
         debate_enabled: max_debate_rounds > 0,
         risk_enabled: max_risk_rounds > 0,
     }
@@ -283,6 +293,7 @@ mod tests {
     fn baseline_topology_has_four_analysts_plus_debate_and_risk() {
         let topology = build_run_topology(&equity_inputs(), 2, 2);
         assert_eq!(topology.spawned_analysts.len(), 4);
+        assert!(topology.unknown_inputs.is_empty());
         assert!(
             topology
                 .spawned_analysts
@@ -343,9 +354,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_inputs_are_silently_dropped() {
-        // Crypto-only inputs do not yet have Role variants — they map to None
-        // and produce an empty analyst roster.
+    fn unknown_inputs_are_tracked_fail_closed() {
+        // Crypto-only inputs do not yet have Role variants. Topology still
+        // records them so completeness/diagnostics can fail closed instead of
+        // pretending the pack has an empty-but-valid analyst roster.
         let inputs = vec![
             "tokenomics".to_owned(),
             "onchain".to_owned(),
@@ -354,6 +366,15 @@ mod tests {
         ];
         let topology = build_run_topology(&inputs, 2, 2);
         assert!(topology.spawned_analysts.is_empty());
+        assert_eq!(
+            topology.unknown_inputs,
+            vec![
+                "tokenomics".to_owned(),
+                "onchain".to_owned(),
+                "social".to_owned(),
+                "derivatives".to_owned(),
+            ]
+        );
     }
 
     #[test]
