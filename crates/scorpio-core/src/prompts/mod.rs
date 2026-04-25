@@ -22,7 +22,7 @@
 //! analyst, researcher, trader, risk, and fund-manager agents.
 pub mod bundle;
 pub mod templating;
-pub mod validation;
+mod validation;
 
 pub use bundle::PromptBundle;
 pub use templating::render;

@@ -10,28 +10,63 @@
 use crate::error::TradingError;
 
 /// Closed allowlist of placeholder tokens that may appear in pack-owned prompt
-/// templates. `templating::render` expands exactly these three; any other
-/// `{...}`-shaped token in a pack asset is treated as a developer typo
-/// (e.g. `{ticker_symbol}`) and would render verbatim into the LLM prompt,
-/// so `is_effectively_empty` deliberately does not strip unknown tokens.
-const KNOWN_PLACEHOLDERS: &[&str] = &["{ticker}", "{current_date}", "{analysis_emphasis}"];
+/// templates.
+///
+/// Some are expanded by `templating::render`; others are filled later by the
+/// agent-specific prompt builders when they splice runtime context into the
+/// system prompt. Any identifier-style `{...}` token outside this allowlist is
+/// treated as a developer typo and makes the slot fail closed.
+const KNOWN_PLACEHOLDERS: &[&str] = &[
+    "{ticker}",
+    "{current_date}",
+    "{analysis_emphasis}",
+    "{untrusted_context_notice}",
+    "{trader_proposal}",
+    "{aggressive_risk_report}",
+    "{neutral_risk_report}",
+    "{conservative_risk_report}",
+    "{risk_discussion_history}",
+    "{fundamental_report}",
+    "{technical_report}",
+    "{sentiment_report}",
+    "{news_report}",
+    "{past_memory_str}",
+    "{current_price}",
+    "{consensus_summary}",
+    "{market_volatility_report}",
+    "{data_quality_note}",
+    "{risk_history}",
+    "{aggressive_response}",
+    "{conservative_response}",
+    "{neutral_response}",
+    "{aggressive_case}",
+    "{neutral_case}",
+    "{conservative_case}",
+];
 
 /// True when the slot has no meaningful content for the LLM prompt.
 ///
 /// A slot is "effectively empty" when:
 /// - it is `trim().is_empty()` after raw input — the obvious case; or
 /// - after stripping every occurrence of the closed allowlist of known
-///   placeholder tokens (`{ticker}`, `{current_date}`, `{analysis_emphasis}`),
-///   the remainder is `trim().is_empty()` — which catches placeholder-only
-///   slots like `"{ticker} {current_date}"` that would render to a degenerate
-///   prompt (whitespace + concrete substitutions only, no instructional text).
+///   placeholder tokens, the remainder is `trim().is_empty()` — which catches
+///   placeholder-only slots like `"{ticker} {current_date}"` or
+///   `"{trader_proposal}"` that would render to degenerate prompts without any
+///   pack-owned instruction text.
+/// - any identifier-style placeholder token outside that allowlist appears in
+///   the slot (e.g. `{ticker_symbol}`), which is treated as a pack-author typo
+///   and fails completeness validation rather than rendering verbatim into the
+///   LLM prompt.
 ///
-/// Unknown placeholder tokens like `{ticker_symbol}` (typo) are *not* stripped
-/// and therefore mark the slot as non-empty — surfacing typo-class developer
-/// errors before they render verbatim to the LLM.
+/// Non-identifier brace text such as JSON examples (`{"symbol":"<ticker>"}`)
+/// still counts as content; only placeholder-shaped tokens participate in the
+/// fail-closed typo check.
 #[must_use]
 pub fn is_effectively_empty(slot: &str) -> bool {
     if slot.trim().is_empty() {
+        return true;
+    }
+    if contains_unknown_placeholder_token(slot) {
         return true;
     }
     let mut stripped = slot.to_string();
@@ -39,6 +74,37 @@ pub fn is_effectively_empty(slot: &str) -> bool {
         stripped = stripped.replace(token, "");
     }
     stripped.trim().is_empty()
+}
+
+fn contains_unknown_placeholder_token(slot: &str) -> bool {
+    for (open_idx, _) in slot.match_indices('{') {
+        let Some(close_offset) = slot[open_idx + 1..].find('}') else {
+            continue;
+        };
+        let close_idx = open_idx + 1 + close_offset;
+        let token = &slot[open_idx..=close_idx];
+        if is_identifier_placeholder(token) && !KNOWN_PLACEHOLDERS.contains(&token) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_identifier_placeholder(token: &str) -> bool {
+    let Some(inner) = token
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return false;
+    };
+    let mut chars = inner.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_lowercase() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// Maximum byte length of a sanitized `{analysis_emphasis}` value.
@@ -158,11 +224,37 @@ mod tests {
     }
 
     #[test]
-    fn unknown_placeholder_is_not_effectively_empty() {
-        // {ticker_symbol} is a typo, not a known token; it would render
-        // verbatim into the LLM prompt, so it must mark the slot as non-empty.
-        assert!(!is_effectively_empty("{ticker_symbol}"));
-        assert!(!is_effectively_empty("{stock} {date}"));
+    fn unknown_placeholder_only_slot_is_effectively_empty() {
+        // Unknown placeholder tokens are pack-author typos. A slot made only of
+        // unresolved `{...}` tokens has no meaningful prompt instructions and
+        // must fail completeness validation rather than pass through verbatim.
+        assert!(is_effectively_empty("{ticker_symbol}"));
+        assert!(is_effectively_empty("{stock} {date}"));
+    }
+
+    #[test]
+    fn runtime_context_placeholder_only_slot_is_effectively_empty() {
+        // Prompt bundles also contain identifier-style runtime placeholders
+        // that individual builders expand later. Those placeholders alone are
+        // still not meaningful prompt content.
+        assert!(is_effectively_empty("{trader_proposal}"));
+        assert!(is_effectively_empty(
+            " {fundamental_report}\n{technical_report}\t{news_report} "
+        ));
+    }
+
+    #[test]
+    fn unknown_placeholder_typo_makes_slot_effectively_empty_even_with_other_text() {
+        assert!(is_effectively_empty(
+            "Analyze {ticker_symbol} with valuation discipline."
+        ));
+    }
+
+    #[test]
+    fn json_example_with_braces_is_not_effectively_empty() {
+        assert!(!is_effectively_empty(
+            r#"The news tool argument shape is: get_news requires {"symbol":"<ticker>"}"#
+        ));
     }
 
     #[test]
@@ -178,10 +270,13 @@ mod tests {
     }
 
     #[test]
-    fn known_placeholders_are_exactly_three() {
-        // Locking the closed allowlist size so any future addition forces
-        // a deliberate code change to this constant + tests.
-        assert_eq!(KNOWN_PLACEHOLDERS.len(), 3);
+    fn known_placeholder_vocabulary_is_closed() {
+        // Locking the closed allowlist size so any future placeholder addition
+        // forces a deliberate code change to this constant + tests.
+        assert_eq!(KNOWN_PLACEHOLDERS.len(), 25);
+        assert!(KNOWN_PLACEHOLDERS.contains(&"{ticker}"));
+        assert!(KNOWN_PLACEHOLDERS.contains(&"{trader_proposal}"));
+        assert!(KNOWN_PLACEHOLDERS.contains(&"{current_price}"));
     }
 
     // ─── sanitize_analysis_emphasis ─────────────────────────────────────────
