@@ -16,15 +16,17 @@
 //! - [`selection`] — runtime policy hydration from the manifest
 //!   ([`RuntimePolicy`], [`resolve_runtime_policy`]).
 
+mod completeness;
 mod crypto;
 mod equity;
 mod manifest;
 mod registry;
 mod selection;
 
+pub use completeness::{CompletenessError, validate_active_pack_completeness};
 pub use manifest::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
 };
-pub use registry::resolve_pack;
+pub use registry::{init_diagnostics, pack_diagnostics, resolve_pack};
 pub(crate) use selection::resolve_runtime_policy_for_manifest;
 pub use selection::{RuntimePolicy, resolve_runtime_policy};
