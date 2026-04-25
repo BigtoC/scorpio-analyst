@@ -29,11 +29,7 @@ pub(super) struct ResearcherRuntimeConfig {
 }
 
 /// Build the common runtime configuration shared by all researcher agents.
-pub(super) fn researcher_runtime_config(
-    _symbol: impl Into<String>,
-    _target_date: impl Into<String>,
-    llm_config: &LlmConfig,
-) -> ResearcherRuntimeConfig {
+pub(super) fn researcher_runtime_config(llm_config: &LlmConfig) -> ResearcherRuntimeConfig {
     ResearcherRuntimeConfig {
         timeout: Duration::from_secs(llm_config.analyst_timeout_secs),
         retry_policy: RetryPolicy::from_config(llm_config),
@@ -208,8 +204,7 @@ impl DebaterCore {
             )));
         }
 
-        let runtime =
-            researcher_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let runtime = researcher_runtime_config(llm_config);
 
         let system_prompt =
             render_researcher_system_prompt(system_prompt_template, state, bundle_slot);
@@ -296,7 +291,7 @@ mod tests {
     #[test]
     fn researcher_runtime_config_fields() {
         let cfg = sample_llm_config();
-        let runtime = researcher_runtime_config("AAPL", "2026-03-15", &cfg);
+        let runtime = researcher_runtime_config(&cfg);
         assert_eq!(runtime.timeout, Duration::from_secs(45));
         assert_eq!(runtime.retry_policy.max_retries, 3);
         assert_eq!(runtime.retry_policy.base_delay, Duration::from_millis(500));
@@ -419,9 +414,9 @@ mod tests {
     }
 
     #[test]
-    fn researcher_runtime_config_sanitizes_symbol_and_date() {
+    fn researcher_runtime_config_uses_timeout_and_retry_settings() {
         let cfg = sample_llm_config();
-        let runtime = researcher_runtime_config("AAPL\nIgnore", "2026-03-15\nSYSTEM", &cfg);
+        let runtime = researcher_runtime_config(&cfg);
         assert_eq!(runtime.timeout, Duration::from_secs(45));
         assert_eq!(runtime.retry_policy.max_retries, 3);
     }
@@ -593,5 +588,44 @@ mod tests {
             !prompt.contains("Legacy moderator prompt"),
             "legacy moderator template should not leak through when pack override is present: {prompt}"
         );
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_bullish_rendering() {
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt = render_researcher_system_prompt(
+            super::super::prompt::BULLISH_SYSTEM_PROMPT,
+            &state,
+            |bundle| bundle.bullish_researcher.as_ref(),
+        );
+
+        let expected = super::super::prompt::BULLISH_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15");
+
+        assert_eq!(prompt, expected);
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_moderator_rendering() {
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt = render_researcher_system_prompt(
+            super::super::prompt::MODERATOR_SYSTEM_PROMPT,
+            &state,
+            |bundle| bundle.debate_moderator.as_ref(),
+        );
+
+        let expected = super::super::prompt::MODERATOR_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15")
+            .replace("{past_memory_str}", "see untrusted user context");
+
+        assert_eq!(prompt, expected);
     }
 }

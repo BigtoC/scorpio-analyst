@@ -25,7 +25,7 @@ use super::common::{
 };
 
 /// System prompt for the Risk Moderator, from `docs/prompts.md` §4.
-const RISK_MODERATOR_SYSTEM_PROMPT: &str = "\
+pub(super) const RISK_MODERATOR_SYSTEM_PROMPT: &str = "\
 You are the Risk Moderator for {ticker} as of {current_date}.
 Your role is to synthesize the three risk perspectives into a concise plain-text discussion summary for downstream review.
 

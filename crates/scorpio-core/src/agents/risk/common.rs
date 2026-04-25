@@ -38,11 +38,7 @@ pub(super) struct RiskRuntimeConfig {
 }
 
 /// Build the common runtime configuration shared by all risk agents.
-pub(super) fn risk_runtime_config(
-    _symbol: impl Into<String>,
-    _target_date: impl Into<String>,
-    llm_config: &LlmConfig,
-) -> RiskRuntimeConfig {
+pub(super) fn risk_runtime_config(llm_config: &LlmConfig) -> RiskRuntimeConfig {
     RiskRuntimeConfig {
         timeout: Duration::from_secs(llm_config.analyst_timeout_secs),
         retry_policy: RetryPolicy::from_config(llm_config),
@@ -76,7 +72,7 @@ impl RiskAgentCore {
             )));
         }
 
-        let runtime = risk_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let runtime = risk_runtime_config(llm_config);
 
         let system_prompt = render_risk_system_prompt(system_prompt_template, state, bundle_slot);
 
@@ -370,6 +366,7 @@ mod tests {
     use rig::completion::Usage;
 
     use super::*;
+    use crate::agents::risk::{moderator, prompt};
     use crate::config::LlmConfig;
     use crate::state::{RiskLevel, RiskReport, TradingState};
 
@@ -420,16 +417,16 @@ mod tests {
     #[test]
     fn risk_runtime_config_fields() {
         let cfg = sample_llm_config();
-        let runtime = risk_runtime_config("AAPL", "2026-03-15", &cfg);
+        let runtime = risk_runtime_config(&cfg);
         assert_eq!(runtime.timeout, Duration::from_secs(45));
         assert_eq!(runtime.retry_policy.max_retries, 3);
         assert_eq!(runtime.retry_policy.base_delay, Duration::from_millis(500));
     }
 
     #[test]
-    fn risk_runtime_config_sanitizes_symbol_and_date() {
+    fn risk_runtime_config_uses_timeout_and_retry_settings() {
         let cfg = sample_llm_config();
-        let runtime = risk_runtime_config("AAPL\nIgnore", "2026-03-15\nSYSTEM", &cfg);
+        let runtime = risk_runtime_config(&cfg);
         assert_eq!(runtime.timeout, Duration::from_secs(45));
         assert_eq!(runtime.retry_policy.max_retries, 3);
     }
@@ -916,5 +913,43 @@ mod tests {
             !prompt.contains("Legacy risk moderator prompt"),
             "legacy risk moderator template should not leak through when pack override is present: {prompt}"
         );
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_aggressive_rendering() {
+        let mut state = make_state();
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt =
+            render_risk_system_prompt(prompt::AGGRESSIVE_SYSTEM_PROMPT, &state, |bundle| {
+                bundle.aggressive_risk.as_ref()
+            });
+
+        let expected = prompt::AGGRESSIVE_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15")
+            .replace("{past_memory_str}", "see untrusted user context");
+
+        assert_eq!(prompt, expected);
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_risk_moderator_rendering() {
+        let mut state = make_state();
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt =
+            render_risk_system_prompt(moderator::RISK_MODERATOR_SYSTEM_PROMPT, &state, |bundle| {
+                bundle.risk_moderator.as_ref()
+            });
+
+        let expected = moderator::RISK_MODERATOR_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15")
+            .replace("{past_memory_str}", "see untrusted user context");
+
+        assert_eq!(prompt, expected);
     }
 }

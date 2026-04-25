@@ -73,13 +73,13 @@ impl PromptBundle {
         }
     }
 
-    /// Placeholder bundle used as the manifest default before Phase 4's
-    /// agent migration lands.
+    /// Placeholder bundle used by packs that do not yet ship prompt assets.
     ///
-    /// Every slot holds an empty string; agents still read their own
-    /// `const _SYSTEM_PROMPT` for now. Once the migration ships the
-    /// baseline pack will override this via `include_str!` on the `.md`
-    /// files under `analysis_packs/equity/prompts/`.
+    /// Every slot holds an empty string so runtime renderers fall back to the
+    /// legacy in-module prompt constants. The baseline equity pack overrides
+    /// this with extracted `.md` templates under
+    /// `analysis_packs/equity/prompts/`; stub packs can keep using
+    /// `PromptBundle::empty()` until they gain real prompt content.
     #[must_use]
     pub fn empty() -> Self {
         Self::from_static("", "", "", "", "", "", "", "", "", "", "", "", "")
