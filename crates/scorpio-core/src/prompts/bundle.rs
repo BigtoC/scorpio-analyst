@@ -84,10 +84,100 @@ impl PromptBundle {
     pub fn empty() -> Self {
         Self::from_static("", "", "", "", "", "", "", "", "", "", "", "", "")
     }
+
+    /// True when every slot is the literal empty string.
+    ///
+    /// This is the canonical "no assets here" sentinel — `PromptBundle::empty()`
+    /// returns `true`; any partially-filled bundle returns `false`. Used by
+    /// `init_diagnostics` to skip stub packs without introducing a separate
+    /// manifest field. A bundle with whitespace-only or placeholder-only slots
+    /// is *not* empty under this check; those cases are caught by the
+    /// per-slot `prompts::validation::is_effectively_empty` predicate when
+    /// `validate_active_pack_completeness` runs against an active pack.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fundamental_analyst.is_empty()
+            && self.sentiment_analyst.is_empty()
+            && self.news_analyst.is_empty()
+            && self.technical_analyst.is_empty()
+            && self.bullish_researcher.is_empty()
+            && self.bearish_researcher.is_empty()
+            && self.debate_moderator.is_empty()
+            && self.trader.is_empty()
+            && self.aggressive_risk.is_empty()
+            && self.conservative_risk.is_empty()
+            && self.neutral_risk.is_empty()
+            && self.risk_moderator.is_empty()
+            && self.fund_manager.is_empty()
+    }
 }
 
 impl Default for PromptBundle {
     fn default() -> Self {
         Self::empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_bundle_is_empty() {
+        assert!(PromptBundle::empty().is_empty());
+    }
+
+    #[test]
+    fn default_bundle_is_empty() {
+        assert!(PromptBundle::default().is_empty());
+    }
+
+    #[test]
+    fn partially_filled_bundle_is_not_empty() {
+        let bundle = PromptBundle::from_static(
+            "you are a fundamental analyst",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        );
+        assert!(!bundle.is_empty());
+    }
+
+    #[test]
+    fn fully_filled_bundle_is_not_empty() {
+        let bundle = PromptBundle::from_static(
+            "f", "s", "n", "t", "bull", "bear", "dm", "tr", "ag", "co", "ne", "rm", "fm",
+        );
+        assert!(!bundle.is_empty());
+    }
+
+    #[test]
+    fn bundle_with_only_trailing_slot_filled_is_not_empty() {
+        // Last-slot guard: catches off-by-one in the all-slots check.
+        let bundle = PromptBundle::from_static(
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "fund_manager template",
+        );
+        assert!(!bundle.is_empty());
     }
 }
