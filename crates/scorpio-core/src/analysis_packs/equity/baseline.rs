@@ -12,6 +12,28 @@ use super::super::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
 };
 
+fn include_prompt(path: &'static str) -> &'static str {
+    path.strip_suffix('\n').unwrap_or(path)
+}
+
+fn baseline_prompt_bundle() -> PromptBundle {
+    PromptBundle::from_static(
+        include_prompt(include_str!("prompts/fundamental_analyst.md")),
+        include_prompt(include_str!("prompts/sentiment_analyst.md")),
+        include_prompt(include_str!("prompts/news_analyst.md")),
+        include_prompt(include_str!("prompts/technical_analyst.md")),
+        include_prompt(include_str!("prompts/bullish_researcher.md")),
+        include_prompt(include_str!("prompts/bearish_researcher.md")),
+        include_prompt(include_str!("prompts/debate_moderator.md")),
+        include_prompt(include_str!("prompts/trader.md")),
+        include_prompt(include_str!("prompts/aggressive_risk.md")),
+        include_prompt(include_str!("prompts/conservative_risk.md")),
+        include_prompt(include_str!("prompts/neutral_risk.md")),
+        include_prompt(include_str!("prompts/risk_moderator.md")),
+        include_prompt(include_str!("prompts/fund_manager.md")),
+    )
+}
+
 /// Build the baseline pack manifest.
 pub fn baseline_pack() -> AnalysisPackManifest {
     AnalysisPackManifest {
@@ -39,10 +61,7 @@ pub fn baseline_pack() -> AnalysisPackManifest {
             .to_owned(),
         report_strategy_label: "Balanced Institutional".to_owned(),
         default_valuation: ValuationAssessment::Full,
-        // Phase 4 scaffolding: empty bundle today because agents still read
-        // their own `const _SYSTEM_PROMPT`. The follow-up migration populates
-        // this via `include_str!` on `.md` files under `equity/prompts/`.
-        prompt_bundle: PromptBundle::empty(),
+        prompt_bundle: baseline_prompt_bundle(),
         valuator_selection: {
             let mut m = HashMap::new();
             m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
@@ -133,6 +152,66 @@ mod tests {
             ValuationAssessment::NotAssessed,
             "unknown shape should fall back to NotAssessed"
         );
+    }
+
+    #[test]
+    fn baseline_pack_populates_prompt_bundle_slots_with_runtime_placeholders() {
+        let pack = resolve_pack(PackId::Baseline);
+        let slots = [
+            (
+                "fundamental",
+                pack.prompt_bundle.fundamental_analyst.as_ref(),
+            ),
+            ("sentiment", pack.prompt_bundle.sentiment_analyst.as_ref()),
+            ("news", pack.prompt_bundle.news_analyst.as_ref()),
+            ("technical", pack.prompt_bundle.technical_analyst.as_ref()),
+            (
+                "bullish_researcher",
+                pack.prompt_bundle.bullish_researcher.as_ref(),
+            ),
+            (
+                "bearish_researcher",
+                pack.prompt_bundle.bearish_researcher.as_ref(),
+            ),
+            (
+                "debate_moderator",
+                pack.prompt_bundle.debate_moderator.as_ref(),
+            ),
+            ("trader", pack.prompt_bundle.trader.as_ref()),
+            (
+                "aggressive_risk",
+                pack.prompt_bundle.aggressive_risk.as_ref(),
+            ),
+            (
+                "conservative_risk",
+                pack.prompt_bundle.conservative_risk.as_ref(),
+            ),
+            ("neutral_risk", pack.prompt_bundle.neutral_risk.as_ref()),
+            ("risk_moderator", pack.prompt_bundle.risk_moderator.as_ref()),
+            ("fund_manager", pack.prompt_bundle.fund_manager.as_ref()),
+        ];
+
+        for (label, template) in slots {
+            assert!(
+                !template.is_empty(),
+                "baseline pack should ship a non-empty {label} prompt template"
+            );
+            assert!(
+                template.contains("{ticker}"),
+                "baseline {label} prompt should preserve the {{ticker}} placeholder"
+            );
+            assert!(
+                template.contains("{current_date}"),
+                "baseline {label} prompt should preserve the {{current_date}} placeholder"
+            );
+        }
+    }
+
+    #[test]
+    fn baseline_pack_uses_extracted_prompt_assets_not_empty_placeholders() {
+        let pack = resolve_pack(PackId::Baseline);
+
+        assert_ne!(pack.prompt_bundle, PromptBundle::empty());
     }
 
     #[test]
