@@ -12,7 +12,7 @@ use crate::analysis_packs::{
 };
 use crate::prompts::PromptBundle;
 use crate::state::TradingState;
-use crate::workflow::topology::Role;
+use crate::workflow::Role;
 
 /// Hydrate `state.analysis_runtime_policy` with the baseline pack's
 /// `RuntimePolicy`. Idempotent.
@@ -51,7 +51,7 @@ pub fn baseline_pack_prompt_for_role(role: Role) -> &'static str {
     let slot = role.prompt_slot();
     // Match every slot explicitly so a future PromptSlot variant forces a
     // compile error here too.
-    use crate::workflow::topology::PromptSlot;
+    use crate::workflow::PromptSlot;
     let cow = match slot {
         PromptSlot::FundamentalAnalyst => bundle.fundamental_analyst,
         PromptSlot::SentimentAnalyst => bundle.sentiment_analyst,
