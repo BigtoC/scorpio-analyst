@@ -8,7 +8,7 @@
 
 use crate::analysis_packs::manifest::{AnalysisPackManifest, PackId};
 use crate::prompts::is_effectively_empty;
-use crate::workflow::topology::{PromptSlot, RunRoleTopology, required_prompt_slots};
+use crate::workflow::{PromptSlot, RunRoleTopology, required_prompt_slots};
 
 /// Slots required by the configured topology that the active pack does not
 /// supply (or supplies as effectively-empty content).
@@ -21,18 +21,40 @@ use crate::workflow::topology::{PromptSlot, RunRoleTopology, required_prompt_slo
 pub struct CompletenessError {
     pub pack_id: PackId,
     pub missing_slots: Vec<PromptSlot>,
+    pub unknown_inputs: Vec<String>,
 }
 
 impl std::fmt::Display for CompletenessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let names: Vec<&str> = self.missing_slots.iter().map(|s| s.name()).collect();
-        write!(
-            f,
-            "active pack {:?} is missing {} required prompt slot(s): {}",
-            self.pack_id,
-            names.len(),
-            names.join(", ")
-        )
+        match (names.is_empty(), self.unknown_inputs.is_empty()) {
+            (false, true) => write!(
+                f,
+                "active pack {:?} is missing {} required prompt slot(s): {}",
+                self.pack_id,
+                names.len(),
+                names.join(", ")
+            ),
+            (true, false) => write!(
+                f,
+                "active pack {:?} declares unknown required_input(s): {}",
+                self.pack_id,
+                self.unknown_inputs.join(", ")
+            ),
+            (false, false) => write!(
+                f,
+                "active pack {:?} is missing {} required prompt slot(s): {} and declares unknown required_input(s): {}",
+                self.pack_id,
+                names.len(),
+                names.join(", "),
+                self.unknown_inputs.join(", ")
+            ),
+            (true, true) => write!(
+                f,
+                "active pack {:?} failed completeness validation",
+                self.pack_id
+            ),
+        }
     }
 }
 
@@ -62,12 +84,13 @@ pub fn validate_active_pack_completeness(
             missing.push(slot);
         }
     }
-    if missing.is_empty() {
+    if missing.is_empty() && topology.unknown_inputs.is_empty() {
         Ok(())
     } else {
         Err(CompletenessError {
             pack_id: manifest.id,
             missing_slots: missing,
+            unknown_inputs: topology.unknown_inputs.clone(),
         })
     }
 }
@@ -79,7 +102,7 @@ mod tests {
     use super::*;
     use crate::analysis_packs::resolve_pack;
     use crate::prompts::PromptBundle;
-    use crate::workflow::topology::build_run_topology;
+    use crate::workflow::build_run_topology;
 
     fn fully_enabled_baseline_topology() -> RunRoleTopology {
         let manifest = resolve_pack(PackId::Baseline);
@@ -105,6 +128,7 @@ mod tests {
         let err = validate_active_pack_completeness(&manifest, &topology)
             .expect_err("empty bundle must fail completeness");
         assert_eq!(err.missing_slots.len(), 13);
+        assert!(err.unknown_inputs.is_empty());
         assert_eq!(err.pack_id, PackId::Baseline);
     }
 
@@ -127,6 +151,27 @@ mod tests {
         let topology = fully_enabled_baseline_topology();
         let err = validate_active_pack_completeness(&manifest, &topology)
             .expect_err("placeholder-only slot must fail");
+        assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
+    }
+
+    #[test]
+    fn unknown_placeholder_only_slot_is_reported_as_missing() {
+        let mut manifest = resolve_pack(PackId::Baseline);
+        manifest.prompt_bundle.trader = Cow::Borrowed("{ticker_symbol}");
+        let topology = fully_enabled_baseline_topology();
+        let err = validate_active_pack_completeness(&manifest, &topology)
+            .expect_err("unknown placeholder typo must fail completeness");
+        assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
+    }
+
+    #[test]
+    fn unknown_placeholder_typo_with_other_text_is_reported_as_missing() {
+        let mut manifest = resolve_pack(PackId::Baseline);
+        manifest.prompt_bundle.trader =
+            Cow::Borrowed("Analyze {ticker_symbol} with valuation discipline.");
+        let topology = fully_enabled_baseline_topology();
+        let err = validate_active_pack_completeness(&manifest, &topology)
+            .expect_err("unknown placeholder typo must fail completeness even with prose");
         assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
     }
 
@@ -168,10 +213,37 @@ mod tests {
         let err = CompletenessError {
             pack_id: PackId::Baseline,
             missing_slots: vec![PromptSlot::Trader, PromptSlot::FundManager],
+            unknown_inputs: Vec::new(),
         };
         let formatted = format!("{err}");
         assert!(formatted.contains("trader"));
         assert!(formatted.contains("fund_manager"));
         assert!(formatted.contains("2 required prompt slot"));
+    }
+
+    #[test]
+    fn unknown_required_inputs_fail_completeness_even_when_known_slots_exist() {
+        let manifest = crate::analysis_packs::AnalysisPackManifest {
+            required_inputs: vec!["news".to_owned(), "tokenomics".to_owned()],
+            ..resolve_pack(PackId::Baseline)
+        };
+        let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+        let err = validate_active_pack_completeness(&manifest, &topology)
+            .expect_err("unknown required_inputs must fail completeness");
+        assert_eq!(err.missing_slots, Vec::<PromptSlot>::new());
+        assert_eq!(err.unknown_inputs, vec!["tokenomics".to_owned()]);
+    }
+
+    #[test]
+    fn display_mentions_unknown_required_inputs() {
+        let err = CompletenessError {
+            pack_id: PackId::Baseline,
+            missing_slots: Vec::new(),
+            unknown_inputs: vec!["tokenomics".to_owned(), "onchain".to_owned()],
+        };
+        let formatted = format!("{err}");
+        assert!(formatted.contains("unknown required_input"));
+        assert!(formatted.contains("tokenomics"));
+        assert!(formatted.contains("onchain"));
     }
 }

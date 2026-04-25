@@ -10,7 +10,7 @@ use tracing::info;
 
 use super::completeness::{CompletenessError, validate_active_pack_completeness};
 use super::{AnalysisPackManifest, PackId, crypto, equity};
-use crate::workflow::topology::build_run_topology;
+use crate::workflow::build_run_topology;
 
 /// Resolve a [`PackId`] into its full [`AnalysisPackManifest`].
 ///
