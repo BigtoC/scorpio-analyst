@@ -25,22 +25,22 @@ The desired architecture is simpler: the active pack owns the prompts, preflight
 
 ## Decisions
 
-| Decision                 | Choice                                                                          | Rationale                                                                     |
-|--------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| Prompt source of truth   | `AnalysisPackManifest.prompt_bundle` only                                       | Removes duplicated runtime ownership                                          |
-| Missing-slot enforcement | Fail only for the active pack                                                   | Stub/inactive packs can remain incomplete during phased development           |
-| Failure boundary         | Preflight                                                                       | Fail before fan-out and before any model call                                 |
-| Validation scope         | Keep manifest/runtime-policy resolution shape-only                              | Prevent inactive stub packs from failing merely by resolving                  |
-| Agent behavior           | No runtime fallback logic                                                       | Keeps agents focused on rendering, not policy                                 |
-| Prompt rendering         | Keep placeholder substitution in agent prompt builders                          | Prompt text stays pack-owned; runtime values stay agent-owned                 |
-| Missing runtime policy   | Treated as orchestration corruption outside preflight-seeded runs               | Prompt builders should not silently invent defaults once centralization lands |
-| Missing selected slot    | Typed config/orchestration failure even if policy exists                        | Keeps alternate entrypoints and tests consistent with preflight guarantees    |
-| Role-to-slot mapping     | One shared canonical prompt-slot identifier surface                             | Avoids duplicating a second role-to-slot table in preflight                   |
-| Topology owner           | One typed per-run `RunRoleTopology` built by a single topology-builder function | Preflight validation and graph routing consume the exact same enablement data |
+| Decision                 | Choice                                                                          | Rationale                                                                      |
+|--------------------------|---------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| Prompt source of truth   | `AnalysisPackManifest.prompt_bundle` only                                       | Removes duplicated runtime ownership                                           |
+| Missing-slot enforcement | Fail only for the active pack                                                   | Stub/inactive packs can remain incomplete during phased development            |
+| Failure boundary         | Preflight                                                                       | Fail before fan-out and before any model call                                  |
+| Validation scope         | Keep manifest/runtime-policy resolution shape-only                              | Prevent inactive stub packs from failing merely by resolving                   |
+| Agent behavior           | No runtime fallback logic                                                       | Keeps agents focused on rendering, not policy                                  |
+| Prompt rendering         | Keep placeholder substitution in agent prompt builders                          | Prompt text stays pack-owned; runtime values stay agent-owned                  |
+| Missing runtime policy   | Treated as orchestration corruption outside preflight-seeded runs               | Prompt builders should not silently invent defaults once centralization lands  |
+| Missing selected slot    | Typed config/orchestration failure even if policy exists                        | Keeps alternate entrypoints and tests consistent with preflight guarantees     |
+| Role-to-slot mapping     | One shared canonical prompt-slot identifier surface                             | Avoids duplicating a second role-to-slot table in preflight                    |
+| Topology owner           | One typed per-run `RunRoleTopology` built by a single topology-builder function | Preflight validation and graph routing consume the exact same enablement data  |
 | Zero-round stage outputs | Leave skipped-stage artifacts absent                                            | Trader/Fund Manager already have absence-handling paths; avoids fake summaries |
-| Validation surface       | Small shared helper, not a large prompt service abstraction                     | Right-sized for the current codebase                                          |
-| Code-owned prompt prose  | Default target is zero append-only prose                                        | Prevents prompt policy from creeping back into code                           |
-| Stub pack support        | Incomplete bundles allowed while pack is inactive                               | Preserves current crypto-pack scaffolding workflow                            |
+| Validation surface       | Small shared helper, not a large prompt service abstraction                     | Right-sized for the current codebase                                           |
+| Code-owned prompt prose  | Default target is zero append-only prose                                        | Prevents prompt policy from creeping back into code                            |
+| Stub pack support        | Incomplete bundles allowed while pack is inactive                               | Preserves current crypto-pack scaffolding workflow                             |
 
 ## Architecture
 
@@ -128,7 +128,7 @@ For incomplete stub packs such as the current crypto placeholder, empty or parti
 - Preflight also becomes the point where `RunRoleTopology` is built and persisted for the run.
 - After resolving the active `RuntimePolicy`, validate that every role required by the current run's `RunRoleTopology` has a non-empty slot.
 - Preflight must consume the same topology-builder function / `RunRoleTopology` surface used for routing, not recompute enablement from config defaults or a preflight-local mirror.
-- Because zero-round runs bypass moderators entirely in this design, moderator prompt slots are not required when `RunRoleTopology` disables the corresponding stage.
+- Because zero-round runs bypass moderators entirely in this design, moderator prompt slots are not required when `RunRoleTopology` marks the corresponding stage as disabled.
 - On any missing required slot, return a hard task failure before analyst fan-out begins.
 - The error should include the active pack id plus the full list of missing slot names in a single actionable message.
 - Preserve the current state/context write path after validation passes.
@@ -246,7 +246,7 @@ Recommended order:
 2. Ensure baseline pack has complete prompt assets for all runnable roles.
 3. Move any remaining role-specific append-only prompt prose out of agent modules into pack assets.
 4. Atomically remove per-agent fallback logic and enable hard preflight enforcement in the same change. Do not merge a runtime state where only one of those two sides has landed.
-6. Remove now-dead runtime prompt constants and stale documentation.
+5. Remove now-dead runtime prompt constants and stale documentation.
 
 This keeps the runtime coherent at each step and minimizes the time spent with dual ownership.
 
