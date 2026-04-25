@@ -8,6 +8,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_core::{
+    analysis_packs::{PackId, resolve_pack},
     error::TradingError,
     state::{
         AssetShape, DataCoverageReport, Decision, DerivedValuation, EvidenceKind, EvidenceRecord,
@@ -15,7 +16,9 @@ use scorpio_core::{
         TradingState,
     },
 };
-use workflow_pipeline_e2e_support::{make_pipeline, phase_from_number, run_stubbed_pipeline};
+use workflow_pipeline_e2e_support::{
+    make_pipeline, make_pipeline_from_pack, phase_from_number, run_stubbed_pipeline,
+};
 
 #[tokio::test]
 async fn run_analysis_cycle_success_path_populates_all_phases() {
@@ -33,10 +36,10 @@ async fn run_analysis_cycle_success_path_populates_all_phases() {
         .expect("pipeline must complete successfully with stubs");
 
     assert_ne!(final_state.execution_id, caller_exec_id);
-    assert!(final_state.fundamental_metrics.is_some());
-    assert!(final_state.technical_indicators.is_some());
-    assert!(final_state.market_sentiment.is_some());
-    assert!(final_state.macro_news.is_some());
+    assert!(final_state.fundamental_metrics().is_some());
+    assert!(final_state.technical_indicators().is_some());
+    assert!(final_state.market_sentiment().is_some());
+    assert!(final_state.macro_news().is_some());
     assert!(!final_state.debate_history.is_empty());
     assert!(final_state.consensus_summary.is_some());
     assert!(final_state.trader_proposal.is_some());
@@ -216,6 +219,79 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
 }
 
 #[tokio::test]
+async fn from_pack_ignores_invalid_config_analysis_pack_and_runs_with_provided_pack() {
+    let pack = resolve_pack(PackId::Baseline);
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "from-pack-invalid-config.db",
+        "from-pack-invalid-config",
+        "not_a_real_pack",
+        1,
+        1,
+    )
+    .await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let final_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("from_pack should honor the provided baseline pack even when config is invalid");
+
+    assert_eq!(final_state.analysis_pack_name.as_deref(), Some("baseline"));
+    assert_eq!(
+        final_state
+            .analysis_runtime_policy
+            .as_ref()
+            .map(|policy| policy.pack_id),
+        Some(PackId::Baseline)
+    );
+}
+
+#[tokio::test]
+async fn from_pack_runs_registered_non_selectable_pack_without_reparsing_config_boundary() {
+    let pack = resolve_pack(PackId::CryptoDigitalAsset);
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "from-pack-crypto.db",
+        "from-pack-crypto",
+        "baseline",
+        0,
+        0,
+    )
+    .await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let final_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("from_pack should allow directly resolved registered packs");
+
+    assert_eq!(
+        final_state.analysis_pack_name.as_deref(),
+        Some("crypto_digital_asset")
+    );
+    assert_eq!(
+        final_state
+            .analysis_runtime_policy
+            .as_ref()
+            .map(|policy| policy.pack_id),
+        Some(PackId::CryptoDigitalAsset)
+    );
+    assert_eq!(
+        final_state
+            .data_coverage
+            .as_ref()
+            .expect("data coverage must be computed")
+            .required_inputs,
+        vec!["tokenomics", "onchain", "social", "derivatives"]
+    );
+}
+
+#[tokio::test]
 async fn e2e_snapshots_contain_boundary_appropriate_state() {
     let (final_state, verify_store, _dir) = run_stubbed_pipeline(1, 1).await;
     let exec_id = final_state.execution_id.to_string();
@@ -230,13 +306,13 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
         snaps.push(snapshot.state);
     }
 
-    assert!(snaps[0].fundamental_metrics.is_some());
+    assert!(snaps[0].fundamental_metrics().is_some());
     assert!(snaps[0].debate_history.is_empty());
     assert!(snaps[0].consensus_summary.is_none());
     assert!(snaps[0].trader_proposal.is_none());
     assert!(snaps[0].final_execution_status.is_none());
 
-    assert!(snaps[1].fundamental_metrics.is_some());
+    assert!(snaps[1].fundamental_metrics().is_some());
     assert!(!snaps[1].debate_history.is_empty());
     assert!(snaps[1].consensus_summary.is_some());
     assert!(snaps[1].trader_proposal.is_none());
@@ -251,7 +327,7 @@ async fn e2e_snapshots_contain_boundary_appropriate_state() {
     assert!(!snaps[3].risk_discussion_history.is_empty());
     assert!(snaps[3].final_execution_status.is_none());
 
-    assert!(snaps[4].fundamental_metrics.is_some());
+    assert!(snaps[4].fundamental_metrics().is_some());
     assert!(snaps[4].consensus_summary.is_some());
     assert!(snaps[4].trader_proposal.is_some());
     assert!(snaps[4].aggressive_risk_report.is_some());
@@ -319,7 +395,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
             content: "stale risk".to_owned(),
         });
     initial_state.consensus_summary = Some("stale consensus".to_owned());
-    initial_state.evidence_fundamental = Some(EvidenceRecord {
+    initial_state.set_evidence_fundamental(EvidenceRecord {
         kind: EvidenceKind::Fundamental,
         payload: FundamentalData {
             revenue_growth_pct: None,
@@ -369,8 +445,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
     );
     assert_ne!(
         final_state
-            .evidence_fundamental
-            .as_ref()
+            .evidence_fundamental()
             .and_then(|record| record.payload.pe_ratio),
         Some(999.0)
     );
@@ -422,7 +497,7 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
 
     // Inject a stale derived_valuation that should NOT survive into the next cycle.
     let mut initial_state = TradingState::new("AAPL", "2026-03-20");
-    initial_state.derived_valuation = Some(DerivedValuation {
+    initial_state.set_derived_valuation(DerivedValuation {
         asset_shape: AssetShape::Fund,
         scenario: ScenarioValuation::NotAssessed {
             reason: "stale_reason_from_prior_run".to_owned(),
@@ -448,7 +523,7 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
     // The stale NotAssessed valuation must not survive into the final state.
     // The stub AnalystTask does not inject derived_valuation, so it ends as None —
     // which is the correct cycle-safe outcome (reset happened).
-    if let Some(dv) = &final_state.derived_valuation {
+    if let Some(dv) = final_state.derived_valuation() {
         // If the runtime did re-derive a value, it must NOT be the stale one.
         assert_ne!(
             dv.asset_shape,

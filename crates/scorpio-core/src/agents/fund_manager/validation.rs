@@ -98,10 +98,10 @@ fn validate_execution_status(status: &ExecutionStatus) -> Result<(), TradingErro
 }
 
 pub(super) fn state_has_missing_analyst_inputs(state: &TradingState) -> bool {
-    state.fundamental_metrics.is_none()
-        || state.technical_indicators.is_none()
-        || state.market_sentiment.is_none()
-        || state.macro_news.is_none()
+    state.fundamental_metrics().is_none()
+        || state.technical_indicators().is_none()
+        || state.market_sentiment().is_none()
+        || state.macro_news().is_none()
 }
 
 pub(super) fn state_has_missing_risk_reports(state: &TradingState) -> bool {

@@ -92,7 +92,6 @@ pub async fn run_analyst_team(
     let outer_timeout = retry_policy.total_budget(inner_timeout);
 
     let symbol = state.asset_symbol.clone();
-    let target_date = state.target_date.clone();
     let analyst_handles = state.analyst_handles();
     let model_id = handle.model_id().to_owned();
 
@@ -105,13 +104,7 @@ pub async fn run_analyst_team(
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
     let fundamental_task = {
-        let analyst = FundamentalAnalyst::new(
-            handle.clone(),
-            finnhub.clone(),
-            symbol.clone(),
-            target_date.clone(),
-            llm_config,
-        );
+        let analyst = FundamentalAnalyst::new(handle.clone(), finnhub.clone(), state, llm_config);
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
@@ -119,8 +112,7 @@ pub async fn run_analyst_team(
         let analyst = SentimentAnalyst::new(
             handle.clone(),
             finnhub.clone(),
-            symbol.clone(),
-            target_date.clone(),
+            state,
             llm_config,
             cached_news.clone(),
         );
@@ -132,8 +124,7 @@ pub async fn run_analyst_team(
             handle.clone(),
             finnhub.clone(),
             fred.clone(),
-            symbol.clone(),
-            target_date.clone(),
+            state,
             llm_config,
             cached_news,
         );
@@ -141,13 +132,7 @@ pub async fn run_analyst_team(
     };
 
     let technical_task = {
-        let analyst = TechnicalAnalyst::new(
-            handle.clone(),
-            yfinance.clone(),
-            symbol,      // moved — last use; avoids a fourth clone
-            target_date, // moved — last use; avoids a fourth clone
-            llm_config,
-        );
+        let analyst = TechnicalAnalyst::new(handle.clone(), yfinance.clone(), state, llm_config);
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
@@ -485,10 +470,10 @@ mod tests {
         assert_eq!(usages.len(), 4);
         assert!(usages.iter().all(|u| u.token_counts_available));
         // State fields populated
-        assert!(state.fundamental_metrics.is_some());
-        assert!(state.market_sentiment.is_some());
-        assert!(state.macro_news.is_some());
-        assert!(state.technical_indicators.is_some());
+        assert!(state.fundamental_metrics().is_some());
+        assert!(state.market_sentiment().is_some());
+        assert!(state.macro_news().is_some());
+        assert!(state.technical_indicators().is_some());
     }
 
     // ── Task 5.7 / 6.2: one analyst fails — partial data, continues ──────
@@ -524,13 +509,13 @@ mod tests {
             .expect("fallback usage for failed analyst must be present");
         assert!(!failed_usage.token_counts_available);
         // The failed field is None; the others are populated
-        assert!(state.fundamental_metrics.is_some());
+        assert!(state.fundamental_metrics().is_some());
         assert!(
-            state.market_sentiment.is_none(),
+            state.market_sentiment().is_none(),
             "failed analyst field must be None"
         );
-        assert!(state.macro_news.is_some());
-        assert!(state.technical_indicators.is_some());
+        assert!(state.macro_news().is_some());
+        assert!(state.technical_indicators().is_some());
     }
 
     // ── Task 5.8 / 6.2: two failures → abort with both agent names ───────

@@ -1,9 +1,9 @@
 use crate::{
     agents::shared::{
-        UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-        build_evidence_context, build_pack_context, build_thesis_memory_context,
-        build_valuation_context, sanitize_date_for_prompt, sanitize_prompt_context,
-        sanitize_symbol_for_prompt, serialize_prompt_value,
+        UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_data_quality_context,
+        build_enrichment_context, build_evidence_context, build_pack_context,
+        build_thesis_memory_context, build_valuation_context, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
     },
     state::TradingState,
 };
@@ -64,6 +64,15 @@ pub(super) struct PromptContext {
     pub(super) user_prompt: String,
 }
 
+fn trader_system_prompt_template(state: &TradingState) -> &str {
+    state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| policy.prompt_bundle.trader.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(TRADER_SYSTEM_PROMPT)
+}
+
 pub(super) fn build_prompt_context(
     state: &TradingState,
     symbol: &str,
@@ -71,10 +80,10 @@ pub(super) fn build_prompt_context(
 ) -> PromptContext {
     let symbol = sanitize_symbol_for_prompt(symbol);
     let target_date = sanitize_date_for_prompt(target_date);
-    let missing_analyst_data = state.fundamental_metrics.is_none()
-        || state.technical_indicators.is_none()
-        || state.market_sentiment.is_none()
-        || state.macro_news.is_none();
+    let missing_analyst_data = state.fundamental_metrics().is_none()
+        || state.technical_indicators().is_none()
+        || state.market_sentiment().is_none()
+        || state.macro_news().is_none();
     let missing_consensus = state.consensus_summary.is_none();
 
     let data_quality_note = if missing_analyst_data || missing_consensus {
@@ -83,9 +92,10 @@ pub(super) fn build_prompt_context(
         "All analyst inputs and the debate consensus are available for this run."
     };
 
-    let system_prompt = TRADER_SYSTEM_PROMPT
+    let system_prompt = trader_system_prompt_template(state)
         .replace("{ticker}", &symbol)
         .replace("{current_date}", &target_date)
+        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
         .replace(
             "{consensus_summary}",
             &sanitize_prompt_context(
@@ -97,20 +107,23 @@ pub(super) fn build_prompt_context(
         )
         .replace(
             "{fundamental_report}",
-            &serialize_prompt_value(&state.fundamental_metrics),
+            &serialize_prompt_value(&state.fundamental_metrics()),
         )
         .replace(
             "{technical_report}",
-            &serialize_prompt_value(&state.technical_indicators),
+            &serialize_prompt_value(&state.technical_indicators()),
         )
         .replace(
             "{sentiment_report}",
-            &serialize_prompt_value(&state.market_sentiment),
+            &serialize_prompt_value(&state.market_sentiment()),
         )
-        .replace("{news_report}", &serialize_prompt_value(&state.macro_news))
+        .replace(
+            "{news_report}",
+            &serialize_prompt_value(&state.macro_news()),
+        )
         .replace(
             "{market_volatility_report}",
-            &serialize_prompt_value(&state.market_volatility),
+            &serialize_prompt_value(&state.market_volatility()),
         )
         .replace("{past_memory_str}", "see user context")
         .replace("{data_quality_note}", data_quality_note)

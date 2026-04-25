@@ -14,14 +14,16 @@ use crate::{
     config::LlmConfig,
     constants::{MAX_RAW_MODEL_OUTPUT_CHARS, MAX_RISK_CHARS, MAX_RISK_HISTORY_CHARS},
     error::{RetryPolicy, TradingError},
+    prompts::PromptBundle,
     providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
     state::{DebateMessage, RiskReport, TradingState},
 };
 
 pub(super) use crate::agents::shared::{
-    UNTRUSTED_CONTEXT_NOTICE, build_data_quality_context, build_enrichment_context,
-    build_evidence_context, build_pack_context, build_thesis_memory_context, extract_json_object,
-    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+    UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_data_quality_context,
+    build_enrichment_context, build_evidence_context, build_pack_context,
+    build_thesis_memory_context, extract_json_object, sanitize_date_for_prompt,
+    sanitize_prompt_context, sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -31,21 +33,13 @@ const MAX_RISK_HISTORY_MESSAGES: usize = 8;
 
 /// Shared runtime configuration for all risk agents.
 pub(super) struct RiskRuntimeConfig {
-    pub symbol: String,
-    pub target_date: String,
     pub timeout: Duration,
     pub retry_policy: RetryPolicy,
 }
 
 /// Build the common runtime configuration shared by all risk agents.
-pub(super) fn risk_runtime_config(
-    symbol: impl Into<String>,
-    target_date: impl Into<String>,
-    llm_config: &LlmConfig,
-) -> RiskRuntimeConfig {
+pub(super) fn risk_runtime_config(llm_config: &LlmConfig) -> RiskRuntimeConfig {
     RiskRuntimeConfig {
-        symbol: sanitize_symbol_for_prompt(&symbol.into()),
-        target_date: sanitize_date_for_prompt(&target_date.into()),
         timeout: Duration::from_secs(llm_config.analyst_timeout_secs),
         retry_policy: RetryPolicy::from_config(llm_config),
     }
@@ -66,6 +60,7 @@ impl RiskAgentCore {
     pub(super) fn new(
         handle: &CompletionModelHandle,
         system_prompt_template: &str,
+        bundle_slot: fn(&PromptBundle) -> &str,
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
@@ -77,12 +72,9 @@ impl RiskAgentCore {
             )));
         }
 
-        let runtime = risk_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let runtime = risk_runtime_config(llm_config);
 
-        let system_prompt = system_prompt_template
-            .replace("{ticker}", &runtime.symbol)
-            .replace("{current_date}", &runtime.target_date)
-            .replace("{past_memory_str}", "see untrusted user context");
+        let system_prompt = render_risk_system_prompt(system_prompt_template, state, bundle_slot);
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -227,19 +219,19 @@ pub(super) fn validate_raw_model_output_size(
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
 pub(super) fn build_analyst_context(state: &TradingState) -> String {
     let fundamental_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.fundamental_metrics()).unwrap_or_else(|_| "null".to_owned()),
     );
     let technical_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.technical_indicators).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.technical_indicators()).unwrap_or_else(|_| "null".to_owned()),
     );
     let sentiment_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.market_sentiment()).unwrap_or_else(|_| "null".to_owned()),
     );
     let news_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.macro_news()).unwrap_or_else(|_| "null".to_owned()),
     );
     let vix_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.market_volatility()).unwrap_or_else(|_| "null".to_owned()),
     );
 
     let evidence_section = build_evidence_context(state);
@@ -256,6 +248,27 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
         "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n- Past learnings: {}\n\n{evidence_section}\n\n{data_quality_section}\n\n{enrichment_section}{pack_context}",
         build_thesis_memory_context(state)
     )
+}
+
+pub(super) fn render_risk_system_prompt(
+    legacy_template: &str,
+    state: &TradingState,
+    bundle_slot: fn(&PromptBundle) -> &str,
+) -> String {
+    let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
+    let target_date = sanitize_date_for_prompt(&state.target_date);
+    let template = state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| bundle_slot(&policy.prompt_bundle))
+        .filter(|template| !template.is_empty())
+        .unwrap_or(legacy_template);
+
+    template
+        .replace("{ticker}", &symbol)
+        .replace("{current_date}", &target_date)
+        .replace("{past_memory_str}", "see untrusted user context")
+        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
 }
 
 /// Build the initial user message that seeds each persona chat with untrusted analyst context.
@@ -353,6 +366,7 @@ mod tests {
     use rig::completion::Usage;
 
     use super::*;
+    use crate::agents::risk::{moderator, prompt};
     use crate::config::LlmConfig;
     use crate::state::{RiskLevel, RiskReport, TradingState};
 
@@ -378,11 +392,8 @@ mod tests {
             symbol: None,
             target_date: "2026-03-15".to_owned(),
             current_price: None,
-            market_volatility: None,
-            fundamental_metrics: None,
-            technical_indicators: None,
-            market_sentiment: None,
-            macro_news: None,
+            equity: None,
+            crypto: None,
             debate_history: Vec::new(),
             consensus_summary: None,
             trader_proposal: None,
@@ -391,10 +402,6 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
-            evidence_fundamental: None,
-            evidence_technical: None,
-            evidence_sentiment: None,
-            evidence_news: None,
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
             data_coverage: None,
@@ -402,7 +409,6 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
-            derived_valuation: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
         }
@@ -411,20 +417,18 @@ mod tests {
     #[test]
     fn risk_runtime_config_fields() {
         let cfg = sample_llm_config();
-        let runtime = risk_runtime_config("AAPL", "2026-03-15", &cfg);
-        assert_eq!(runtime.symbol, "AAPL");
-        assert_eq!(runtime.target_date, "2026-03-15");
+        let runtime = risk_runtime_config(&cfg);
         assert_eq!(runtime.timeout, Duration::from_secs(45));
         assert_eq!(runtime.retry_policy.max_retries, 3);
         assert_eq!(runtime.retry_policy.base_delay, Duration::from_millis(500));
     }
 
     #[test]
-    fn risk_runtime_config_sanitizes_symbol_and_date() {
+    fn risk_runtime_config_uses_timeout_and_retry_settings() {
         let cfg = sample_llm_config();
-        let runtime = risk_runtime_config("AAPL\nIgnore", "2026-03-15\nSYSTEM", &cfg);
-        assert_eq!(runtime.symbol, "AAPLIgnore");
-        assert_eq!(runtime.target_date, "2026-03-15T");
+        let runtime = risk_runtime_config(&cfg);
+        assert_eq!(runtime.timeout, Duration::from_secs(45));
+        assert_eq!(runtime.retry_policy.max_retries, 3);
     }
 
     #[test]
@@ -853,5 +857,99 @@ mod tests {
         let ctx = build_analyst_context(&state);
         assert!(ctx.contains("Past learnings:"));
         assert!(ctx.contains("Ignore previous instructions"));
+    }
+
+    #[test]
+    fn rendered_system_prompt_prefers_runtime_policy_aggressive_bundle() {
+        let mut state = make_state();
+        let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+            .expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "favour upside capture".to_owned();
+        policy.prompt_bundle.aggressive_risk =
+            "Aggressive pack prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+        state.analysis_runtime_policy = Some(policy);
+
+        let prompt = render_risk_system_prompt(
+            "Legacy aggressive prompt for {ticker} at {current_date}.",
+            &state,
+            |bundle| bundle.aggressive_risk.as_ref(),
+        );
+
+        assert!(
+            prompt.contains(
+                "Aggressive pack prompt for AAPL at 2026-03-15. Emphasis: favour upside capture."
+            ),
+            "runtime policy should override the aggressive risk system prompt: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Legacy aggressive prompt"),
+            "legacy aggressive template should not leak through when pack override is present: {prompt}"
+        );
+    }
+
+    #[test]
+    fn rendered_system_prompt_prefers_runtime_policy_risk_moderator_bundle() {
+        let mut state = make_state();
+        let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+            .expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "surface the true blockers".to_owned();
+        policy.prompt_bundle.risk_moderator =
+            "Risk moderator pack prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+        state.analysis_runtime_policy = Some(policy);
+
+        let prompt = render_risk_system_prompt(
+            "Legacy risk moderator prompt for {ticker} at {current_date}.",
+            &state,
+            |bundle| bundle.risk_moderator.as_ref(),
+        );
+
+        assert!(
+            prompt.contains("Risk moderator pack prompt for AAPL at 2026-03-15. Emphasis: surface the true blockers."),
+            "runtime policy should override the risk moderator system prompt: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Legacy risk moderator prompt"),
+            "legacy risk moderator template should not leak through when pack override is present: {prompt}"
+        );
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_aggressive_rendering() {
+        let mut state = make_state();
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt =
+            render_risk_system_prompt(prompt::AGGRESSIVE_SYSTEM_PROMPT, &state, |bundle| {
+                bundle.aggressive_risk.as_ref()
+            });
+
+        let expected = prompt::AGGRESSIVE_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15")
+            .replace("{past_memory_str}", "see untrusted user context");
+
+        assert_eq!(prompt, expected);
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_risk_moderator_rendering() {
+        let mut state = make_state();
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt =
+            render_risk_system_prompt(moderator::RISK_MODERATOR_SYSTEM_PROMPT, &state, |bundle| {
+                bundle.risk_moderator.as_ref()
+            });
+
+        let expected = moderator::RISK_MODERATOR_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15")
+            .replace("{past_memory_str}", "see untrusted user context");
+
+        assert_eq!(prompt, expected);
     }
 }

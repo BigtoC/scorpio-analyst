@@ -14,7 +14,7 @@ use scorpio_core::{
     workflow::{SnapshotPhase, SnapshotStore},
 };
 
-pub use workflow_pipeline_make_pipeline::make_pipeline;
+pub use workflow_pipeline_make_pipeline::{make_pipeline, make_pipeline_from_pack};
 
 pub fn phase_from_number(phase: u8) -> SnapshotPhase {
     match phase {

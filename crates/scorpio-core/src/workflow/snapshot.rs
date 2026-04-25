@@ -29,6 +29,8 @@ use crate::{
 mod path;
 mod thesis;
 
+pub(crate) use thesis::THESIS_MEMORY_SCHEMA_VERSION;
+
 #[cfg(test)]
 mod tests;
 
@@ -181,7 +183,7 @@ impl SnapshotStore {
         .bind(usage_json.as_deref())
         .bind(&created_at)
         .bind(&state.asset_symbol)
-        .bind(1_i64)
+        .bind(THESIS_MEMORY_SCHEMA_VERSION)
         .execute(&self.pool)
         .await
         .with_context(|| format!("failed to save snapshot phase={phase_number} exec={execution_id}"))
@@ -219,8 +221,8 @@ impl SnapshotStore {
     ) -> Result<Option<LoadedSnapshot>, TradingError> {
         let phase_number = phase.number();
 
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
-            "SELECT trading_state_json, token_usage_json
+        let row: Option<(Option<i64>, String, Option<String>)> = sqlx::query_as(
+            "SELECT schema_version, trading_state_json, token_usage_json
              FROM phase_snapshots
              WHERE execution_id = ? AND phase_number = ?",
         )
@@ -235,7 +237,21 @@ impl SnapshotStore {
 
         match row {
             None => Ok(None),
-            Some((state_json, usage_json)) => {
+            Some((schema_version, state_json, usage_json)) => {
+                // Same-version-only after the Phase 6 bump: a pre-v2 row is
+                // unsupported after the `TradingState` equity sub-state reshape.
+                // Surface the mismatch as a typed storage error so callers can
+                // fail fast rather than attempt a deserialization that would
+                // lose or misplace fields.
+                let schema_version = schema_version.unwrap_or(0);
+                if schema_version != THESIS_MEMORY_SCHEMA_VERSION {
+                    return Err(TradingError::Storage(anyhow::anyhow!(
+                        "incompatible snapshot schema_version={schema_version} \
+                         (active={THESIS_MEMORY_SCHEMA_VERSION}) for exec={execution_id} \
+                         phase={phase_number}"
+                    )));
+                }
+
                 let state: TradingState = serde_json::from_str(&state_json)
                     .with_context(|| "failed to deserialize TradingState from snapshot")
                     .map_err(TradingError::Storage)?;

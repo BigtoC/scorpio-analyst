@@ -209,26 +209,26 @@ async fn analyst_sync_all_succeed_returns_continue() {
     assert_eq!(result.next_action, NextAction::Continue);
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
-    assert!(recovered.fundamental_metrics.is_some());
-    assert!(recovered.market_sentiment.is_some());
-    assert!(recovered.macro_news.is_some());
-    assert!(recovered.technical_indicators.is_some());
+    assert!(recovered.fundamental_metrics().is_some());
+    assert!(recovered.market_sentiment().is_some());
+    assert!(recovered.macro_news().is_some());
+    assert!(recovered.technical_indicators().is_some());
 
     // Task 3.5 — typed evidence fields must all be Some.
     assert!(
-        recovered.evidence_fundamental.is_some(),
+        recovered.evidence_fundamental().is_some(),
         "evidence_fundamental must be populated"
     );
     assert!(
-        recovered.evidence_sentiment.is_some(),
+        recovered.evidence_sentiment().is_some(),
         "evidence_sentiment must be populated"
     );
     assert!(
-        recovered.evidence_news.is_some(),
+        recovered.evidence_news().is_some(),
         "evidence_news must be populated"
     );
     assert!(
-        recovered.evidence_technical.is_some(),
+        recovered.evidence_technical().is_some(),
         "evidence_technical must be populated"
     );
     // Coverage: no missing inputs.
@@ -559,11 +559,11 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
 
-    assert!(recovered.evidence_fundamental.is_some());
-    assert!(recovered.evidence_sentiment.is_some());
-    assert!(recovered.evidence_news.is_some());
+    assert!(recovered.evidence_fundamental().is_some());
+    assert!(recovered.evidence_sentiment().is_some());
+    assert!(recovered.evidence_news().is_some());
     assert!(
-        recovered.evidence_technical.is_none(),
+        recovered.evidence_technical().is_none(),
         "evidence_technical must remain None when technical analyst failed"
     );
 
@@ -708,12 +708,12 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     assert!(
-        recovered.fundamental_metrics.is_none(),
+        recovered.fundamental_metrics().is_none(),
         "unreadable payload must not be merged into state"
     );
-    assert!(recovered.market_sentiment.is_some());
-    assert!(recovered.macro_news.is_some());
-    assert!(recovered.technical_indicators.is_some());
+    assert!(recovered.market_sentiment().is_some());
+    assert!(recovered.macro_news().is_some());
+    assert!(recovered.technical_indicators().is_some());
 }
 
 #[tokio::test]
@@ -973,12 +973,12 @@ async fn analyst_sync_honours_restricted_required_inputs_without_phantom_failure
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     // Active analysts populated
-    assert!(recovered.fundamental_metrics.is_some());
-    assert!(recovered.macro_news.is_some());
+    assert!(recovered.fundamental_metrics().is_some());
+    assert!(recovered.macro_news().is_some());
     // Inactive analysts must stay None — they were never merged because the
     // registry-driven sync only processes ids in the active set.
-    assert!(recovered.market_sentiment.is_none());
-    assert!(recovered.technical_indicators.is_none());
+    assert!(recovered.market_sentiment().is_none());
+    assert!(recovered.technical_indicators().is_none());
     // Token-usage phase should have exactly two entries (one per active id).
     let phase = recovered
         .token_usage
@@ -1952,8 +1952,7 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     let derived = recovered
-        .derived_valuation
-        .as_ref()
+        .derived_valuation()
         .expect("derived_valuation must be Some after AnalystSyncTask runs");
     assert!(
         matches!(derived.scenario, ScenarioValuation::NotAssessed { .. }),
@@ -2136,8 +2135,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     let derived = recovered
-        .derived_valuation
-        .as_ref()
+        .derived_valuation()
         .expect("derived_valuation must be Some after AnalystSyncTask runs");
 
     match &derived.scenario {
@@ -2161,6 +2159,199 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             assert!((peg.peg_ratio - 2.586206896551724).abs() < 0.01);
         }
         other => panic!("expected CorporateEquity valuation, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
+    use std::time::Duration;
+
+    use crate::{state::AssetShape, valuation::ValuatorId};
+    use yfinance_rs::{
+        analysis::EarningsTrendRow,
+        fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
+        profile::Profile,
+    };
+
+    fn company_profile() -> Profile {
+        serde_json::from_str(
+            r#"{"Company":{"name":"Test Corp","sector":null,"industry":null,"website":null,"address":null,"summary":null,"isin":null}}"#,
+        )
+        .unwrap()
+    }
+
+    fn trailing_cashflow_rows_with_fcf() -> Vec<CashflowRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"2025Q4","operating_cashflow":{"amount":"1200000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}},
+                {"period":"2025Q3","operating_cashflow":{"amount":"1100000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"900000000","currency":"USD"},"net_income":{"amount":"850000000","currency":"USD"}},
+                {"period":"2025Q2","operating_cashflow":{"amount":"1300000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"1100000000","currency":"USD"},"net_income":{"amount":"950000000","currency":"USD"}},
+                {"period":"2025Q1","operating_cashflow":{"amount":"1000000000","currency":"USD"},"capital_expenditures":{"amount":"-200000000","currency":"USD"},"free_cash_flow":{"amount":"800000000","currency":"USD"},"net_income":{"amount":"800000000","currency":"USD"}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    fn balance_sheet_rows_with_shares() -> Vec<BalanceSheetRow> {
+        serde_json::from_str(
+            r#"[{"period":"2025Q4","total_assets":{"amount":"5000000000","currency":"USD"},"total_liabilities":{"amount":"2000000000","currency":"USD"},"total_equity":{"amount":"3000000000","currency":"USD"},"cash":{"amount":"500000000","currency":"USD"},"long_term_debt":{"amount":"1000000000","currency":"USD"},"shares_outstanding":1000000000}]"#,
+        )
+        .unwrap()
+    }
+
+    fn trailing_income_statement_rows() -> Vec<IncomeStatementRow> {
+        serde_json::from_str(
+            r#"[
+                {"period":"2025Q4","total_revenue":{"amount":"4000000000","currency":"USD"},"gross_profit":{"amount":"1800000000","currency":"USD"},"operating_income":{"amount":"1200000000","currency":"USD"},"net_income":{"amount":"900000000","currency":"USD"}},
+                {"period":"2025Q3","total_revenue":{"amount":"3900000000","currency":"USD"},"gross_profit":{"amount":"1750000000","currency":"USD"},"operating_income":{"amount":"1100000000","currency":"USD"},"net_income":{"amount":"850000000","currency":"USD"}},
+                {"period":"2025Q2","total_revenue":{"amount":"4100000000","currency":"USD"},"gross_profit":{"amount":"1850000000","currency":"USD"},"operating_income":{"amount":"1300000000","currency":"USD"},"net_income":{"amount":"950000000","currency":"USD"}},
+                {"period":"2025Q1","total_revenue":{"amount":"3800000000","currency":"USD"},"gross_profit":{"amount":"1700000000","currency":"USD"},"operating_income":{"amount":"1000000000","currency":"USD"},"net_income":{"amount":"800000000","currency":"USD"}}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    fn quarterly_shares() -> Vec<ShareCount> {
+        serde_json::from_str(
+            r#"[
+                {"date":1735689600,"shares":1000000000},
+                {"date":1743465600,"shares":1000000000}
+            ]"#,
+        )
+        .unwrap()
+    }
+
+    fn earnings_trend_rows_with_forward_eps() -> Vec<EarningsTrendRow> {
+        serde_json::from_str(
+            r#"[{"period":"+1y","growth":0.08,"earnings_estimate":{"avg":{"amount":"7.25","currency":"USD"},"low":null,"high":null,"year_ago_eps":null,"num_analysts":null,"growth":0.08},"revenue_estimate":{"avg":null,"low":null,"high":null,"year_ago_revenue":null,"num_analysts":null,"growth":null},"eps_trend":{"current":null,"historical":[]},"eps_revisions":{"historical":[]}}]"#,
+        )
+        .unwrap()
+    }
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let mut state = sample_state();
+    state.current_price = Some(150.0);
+    let mut policy = resolve_runtime_policy("baseline").expect("baseline pack should resolve");
+    policy
+        .valuator_selection
+        .insert(AssetShape::CorporateEquity, ValuatorId::CryptoTokenomics);
+    state.analysis_runtime_policy = Some(policy);
+    seed_state(&ctx, &state).await;
+
+    for key in &[
+        common::ANALYST_FUNDAMENTAL,
+        common::ANALYST_SENTIMENT,
+        common::ANALYST_NEWS,
+        common::ANALYST_TECHNICAL,
+    ] {
+        ctx.set(
+            format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
+            true,
+        )
+        .await;
+    }
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let yfinance = crate::data::YFinanceClient::with_stubbed_financials(
+        crate::data::StubbedFinancialResponses {
+            profile: Some(company_profile()),
+            cashflow: Some(trailing_cashflow_rows_with_fcf()),
+            balance: Some(balance_sheet_rows_with_shares()),
+            income: Some(trailing_income_statement_rows()),
+            shares: Some(quarterly_shares()),
+            trend: Some(earnings_trend_rows_with_forward_eps()),
+            trend_error: None,
+        },
+    );
+    let task = AnalystSyncTask::with_yfinance(store, yfinance, Duration::from_millis(50));
+    let result = task.run(ctx.clone()).await.expect("task should succeed");
+
+    assert_eq!(result.next_action, NextAction::Continue);
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    let derived = recovered
+        .derived_valuation()
+        .expect("derived_valuation must be Some after AnalystSyncTask runs");
+
+    assert_eq!(derived.asset_shape, AssetShape::CorporateEquity);
+    match &derived.scenario {
+        ScenarioValuation::NotAssessed { reason } => {
+            assert_eq!(reason, "no_valuator_selected");
+        }
+        other => panic!("expected NotAssessed when no valuator is selected, got {other:?}"),
     }
 }
 

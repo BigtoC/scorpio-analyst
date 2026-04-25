@@ -196,10 +196,10 @@ async fn integration_one_analyst_failure_pipeline_continues() {
     assert_eq!(result.next_action, NextAction::Continue);
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
-    assert!(recovered.fundamental_metrics.is_none());
-    assert!(recovered.market_sentiment.is_some());
-    assert!(recovered.macro_news.is_some());
-    assert!(recovered.technical_indicators.is_some());
+    assert!(recovered.fundamental_metrics().is_none());
+    assert!(recovered.market_sentiment().is_some());
+    assert!(recovered.macro_news().is_some());
+    assert!(recovered.technical_indicators().is_some());
 }
 
 #[tokio::test]

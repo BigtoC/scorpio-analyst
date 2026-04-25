@@ -640,15 +640,19 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     symbol: None,
                     target_date,
                     current_price: None,
-                    market_volatility: None,
-                    fundamental_metrics,
-                    technical_indicators,
-                    market_sentiment,
-                    macro_news,
-                    evidence_fundamental,
-                    evidence_technical,
-                    evidence_sentiment,
-                    evidence_news,
+                    equity: Some(EquityState {
+                        fundamental_metrics,
+                        technical_indicators,
+                        market_sentiment,
+                        macro_news,
+                        evidence_fundamental,
+                        evidence_technical,
+                        evidence_sentiment,
+                        evidence_news,
+                        market_volatility: None,
+                        derived_valuation: None,
+                    }),
+                    crypto: None,
                     enrichment_event_news,
                     enrichment_consensus,
                     data_coverage,
@@ -664,7 +668,6 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     prior_thesis,
                     current_thesis,
                     token_usage,
-                    derived_valuation: None,
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
                 }
@@ -766,7 +769,7 @@ fn trading_state_without_derived_valuation_deserializes_as_none() {
         .expect("json is object")
         .remove("derived_valuation");
     let back: TradingState = serde_json::from_value(json).expect("old snapshot must deserialize");
-    assert!(back.derived_valuation.is_none());
+    assert!(back.derived_valuation().is_none());
     assert_eq!(back.asset_symbol, "AAPL");
 }
 
@@ -856,4 +859,156 @@ fn trading_state_without_analysis_pack_name_deserializes_as_none() {
         "pre-pack snapshots should have analysis_pack_name = None"
     );
     assert_eq!(back.asset_symbol, "AAPL");
+}
+
+#[test]
+fn trading_state_with_legacy_root_equity_fields_deserializes_into_equity_substate() {
+    let mut json = serde_json::to_value(TradingState::new("AAPL", "2026-03-15"))
+        .expect("serialize baseline state");
+    let object = json.as_object_mut().expect("json is object");
+    object.insert("current_price".to_owned(), serde_json::json!(185.5));
+    object.insert(
+        "fundamental_metrics".to_owned(),
+        serde_json::json!({
+            "revenue_growth_pct": 12.5,
+            "pe_ratio": 24.5,
+            "eps": 6.05,
+            "current_ratio": 1.8,
+            "debt_to_equity": 0.42,
+            "gross_margin": 55.0,
+            "net_income": 123456789.0,
+            "insider_transactions": [],
+            "summary": "legacy fundamentals"
+        }),
+    );
+    object.insert(
+        "technical_indicators".to_owned(),
+        serde_json::json!({
+            "rsi": 55.0,
+            "macd": null,
+            "atr": 2.1,
+            "sma_20": 180.0,
+            "sma_50": 175.0,
+            "ema_12": 181.0,
+            "ema_26": 179.0,
+            "bollinger_upper": 190.0,
+            "bollinger_lower": 170.0,
+            "support_level": 176.0,
+            "resistance_level": 188.0,
+            "volume_avg": 1234567.0,
+            "summary": "legacy technical"
+        }),
+    );
+    object.insert(
+        "market_sentiment".to_owned(),
+        serde_json::json!({
+            "overall_score": 0.72,
+            "source_breakdown": [],
+            "engagement_peaks": [],
+            "summary": "legacy sentiment"
+        }),
+    );
+    object.insert(
+        "macro_news".to_owned(),
+        serde_json::json!({
+            "articles": [],
+            "macro_events": [],
+            "summary": "legacy news"
+        }),
+    );
+    object.insert(
+        "market_volatility".to_owned(),
+        serde_json::json!({
+            "vix_level": 19.76,
+            "vix_sma_20": 22.03,
+            "vix_trend": "falling",
+            "vix_regime": "normal",
+            "fetched_at": "2026-03-15"
+        }),
+    );
+    object.insert(
+        "derived_valuation".to_owned(),
+        serde_json::json!({
+            "asset_shape": "CorporateEquity",
+            "scenario": {
+                "corporate_equity": {
+                    "dcf": {
+                        "free_cash_flow": 1000000.0,
+                        "discount_rate_pct": 10.0,
+                        "intrinsic_value_per_share": 190.0
+                    },
+                    "ev_ebitda": null,
+                    "forward_pe": null,
+                    "peg": null
+                }
+            }
+        }),
+    );
+
+    let back: TradingState =
+        serde_json::from_value(json).expect("legacy root-shaped snapshot must deserialize");
+
+    assert_eq!(back.asset_symbol, "AAPL");
+    assert_eq!(
+        back.fundamental_metrics().map(|data| data.summary.as_str()),
+        Some("legacy fundamentals")
+    );
+    assert_eq!(
+        back.technical_indicators()
+            .map(|data| data.summary.as_str()),
+        Some("legacy technical")
+    );
+    assert_eq!(
+        back.market_sentiment().map(|data| data.summary.as_str()),
+        Some("legacy sentiment")
+    );
+    assert_eq!(
+        back.macro_news().map(|data| data.summary.as_str()),
+        Some("legacy news")
+    );
+    assert_eq!(
+        back.market_volatility()
+            .map(|data| data.fetched_at.as_str()),
+        Some("2026-03-15")
+    );
+    assert!(back.derived_valuation().is_some());
+}
+
+#[test]
+fn trading_state_prefers_equity_substate_when_both_new_and_legacy_fields_are_present() {
+    let mut state = TradingState::new("AAPL", "2026-03-15");
+    state.set_fundamental_metrics(FundamentalData {
+        revenue_growth_pct: Some(99.0),
+        pe_ratio: None,
+        eps: None,
+        current_ratio: None,
+        debt_to_equity: None,
+        gross_margin: None,
+        net_income: None,
+        insider_transactions: vec![],
+        summary: "new equity payload".to_owned(),
+    });
+    let mut json = serde_json::to_value(state).expect("serialize current state");
+    json.as_object_mut().expect("json is object").insert(
+        "fundamental_metrics".to_owned(),
+        serde_json::json!({
+            "revenue_growth_pct": 12.5,
+            "pe_ratio": 24.5,
+            "eps": 6.05,
+            "current_ratio": 1.8,
+            "debt_to_equity": 0.42,
+            "gross_margin": 55.0,
+            "net_income": 123456789.0,
+            "insider_transactions": [],
+            "summary": "legacy root payload"
+        }),
+    );
+
+    let back: TradingState =
+        serde_json::from_value(json).expect("mixed-shape payload must deserialize");
+
+    assert_eq!(
+        back.fundamental_metrics().map(|data| data.summary.as_str()),
+        Some("new equity payload")
+    );
 }

@@ -9,7 +9,25 @@ use crate::{
 
 use super::SnapshotStore;
 
-const THESIS_MEMORY_SCHEMA_VERSION: i64 = 1;
+/// Active thesis-memory schema version.
+///
+/// # v2 (Phase 6 reshape)
+///
+/// `TradingState` moved equity-only fields (`fundamental_metrics`,
+/// `evidence_*`, `market_volatility`, `derived_valuation`, …) off the root
+/// and into a new `equity: Option<EquityState>` sub-state. v1 snapshots
+/// have those fields at the root, so they cannot be deserialized under the
+/// new shape — the lookup below skips any row whose `schema_version` does
+/// not equal the active version.
+///
+/// # Release note
+///
+/// Bumping this version is a one-time breaking change: existing
+/// thesis-memory continuity is reset; prior-run theses will not be carried
+/// forward. No SQL migration runs — pre-v2 rows remain on disk as
+/// unsupported. Developers may optionally delete
+/// `~/.scorpio-analyst/phase_snapshots.db` for a clean slate.
+pub(crate) const THESIS_MEMORY_SCHEMA_VERSION: i64 = 2;
 
 impl SnapshotStore {
     /// Load the most recent prior thesis for a canonical symbol.
@@ -58,11 +76,16 @@ impl SnapshotStore {
 
         for (schema_version, state_json) in rows {
             let schema_version = schema_version.unwrap_or(0);
-            if schema_version > THESIS_MEMORY_SCHEMA_VERSION {
+            // Same-version-only after the Phase 6 bump: incompatible rows are
+            // skipped *before* deserialization so a v1 snapshot (which would
+            // fail to decode into the new `equity`-shaped `TradingState`)
+            // never surfaces as a fallback thesis.
+            if schema_version != THESIS_MEMORY_SCHEMA_VERSION {
                 debug!(
                     symbol,
                     schema_version,
-                    "prior-thesis snapshot uses unsupported schema version; skipping"
+                    active = THESIS_MEMORY_SCHEMA_VERSION,
+                    "prior-thesis snapshot schema version mismatch; skipping"
                 );
                 continue;
             }

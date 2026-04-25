@@ -387,7 +387,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         .expect("fanout replacement must succeed");
 
     let mut initial_state = TradingState::new("AAPL", "2026-03-20");
-    initial_state.evidence_fundamental = Some(EvidenceRecord {
+    initial_state.set_evidence_fundamental(EvidenceRecord {
         kind: EvidenceKind::Fundamental,
         payload: FundamentalData {
             revenue_growth_pct: None,
@@ -410,30 +410,28 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         }],
         quality_flags: vec![],
     });
-    initial_state.evidence_technical =
-        initial_state
-            .evidence_fundamental
-            .clone()
-            .map(|record| EvidenceRecord {
-                kind: EvidenceKind::Technical,
-                payload: crate::state::TechnicalData {
-                    rsi: Some(1.0),
-                    macd: None,
-                    atr: None,
-                    sma_20: None,
-                    sma_50: None,
-                    ema_12: None,
-                    ema_26: None,
-                    bollinger_upper: None,
-                    bollinger_lower: None,
-                    support_level: None,
-                    resistance_level: None,
-                    volume_avg: None,
-                    summary: record.payload.summary,
-                },
-                sources: record.sources,
-                quality_flags: record.quality_flags,
-            });
+    if let Some(fund) = initial_state.evidence_fundamental().cloned() {
+        initial_state.set_evidence_technical(EvidenceRecord {
+            kind: EvidenceKind::Technical,
+            payload: crate::state::TechnicalData {
+                rsi: Some(1.0),
+                macd: None,
+                atr: None,
+                sma_20: None,
+                sma_50: None,
+                ema_12: None,
+                ema_26: None,
+                bollinger_upper: None,
+                bollinger_lower: None,
+                support_level: None,
+                resistance_level: None,
+                volume_avg: None,
+                summary: fund.payload.summary,
+            },
+            sources: fund.sources,
+            quality_flags: fund.quality_flags,
+        });
+    }
     initial_state.data_coverage = Some(DataCoverageReport {
         required_inputs: vec!["stale".to_owned()],
         missing_inputs: vec![],
@@ -447,7 +445,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         .await
         .expect("pipeline must succeed with one missing analyst input");
 
-    assert!(final_state.evidence_technical.is_none());
+    assert!(final_state.evidence_technical().is_none());
     assert_eq!(
         final_state
             .data_coverage

@@ -22,10 +22,12 @@ use crate::{
     data::{FinnhubClient, FredClient, YFinanceClient},
     providers::factory::CompletionModelHandle,
     state::{
-        AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, NewsData, PhaseTokenUsage, ProvenanceSummary, SentimentData,
-        TechnicalData, TradingState, derive_valuation,
+        AgentTokenUsage, AssetShape, DataCoverageReport, DerivedValuation, EvidenceKind,
+        EvidenceRecord, EvidenceSource, FundamentalData, NewsData, PhaseTokenUsage,
+        ProvenanceSummary, ScenarioValuation, SentimentData, TechnicalData, TradingState,
+        derive_valuation,
     },
+    valuation::ValuatorRegistry,
     workflow::{
         context_bridge::{
             deserialize_state_from_context, read_prefixed_result, serialize_state_to_context,
@@ -102,10 +104,10 @@ fn active_analyst_ids(state: &TradingState) -> Vec<AnalystId> {
 
 fn input_missing(state: &TradingState, input: &str) -> bool {
     match input {
-        "fundamentals" => state.evidence_fundamental.is_none(),
-        "sentiment" => state.evidence_sentiment.is_none(),
-        "news" => state.evidence_news.is_none(),
-        "technical" => state.evidence_technical.is_none(),
+        "fundamentals" => state.evidence_fundamental().is_none(),
+        "sentiment" => state.evidence_sentiment().is_none(),
+        "news" => state.evidence_news().is_none(),
+        "technical" => state.evidence_technical().is_none(),
         _ => false,
     }
 }
@@ -157,8 +159,7 @@ impl Task for FundamentalAnalystTask {
         let analyst = FundamentalAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
         );
 
@@ -244,8 +245,7 @@ impl Task for SentimentAnalystTask {
         let analyst = SentimentAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
             cached_news_opt,
         );
@@ -335,8 +335,7 @@ impl Task for NewsAnalystTask {
             self.handle.clone(),
             self.finnhub.clone(),
             self.fred.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
             cached_news_opt,
         );
@@ -420,8 +419,7 @@ impl Task for TechnicalAnalystTask {
         let analyst = TechnicalAnalyst::new(
             self.handle.clone(),
             self.yfinance.clone(),
-            state.asset_symbol.clone(),
-            state.target_date.clone(),
+            &state,
             &self.llm_config,
         );
 
@@ -622,6 +620,64 @@ async fn merge_analyst_result<T, F, G>(
     }
 }
 
+fn no_valuator_selected(asset_shape: AssetShape) -> DerivedValuation {
+    DerivedValuation {
+        asset_shape,
+        scenario: ScenarioValuation::NotAssessed {
+            reason: "no_valuator_selected".to_owned(),
+        },
+    }
+}
+
+fn derive_runtime_valuation(
+    state: &TradingState,
+    valuation_inputs: &ValuationInputs,
+    current_price: Option<f64>,
+) -> DerivedValuation {
+    let provisional = derive_valuation(
+        valuation_inputs.profile.clone(),
+        valuation_inputs.cashflow.as_deref(),
+        valuation_inputs.balance.as_deref(),
+        valuation_inputs.income.as_deref(),
+        valuation_inputs.shares.as_deref(),
+        valuation_inputs.trend.as_deref(),
+        current_price,
+    );
+
+    let Some(policy) = state.analysis_runtime_policy.as_ref() else {
+        return provisional;
+    };
+
+    let Some(valuator_id) = policy
+        .valuator_selection
+        .get(&provisional.asset_shape)
+        .copied()
+    else {
+        return match provisional.asset_shape {
+            AssetShape::Fund | AssetShape::Unknown => provisional,
+            _ => no_valuator_selected(provisional.asset_shape),
+        };
+    };
+
+    let registry = ValuatorRegistry::equity_baseline();
+    let Some(valuator) = registry.get(valuator_id) else {
+        return no_valuator_selected(provisional.asset_shape);
+    };
+
+    valuator.assess(
+        crate::valuation::ValuationInputs {
+            profile: valuation_inputs.profile.clone(),
+            cashflow: valuation_inputs.cashflow.as_deref(),
+            balance: valuation_inputs.balance.as_deref(),
+            income: valuation_inputs.income.as_deref(),
+            shares: valuation_inputs.shares.as_deref(),
+            earnings_trend: valuation_inputs.trend.as_deref(),
+            current_price,
+        },
+        &provisional.asset_shape,
+    )
+}
+
 #[async_trait]
 impl Task for AnalystSyncTask {
     fn id(&self) -> &str {
@@ -654,9 +710,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_FUNDAMENTAL,
-                |state, data| state.fundamental_metrics = Some(data),
+                |state, data| state.set_fundamental_metrics(data),
                 |state, data| {
-                    state.evidence_fundamental = Some(EvidenceRecord {
+                    state.set_evidence_fundamental(EvidenceRecord {
                         kind: EvidenceKind::Fundamental,
                         payload: data,
                         sources: vec![stage1_source(
@@ -675,9 +731,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_SENTIMENT,
-                |state, data| state.market_sentiment = Some(data),
+                |state, data| state.set_market_sentiment(data),
                 |state, data| {
-                    state.evidence_sentiment = Some(EvidenceRecord {
+                    state.set_evidence_sentiment(EvidenceRecord {
                         kind: EvidenceKind::Sentiment,
                         payload: data,
                         sources: vec![stage1_source(
@@ -696,9 +752,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_NEWS,
-                |state, data| state.macro_news = Some(data),
+                |state, data| state.set_macro_news(data),
                 |state, data| {
-                    state.evidence_news = Some(EvidenceRecord {
+                    state.set_evidence_news(EvidenceRecord {
                         kind: EvidenceKind::News,
                         payload: data,
                         sources: vec![
@@ -717,9 +773,9 @@ impl Task for AnalystSyncTask {
                 &mut state,
                 &mut failures,
                 ANALYST_TECHNICAL,
-                |state, data| state.technical_indicators = Some(data),
+                |state, data| state.set_technical_indicators(data),
                 |state, data| {
-                    state.evidence_technical = Some(EvidenceRecord {
+                    state.set_evidence_technical(EvidenceRecord {
                         kind: EvidenceKind::Technical,
                         payload: data,
                         sources: vec![stage1_source(PROVIDER_YFINANCE, vec!["ohlcv".to_owned()])],
@@ -763,16 +819,16 @@ impl Task for AnalystSyncTask {
 
         // Derive ProvenanceSummary from providers attached to present evidence records.
         let mut providers: Vec<String> = Vec::new();
-        if let Some(rec) = &state.evidence_fundamental {
+        if let Some(rec) = state.evidence_fundamental() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
-        if let Some(rec) = &state.evidence_sentiment {
+        if let Some(rec) = state.evidence_sentiment() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
-        if let Some(rec) = &state.evidence_news {
+        if let Some(rec) = state.evidence_news() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
-        if let Some(rec) = &state.evidence_technical {
+        if let Some(rec) = state.evidence_technical() {
             providers.extend(rec.sources.iter().map(|s| s.provider.clone()));
         }
         providers.sort_unstable();
@@ -790,19 +846,15 @@ impl Task for AnalystSyncTask {
             fetch_valuation_inputs(&self.yfinance, &symbol, self.valuation_fetch_timeout).await;
         let current_price = state.current_price;
 
-        state.derived_valuation = Some(derive_valuation(
-            valuation_inputs.profile,
-            valuation_inputs.cashflow.as_deref(),
-            valuation_inputs.balance.as_deref(),
-            valuation_inputs.income.as_deref(),
-            valuation_inputs.shares.as_deref(),
-            valuation_inputs.trend.as_deref(),
+        state.set_derived_valuation(derive_runtime_valuation(
+            &state,
+            &valuation_inputs,
             current_price,
         ));
 
         info!(
             task = "analyst_sync",
-            asset_shape = ?state.derived_valuation.as_ref().map(|d| &d.asset_shape),
+            asset_shape = ?state.derived_valuation().map(|d| &d.asset_shape),
             "deterministic valuation derived"
         );
 

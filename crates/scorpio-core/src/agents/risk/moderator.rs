@@ -25,7 +25,7 @@ use super::common::{
 };
 
 /// System prompt for the Risk Moderator, from `docs/prompts.md` §4.
-const RISK_MODERATOR_SYSTEM_PROMPT: &str = "\
+pub(super) const RISK_MODERATOR_SYSTEM_PROMPT: &str = "\
 You are the Risk Moderator for {ticker} as of {current_date}.
 Your role is to synthesize the three risk perspectives into a concise plain-text discussion summary for downstream review.
 
@@ -83,7 +83,13 @@ impl RiskModerator {
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         Ok(Self {
-            core: RiskAgentCore::new(handle, RISK_MODERATOR_SYSTEM_PROMPT, state, llm_config)?,
+            core: RiskAgentCore::new(
+                handle,
+                RISK_MODERATOR_SYSTEM_PROMPT,
+                |bundle| bundle.risk_moderator.as_ref(),
+                state,
+                llm_config,
+            )?,
         })
     }
 
@@ -240,11 +246,8 @@ mod tests {
             symbol: None,
             target_date: "2026-03-15".to_owned(),
             current_price: None,
-            market_volatility: None,
-            fundamental_metrics: None,
-            technical_indicators: None,
-            market_sentiment: None,
-            macro_news: None,
+            equity: None,
+            crypto: None,
             debate_history: Vec::new(),
             consensus_summary: None,
             trader_proposal: Some(TradeProposal {
@@ -276,10 +279,6 @@ mod tests {
                 flags_violation: true,
             }),
             final_execution_status: None,
-            evidence_fundamental: None,
-            evidence_technical: None,
-            evidence_sentiment: None,
-            evidence_news: None,
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
             data_coverage: None,
@@ -287,7 +286,6 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: TokenUsageTracker::default(),
-            derived_valuation: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
         }

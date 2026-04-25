@@ -17,6 +17,7 @@ mod bearish;
 mod bullish;
 mod common;
 mod moderator;
+mod prompt;
 
 pub use bearish::BearishResearcher;
 pub use bullish::BullishResearcher;
@@ -344,11 +345,8 @@ mod tests {
             symbol: None,
             target_date: "2026-03-15".to_owned(),
             current_price: None,
-            market_volatility: None,
-            fundamental_metrics: None,
-            technical_indicators: None,
-            market_sentiment: None,
-            macro_news: None,
+            equity: None,
+            crypto: None,
             debate_history: Vec::new(),
             consensus_summary: None,
             trader_proposal: None,
@@ -357,10 +355,6 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
-            evidence_fundamental: None,
-            evidence_technical: None,
-            evidence_sentiment: None,
-            evidence_news: None,
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
             data_coverage: None,
@@ -368,7 +362,6 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: TokenUsageTracker::default(),
-            derived_valuation: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
         }

@@ -9,7 +9,7 @@ use scorpio_core::state::{
 pub(crate) fn write_scenario_valuation(out: &mut String, state: &TradingState) {
     super::final_report::section_header(out, "Scenario Valuation");
 
-    match state.derived_valuation.as_ref() {
+    match state.derived_valuation() {
         None => {
             let _ = writeln!(out, "Not computed for this run.");
         }
@@ -102,7 +102,7 @@ mod tests {
 
     fn state_with_valuation(dv: DerivedValuation) -> TradingState {
         let mut state = TradingState::new("AAPL", "2026-04-03");
-        state.derived_valuation = Some(dv);
+        state.set_derived_valuation(dv);
         state
     }
 

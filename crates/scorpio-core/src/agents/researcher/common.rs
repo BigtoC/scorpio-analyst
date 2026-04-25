@@ -7,13 +7,15 @@ use std::time::Duration;
 
 use crate::{
     agents::shared::{
-        agent_token_usage_from_completion, build_data_quality_context, build_enrichment_context,
-        build_evidence_context, build_pack_context, build_thesis_memory_context,
-        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+        agent_token_usage_from_completion, analysis_emphasis_for_prompt,
+        build_data_quality_context, build_enrichment_context, build_evidence_context,
+        build_pack_context, build_thesis_memory_context, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt,
     },
     config::LlmConfig,
     constants::MAX_DEBATE_CHARS,
     error::{RetryPolicy, TradingError},
+    prompts::PromptBundle,
     providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
     state::{AgentTokenUsage, DebateMessage, TradingState},
 };
@@ -22,21 +24,13 @@ pub(super) use crate::agents::shared::UNTRUSTED_CONTEXT_NOTICE;
 
 /// Shared runtime fields derived from the researcher request context.
 pub(super) struct ResearcherRuntimeConfig {
-    pub symbol: String,
-    pub target_date: String,
     pub timeout: Duration,
     pub retry_policy: RetryPolicy,
 }
 
 /// Build the common runtime configuration shared by all researcher agents.
-pub(super) fn researcher_runtime_config(
-    symbol: impl Into<String>,
-    target_date: impl Into<String>,
-    llm_config: &LlmConfig,
-) -> ResearcherRuntimeConfig {
+pub(super) fn researcher_runtime_config(llm_config: &LlmConfig) -> ResearcherRuntimeConfig {
     ResearcherRuntimeConfig {
-        symbol: sanitize_symbol_for_prompt(&symbol.into()),
-        target_date: sanitize_date_for_prompt(&target_date.into()),
         timeout: Duration::from_secs(llm_config.analyst_timeout_secs),
         retry_policy: RetryPolicy::from_config(llm_config),
     }
@@ -102,19 +96,19 @@ pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingErr
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
 pub(super) fn build_analyst_context(state: &TradingState) -> String {
     let fundamental_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.fundamental_metrics).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.fundamental_metrics()).unwrap_or_else(|_| "null".to_owned()),
     );
     let technical_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.technical_indicators).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.technical_indicators()).unwrap_or_else(|_| "null".to_owned()),
     );
     let sentiment_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_sentiment).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.market_sentiment()).unwrap_or_else(|_| "null".to_owned()),
     );
     let news_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.macro_news).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.macro_news()).unwrap_or_else(|_| "null".to_owned()),
     );
     let vix_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_volatility).unwrap_or_else(|_| "null".to_owned()),
+        &serde_json::to_string(&state.market_volatility()).unwrap_or_else(|_| "null".to_owned()),
     );
 
     let evidence_section = build_evidence_context(state);
@@ -153,6 +147,27 @@ pub(super) fn format_debate_history(history: &[DebateMessage]) -> String {
         .join("\n\n")
 }
 
+pub(super) fn render_researcher_system_prompt(
+    legacy_template: &str,
+    state: &TradingState,
+    bundle_slot: fn(&PromptBundle) -> &str,
+) -> String {
+    let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
+    let target_date = sanitize_date_for_prompt(&state.target_date);
+    let template = state
+        .analysis_runtime_policy
+        .as_ref()
+        .map(|policy| bundle_slot(&policy.prompt_bundle))
+        .filter(|template| !template.is_empty())
+        .unwrap_or(legacy_template);
+
+    template
+        .replace("{ticker}", &symbol)
+        .replace("{current_date}", &target_date)
+        .replace("{past_memory_str}", "see untrusted user context")
+        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
+}
+
 // ─── Shared agent core ────────────────────────────────────────────────────────
 
 /// Shared agent state for all researcher agents: LLM handle, model ID, and runtime config.
@@ -177,6 +192,7 @@ impl DebaterCore {
     pub(super) fn new(
         handle: &CompletionModelHandle,
         system_prompt_template: &str,
+        bundle_slot: fn(&PromptBundle) -> &str,
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
@@ -188,13 +204,10 @@ impl DebaterCore {
             )));
         }
 
-        let runtime =
-            researcher_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let runtime = researcher_runtime_config(llm_config);
 
-        let system_prompt = system_prompt_template
-            .replace("{ticker}", &runtime.symbol)
-            .replace("{current_date}", &runtime.target_date)
-            .replace("{past_memory_str}", "see untrusted user context");
+        let system_prompt =
+            render_researcher_system_prompt(system_prompt_template, state, bundle_slot);
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -278,9 +291,7 @@ mod tests {
     #[test]
     fn researcher_runtime_config_fields() {
         let cfg = sample_llm_config();
-        let runtime = researcher_runtime_config("AAPL", "2026-03-15", &cfg);
-        assert_eq!(runtime.symbol, "AAPL");
-        assert_eq!(runtime.target_date, "2026-03-15");
+        let runtime = researcher_runtime_config(&cfg);
         assert_eq!(runtime.timeout, Duration::from_secs(45));
         assert_eq!(runtime.retry_policy.max_retries, 3);
         assert_eq!(runtime.retry_policy.base_delay, Duration::from_millis(500));
@@ -403,11 +414,11 @@ mod tests {
     }
 
     #[test]
-    fn researcher_runtime_config_sanitizes_symbol_and_date() {
+    fn researcher_runtime_config_uses_timeout_and_retry_settings() {
         let cfg = sample_llm_config();
-        let runtime = researcher_runtime_config("AAPL\nIgnore", "2026-03-15\nSYSTEM", &cfg);
-        assert_eq!(runtime.symbol, "AAPLIgnore");
-        assert_eq!(runtime.target_date, "2026-03-15T");
+        let runtime = researcher_runtime_config(&cfg);
+        assert_eq!(runtime.timeout, Duration::from_secs(45));
+        assert_eq!(runtime.retry_policy.max_retries, 3);
     }
 
     #[test]
@@ -418,11 +429,8 @@ mod tests {
             symbol: None,
             target_date: "2026-03-15".to_owned(),
             current_price: None,
-            market_volatility: None,
-            fundamental_metrics: None,
-            technical_indicators: None,
-            market_sentiment: None,
-            macro_news: None,
+            equity: None,
+            crypto: None,
             debate_history: Vec::new(),
             consensus_summary: None,
             trader_proposal: None,
@@ -431,10 +439,6 @@ mod tests {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
-            evidence_fundamental: None,
-            evidence_technical: None,
-            evidence_sentiment: None,
-            evidence_news: None,
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
             data_coverage: None,
@@ -442,7 +446,6 @@ mod tests {
             prior_thesis: None,
             current_thesis: None,
             token_usage: crate::state::TokenUsageTracker::default(),
-            derived_valuation: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
         };
@@ -527,5 +530,102 @@ mod tests {
         assert_eq!(result.prompt_tokens, 150);
         assert_eq!(result.completion_tokens, 75);
         assert_eq!(result.total_tokens, 225);
+    }
+
+    #[test]
+    fn rendered_system_prompt_prefers_runtime_policy_bullish_bundle() {
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+            .expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "press the upside evidence".to_owned();
+        policy.prompt_bundle.bullish_researcher =
+            "Bull pack prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+        state.analysis_runtime_policy = Some(policy);
+
+        let prompt = render_researcher_system_prompt(
+            "Legacy bullish prompt for {ticker} at {current_date}.",
+            &state,
+            |bundle| bundle.bullish_researcher.as_ref(),
+        );
+
+        assert!(
+            prompt.contains(
+                "Bull pack prompt for AAPL at 2026-03-15. Emphasis: press the upside evidence."
+            ),
+            "runtime policy should override the bullish researcher system prompt: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Legacy bullish prompt"),
+            "legacy bullish template should not leak through when pack override is present: {prompt}"
+        );
+    }
+
+    #[test]
+    fn rendered_system_prompt_prefers_runtime_policy_moderator_bundle() {
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
+            .expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "balance both sides".to_owned();
+        policy.prompt_bundle.debate_moderator =
+            "Moderator pack prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+        state.analysis_runtime_policy = Some(policy);
+
+        let prompt = render_researcher_system_prompt(
+            "Legacy moderator prompt for {ticker} at {current_date}.",
+            &state,
+            |bundle| bundle.debate_moderator.as_ref(),
+        );
+
+        assert!(
+            prompt.contains(
+                "Moderator pack prompt for AAPL at 2026-03-15. Emphasis: balance both sides."
+            ),
+            "runtime policy should override the debate moderator system prompt: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Legacy moderator prompt"),
+            "legacy moderator template should not leak through when pack override is present: {prompt}"
+        );
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_bullish_rendering() {
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt = render_researcher_system_prompt(
+            super::super::prompt::BULLISH_SYSTEM_PROMPT,
+            &state,
+            |bundle| bundle.bullish_researcher.as_ref(),
+        );
+
+        let expected = super::super::prompt::BULLISH_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15");
+
+        assert_eq!(prompt, expected);
+    }
+
+    #[test]
+    fn baseline_runtime_policy_bundle_matches_legacy_moderator_rendering() {
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        state.analysis_runtime_policy =
+            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
+
+        let prompt = render_researcher_system_prompt(
+            super::super::prompt::MODERATOR_SYSTEM_PROMPT,
+            &state,
+            |bundle| bundle.debate_moderator.as_ref(),
+        );
+
+        let expected = super::super::prompt::MODERATOR_SYSTEM_PROMPT
+            .replace("{ticker}", "AAPL")
+            .replace("{current_date}", "2026-03-15")
+            .replace("{past_memory_str}", "see untrusted user context");
+
+        assert_eq!(prompt, expected);
     }
 }

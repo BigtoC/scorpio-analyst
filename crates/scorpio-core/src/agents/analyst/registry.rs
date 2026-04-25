@@ -107,6 +107,27 @@ impl Analyst for AnalystMetadata {
 }
 
 impl AnalystRegistry {
+    fn register_placeholder_analysts(&mut self) {
+        use super::traits::DataNeed;
+
+        self.register(Arc::new(AnalystMetadata::new(
+            AnalystId::Tokenomics,
+            vec![DataNeed::Tokenomics],
+        )));
+        self.register(Arc::new(AnalystMetadata::new(
+            AnalystId::OnChain,
+            vec![DataNeed::OnChain],
+        )));
+        self.register(Arc::new(AnalystMetadata::new(
+            AnalystId::Social,
+            vec![DataNeed::Social],
+        )));
+        self.register(Arc::new(AnalystMetadata::new(
+            AnalystId::Derivatives,
+            vec![DataNeed::Derivatives],
+        )));
+    }
+
     /// The equity-baseline analyst roster — the four analysts that ship
     /// today. Order matches `workflow/pipeline/runtime::build_graph` so
     /// baseline fan-out stays byte-identical.
@@ -130,6 +151,17 @@ impl AnalystRegistry {
             AnalystId::Technical,
             vec![DataNeed::PriceHistory],
         )));
+        reg
+    }
+
+    /// Full analyst catalog — live equity analysts plus placeholder crypto ids.
+    ///
+    /// The builder uses this so pack-declared analyst identities remain
+    /// authoritative even before every placeholder has a spawnable runtime task.
+    #[must_use]
+    pub fn all_known() -> Self {
+        let mut reg = Self::equity_baseline();
+        reg.register_placeholder_analysts();
         reg
     }
 }
@@ -194,5 +226,14 @@ mod tests {
         assert!(reg.contains(AnalystId::Sentiment));
         assert!(reg.contains(AnalystId::News));
         assert!(reg.contains(AnalystId::Technical));
+    }
+
+    #[test]
+    fn all_known_contains_crypto_placeholder_analysts() {
+        let reg = AnalystRegistry::all_known();
+        assert!(reg.contains(AnalystId::Tokenomics));
+        assert!(reg.contains(AnalystId::OnChain));
+        assert!(reg.contains(AnalystId::Social));
+        assert!(reg.contains(AnalystId::Derivatives));
     }
 }

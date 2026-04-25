@@ -210,7 +210,10 @@ mod tests {
 
         assert_eq!(original.asset_symbol, recovered.asset_symbol);
         assert_eq!(original.target_date, recovered.target_date);
-        assert_eq!(original.fundamental_metrics, recovered.fundamental_metrics);
+        assert_eq!(
+            original.fundamental_metrics(),
+            recovered.fundamental_metrics()
+        );
         assert_eq!(original.debate_history, recovered.debate_history);
     }
 
@@ -219,7 +222,7 @@ mod tests {
         let ctx = Context::new();
         let mut original = sample_state();
 
-        original.evidence_fundamental = Some(sample_evidence_fundamental());
+        original.set_evidence_fundamental(sample_evidence_fundamental());
         original.data_coverage = Some(DataCoverageReport {
             required_inputs: vec![
                 "fundamentals".to_owned(),
@@ -242,16 +245,11 @@ mod tests {
             .expect("deserialization should succeed");
 
         assert!(
-            recovered.evidence_fundamental.is_some(),
+            recovered.evidence_fundamental().is_some(),
             "evidence_fundamental must survive context round-trip"
         );
         assert_eq!(
-            recovered
-                .evidence_fundamental
-                .as_ref()
-                .unwrap()
-                .payload
-                .pe_ratio,
+            recovered.evidence_fundamental().unwrap().payload.pe_ratio,
             Some(25.0)
         );
         assert_eq!(

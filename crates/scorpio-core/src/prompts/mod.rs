@@ -8,17 +8,18 @@
 //! # Scope in this slice
 //!
 //! - [`PromptBundle`] carries one `Cow<'static, str>` per agent role — the
-//!   baseline pack populates these via `include_str!` so the zero-alloc
-//!   path remains the default; runtime-loaded packs can opt into
+//!   baseline pack now populates these via `include_str!` under
+//!   `analysis_packs/equity/prompts/` so the zero-alloc path remains the
+//!   default; runtime-loaded packs can opt into
 //!   `Cow::Owned` without touching the type.
 //! - [`templating::render`] expands `{ticker}` / `{current_date}` /
 //!   `{analysis_emphasis}` placeholders using the same `.replace()`
 //!   semantics the agent-side prompt builders use today, so extractions
 //!   stay byte-identical.
 //!
-//! Agent modules continue to embed their prompts as `const _SYSTEM_PROMPT`
-//! in this slice; migrating those reads to the bundle is the explicit
-//! Phase 4 follow-up.
+//! Agent modules still keep `const _SYSTEM_PROMPT` fallbacks for safety, but
+//! the active runtime path now prefers the pack-owned bundle slots across the
+//! analyst, researcher, trader, risk, and fund-manager agents.
 pub mod bundle;
 pub mod templating;
 

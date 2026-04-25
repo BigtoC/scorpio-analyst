@@ -10,8 +10,16 @@ use crate::{ReportContext, Reporter};
 
 /// Versioned envelope written to the JSON artifact file.
 ///
-/// `schema_version` starts at `1` and is bumped on backward-incompatible
-/// changes, matching the `THESIS_MEMORY_SCHEMA_VERSION` convention.
+/// `schema_version` is bumped on backward-incompatible changes to
+/// `trading_state`, matching the `THESIS_MEMORY_SCHEMA_VERSION` convention.
+///
+/// # v2 (Phase 6 reshape)
+///
+/// `TradingState` moved equity-only fields into `state.equity.*`. Consumers
+/// that parsed v1 artifacts via root-level `fundamental_metrics` etc. must
+/// reach through `state.equity` after this bump.
+pub const JSON_REPORT_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JsonReport {
     pub schema_version: u32,
@@ -48,7 +56,7 @@ impl Reporter for JsonReporter {
             .context("json reporter requires an output directory")?;
         let path = Self::filename(&ctx);
         let report = JsonReport {
-            schema_version: 1,
+            schema_version: JSON_REPORT_SCHEMA_VERSION,
             generated_at: ctx.finished_at,
             trading_state: (*state).clone(),
         };

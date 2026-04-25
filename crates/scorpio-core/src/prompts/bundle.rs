@@ -6,13 +6,15 @@
 //! in the plan.
 use std::borrow::Cow;
 
+use serde::{Deserialize, Serialize};
+
 /// Canonical set of prompt slots every pack fills.
 ///
 /// Each slot is the *unmodified* system-prompt template as stored in the
 /// pack's `prompts/` directory. Placeholders (`{ticker}`,
 /// `{current_date}`, `{analysis_emphasis}`) are expanded at the call site
 /// via [`super::templating::render`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptBundle {
     pub fundamental_analyst: Cow<'static, str>,
     pub sentiment_analyst: Cow<'static, str>,
@@ -71,13 +73,13 @@ impl PromptBundle {
         }
     }
 
-    /// Placeholder bundle used as the manifest default before Phase 4's
-    /// agent migration lands.
+    /// Placeholder bundle used by packs that do not yet ship prompt assets.
     ///
-    /// Every slot holds an empty string; agents still read their own
-    /// `const _SYSTEM_PROMPT` for now. Once the migration ships the
-    /// baseline pack will override this via `include_str!` on the `.md`
-    /// files under `analysis_packs/equity/prompts/`.
+    /// Every slot holds an empty string so runtime renderers fall back to the
+    /// legacy in-module prompt constants. The baseline equity pack overrides
+    /// this with extracted `.md` templates under
+    /// `analysis_packs/equity/prompts/`; stub packs can keep using
+    /// `PromptBundle::empty()` until they gain real prompt content.
     #[must_use]
     pub fn empty() -> Self {
         Self::from_static("", "", "", "", "", "", "", "", "", "", "", "", "")

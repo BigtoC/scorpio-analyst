@@ -12,8 +12,9 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::{
         agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
-        build_data_quality_prompt_rule, build_missing_data_prompt_rule,
+        build_data_quality_prompt_rule, build_missing_data_prompt_rule, sanitize_prompt_context,
     },
+    analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::TECHNICAL_ANALYST_MAX_TURNS,
     data::{GetOhlcv, OhlcvToolContext, YFinanceClient},
@@ -23,75 +24,41 @@ use crate::{
         CalculateMacd, CalculateRsi,
     },
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, TechnicalData},
+    state::{AgentTokenUsage, TechnicalData, TradingState},
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-
-/// System prompt for the Technical Analyst, adapted from `docs/prompts.md`.
-const TECHNICAL_SYSTEM_PROMPT: &str = "\
-You are the Technical Analyst for {ticker} as of {current_date}.
-Your job is to interpret tool-computed technical signals and return a `TechnicalData` JSON object.
-
-Use only the technical indicator tools bound for the run. Current runtime tools may include:
-- `get_ohlcv` — call get_ohlcv called at most once per run
-- `calculate_all_indicators`
-- `calculate_rsi`
-- `calculate_macd`
-- `calculate_atr`
-- `calculate_bollinger_bands`
-- `calculate_indicator_by_name`
-
-Important constraints:
-- Do not paste raw OHLCV candles into your response.
-- Prefer `calculate_all_indicators` when it is available.
-- If the runtime exposes only named-indicator selection, use the exact supported indicator names:
-  `close_50_sma`, `close_200_sma`, `close_10_ema`, `macd`, `macds`, `macdh`, `rsi`, `boll`, `boll_ub`, `boll_lb`, \
-  `atr`, `vwma`.
-
-Populate only these schema fields:
-- `rsi`
-- `macd` — either `null` or an object with `macd_line`, `signal_line`, and `histogram`
-- `atr`
-- `sma_20`
-- `sma_50`
-- `ema_12`
-- `ema_26`
-- `bollinger_upper`
-- `bollinger_lower`
-- `support_level`
-- `resistance_level`
-- `volume_avg`
-- `summary`
-
-Instructions:
-1. Focus on trend, momentum, volatility, and key levels instead of dumping every reading.
-2. If an indicator cannot be computed because of limited history, preserve that absence with `null` rather than \
-   guessing.
-3. Interpret tool output; do not claim you calculated indicators manually.
-4. The `macd` output field is not a scalar named-indicator value. When present, set it to an object with \
-   `macd_line`, `signal_line`, and `histogram`. If you cannot provide all three, use `null`.
-5. Some named indicators may exist for reasoning but not as dedicated output fields. For example, if `close_200_sma`, \
-   `close_10_ema`, or a scalar named-indicator value like `macd` is available, use it for reasoning only unless you can \
-   populate the full `macd` object without inventing values.
-6. Keep `summary` short and useful for the Trader and risk agents.
-7. Return exactly one JSON object required by `TechnicalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
-
-Do not include any trade recommendation, target price, or final transaction proposal.";
+use super::prompt::TECHNICAL_SYSTEM_PROMPT;
 
 /// Build the rendered system prompt for the Technical Analyst.
 ///
 /// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
 /// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-pub(crate) fn build_technical_system_prompt(symbol: &str, target_date: &str) -> String {
+fn technical_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
+    policy
+        .map(|policy| policy.prompt_bundle.technical_analyst.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(TECHNICAL_SYSTEM_PROMPT)
+}
+
+pub(crate) fn build_technical_system_prompt(
+    symbol: &str,
+    target_date: &str,
+    policy: Option<&RuntimePolicy>,
+) -> String {
+    let analysis_emphasis = policy
+        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
+        .unwrap_or_default();
+
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = TECHNICAL_SYSTEM_PROMPT
+        base = technical_system_prompt_template(policy)
             .replace("{ticker}", symbol)
-            .replace("{current_date}", target_date),
+            .replace("{current_date}", target_date)
+            .replace("{analysis_emphasis}", &analysis_emphasis),
         auth_rule = build_authoritative_source_prompt_rule(),
         missing_rule = build_missing_data_prompt_rule(),
         quality_rule = build_data_quality_prompt_rule(),
@@ -111,6 +78,7 @@ pub struct TechnicalAnalyst {
     yfinance: YFinanceClient,
     symbol: String,
     target_date: String,
+    system_prompt: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
 }
@@ -121,23 +89,27 @@ impl TechnicalAnalyst {
     /// # Parameters
     /// - `handle` – pre-constructed LLM completion model handle (`QuickThinking` tier).
     /// - `yfinance` – Yahoo Finance client for OHLCV fetching.
-    /// - `symbol` – asset ticker symbol.
-    /// - `target_date` – analysis date string (ISO 8601, e.g. `"2026-03-14"`).
+    /// - `state` – current trading state, including any active runtime policy.
     /// - `llm_config` – LLM configuration, used for timeout.
     pub fn new(
         handle: CompletionModelHandle,
         yfinance: YFinanceClient,
-        symbol: impl Into<String>,
-        target_date: impl Into<String>,
+        state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Self {
-        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+        let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let system_prompt = build_technical_system_prompt(
+            &runtime.symbol,
+            &runtime.target_date,
+            state.analysis_runtime_policy.as_ref(),
+        );
 
         Self {
             handle,
             yfinance,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
+            system_prompt,
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
         }
@@ -171,9 +143,7 @@ impl TechnicalAnalyst {
             Box::new(CalculateIndicatorByName::new(ohlcv_context)),
         ];
 
-        let system_prompt = build_technical_system_prompt(&self.symbol, &self.target_date);
-
-        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
+        let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
         let prompt = format!(
             "Fetch OHLCV data for {} from {} to {} using get_ohlcv, compute indicators with \
@@ -733,7 +703,7 @@ mod tests {
             build_missing_data_prompt_rule,
         };
 
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01");
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", None);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -758,6 +728,43 @@ mod tests {
         assert!(
             prompt.contains("Separate observed facts"),
             "rendered prompt must contain 'Separate observed facts'"
+        );
+    }
+
+    #[test]
+    fn technical_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
+        use crate::{
+            agents::shared::{
+                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
+                build_missing_data_prompt_rule,
+            },
+            analysis_packs::resolve_runtime_policy,
+        };
+
+        let mut policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "stress momentum and key levels".to_owned();
+        policy.prompt_bundle.technical_analyst =
+            "Pack technical prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", Some(&policy));
+
+        assert!(
+            prompt.contains(
+                "Pack technical prompt for AAPL at 2026-01-01. Emphasis: stress momentum and key levels."
+            ),
+            "runtime-policy prompt bundle should override the legacy technical template: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Your job is to interpret tool-computed technical signals"),
+            "legacy technical template should not leak through when a pack override is present: {prompt}"
+        );
+        assert!(
+            prompt.contains(build_authoritative_source_prompt_rule())
+                && prompt.contains(build_missing_data_prompt_rule())
+                && prompt.contains(build_data_quality_prompt_rule()),
+            "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
         );
     }
 }

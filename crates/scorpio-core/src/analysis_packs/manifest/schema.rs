@@ -44,10 +44,9 @@ pub struct AnalysisPackManifest {
     /// Per-role system prompts supplied by the pack.
     ///
     /// Introduced in Phase 4 of the asset-class generalization refactor.
-    /// Today the bundle is [`PromptBundle::empty`] for the baseline pack
-    /// because agents still read their own `const _SYSTEM_PROMPT`; the
-    /// follow-up migration fills these slots via `include_str!` on `.md`
-    /// files and rewires agents to read from here instead.
+    /// The baseline equity pack ships extracted prompt assets for every live
+    /// role, while stub packs may still use [`PromptBundle::empty`] so runtime
+    /// code falls back to the legacy in-module prompt constants.
     pub prompt_bundle: PromptBundle,
     /// Manifest-selected valuation strategy per asset shape.
     ///

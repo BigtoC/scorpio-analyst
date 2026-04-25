@@ -16,64 +16,49 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::{
         agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
-        build_data_quality_prompt_rule, build_missing_data_prompt_rule,
+        build_data_quality_prompt_rule, build_missing_data_prompt_rule, sanitize_prompt_context,
     },
+    analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::FUNDAMENTAL_ANALYST_MAX_TURNS,
     data::{FinnhubClient, GetEarnings, GetFundamentals},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, FundamentalData},
+    state::{AgentTokenUsage, FundamentalData, TradingState},
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-
-/// System prompt for the Fundamental Analyst, adapted from `docs/prompts.md`.
-const FUNDAMENTAL_SYSTEM_PROMPT: &str = "\
-You are the Fundamental Analyst for {ticker} as of {current_date}.
-Your job is to turn raw company financial data into a concise, evidence-backed `FundamentalData` JSON object.
-
-Use only the tools bound for this run. When available, the runtime tool names are typically:
-- `get_fundamentals`
-- `get_earnings`
-
-Note: `get_fundamentals` already includes insider transaction data in its response.
-Do not call a separate insider-transactions tool.
-
-Populate only these schema fields:
-- `revenue_growth_pct`
-- `pe_ratio`
-- `eps`
-- `current_ratio`
-- `debt_to_equity`
-- `gross_margin`
-- `net_income`
-- `insider_transactions`
-- `summary`
-
-Instructions:
-1. Gather enough data to evaluate growth, valuation, profitability, liquidity, leverage, and insider activity.
-2. Base every populated numeric field on tool output. If a value is unavailable, return `null` for that field.
-3. Populate `insider_transactions` only with actual records from tool output. If none are available, return `[]`.
-4. Keep `summary` short and useful for downstream agents. It should explain what matters, not restate every metric.
-5. Do not invent management guidance, free-cash-flow commentary, or any metric not present in the runtime schema.
-6. Return exactly one JSON object required by `FundamentalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
-
-Do not include any trade recommendation, target price, or final transaction proposal.";
+use super::prompt::FUNDAMENTAL_SYSTEM_PROMPT;
 
 /// Build the rendered system prompt for the Fundamental Analyst.
 ///
 /// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
 /// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-pub(crate) fn build_fundamental_system_prompt(symbol: &str, target_date: &str) -> String {
+fn fundamental_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
+    policy
+        .map(|policy| policy.prompt_bundle.fundamental_analyst.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(FUNDAMENTAL_SYSTEM_PROMPT)
+}
+
+pub(crate) fn build_fundamental_system_prompt(
+    symbol: &str,
+    target_date: &str,
+    policy: Option<&RuntimePolicy>,
+) -> String {
+    let analysis_emphasis = policy
+        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
+        .unwrap_or_default();
+
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = FUNDAMENTAL_SYSTEM_PROMPT
+        base = fundamental_system_prompt_template(policy)
             .replace("{ticker}", symbol)
-            .replace("{current_date}", target_date),
+            .replace("{current_date}", target_date)
+            .replace("{analysis_emphasis}", &analysis_emphasis),
         auth_rule = build_authoritative_source_prompt_rule(),
         missing_rule = build_missing_data_prompt_rule(),
         quality_rule = build_data_quality_prompt_rule(),
@@ -89,6 +74,7 @@ pub struct FundamentalAnalyst {
     finnhub: FinnhubClient,
     symbol: String,
     target_date: String,
+    system_prompt: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
 }
@@ -99,23 +85,27 @@ impl FundamentalAnalyst {
     /// # Parameters
     /// - `handle` – pre-constructed LLM completion model handle (should be `QuickThinking` tier).
     /// - `finnhub` – Finnhub client for data fetching.
-    /// - `symbol` – asset ticker symbol (e.g. `"AAPL"`).
-    /// - `target_date` – analysis date string (e.g. `"2026-03-14"`).
+    /// - `state` – current trading state, including any active runtime policy.
     /// - `llm_config` – LLM configuration, used for timeout.
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
-        symbol: impl Into<String>,
-        target_date: impl Into<String>,
+        state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Self {
-        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+        let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let system_prompt = build_fundamental_system_prompt(
+            &runtime.symbol,
+            &runtime.target_date,
+            state.analysis_runtime_policy.as_ref(),
+        );
 
         Self {
             handle,
             finnhub,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
+            system_prompt,
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
         }
@@ -141,9 +131,7 @@ impl FundamentalAnalyst {
             )),
         ];
 
-        let system_prompt = build_fundamental_system_prompt(&self.symbol, &self.target_date);
-
-        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
+        let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
         let prompt = format!(
             "Analyse {} as of {}. Use the available tools to fetch the data you need, \
@@ -545,7 +533,7 @@ mod tests {
             build_missing_data_prompt_rule,
         };
 
-        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01");
+        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01", None);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -570,6 +558,43 @@ mod tests {
         assert!(
             prompt.contains("Separate observed facts"),
             "rendered prompt must contain 'Separate observed facts'"
+        );
+    }
+
+    #[test]
+    fn fundamental_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
+        use crate::{
+            agents::shared::{
+                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
+                build_missing_data_prompt_rule,
+            },
+            analysis_packs::resolve_runtime_policy,
+        };
+
+        let mut policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "focus on balance-sheet durability".to_owned();
+        policy.prompt_bundle.fundamental_analyst =
+            "Pack fundamental prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+
+        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01", Some(&policy));
+
+        assert!(
+            prompt.contains(
+                "Pack fundamental prompt for AAPL at 2026-01-01. Emphasis: focus on balance-sheet durability."
+            ),
+            "runtime-policy prompt bundle should override the legacy fundamental template: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Your job is to turn raw company financial data"),
+            "legacy fundamental template should not leak through when a pack override is present: {prompt}"
+        );
+        assert!(
+            prompt.contains(build_authoritative_source_prompt_rule())
+                && prompt.contains(build_missing_data_prompt_rule())
+                && prompt.contains(build_data_quality_prompt_rule()),
+            "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
         );
     }
 }

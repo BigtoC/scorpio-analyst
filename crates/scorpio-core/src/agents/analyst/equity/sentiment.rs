@@ -16,63 +16,49 @@ use rig::tool::ToolDyn;
 use crate::{
     agents::shared::{
         agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
-        build_data_quality_prompt_rule, build_missing_data_prompt_rule,
+        build_data_quality_prompt_rule, build_missing_data_prompt_rule, sanitize_prompt_context,
     },
+    analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::SENTIMENT_ANALYST_MAX_TURNS,
     data::{FinnhubClient, GetCachedNews, GetNews},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, NewsData, SentimentData},
+    state::{AgentTokenUsage, NewsData, SentimentData, TradingState},
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-
-/// System prompt for the Sentiment Analyst, adapted from `docs/prompts.md`.
-const SENTIMENT_SYSTEM_PROMPT: &str = "\
-You are the Sentiment Analyst for {ticker} as of {current_date}.
-Your job is to infer the current market narrative from the sources actually available in the MVP and return a \
-`SentimentData` JSON object.
-
-Important MVP constraint:
-- Do not assume direct Reddit, X/Twitter, StockTwits, or other social-platform access unless those tools are explicitly \
-  bound.
-- In the current system, sentiment is usually inferred from company news and any runtime-provided sentiment proxies.
-- The news tool argument shape is: get_news requires {\"symbol\":\"<ticker>\"}
-
-Populate only these schema fields:
-- `overall_score`
-- `source_breakdown`
-- `engagement_peaks`
-- `summary`
-
-Instructions:
-1. Derive sentiment from the available sources only.
-2. Use a consistent numeric convention for `overall_score` and `source_breakdown[].score`: `-1.0` means clearly bearish, \
-   `0.0` neutral or inconclusive, and `1.0` clearly bullish.
-3. Use `source_breakdown[].sample_size` for the count of items actually analyzed for that source grouping.
-4. In the MVP, `engagement_peaks` will often be `[]`. Do not fabricate peaks unless the runtime gives you explicit \
-   engagement timing data.
-5. If no meaningful sentiment signal is available, return `overall_score: 0.0`, empty arrays where appropriate, and a \
-   `summary` explaining that the signal is weak or unavailable.
-6. Distinguish sentiment from facts: explain how the market appears to be interpreting events, not only what happened.
-7. Return exactly one JSON object required by `SentimentData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
-
-Do not include any trade recommendation, target price, or final transaction proposal.";
+use super::prompt::SENTIMENT_SYSTEM_PROMPT;
 
 /// Build the rendered system prompt for the Sentiment Analyst.
 ///
 /// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
 /// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-pub(crate) fn build_sentiment_system_prompt(symbol: &str, target_date: &str) -> String {
+fn sentiment_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
+    policy
+        .map(|policy| policy.prompt_bundle.sentiment_analyst.as_ref())
+        .filter(|template| !template.is_empty())
+        .unwrap_or(SENTIMENT_SYSTEM_PROMPT)
+}
+
+pub(crate) fn build_sentiment_system_prompt(
+    symbol: &str,
+    target_date: &str,
+    policy: Option<&RuntimePolicy>,
+) -> String {
+    let analysis_emphasis = policy
+        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
+        .unwrap_or_default();
+
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = SENTIMENT_SYSTEM_PROMPT
+        base = sentiment_system_prompt_template(policy)
             .replace("{ticker}", symbol)
-            .replace("{current_date}", target_date),
+            .replace("{current_date}", target_date)
+            .replace("{analysis_emphasis}", &analysis_emphasis),
         auth_rule = build_authoritative_source_prompt_rule(),
         missing_rule = build_missing_data_prompt_rule(),
         quality_rule = build_data_quality_prompt_rule(),
@@ -88,6 +74,7 @@ pub struct SentimentAnalyst {
     finnhub: FinnhubClient,
     symbol: String,
     target_date: String,
+    system_prompt: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
     /// Pre-fetched news from `run_analyst_team`.  When `Some`, a
@@ -102,26 +89,30 @@ impl SentimentAnalyst {
     /// # Parameters
     /// - `handle` – pre-constructed LLM completion model handle (`QuickThinking` tier).
     /// - `finnhub` – Finnhub client used to fetch news articles.
-    /// - `symbol` – asset ticker symbol.
-    /// - `target_date` – analysis date string.
+    /// - `state` – current trading state, including any active runtime policy.
     /// - `llm_config` – LLM configuration, used for timeout.
     /// - `cached_news` – optional pre-fetched news; when `Some`, the live
     ///   [`GetNews`] tool is replaced with a zero-cost [`GetCachedNews`] tool.
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
-        symbol: impl Into<String>,
-        target_date: impl Into<String>,
+        state: &TradingState,
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
-        let runtime = analyst_runtime_config(symbol, target_date, llm_config);
+        let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
+        let system_prompt = build_sentiment_system_prompt(
+            &runtime.symbol,
+            &runtime.target_date,
+            state.analysis_runtime_policy.as_ref(),
+        );
 
         Self {
             handle,
             finnhub,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
+            system_prompt,
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
             cached_news,
@@ -152,9 +143,7 @@ impl SentimentAnalyst {
         };
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
-        let system_prompt = build_sentiment_system_prompt(&self.symbol, &self.target_date);
-
-        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
+        let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
         let prompt = format!(
             "Fetch and analyse recent news for {} as of {} using the available tools, \
@@ -649,7 +638,7 @@ mod tests {
             build_missing_data_prompt_rule,
         };
 
-        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01");
+        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", None);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -674,6 +663,43 @@ mod tests {
         assert!(
             prompt.contains("Separate observed facts"),
             "rendered prompt must contain 'Separate observed facts'"
+        );
+    }
+
+    #[test]
+    fn sentiment_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
+        use crate::{
+            agents::shared::{
+                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
+                build_missing_data_prompt_rule,
+            },
+            analysis_packs::resolve_runtime_policy,
+        };
+
+        let mut policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        policy.analysis_emphasis = "weight narrative skew".to_owned();
+        policy.prompt_bundle.sentiment_analyst =
+            "Pack sentiment prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
+                .into();
+
+        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", Some(&policy));
+
+        assert!(
+            prompt.contains(
+                "Pack sentiment prompt for AAPL at 2026-01-01. Emphasis: weight narrative skew."
+            ),
+            "runtime-policy prompt bundle should override the legacy sentiment template: {prompt}"
+        );
+        assert!(
+            !prompt.contains("Your job is to infer the current market narrative"),
+            "legacy sentiment template should not leak through when a pack override is present: {prompt}"
+        );
+        assert!(
+            prompt.contains(build_authoritative_source_prompt_rule())
+                && prompt.contains(build_missing_data_prompt_rule())
+                && prompt.contains(build_data_quality_prompt_rule()),
+            "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
         );
     }
 }

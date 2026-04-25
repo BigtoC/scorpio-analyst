@@ -23,6 +23,7 @@ use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::debug;
 
 use crate::{
+    analysis_packs::RuntimePolicy,
     data::{adapters::ProviderCapabilities, resolve_symbol},
     workflow::{
         SnapshotStore,
@@ -49,8 +50,9 @@ const THESIS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 pub struct PreflightTask {
     enrichment: crate::config::DataEnrichmentConfig,
     snapshot_store: Arc<SnapshotStore>,
-    /// The analysis pack identifier resolved from config.
-    pack_id: String,
+    /// The resolved runtime policy or the deferred resolution error for the
+    /// config-selected pack.
+    runtime_policy: Result<RuntimePolicy, String>,
 }
 
 impl PreflightTask {
@@ -64,10 +66,16 @@ impl PreflightTask {
         enrichment: crate::config::DataEnrichmentConfig,
         snapshot_store: Arc<SnapshotStore>,
     ) -> Self {
-        Self::with_pack(enrichment, snapshot_store, "baseline".to_owned())
+        Self::with_runtime_policy(
+            enrichment,
+            snapshot_store,
+            crate::analysis_packs::resolve_runtime_policy("baseline")
+                .expect("baseline pack must resolve"),
+        )
     }
 
     /// Create a new `PreflightTask` with a specific pack selection.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn with_pack(
         enrichment: crate::config::DataEnrichmentConfig,
         snapshot_store: Arc<SnapshotStore>,
@@ -76,7 +84,20 @@ impl PreflightTask {
         Self {
             enrichment,
             snapshot_store,
-            pack_id,
+            runtime_policy: crate::analysis_packs::resolve_runtime_policy(&pack_id),
+        }
+    }
+
+    /// Create a new `PreflightTask` from an already-resolved runtime policy.
+    pub fn with_runtime_policy(
+        enrichment: crate::config::DataEnrichmentConfig,
+        snapshot_store: Arc<SnapshotStore>,
+        runtime_policy: RuntimePolicy,
+    ) -> Self {
+        Self {
+            enrichment,
+            snapshot_store,
+            runtime_policy: Ok(runtime_policy),
         }
     }
 }
@@ -157,12 +178,11 @@ impl Task for PreflightTask {
         context.set(KEY_RESOLVED_INSTRUMENT, instrument_json).await;
 
         // ── Resolve analysis pack into runtime policy ─────────────────────
-        let runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy(&self.pack_id).map_err(|e| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "PreflightTask: pack resolution failed: {e}"
-                ))
-            })?;
+        let runtime_policy = self.runtime_policy.as_ref().map_err(|e| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: pack resolution failed: {e}"
+            ))
+        })?;
         debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
 
         state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
@@ -184,7 +204,7 @@ impl Task for PreflightTask {
         })?;
         context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
 
-        let policy_json = serde_json::to_string(&runtime_policy).map_err(|e| {
+        let policy_json = serde_json::to_string(runtime_policy).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: orchestration corruption: RuntimePolicy serialization failed: {e}"
             ))
