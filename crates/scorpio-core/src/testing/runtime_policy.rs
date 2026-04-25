@@ -129,15 +129,68 @@ mod tests {
     }
 
     #[test]
-    fn baseline_prompt_matches_bundle_field_for_role() {
+    fn baseline_prompt_matches_bundle_field_for_every_role() {
+        // Pack-oracle helper must return byte-identical content to the
+        // manifest's PromptBundle for every live role — locks the helper as
+        // the canonical regression-test oracle for Units 4a/4b.
         let manifest = resolve_pack(PackId::Baseline);
-        assert_eq!(
-            baseline_pack_prompt_for_role(Role::FundamentalAnalyst),
-            manifest.prompt_bundle.fundamental_analyst.as_ref()
-        );
-        assert_eq!(
-            baseline_pack_prompt_for_role(Role::FundManager),
-            manifest.prompt_bundle.fund_manager.as_ref()
-        );
+        let pairs: [(Role, &str); 13] = [
+            (
+                Role::FundamentalAnalyst,
+                manifest.prompt_bundle.fundamental_analyst.as_ref(),
+            ),
+            (
+                Role::SentimentAnalyst,
+                manifest.prompt_bundle.sentiment_analyst.as_ref(),
+            ),
+            (
+                Role::NewsAnalyst,
+                manifest.prompt_bundle.news_analyst.as_ref(),
+            ),
+            (
+                Role::TechnicalAnalyst,
+                manifest.prompt_bundle.technical_analyst.as_ref(),
+            ),
+            (
+                Role::BullishResearcher,
+                manifest.prompt_bundle.bullish_researcher.as_ref(),
+            ),
+            (
+                Role::BearishResearcher,
+                manifest.prompt_bundle.bearish_researcher.as_ref(),
+            ),
+            (
+                Role::DebateModerator,
+                manifest.prompt_bundle.debate_moderator.as_ref(),
+            ),
+            (Role::Trader, manifest.prompt_bundle.trader.as_ref()),
+            (
+                Role::AggressiveRisk,
+                manifest.prompt_bundle.aggressive_risk.as_ref(),
+            ),
+            (
+                Role::ConservativeRisk,
+                manifest.prompt_bundle.conservative_risk.as_ref(),
+            ),
+            (
+                Role::NeutralRisk,
+                manifest.prompt_bundle.neutral_risk.as_ref(),
+            ),
+            (
+                Role::RiskModerator,
+                manifest.prompt_bundle.risk_moderator.as_ref(),
+            ),
+            (
+                Role::FundManager,
+                manifest.prompt_bundle.fund_manager.as_ref(),
+            ),
+        ];
+        for (role, expected) in pairs {
+            assert_eq!(
+                baseline_pack_prompt_for_role(role),
+                expected,
+                "oracle for {role:?} must match manifest bundle byte-for-byte"
+            );
+        }
     }
 }
