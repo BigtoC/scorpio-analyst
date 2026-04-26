@@ -1,6 +1,7 @@
 ---
 title: Prompt Bundle Centralization — Runtime Contract Migration
 date: 2026-04-26
+last_updated: 2026-04-26
 type: refactor-followup
 status: shipped
 tags:
@@ -175,3 +176,39 @@ The deferred items called out in earlier drafts of this document
 (real-world abstraction validation against a real second pack;
 `scorpio db vacuum` for thesis-row reclamation) remain deferred to the
 slice that ships a second selectable pack.
+
+## Review-driven hardening after shipment
+
+A follow-up review pass on the same branch closed the remaining drift between
+the shipped runtime contract and the prompt/test surfaces:
+
+- `testing::runtime_policy::runtime_policy_from_manifest` was added as the
+  shared test-only manifest-to-policy seam. Integration tests that exercise
+  synthetic manifests (`tests/second_consumer_abstraction.rs` and
+  `tests/prompt_bundle_regression_gate.rs`) now validate completeness against
+  the same `RuntimePolicy` boundary production uses instead of reconstructing
+  local setup around `AnalysisPackManifest`.
+- `tests/second_consumer_abstraction.rs` is now gated behind
+  `#![cfg(feature = "test-helpers")]` so its helper usage matches the repo's
+  integration-test contract.
+- Duplicate local `with_baseline_runtime_policy` helpers in
+  `agents/trader/tests.rs` and `agents/fund_manager/tests.rs` were replaced by
+  the shared testing helper, keeping one test-only runtime-policy contract.
+- Trader and fund-manager prompt builders finished the R1/R5 ownership move:
+  absent upstream inputs now serialize as structured runtime values (`null`,
+  `Upstream data state: complete|incomplete`, and
+  `Dual-risk escalation: stage_disabled|...`) while the interpretation rules
+  live in the pack-owned assets under
+  `analysis_packs/equity/prompts/trader.md` and `fund_manager.md`.
+- `testing::prompt_render` now maps the zero-risk fixture path to
+  `DualRiskStatus::StageDisabled`, and the prompt-bundle golden fixtures were
+  refreshed to lock the updated user-visible contract.
+- `prompts/mod.rs` was corrected to describe the actual runtime state of the
+  world: active prompt prose is pack-owned and builders are mechanical
+  renderers over runtime policy and state.
+
+This hardening pass was re-verified with the full repo commands:
+
+- `cargo fmt -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo nextest run --workspace --all-features --locked --no-fail-fast`
