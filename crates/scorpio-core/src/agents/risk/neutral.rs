@@ -416,8 +416,10 @@ mod tests {
 
     #[test]
     fn neutral_system_prompt_mentions_balancing_extremes() {
-        // Drift-detection oracle; see conservative.rs for the rationale.
-        let prompt = super::super::prompt::NEUTRAL_SYSTEM_PROMPT;
+        // Drift-detection guard against the canonical runtime source — the
+        // baseline pack's `PromptBundle.neutral_risk` slot.
+        let prompt =
+            crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::NeutralRisk);
         assert!(prompt.contains("too permissive"));
         assert!(prompt.contains("too restrictive"));
     }

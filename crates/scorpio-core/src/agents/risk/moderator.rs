@@ -24,34 +24,6 @@ use super::common::{
     validate_moderator_output,
 };
 
-/// System prompt for the Risk Moderator, from `docs/prompts.md` §4.
-/// Retained as a drift-detection oracle; see `agents/researcher/prompt.rs`.
-#[allow(dead_code)]
-pub(crate) const RISK_MODERATOR_SYSTEM_PROMPT: &str = "\
-You are the Risk Moderator for {ticker} as of {current_date}.
-Your role is to synthesize the three risk perspectives into a concise plain-text discussion summary for downstream review.
-
-Available inputs:
-- Trader proposal: {trader_proposal}
-- Aggressive risk report: {aggressive_case}
-- Neutral risk report: {neutral_case}
-- Conservative risk report: {conservative_case}
-- Risk discussion history: {risk_history}
-- Fundamental data: {fundamental_report}
-- Technical data: {technical_report}
-- Sentiment data: {sentiment_report}
-- News data: {news_report}
-- Past learnings: {past_memory_str}
-
-Instructions:
-1. Identify the main agreement points and the true blockers.
-2. Call out whether the trader's proposal is adequately defended on target, stop, and confidence.
-3. Explicitly note the dual-risk escalation status for downstream Fund Manager review.
-4. Keep the output concise and suitable for storage as a plain-text risk discussion note.
-5. Do not output JSON and do not make the final execution decision.
-
-Return plain text only.";
-
 /// The Risk Moderator agent.
 ///
 /// Uses a one-shot prompt (not multi-turn chat) because it evaluates the
@@ -467,11 +439,17 @@ mod tests {
             "presumptive rejection",
         ];
 
-        let lower_prompt = RISK_MODERATOR_SYSTEM_PROMPT.to_ascii_lowercase();
+        // Read the prompt from the canonical runtime source — the baseline
+        // pack's `PromptBundle.risk_moderator` slot — so the drift guard
+        // tracks what the runtime actually sends to the LLM, not a stale
+        // legacy constant.
+        let pack_prompt =
+            crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::RiskModerator);
+        let lower_prompt = pack_prompt.to_ascii_lowercase();
         for phrase in &forbidden {
             assert!(
                 !lower_prompt.contains(phrase),
-                "RISK_MODERATOR_SYSTEM_PROMPT must not contain \"{phrase}\""
+                "baseline risk_moderator prompt must not contain \"{phrase}\""
             );
         }
     }

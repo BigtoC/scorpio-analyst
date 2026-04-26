@@ -26,7 +26,6 @@ mod common;
 mod conservative;
 mod moderator;
 mod neutral;
-mod prompt;
 
 pub(crate) use self::common::DualRiskStatus;
 #[cfg(any(test, feature = "test-helpers"))]

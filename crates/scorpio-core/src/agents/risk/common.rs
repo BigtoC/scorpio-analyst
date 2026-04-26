@@ -431,7 +431,6 @@ mod tests {
     use rig::completion::Usage;
 
     use super::*;
-    use crate::agents::risk::{moderator, prompt};
     use crate::config::LlmConfig;
     use crate::state::{RiskLevel, RiskReport, TradingState};
 
@@ -974,45 +973,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn baseline_runtime_policy_bundle_matches_legacy_aggressive_rendering() {
-        let mut state = make_state();
-        state.analysis_runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
-
-        let policy = state
-            .analysis_runtime_policy
-            .as_ref()
-            .expect("baseline policy hydrated");
-        let prompt =
-            render_risk_system_prompt(policy, &state, |bundle| bundle.aggressive_risk.as_ref());
-
-        let expected = prompt::AGGRESSIVE_SYSTEM_PROMPT
-            .replace("{ticker}", "AAPL")
-            .replace("{current_date}", "2026-03-15")
-            .replace("{past_memory_str}", "see untrusted user context");
-
-        assert_eq!(prompt, expected);
-    }
-
-    #[test]
-    fn baseline_runtime_policy_bundle_matches_legacy_risk_moderator_rendering() {
-        let mut state = make_state();
-        state.analysis_runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
-
-        let policy = state
-            .analysis_runtime_policy
-            .as_ref()
-            .expect("baseline policy hydrated");
-        let prompt =
-            render_risk_system_prompt(policy, &state, |bundle| bundle.risk_moderator.as_ref());
-
-        let expected = moderator::RISK_MODERATOR_SYSTEM_PROMPT
-            .replace("{ticker}", "AAPL")
-            .replace("{current_date}", "2026-03-15")
-            .replace("{past_memory_str}", "see untrusted user context");
-
-        assert_eq!(prompt, expected);
-    }
+    // The previous `baseline_runtime_policy_bundle_matches_legacy_*_rendering`
+    // tests asserted byte-equivalence between the legacy `_SYSTEM_PROMPT`
+    // constants and the rendered baseline pack assets. After the
+    // prompt-bundle centralization migration the constants are no longer
+    // the runtime source of truth, and the golden-byte regression gate at
+    // `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` covers
+    // the rendered output across 13 roles × 4 scenarios. The tests here
+    // were duplicating that gate while keeping the legacy constants
+    // alive — both removed.
 }

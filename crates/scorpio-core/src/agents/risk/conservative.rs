@@ -396,11 +396,11 @@ mod tests {
 
     #[test]
     fn conservative_system_prompt_mentions_rsi_macro_and_beta_risks() {
-        // The legacy constant is the documentation oracle — drift detection
-        // for what the conservative prompt is supposed to cover. Reference
-        // it via the qualified path so it's reachable even though the
-        // production renderer no longer uses the constant directly.
-        let prompt = super::super::prompt::CONSERVATIVE_SYSTEM_PROMPT;
+        // Read the prompt from the canonical runtime source — the baseline
+        // pack's `PromptBundle.conservative_risk` slot — so the drift guard
+        // tracks what the runtime actually sends to the LLM.
+        let prompt =
+            crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::ConservativeRisk);
         assert!(prompt.contains("RSI"));
         assert!(prompt.contains("macroeconomic"));
         assert!(prompt.contains("beta"));
