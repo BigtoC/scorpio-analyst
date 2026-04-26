@@ -25,8 +25,6 @@ use super::common::{
     validate_raw_model_output_size, validate_risk_text,
 };
 
-use super::prompt::NEUTRAL_SYSTEM_PROMPT;
-
 /// The Neutral Risk Analyst agent.
 ///
 /// Maintains a multi-turn chat session so each response can build on prior
@@ -61,9 +59,10 @@ impl NeutralRiskAgent {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "NeutralRisk")?;
         let core = RiskAgentCore::new(
             handle,
-            NEUTRAL_SYSTEM_PROMPT,
+            policy,
             |bundle| bundle.neutral_risk.as_ref(),
             state,
             llm_config,
@@ -417,8 +416,10 @@ mod tests {
 
     #[test]
     fn neutral_system_prompt_mentions_balancing_extremes() {
-        assert!(NEUTRAL_SYSTEM_PROMPT.contains("too permissive"));
-        assert!(NEUTRAL_SYSTEM_PROMPT.contains("too restrictive"));
+        // Drift-detection oracle; see conservative.rs for the rationale.
+        let prompt = super::super::prompt::NEUTRAL_SYSTEM_PROMPT;
+        assert!(prompt.contains("too permissive"));
+        assert!(prompt.contains("too restrictive"));
     }
 
     #[test]

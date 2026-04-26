@@ -25,8 +25,6 @@ use super::common::{
     validate_raw_model_output_size, validate_risk_text,
 };
 
-use super::prompt::AGGRESSIVE_SYSTEM_PROMPT;
-
 /// The Aggressive Risk Analyst agent.
 ///
 /// Maintains a multi-turn chat session to build on prior risk discussion
@@ -61,9 +59,10 @@ impl AggressiveRiskAgent {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "AggressiveRisk")?;
         let core = RiskAgentCore::new(
             handle,
-            AGGRESSIVE_SYSTEM_PROMPT,
+            policy,
             |bundle| bundle.aggressive_risk.as_ref(),
             state,
             llm_config,

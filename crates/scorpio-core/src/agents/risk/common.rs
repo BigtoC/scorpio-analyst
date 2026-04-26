@@ -56,10 +56,10 @@ pub(super) struct RiskAgentCore {
 }
 
 impl RiskAgentCore {
-    /// Build the shared core from a completion handle, system-prompt template, and config.
+    /// Build the shared core from a completion handle and runtime policy.
     pub(super) fn new(
         handle: &CompletionModelHandle,
-        system_prompt_template: &str,
+        policy: &crate::analysis_packs::RuntimePolicy,
         bundle_slot: fn(&PromptBundle) -> &str,
         state: &TradingState,
         llm_config: &LlmConfig,
@@ -74,7 +74,7 @@ impl RiskAgentCore {
 
         let runtime = risk_runtime_config(llm_config);
 
-        let system_prompt = render_risk_system_prompt(system_prompt_template, state, bundle_slot);
+        let system_prompt = render_risk_system_prompt(policy, state, bundle_slot);
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -151,11 +151,11 @@ impl DualRiskStatus {
     /// [`from_reports`]. Lets fund-manager and risk-moderator code distinguish
     /// "we didn't run the stage" from "we ran the stage but data is missing."
     ///
-    /// **Currently invoked only from tests.** Unit 4b switches
-    /// `fund_manager::agent` from [`from_reports`](Self::from_reports) to
-    /// this topology-aware variant once `PreflightTask` writes the topology
-    /// to context.
-    #[allow(dead_code)]
+    /// `fund_manager::agent` invokes this constructor via
+    /// `risk_stage_enabled_for_state`, which currently always returns `true`
+    /// pending the Phase 9 routing flip. Once `FundManagerTask` reads
+    /// `KEY_ROUTING_FLAGS` from context, the [`StageDisabled`] variant
+    /// becomes reachable for production zero-risk runs.
     pub(crate) fn from_reports_with_topology(
         conservative: Option<&RiskReport>,
         neutral: Option<&RiskReport>,
@@ -290,19 +290,37 @@ pub(super) fn build_analyst_context(state: &TradingState) -> String {
     )
 }
 
+/// Borrow the runtime policy from `state` or return a typed `Config` error
+/// naming the offending agent. Production paths are guaranteed to have a
+/// hydrated policy after `PreflightTask` runs, so this only fires for
+/// unit tests that deliberately bypass preflight without using
+/// `with_baseline_runtime_policy`.
+pub(super) fn runtime_policy_for_agent<'a>(
+    state: &'a TradingState,
+    agent: &'static str,
+) -> Result<&'a crate::analysis_packs::RuntimePolicy, TradingError> {
+    state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+        TradingError::Config(anyhow::anyhow!(
+            "{agent}: missing runtime policy — preflight is the sole writer of \
+             state.analysis_runtime_policy; use `with_baseline_runtime_policy` \
+             in tests that bypass preflight"
+        ))
+    })
+}
+
 pub(crate) fn render_risk_system_prompt(
-    legacy_template: &str,
+    policy: &crate::analysis_packs::RuntimePolicy,
     state: &TradingState,
     bundle_slot: fn(&PromptBundle) -> &str,
 ) -> String {
+    // `&RuntimePolicy` is required: preflight is the sole writer of
+    // `state.analysis_runtime_policy`, and `validate_active_pack_completeness`
+    // rejects packs whose required slots are empty before this renderer is
+    // ever reached. The renderer therefore reads the slot directly with no
+    // legacy fallback — production always sees a non-empty template.
     let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
     let target_date = sanitize_date_for_prompt(&state.target_date);
-    let template = state
-        .analysis_runtime_policy
-        .as_ref()
-        .map(|policy| bundle_slot(&policy.prompt_bundle))
-        .filter(|template| !template.is_empty())
-        .unwrap_or(legacy_template);
+    let template = bundle_slot(&policy.prompt_bundle);
 
     template
         .replace("{ticker}", &symbol)
@@ -917,21 +935,18 @@ mod tests {
                 .into();
         state.analysis_runtime_policy = Some(policy);
 
-        let prompt = render_risk_system_prompt(
-            "Legacy aggressive prompt for {ticker} at {current_date}.",
-            &state,
-            |bundle| bundle.aggressive_risk.as_ref(),
-        );
+        let policy = state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("policy hydrated above");
+        let prompt =
+            render_risk_system_prompt(policy, &state, |bundle| bundle.aggressive_risk.as_ref());
 
         assert!(
             prompt.contains(
                 "Aggressive pack prompt for AAPL at 2026-03-15. Emphasis: favour upside capture."
             ),
-            "runtime policy should override the aggressive risk system prompt: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Legacy aggressive prompt"),
-            "legacy aggressive template should not leak through when pack override is present: {prompt}"
+            "runtime policy should drive the aggressive risk system prompt: {prompt}"
         );
     }
 
@@ -946,19 +961,16 @@ mod tests {
                 .into();
         state.analysis_runtime_policy = Some(policy);
 
-        let prompt = render_risk_system_prompt(
-            "Legacy risk moderator prompt for {ticker} at {current_date}.",
-            &state,
-            |bundle| bundle.risk_moderator.as_ref(),
-        );
+        let policy = state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("policy hydrated above");
+        let prompt =
+            render_risk_system_prompt(policy, &state, |bundle| bundle.risk_moderator.as_ref());
 
         assert!(
             prompt.contains("Risk moderator pack prompt for AAPL at 2026-03-15. Emphasis: surface the true blockers."),
-            "runtime policy should override the risk moderator system prompt: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Legacy risk moderator prompt"),
-            "legacy risk moderator template should not leak through when pack override is present: {prompt}"
+            "runtime policy should drive the risk moderator system prompt: {prompt}"
         );
     }
 
@@ -968,10 +980,12 @@ mod tests {
         state.analysis_runtime_policy =
             crate::analysis_packs::resolve_runtime_policy("baseline").ok();
 
+        let policy = state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("baseline policy hydrated");
         let prompt =
-            render_risk_system_prompt(prompt::AGGRESSIVE_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.aggressive_risk.as_ref()
-            });
+            render_risk_system_prompt(policy, &state, |bundle| bundle.aggressive_risk.as_ref());
 
         let expected = prompt::AGGRESSIVE_SYSTEM_PROMPT
             .replace("{ticker}", "AAPL")
@@ -987,10 +1001,12 @@ mod tests {
         state.analysis_runtime_policy =
             crate::analysis_packs::resolve_runtime_policy("baseline").ok();
 
+        let policy = state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("baseline policy hydrated");
         let prompt =
-            render_risk_system_prompt(moderator::RISK_MODERATOR_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.risk_moderator.as_ref()
-            });
+            render_risk_system_prompt(policy, &state, |bundle| bundle.risk_moderator.as_ref());
 
         let expected = moderator::RISK_MODERATOR_SYSTEM_PROMPT
             .replace("{ticker}", "AAPL")

@@ -25,6 +25,8 @@ use super::common::{
 };
 
 /// System prompt for the Risk Moderator, from `docs/prompts.md` §4.
+/// Retained as a drift-detection oracle; see `agents/researcher/prompt.rs`.
+#[allow(dead_code)]
 pub(crate) const RISK_MODERATOR_SYSTEM_PROMPT: &str = "\
 You are the Risk Moderator for {ticker} as of {current_date}.
 Your role is to synthesize the three risk perspectives into a concise plain-text discussion summary for downstream review.
@@ -82,10 +84,11 @@ impl RiskModerator {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "RiskModerator")?;
         Ok(Self {
             core: RiskAgentCore::new(
                 handle,
-                RISK_MODERATOR_SYSTEM_PROMPT,
+                policy,
                 |bundle| bundle.risk_moderator.as_ref(),
                 state,
                 llm_config,

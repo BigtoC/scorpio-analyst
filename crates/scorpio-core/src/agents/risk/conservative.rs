@@ -24,8 +24,6 @@ use super::common::{
     validate_raw_model_output_size, validate_risk_text,
 };
 
-use super::prompt::CONSERVATIVE_SYSTEM_PROMPT;
-
 /// The Conservative Risk Analyst agent.
 ///
 /// Maintains a multi-turn chat session so each response can build on prior
@@ -60,9 +58,10 @@ impl ConservativeRiskAgent {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "ConservativeRisk")?;
         let core = RiskAgentCore::new(
             handle,
-            CONSERVATIVE_SYSTEM_PROMPT,
+            policy,
             |bundle| bundle.conservative_risk.as_ref(),
             state,
             llm_config,
@@ -397,9 +396,14 @@ mod tests {
 
     #[test]
     fn conservative_system_prompt_mentions_rsi_macro_and_beta_risks() {
-        assert!(CONSERVATIVE_SYSTEM_PROMPT.contains("RSI"));
-        assert!(CONSERVATIVE_SYSTEM_PROMPT.contains("macroeconomic"));
-        assert!(CONSERVATIVE_SYSTEM_PROMPT.contains("beta"));
+        // The legacy constant is the documentation oracle — drift detection
+        // for what the conservative prompt is supposed to cover. Reference
+        // it via the qualified path so it's reachable even though the
+        // production renderer no longer uses the constant directly.
+        let prompt = super::super::prompt::CONSERVATIVE_SYSTEM_PROMPT;
+        assert!(prompt.contains("RSI"));
+        assert!(prompt.contains("macroeconomic"));
+        assert!(prompt.contains("beta"));
     }
 
     #[test]
