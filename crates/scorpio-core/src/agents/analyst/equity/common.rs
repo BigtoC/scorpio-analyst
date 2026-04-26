@@ -11,8 +11,8 @@ use serde::de::DeserializeOwned;
 use crate::agents::shared::agent_token_usage_from_completion;
 use crate::{
     agents::shared::{
-        AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE, MISSING_DATA_PROMPT_RULE,
-        sanitize_prompt_context,
+        ANALYST_INFERENCE_GUARDS, AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE,
+        MISSING_DATA_PROMPT_RULE, sanitize_prompt_context,
     },
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
@@ -44,10 +44,11 @@ pub(super) fn render_analyst_system_prompt(
         .replace("{analysis_emphasis}", &analysis_emphasis);
 
     format!(
-        "{base}\n\n{AUTHORITATIVE_SOURCE_PROMPT_RULE}\n{MISSING_DATA_PROMPT_RULE}\n{DATA_QUALITY_PROMPT_RULE}\n\
-Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
-If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
-Separate observed facts from interpretation.",
+        "{base}\n\n\
+         {AUTHORITATIVE_SOURCE_PROMPT_RULE}\n\
+         {MISSING_DATA_PROMPT_RULE}\n\
+         {DATA_QUALITY_PROMPT_RULE}\n\
+         {ANALYST_INFERENCE_GUARDS}",
     )
 }
 

@@ -207,6 +207,12 @@ claims. Return `null` or `[]` for missing structured fields; do not guess or ext
 pub(crate) const DATA_QUALITY_PROMPT_RULE: &str = "Separate observed facts (tool output) from interpretation (your reasoning). Do not present \
 interpretation as established fact.";
 
+/// Analyst-specific unsupported-inference guards appended after the three
+/// evidence-discipline rules in every equity analyst's rendered system prompt.
+pub(crate) const ANALYST_INFERENCE_GUARDS: &str = "Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
+If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
+Separate observed facts from interpretation.";
+
 // ─── Typed evidence and data-quality context builders ────────────────────────
 
 /// Render a prompt-safe typed evidence snapshot in the Stage 4 contract shape.
