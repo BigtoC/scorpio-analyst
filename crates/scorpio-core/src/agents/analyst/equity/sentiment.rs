@@ -28,34 +28,28 @@ use crate::{
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-use super::prompt::SENTIMENT_SYSTEM_PROMPT;
 
 /// Build the rendered system prompt for the Sentiment Analyst.
 ///
-/// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
-/// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-fn sentiment_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
-    policy
-        .map(|policy| policy.prompt_bundle.sentiment_analyst.as_ref())
-        .filter(|template| !template.is_empty())
-        .unwrap_or(SENTIMENT_SYSTEM_PROMPT)
-}
-
+/// Reads the role's prompt template directly from the active pack's
+/// `RuntimePolicy.prompt_bundle.sentiment_analyst` slot and substitutes
+/// runtime placeholders, then appends the three shared evidence-discipline
+/// rule helpers plus analyst-specific unsupported-inference guards.
+/// Preflight's completeness gate ensures the slot is non-empty.
 pub(crate) fn build_sentiment_system_prompt(
     symbol: &str,
     target_date: &str,
-    policy: Option<&RuntimePolicy>,
+    policy: &RuntimePolicy,
 ) -> String {
-    let analysis_emphasis = policy
-        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
-        .unwrap_or_default();
+    let analysis_emphasis = sanitize_prompt_context(&policy.analysis_emphasis);
+    let base = policy.prompt_bundle.sentiment_analyst.as_ref();
 
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = sentiment_system_prompt_template(policy)
+        base = base
             .replace("{ticker}", symbol)
             .replace("{current_date}", target_date)
             .replace("{analysis_emphasis}", &analysis_emphasis),
@@ -97,15 +91,13 @@ impl SentimentAnalyst {
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
         state: &TradingState,
+        policy: &RuntimePolicy,
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt = build_sentiment_system_prompt(
-            &runtime.symbol,
-            &runtime.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        );
+        let system_prompt =
+            build_sentiment_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
         Self {
             handle,
@@ -269,24 +261,29 @@ mod tests {
 
     // ── Task 2.5: Agent does not attempt social-platform access ──────────
 
+    fn baseline_sentiment_prompt() -> &'static str {
+        crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::SentimentAnalyst)
+    }
+
     #[test]
     fn system_prompt_forbids_social_platforms() {
-        // The system prompt should explicitly warn against social-platform access
+        // Drift-detection guard against the canonical runtime source — the
+        // baseline pack's `PromptBundle.sentiment_analyst` slot.
+        let prompt = baseline_sentiment_prompt();
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("Reddit"),
+            prompt.contains("Reddit"),
             "prompt should mention Reddit constraint"
         );
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("X/Twitter"),
+            prompt.contains("X/Twitter"),
             "prompt should mention X/Twitter constraint"
         );
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("StockTwits"),
+            prompt.contains("StockTwits"),
             "prompt should mention StockTwits constraint"
         );
-        // It should say NOT to assume those are available
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("Do not assume"),
+            prompt.contains("Do not assume"),
             "prompt should say 'Do not assume'"
         );
     }
@@ -526,25 +523,27 @@ mod tests {
 
     #[test]
     fn sentiment_prompt_states_get_news_argument_shape() {
+        let prompt = baseline_sentiment_prompt();
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains(r#"get_news requires {"symbol":"<ticker>"}"#),
-            "SENTIMENT_SYSTEM_PROMPT must contain 'get_news requires {{\"symbol\":\"<ticker>\"}}'"
+            prompt.contains(r#"get_news requires {"symbol":"<ticker>"}"#),
+            "baseline sentiment prompt must contain 'get_news requires {{\"symbol\":\"<ticker>\"}}'"
         );
     }
 
     #[test]
     fn sentiment_prompt_requires_exactly_one_json_object_response() {
+        let prompt = baseline_sentiment_prompt();
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("exactly one JSON object"),
-            "SENTIMENT_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+            prompt.contains("exactly one JSON object"),
+            "baseline sentiment prompt must contain 'exactly one JSON object'"
         );
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("no prose"),
-            "SENTIMENT_SYSTEM_PROMPT must contain 'no prose'"
+            prompt.contains("no prose"),
+            "baseline sentiment prompt must contain 'no prose'"
         );
         assert!(
-            SENTIMENT_SYSTEM_PROMPT.contains("no markdown fences"),
-            "SENTIMENT_SYSTEM_PROMPT must contain 'no markdown fences'"
+            prompt.contains("no markdown fences"),
+            "baseline sentiment prompt must contain 'no markdown fences'"
         );
     }
 
@@ -637,8 +636,11 @@ mod tests {
             build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
             build_missing_data_prompt_rule,
         };
+        use crate::analysis_packs::resolve_runtime_policy;
 
-        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", None);
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -667,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn sentiment_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
+    fn sentiment_rendered_prompt_uses_runtime_policy_prompt_bundle() {
         use crate::{
             agents::shared::{
                 build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
@@ -683,17 +685,13 @@ mod tests {
             "Pack sentiment prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", Some(&policy));
+        let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(
                 "Pack sentiment prompt for AAPL at 2026-01-01. Emphasis: weight narrative skew."
             ),
-            "runtime-policy prompt bundle should override the legacy sentiment template: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Your job is to infer the current market narrative"),
-            "legacy sentiment template should not leak through when a pack override is present: {prompt}"
+            "runtime-policy prompt bundle should drive the sentiment template: {prompt}"
         );
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule())

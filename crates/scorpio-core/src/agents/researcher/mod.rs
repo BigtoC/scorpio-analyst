@@ -17,7 +17,6 @@ mod bearish;
 mod bullish;
 mod common;
 mod moderator;
-mod prompt;
 
 pub use bearish::BearishResearcher;
 pub use bullish::BullishResearcher;

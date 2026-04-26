@@ -605,46 +605,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn baseline_runtime_policy_bundle_matches_legacy_bullish_rendering() {
-        let mut state = TradingState::new("AAPL", "2026-03-15");
-        state.analysis_runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
-
-        let policy = state
-            .analysis_runtime_policy
-            .as_ref()
-            .expect("baseline policy hydrated");
-        let prompt = render_researcher_system_prompt(policy, &state, |bundle| {
-            bundle.bullish_researcher.as_ref()
-        });
-
-        let expected = super::super::prompt::BULLISH_SYSTEM_PROMPT
-            .replace("{ticker}", "AAPL")
-            .replace("{current_date}", "2026-03-15");
-
-        assert_eq!(prompt, expected);
-    }
-
-    #[test]
-    fn baseline_runtime_policy_bundle_matches_legacy_moderator_rendering() {
-        let mut state = TradingState::new("AAPL", "2026-03-15");
-        state.analysis_runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
-
-        let policy = state
-            .analysis_runtime_policy
-            .as_ref()
-            .expect("baseline policy hydrated");
-        let prompt = render_researcher_system_prompt(policy, &state, |bundle| {
-            bundle.debate_moderator.as_ref()
-        });
-
-        let expected = super::super::prompt::MODERATOR_SYSTEM_PROMPT
-            .replace("{ticker}", "AAPL")
-            .replace("{current_date}", "2026-03-15")
-            .replace("{past_memory_str}", "see untrusted user context");
-
-        assert_eq!(prompt, expected);
-    }
+    // The previous `baseline_runtime_policy_bundle_matches_legacy_*_rendering`
+    // tests asserted byte-equivalence between the legacy `_SYSTEM_PROMPT`
+    // constants and the rendered baseline pack assets. After the
+    // prompt-bundle centralization migration, the constants are no longer
+    // the runtime source of truth — they exist only as `#[allow(dead_code)]`
+    // documentation. The rendered baseline bytes are now locked by the
+    // golden-byte regression gate at
+    // `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`, which
+    // diffs full prompt outputs (including injected context) against
+    // on-disk fixtures across 13 roles × 4 scenarios. Re-asserting
+    // equivalence here would duplicate that gate while still tying these
+    // tests to the legacy constants — so they were removed.
 }

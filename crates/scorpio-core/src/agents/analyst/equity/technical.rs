@@ -28,34 +28,31 @@ use crate::{
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-use super::prompt::TECHNICAL_SYSTEM_PROMPT;
-
 /// Build the rendered system prompt for the Technical Analyst.
 ///
-/// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
-/// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-fn technical_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
-    policy
-        .map(|policy| policy.prompt_bundle.technical_analyst.as_ref())
-        .filter(|template| !template.is_empty())
-        .unwrap_or(TECHNICAL_SYSTEM_PROMPT)
-}
-
+/// Reads the role's prompt template directly from the active pack's
+/// `RuntimePolicy.prompt_bundle.technical_analyst` slot and substitutes
+/// `{ticker}` / `{current_date}` / `{analysis_emphasis}` placeholders, then
+/// appends the three shared evidence-discipline rule helpers plus
+/// analyst-specific unsupported-inference guards.
+///
+/// Preflight's `validate_active_pack_completeness` gate ensures the slot is
+/// non-empty before any analyst task runs, so the renderer reads it directly
+/// with no legacy fallback.
 pub(crate) fn build_technical_system_prompt(
     symbol: &str,
     target_date: &str,
-    policy: Option<&RuntimePolicy>,
+    policy: &RuntimePolicy,
 ) -> String {
-    let analysis_emphasis = policy
-        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
-        .unwrap_or_default();
+    let analysis_emphasis = sanitize_prompt_context(&policy.analysis_emphasis);
+    let base = policy.prompt_bundle.technical_analyst.as_ref();
 
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = technical_system_prompt_template(policy)
+        base = base
             .replace("{ticker}", symbol)
             .replace("{current_date}", target_date)
             .replace("{analysis_emphasis}", &analysis_emphasis),
@@ -95,14 +92,12 @@ impl TechnicalAnalyst {
         handle: CompletionModelHandle,
         yfinance: YFinanceClient,
         state: &TradingState,
+        policy: &RuntimePolicy,
         llm_config: &LlmConfig,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt = build_technical_system_prompt(
-            &runtime.symbol,
-            &runtime.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        );
+        let system_prompt =
+            build_technical_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
         Self {
             handle,
@@ -284,13 +279,20 @@ mod tests {
 
     // ── Task 4.5: Prompt-compatible indicator names ───────────────────────
 
+    fn baseline_technical_prompt() -> &'static str {
+        crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::TechnicalAnalyst)
+    }
+
     #[test]
     fn system_prompt_mentions_prompt_compatible_indicator_names() {
+        // Drift-detection guard against the canonical runtime source — the
+        // baseline pack's `PromptBundle.technical_analyst` slot.
+        let prompt = baseline_technical_prompt();
         let names = ["rsi", "macd", "atr", "boll", "boll_ub", "boll_lb", "vwma"];
         for name in &names {
             assert!(
-                TECHNICAL_SYSTEM_PROMPT.contains(name),
-                "system prompt should mention indicator name: {name}"
+                prompt.contains(name),
+                "baseline technical prompt should mention indicator name: {name}"
             );
         }
     }
@@ -526,42 +528,45 @@ mod tests {
 
     #[test]
     fn technical_prompt_limits_get_ohlcv_to_one_call() {
+        let prompt = baseline_technical_prompt();
         assert!(
-            TECHNICAL_SYSTEM_PROMPT.contains("get_ohlcv"),
-            "TECHNICAL_SYSTEM_PROMPT must contain 'get_ohlcv'"
+            prompt.contains("get_ohlcv"),
+            "baseline technical prompt must contain 'get_ohlcv'"
         );
         assert!(
-            TECHNICAL_SYSTEM_PROMPT.contains("called at most once"),
-            "TECHNICAL_SYSTEM_PROMPT must contain 'called at most once'"
+            prompt.contains("called at most once"),
+            "baseline technical prompt must contain 'called at most once'"
         );
         assert!(
-            TECHNICAL_SYSTEM_PROMPT.contains("indicator tools"),
-            "TECHNICAL_SYSTEM_PROMPT must contain 'indicator tools'"
+            prompt.contains("indicator tools"),
+            "baseline technical prompt must contain 'indicator tools'"
         );
     }
 
     #[test]
     fn technical_prompt_requires_exactly_one_json_object_response() {
+        let prompt = baseline_technical_prompt();
         assert!(
-            TECHNICAL_SYSTEM_PROMPT.contains("exactly one JSON object"),
-            "TECHNICAL_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+            prompt.contains("exactly one JSON object"),
+            "baseline technical prompt must contain 'exactly one JSON object'"
         );
         assert!(
-            TECHNICAL_SYSTEM_PROMPT.contains("no prose"),
-            "TECHNICAL_SYSTEM_PROMPT must contain 'no prose'"
+            prompt.contains("no prose"),
+            "baseline technical prompt must contain 'no prose'"
         );
         assert!(
-            TECHNICAL_SYSTEM_PROMPT.contains("no markdown fences"),
-            "TECHNICAL_SYSTEM_PROMPT must contain 'no markdown fences'"
+            prompt.contains("no markdown fences"),
+            "baseline technical prompt must contain 'no markdown fences'"
         );
     }
 
     #[test]
     fn technical_prompt_describes_macd_object_shape() {
+        let prompt = baseline_technical_prompt();
         for field in ["macd_line", "signal_line", "histogram"] {
             assert!(
-                TECHNICAL_SYSTEM_PROMPT.contains(field),
-                "TECHNICAL_SYSTEM_PROMPT must describe MACD field: {field}"
+                prompt.contains(field),
+                "baseline technical prompt must describe MACD field: {field}"
             );
         }
     }
@@ -698,12 +703,17 @@ mod tests {
 
     #[test]
     fn technical_rendered_prompt_includes_evidence_discipline_rules() {
-        use crate::agents::shared::{
-            build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
-            build_missing_data_prompt_rule,
+        use crate::{
+            agents::shared::{
+                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
+                build_missing_data_prompt_rule,
+            },
+            analysis_packs::resolve_runtime_policy,
         };
 
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", None);
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -748,17 +758,13 @@ mod tests {
             "Pack technical prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", Some(&policy));
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(
                 "Pack technical prompt for AAPL at 2026-01-01. Emphasis: stress momentum and key levels."
             ),
-            "runtime-policy prompt bundle should override the legacy technical template: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Your job is to interpret tool-computed technical signals"),
-            "legacy technical template should not leak through when a pack override is present: {prompt}"
+            "runtime-policy prompt bundle should drive the technical prompt body: {prompt}"
         );
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule())

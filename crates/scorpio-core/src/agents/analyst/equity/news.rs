@@ -27,34 +27,28 @@ use crate::{
 };
 
 use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-use super::prompt::NEWS_SYSTEM_PROMPT;
 
 /// Build the rendered system prompt for the News Analyst.
 ///
-/// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
-/// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-fn news_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
-    policy
-        .map(|policy| policy.prompt_bundle.news_analyst.as_ref())
-        .filter(|template| !template.is_empty())
-        .unwrap_or(NEWS_SYSTEM_PROMPT)
-}
-
+/// Reads the role's prompt template directly from the active pack's
+/// `RuntimePolicy.prompt_bundle.news_analyst` slot and substitutes runtime
+/// placeholders, then appends the three shared evidence-discipline rule
+/// helpers plus analyst-specific unsupported-inference guards. Preflight's
+/// completeness gate ensures the slot is non-empty before this fires.
 pub(crate) fn build_news_system_prompt(
     symbol: &str,
     target_date: &str,
-    policy: Option<&RuntimePolicy>,
+    policy: &RuntimePolicy,
 ) -> String {
-    let analysis_emphasis = policy
-        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
-        .unwrap_or_default();
+    let analysis_emphasis = sanitize_prompt_context(&policy.analysis_emphasis);
+    let base = policy.prompt_bundle.news_analyst.as_ref();
 
     format!(
         "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
 Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
 If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
 Separate observed facts from interpretation.",
-        base = news_system_prompt_template(policy)
+        base = base
             .replace("{ticker}", symbol)
             .replace("{current_date}", target_date)
             .replace("{analysis_emphasis}", &analysis_emphasis),
@@ -100,15 +94,12 @@ impl NewsAnalyst {
         finnhub: FinnhubClient,
         fred: FredClient,
         state: &TradingState,
+        policy: &RuntimePolicy,
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt = build_news_system_prompt(
-            &runtime.symbol,
-            &runtime.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        );
+        let system_prompt = build_news_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
         Self {
             handle,
@@ -528,35 +519,41 @@ mod tests {
 
     // ── Task 4: Migrate to shared inference helper ────────────────────────
 
+    fn baseline_news_prompt() -> &'static str {
+        crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::NewsAnalyst)
+    }
+
     #[test]
     fn news_prompt_states_exact_tool_argument_shapes() {
+        let prompt = baseline_news_prompt();
         assert!(
-            NEWS_SYSTEM_PROMPT.contains(r#"get_news requires {"symbol":"<ticker>"}"#),
-            r#"NEWS_SYSTEM_PROMPT must contain 'get_news requires {{"symbol":"<ticker>"}}"#
+            prompt.contains(r#"get_news requires {"symbol":"<ticker>"}"#),
+            r#"baseline news prompt must contain 'get_news requires {{"symbol":"<ticker>"}}"#
         );
         assert!(
-            NEWS_SYSTEM_PROMPT.contains("get_market_news takes {}"),
-            "NEWS_SYSTEM_PROMPT must contain 'get_market_news takes {{}}'"
+            prompt.contains("get_market_news takes {}"),
+            "baseline news prompt must contain 'get_market_news takes {{}}'"
         );
         assert!(
-            NEWS_SYSTEM_PROMPT.contains("get_economic_indicators takes {}"),
-            "NEWS_SYSTEM_PROMPT must contain 'get_economic_indicators takes {{}}'"
+            prompt.contains("get_economic_indicators takes {}"),
+            "baseline news prompt must contain 'get_economic_indicators takes {{}}'"
         );
     }
 
     #[test]
     fn news_prompt_requires_exactly_one_json_object_response() {
+        let prompt = baseline_news_prompt();
         assert!(
-            NEWS_SYSTEM_PROMPT.contains("exactly one JSON object"),
-            "NEWS_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+            prompt.contains("exactly one JSON object"),
+            "baseline news prompt must contain 'exactly one JSON object'"
         );
         assert!(
-            NEWS_SYSTEM_PROMPT.contains("no prose"),
-            "NEWS_SYSTEM_PROMPT must contain 'no prose'"
+            prompt.contains("no prose"),
+            "baseline news prompt must contain 'no prose'"
         );
         assert!(
-            NEWS_SYSTEM_PROMPT.contains("no markdown fences"),
-            "NEWS_SYSTEM_PROMPT must contain 'no markdown fences'"
+            prompt.contains("no markdown fences"),
+            "baseline news prompt must contain 'no markdown fences'"
         );
     }
 
@@ -637,8 +634,11 @@ mod tests {
             build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
             build_missing_data_prompt_rule,
         };
+        use crate::analysis_packs::resolve_runtime_policy;
 
-        let prompt = build_news_system_prompt("AAPL", "2026-01-01", None);
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule()),
@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn news_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
+    fn news_rendered_prompt_uses_runtime_policy_prompt_bundle() {
         use crate::{
             agents::shared::{
                 build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
@@ -683,19 +683,13 @@ mod tests {
             "Pack news prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_news_system_prompt("AAPL", "2026-01-01", Some(&policy));
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(
                 "Pack news prompt for AAPL at 2026-01-01. Emphasis: prioritise decision-relevant catalysts."
             ),
-            "runtime-policy prompt bundle should override the legacy news template: {prompt}"
-        );
-        assert!(
-            !prompt.contains(
-                "Your job is to identify the most relevant recent company and macro developments"
-            ),
-            "legacy news template should not leak through when a pack override is present: {prompt}"
+            "runtime-policy prompt bundle should drive the news template: {prompt}"
         );
         assert!(
             prompt.contains(build_authoritative_source_prompt_rule())

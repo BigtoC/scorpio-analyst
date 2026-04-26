@@ -7,7 +7,6 @@
 pub(crate) mod common;
 mod fundamental;
 mod news;
-mod prompt;
 mod sentiment;
 mod technical;
 
