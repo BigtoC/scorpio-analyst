@@ -7,12 +7,23 @@
 //! their consumers expect. **Production code must never use these — preflight
 //! is the sole writer of `state.analysis_runtime_policy` per Unit 4a.**
 
+use std::sync::OnceLock;
+
 use crate::analysis_packs::{
-    PackId, RuntimePolicy, resolve_pack, resolve_runtime_policy_for_manifest,
+    AnalysisPackManifest, PackId, RuntimePolicy, resolve_pack, resolve_runtime_policy_for_manifest,
 };
-use crate::prompts::PromptBundle;
 use crate::state::TradingState;
 use crate::workflow::Role;
+
+/// Cached baseline manifest used by [`baseline_pack_prompt_for_role`] so its
+/// `Cow::Owned` slot data lives for the lifetime of the test process — that
+/// lets the oracle keep returning `&'static str` even after the equity pack
+/// started materialising owned slot content (analyst slots gain the runtime
+/// contract via `with_analyst_runtime_contract` at load time).
+fn baseline_manifest() -> &'static AnalysisPackManifest {
+    static MANIFEST: OnceLock<AnalysisPackManifest> = OnceLock::new();
+    MANIFEST.get_or_init(|| resolve_pack(PackId::Baseline))
+}
 
 /// Hydrate `state.analysis_runtime_policy` with the baseline pack's
 /// `RuntimePolicy`. Idempotent.
@@ -39,42 +50,29 @@ pub fn with_runtime_policy(state: &mut TradingState, policy: RuntimePolicy) {
 /// `PromptBundle` after preflight has hydrated it. Tests use this as the
 /// canonical oracle for "what does the baseline pack say for role X" without
 /// having to rebuild a runtime policy.
+///
+/// Backed by a `OnceLock`-cached manifest so analyst slots that materialise
+/// owned strings at load time (the runtime contract is appended in
+/// `baseline_prompt_bundle`) still return `&'static str` to callers.
 #[must_use]
 pub fn baseline_pack_prompt_for_role(role: Role) -> &'static str {
-    let manifest = resolve_pack(PackId::Baseline);
-    // The baseline pack uses `Cow::Borrowed(include_str!(...))` so each slot's
-    // backing storage is `&'static str`. We round-trip through the slot
-    // accessor to keep this helper consistent with how production code reads
-    // the bundle, but the lifetime is preserved by extracting the static
-    // borrow up front.
-    let bundle: PromptBundle = manifest.prompt_bundle.clone();
-    let slot = role.prompt_slot();
-    // Match every slot explicitly so a future PromptSlot variant forces a
-    // compile error here too.
     use crate::workflow::PromptSlot;
-    let cow = match slot {
-        PromptSlot::FundamentalAnalyst => bundle.fundamental_analyst,
-        PromptSlot::SentimentAnalyst => bundle.sentiment_analyst,
-        PromptSlot::NewsAnalyst => bundle.news_analyst,
-        PromptSlot::TechnicalAnalyst => bundle.technical_analyst,
-        PromptSlot::BullishResearcher => bundle.bullish_researcher,
-        PromptSlot::BearishResearcher => bundle.bearish_researcher,
-        PromptSlot::DebateModerator => bundle.debate_moderator,
-        PromptSlot::Trader => bundle.trader,
-        PromptSlot::AggressiveRisk => bundle.aggressive_risk,
-        PromptSlot::ConservativeRisk => bundle.conservative_risk,
-        PromptSlot::NeutralRisk => bundle.neutral_risk,
-        PromptSlot::RiskModerator => bundle.risk_moderator,
-        PromptSlot::FundManager => bundle.fund_manager,
-    };
-    match cow {
-        std::borrow::Cow::Borrowed(s) => s,
-        // Baseline assets are `include_str!` and therefore always Borrowed;
-        // a runtime-loaded pack would hit this branch and need a different
-        // helper.
-        std::borrow::Cow::Owned(_) => {
-            panic!("baseline pack prompts must be compile-time borrowed (include_str!)")
-        }
+
+    let bundle = &baseline_manifest().prompt_bundle;
+    match role.prompt_slot() {
+        PromptSlot::FundamentalAnalyst => bundle.fundamental_analyst.as_ref(),
+        PromptSlot::SentimentAnalyst => bundle.sentiment_analyst.as_ref(),
+        PromptSlot::NewsAnalyst => bundle.news_analyst.as_ref(),
+        PromptSlot::TechnicalAnalyst => bundle.technical_analyst.as_ref(),
+        PromptSlot::BullishResearcher => bundle.bullish_researcher.as_ref(),
+        PromptSlot::BearishResearcher => bundle.bearish_researcher.as_ref(),
+        PromptSlot::DebateModerator => bundle.debate_moderator.as_ref(),
+        PromptSlot::Trader => bundle.trader.as_ref(),
+        PromptSlot::AggressiveRisk => bundle.aggressive_risk.as_ref(),
+        PromptSlot::ConservativeRisk => bundle.conservative_risk.as_ref(),
+        PromptSlot::NeutralRisk => bundle.neutral_risk.as_ref(),
+        PromptSlot::RiskModerator => bundle.risk_moderator.as_ref(),
+        PromptSlot::FundManager => bundle.fund_manager.as_ref(),
     }
 }
 
@@ -133,57 +131,24 @@ mod tests {
         // Pack-oracle helper must return byte-identical content to the
         // manifest's PromptBundle for every live role — locks the helper as
         // the canonical regression-test oracle for Units 4a/4b.
-        let manifest = resolve_pack(PackId::Baseline);
+        let bundle = &baseline_manifest().prompt_bundle;
         let pairs: [(Role, &str); 13] = [
             (
                 Role::FundamentalAnalyst,
-                manifest.prompt_bundle.fundamental_analyst.as_ref(),
+                bundle.fundamental_analyst.as_ref(),
             ),
-            (
-                Role::SentimentAnalyst,
-                manifest.prompt_bundle.sentiment_analyst.as_ref(),
-            ),
-            (
-                Role::NewsAnalyst,
-                manifest.prompt_bundle.news_analyst.as_ref(),
-            ),
-            (
-                Role::TechnicalAnalyst,
-                manifest.prompt_bundle.technical_analyst.as_ref(),
-            ),
-            (
-                Role::BullishResearcher,
-                manifest.prompt_bundle.bullish_researcher.as_ref(),
-            ),
-            (
-                Role::BearishResearcher,
-                manifest.prompt_bundle.bearish_researcher.as_ref(),
-            ),
-            (
-                Role::DebateModerator,
-                manifest.prompt_bundle.debate_moderator.as_ref(),
-            ),
-            (Role::Trader, manifest.prompt_bundle.trader.as_ref()),
-            (
-                Role::AggressiveRisk,
-                manifest.prompt_bundle.aggressive_risk.as_ref(),
-            ),
-            (
-                Role::ConservativeRisk,
-                manifest.prompt_bundle.conservative_risk.as_ref(),
-            ),
-            (
-                Role::NeutralRisk,
-                manifest.prompt_bundle.neutral_risk.as_ref(),
-            ),
-            (
-                Role::RiskModerator,
-                manifest.prompt_bundle.risk_moderator.as_ref(),
-            ),
-            (
-                Role::FundManager,
-                manifest.prompt_bundle.fund_manager.as_ref(),
-            ),
+            (Role::SentimentAnalyst, bundle.sentiment_analyst.as_ref()),
+            (Role::NewsAnalyst, bundle.news_analyst.as_ref()),
+            (Role::TechnicalAnalyst, bundle.technical_analyst.as_ref()),
+            (Role::BullishResearcher, bundle.bullish_researcher.as_ref()),
+            (Role::BearishResearcher, bundle.bearish_researcher.as_ref()),
+            (Role::DebateModerator, bundle.debate_moderator.as_ref()),
+            (Role::Trader, bundle.trader.as_ref()),
+            (Role::AggressiveRisk, bundle.aggressive_risk.as_ref()),
+            (Role::ConservativeRisk, bundle.conservative_risk.as_ref()),
+            (Role::NeutralRisk, bundle.neutral_risk.as_ref()),
+            (Role::RiskModerator, bundle.risk_moderator.as_ref()),
+            (Role::FundManager, bundle.fund_manager.as_ref()),
         ];
         for (role, expected) in pairs {
             assert_eq!(
