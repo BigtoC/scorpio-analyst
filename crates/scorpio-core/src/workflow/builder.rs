@@ -105,7 +105,7 @@ pub fn build_graph_from_pack(
                 .unwrap_or_else(|| ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0) > 0)
         },
         TASKS.bullish_researcher,
-        TASKS.debate_moderator,
+        TASKS.trader,
     );
 
     graph.add_task(BullishResearcherTask::new(
@@ -149,7 +149,7 @@ pub fn build_graph_from_pack(
                 .unwrap_or_else(|| ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0) > 0)
         },
         TASKS.aggressive_risk,
-        TASKS.risk_moderator,
+        TASKS.fund_manager,
     );
 
     graph.add_task(AggressiveRiskTask::new(
