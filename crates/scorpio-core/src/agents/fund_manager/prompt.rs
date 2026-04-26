@@ -69,7 +69,7 @@ your first rationale line MUST begin with one of: \
 `Dual-risk escalation: overridden because ` (if Approved with a directional action). \
 When it is `unknown` (one or more reports missing), start the first line with: \
 `Dual-risk escalation: indeterminate because `. \
-When it is `absent`, no first-line prefix is required.
+When it is `absent`, no first-line prefix is required. \
 Emit the prefix byte-for-byte. Do not use markdown fences, lowercase variants, \
 mixed-case variants, or em-dashes.
 3. Make an evidence-based decision using the full input set.

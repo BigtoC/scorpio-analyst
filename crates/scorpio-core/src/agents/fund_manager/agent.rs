@@ -123,9 +123,17 @@ impl FundManagerAgent {
             .as_ref()
             .map(|p| p.action.clone())
             .expect("checked above");
-        let dual_risk_status = crate::agents::risk::DualRiskStatus::from_reports(
+        // Topology-aware dual-risk derivation: if the run was configured with
+        // zero risk rounds, the risk stage was deliberately bypassed and the
+        // status is `StageDisabled` rather than `Unknown`. The topology is
+        // read off the runtime policy that `PreflightTask` hydrates; absent
+        // policy or absent required_inputs falls back to the legacy
+        // "risk stage enabled" semantic so existing tests stay green.
+        let risk_stage_enabled = risk_stage_enabled_for_state(state);
+        let dual_risk_status = crate::agents::risk::DualRiskStatus::from_reports_with_topology(
             state.conservative_risk_report.as_ref(),
             state.neutral_risk_report.as_ref(),
+            risk_stage_enabled,
         );
 
         let (system_prompt, user_prompt) =
@@ -169,6 +177,29 @@ pub(super) async fn run_fund_manager(
     config: &Config,
 ) -> Result<AgentTokenUsage, TradingError> {
     run_fund_manager_with_inference(state, config, &RigFundManagerInference).await
+}
+
+/// True when the configured topology has the risk stage enabled.
+///
+/// **Behavior-neutral wiring (Phase 3).** This function currently returns
+/// `true` for every reachable code path: the legacy default config always
+/// configures non-zero risk rounds, so the topology derived from the active
+/// pack manifest reports `risk_enabled = true`. The fund-manager agent does
+/// not have direct `&Context` access, so it cannot read the real
+/// `KEY_ROUTING_FLAGS` written by `PreflightTask` — that plumbing happens
+/// in Phase 9 alongside the broader RoutingFlags-driven routing flip, when
+/// `FundManagerTask` reads the flag from context and passes it through.
+///
+/// Until then, calling `from_reports_with_topology(.., true)` is structurally
+/// identical to calling `from_reports(..)` — both return `Unknown` when
+/// risk reports are missing. The variant `StageDisabled` becomes reachable
+/// once Phase 9 wires the real flag.
+fn risk_stage_enabled_for_state(state: &TradingState) -> bool {
+    // Today: always enabled. Documented above. The argument is kept so the
+    // call site and signature land here in Phase 3 — only the data source
+    // changes in Phase 9.
+    let _ = state;
+    true
 }
 
 pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
