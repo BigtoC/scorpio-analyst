@@ -9,6 +9,7 @@ use super::{
     agent::{FundManagerInference, run_fund_manager_with_inference},
 };
 use crate::{
+    analysis_packs::resolve_runtime_policy,
     config::{Config, LlmConfig, ProviderSettings, ProvidersConfig, TradingConfig},
     error::{RetryPolicy, TradingError},
     providers::{
@@ -20,9 +21,19 @@ use crate::{
         RiskReport, SentimentData, SentimentSource, TechnicalData, ThesisMemory, TradeAction,
         TradeProposal, TradingState,
     },
+    workflow::Role,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────
+
+fn baseline_fund_manager_prompt() -> &'static str {
+    crate::testing::baseline_pack_prompt_for_role(Role::FundManager)
+}
+
+fn with_baseline_runtime_policy(state: &mut TradingState) {
+    state.analysis_runtime_policy =
+        Some(resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve"));
+}
 
 fn sample_llm_config() -> LlmConfig {
     LlmConfig {
@@ -94,6 +105,7 @@ fn violation_risk_report(level: RiskLevel) -> RiskReport {
 
 fn populated_state() -> TradingState {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     state.trader_proposal = Some(valid_proposal());
     state.aggressive_risk_report = Some(no_violation_risk_report(RiskLevel::Aggressive));
     state.neutral_risk_report = Some(no_violation_risk_report(RiskLevel::Neutral));
@@ -400,6 +412,7 @@ async fn llm_path_when_neither_flags_violation() {
 #[tokio::test]
 async fn error_when_trader_proposal_is_none() {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     // trader_proposal is None by default.
 
     let inference = StubInference::new(vec![]);
@@ -592,6 +605,7 @@ async fn agent_token_usage_marks_unavailable_for_llm_path_without_authoritative_
 #[tokio::test]
 async fn missing_risk_reports_invoke_llm_path() {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     state.trader_proposal = Some(valid_proposal());
     // All risk reports are None.
 
@@ -623,6 +637,7 @@ async fn missing_risk_reports_invoke_llm_path() {
 #[tokio::test]
 async fn missing_analyst_inputs_invoke_llm_path() {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     state.trader_proposal = Some(valid_proposal());
     state.aggressive_risk_report = Some(no_violation_risk_report(RiskLevel::Aggressive));
     state.neutral_risk_report = Some(no_violation_risk_report(RiskLevel::Neutral));
@@ -655,6 +670,7 @@ async fn missing_analyst_inputs_invoke_llm_path() {
 #[tokio::test]
 async fn missing_risk_reports_without_acknowledgment_is_rejected() {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     state.trader_proposal = Some(valid_proposal());
 
     let inference = StubInference::new(vec![Ok(make_prompt_response(
@@ -674,6 +690,7 @@ async fn missing_risk_reports_without_acknowledgment_is_rejected() {
 #[tokio::test]
 async fn missing_analyst_inputs_without_acknowledgment_is_rejected() {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     state.trader_proposal = Some(valid_proposal());
     state.aggressive_risk_report = Some(no_violation_risk_report(RiskLevel::Aggressive));
     state.neutral_risk_report = Some(no_violation_risk_report(RiskLevel::Neutral));
@@ -734,7 +751,8 @@ fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
     use super::prompt::build_prompt_context;
     use crate::{agents::risk::DualRiskStatus, state::TradingState};
 
-    let state = TradingState::new("AAPL", "2026-01-15");
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    with_baseline_runtime_policy(&mut state);
     let (_system, user) = build_prompt_context(
         &state,
         &state.asset_symbol,
@@ -767,7 +785,7 @@ fn build_prompt_context_user_prompt_includes_pack_context() {
 }
 
 #[test]
-fn build_prompt_context_prefers_runtime_policy_fund_manager_prompt_bundle() {
+fn build_prompt_context_renders_runtime_policy_fund_manager_prompt_bundle() {
     use super::prompt::build_prompt_context;
     use crate::{agents::risk::DualRiskStatus, state::TradingState};
 
@@ -788,10 +806,6 @@ fn build_prompt_context_prefers_runtime_policy_fund_manager_prompt_bundle() {
     assert!(
         system.contains("Pack-owned fund manager prompt for AAPL at 2026-01-15."),
         "system prompt should render the runtime-policy fund-manager prompt bundle: {system}"
-    );
-    assert!(
-        !system.contains("Your role is to make the final approve-or-reject execution decision"),
-        "legacy fund-manager prompt should not leak through when a pack override is present: {system}"
     );
 }
 
@@ -858,7 +872,8 @@ fn build_prompt_context_includes_absence_note_when_prior_thesis_missing() {
     use super::prompt::build_prompt_context;
     use crate::agents::risk::DualRiskStatus;
 
-    let state = TradingState::new("AAPL", "2026-01-15");
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    with_baseline_runtime_policy(&mut state);
     let (system, user) = build_prompt_context(
         &state,
         &state.asset_symbol,
@@ -904,7 +919,8 @@ fn fund_manager_prompt_includes_valuation_not_computed_when_no_derived_valuation
     use super::prompt::build_prompt_context;
     use crate::agents::risk::DualRiskStatus;
 
-    let state = TradingState::new("AAPL", "2026-01-15");
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    with_baseline_runtime_policy(&mut state);
     let (_system, user) = build_prompt_context(
         &state,
         &state.asset_symbol,
@@ -1083,23 +1099,18 @@ fn fund_manager_prompt_partial_valuation_surfaces_only_available_metrics() {
 
 #[test]
 fn fund_manager_system_prompt_references_precomputed_valuation() {
-    use super::prompt::FUND_MANAGER_SYSTEM_PROMPT;
-
+    let prompt = baseline_fund_manager_prompt();
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("pre-computed deterministic valuation"),
-        "system prompt must reference pre-computed valuation context: {}",
-        FUND_MANAGER_SYSTEM_PROMPT
+        prompt.contains("pre-computed deterministic valuation"),
+        "system prompt must reference pre-computed valuation context: {prompt}"
     );
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("not assessed"),
-        "system prompt must describe the not-assessed fallback for ETF/fund assets: {}",
-        FUND_MANAGER_SYSTEM_PROMPT
+        prompt.contains("not assessed"),
+        "system prompt must describe the not-assessed fallback for ETF/fund assets: {prompt}"
     );
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("not computed")
-            || FUND_MANAGER_SYSTEM_PROMPT.contains("unavailable"),
-        "system prompt must describe the not-computed fallback path: {}",
-        FUND_MANAGER_SYSTEM_PROMPT
+        prompt.contains("not computed") || prompt.contains("unavailable"),
+        "system prompt must describe the not-computed fallback path: {prompt}"
     );
 }
 
@@ -1606,36 +1617,34 @@ fn fund_manager_prompt_places_unknown_indicator_near_top() {
 
 #[test]
 fn fund_manager_system_prompt_contains_exact_first_line_contract() {
-    use super::prompt::FUND_MANAGER_SYSTEM_PROMPT;
-
+    let prompt = baseline_fund_manager_prompt();
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation: upheld because"),
+        prompt.contains("Dual-risk escalation: upheld because"),
         "system prompt must contain upheld prefix example"
     );
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation: deferred because"),
+        prompt.contains("Dual-risk escalation: deferred because"),
         "system prompt must contain deferred prefix example"
     );
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation: overridden because"),
+        prompt.contains("Dual-risk escalation: overridden because"),
         "system prompt must contain overridden prefix example"
     );
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation: indeterminate because"),
+        prompt.contains("Dual-risk escalation: indeterminate because"),
         "system prompt must contain indeterminate prefix example"
     );
 }
 
 #[test]
 fn fund_manager_system_prompt_requires_byte_for_byte_prefix_emission() {
-    use super::prompt::FUND_MANAGER_SYSTEM_PROMPT;
-
+    let prompt = baseline_fund_manager_prompt();
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains("Emit the prefix byte-for-byte"),
+        prompt.contains("Emit the prefix byte-for-byte"),
         "system prompt must require byte-for-byte prefix emission"
     );
     assert!(
-        FUND_MANAGER_SYSTEM_PROMPT.contains(
+        prompt.contains(
             "Do not use markdown fences, lowercase variants, mixed-case variants, or em-dashes."
         ),
         "system prompt must forbid alternate prefix formatting"
@@ -1644,7 +1653,7 @@ fn fund_manager_system_prompt_requires_byte_for_byte_prefix_emission() {
 
 #[test]
 fn fund_manager_prompt_drift_guard_forbids_deterministic_phrases() {
-    use super::prompt::{FUND_MANAGER_SYSTEM_PROMPT, build_user_prompt_for_test};
+    use super::prompt::build_user_prompt_for_test;
     use crate::agents::risk::DualRiskStatus;
 
     let forbidden = [
@@ -1659,13 +1668,13 @@ fn fund_manager_prompt_drift_guard_forbids_deterministic_phrases() {
     ];
 
     let user_prompt = build_user_prompt_for_test(DualRiskStatus::Absent);
-    let system_lower = FUND_MANAGER_SYSTEM_PROMPT.to_ascii_lowercase();
+    let system_lower = baseline_fund_manager_prompt().to_ascii_lowercase();
     let user_lower = user_prompt.to_ascii_lowercase();
 
     for phrase in &forbidden {
         assert!(
             !system_lower.contains(phrase),
-            "FUND_MANAGER_SYSTEM_PROMPT must not contain \"{phrase}\""
+            "baseline fund manager prompt must not contain \"{phrase}\""
         );
         assert!(
             !user_lower.contains(phrase),

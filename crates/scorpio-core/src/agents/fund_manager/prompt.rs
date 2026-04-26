@@ -18,90 +18,18 @@ const MISSING_RISK_DISCUSSION_NOTE: &str = "(no risk discussion history availabl
 const MISSING_ANALYST_DATA_NOTE: &str =
     "(data unavailable — acknowledge the gap and calibrate confidence conservatively)";
 
-/// System prompt for the Fund Manager, from `docs/prompts.md` section 5.
-pub(super) const FUND_MANAGER_SYSTEM_PROMPT: &str = "\
-You are the Fund Manager for {ticker} as of {current_date}.
-Your role is to make the final approve-or-reject execution decision after reviewing the trader \
-proposal and all risk inputs.
-
-{untrusted_context_notice}
-
-Available inputs:
-- Trader proposal: {trader_proposal}
-- Aggressive risk report: {aggressive_risk_report}
-- Neutral risk report: {neutral_risk_report}
-- Conservative risk report: {conservative_risk_report}
-- Risk discussion summary: {risk_discussion_history}
-- Fundamental data: {fundamental_report}
-- Technical data: {technical_report}
-- Sentiment data: {sentiment_report}
-- News data: {news_report}
-- Past learnings: {past_memory_str}
-
-Current market price: {current_price}
-
-**Action Scale** (use exactly one):
-- **Buy**: High-conviction approval to initiate or add exposure at current or near-term levels
-- **Underweight**: Reduce allocation or trim exposure because risk/reward is unfavorable relative to alternatives
-- **Hold**: Do not add or reduce exposure now; maintain current allocation while monitoring for a better entry or clearer confirmation
-- **Overweight**: Positive outlook; increase allocation gradually, but size the position below full-conviction Buy
-- **Sell**: Exit exposure or avoid initiating a position because downside risk, valuation, or trend is materially unfavorable
-
-Return ONLY a JSON object matching `ExecutionStatus`:
-- `decision`: `Approved` or `Rejected`
-- `action`: one of `Buy`, `Underweight`, `Hold`, `Overweight`, `Sell`
-- `rationale`: concise audit-ready explanation
-- `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
-- `entry_guidance`: (required when action is Hold or Sell) a specific tactical entry condition, \
-e.g. \"tactical BUY on any dip below $570-$575\" or \"accumulate below $145 on weakness\". \
-Reference concrete price levels derived from support/resistance, valuation floor, or technical signals.
-- `suggested_position`: recommended portfolio allocation with scaling guidance, \
-e.g. \"5-12% of portfolio (add 2-4% on weakness) - maintain conservative sizing while volatility premium persists\". \
-Calibrate size to conviction level, volatility, and risk tolerance.
-
-Instructions:
-1. Review the trader proposal and all risk inputs carefully.
-2. Check the `Dual-risk escalation:` indicator at the top of the user context. \
-When it is `present` (both Conservative and Neutral risk reports flagged a material violation), \
-your first rationale line MUST begin with one of: \
-`Dual-risk escalation: upheld because ` (if Rejected), \
-`Dual-risk escalation: deferred because ` (if Approved with Hold), or \
-`Dual-risk escalation: overridden because ` (if Approved with a directional action). \
-When it is `unknown` (one or more reports missing), start the first line with: \
-`Dual-risk escalation: indeterminate because `. \
-When it is `absent`, no first-line prefix is required. \
-Emit the prefix byte-for-byte. Do not use markdown fences, lowercase variants, \
-mixed-case variants, or em-dashes.
-3. Make an evidence-based decision using the full input set.
-4. Ground the decision in the pre-computed deterministic valuation provided in the user context \
-(see \"Deterministic scenario valuation\" section). Use those numbers to anchor price levels \
-in `entry_guidance` and calibrate `suggested_position`. If the valuation is `not assessed` \
-(e.g. ETF or fund-style instrument), note this explicitly in `rationale` and anchor price levels \
-on technical signals instead. If valuation is `not computed` or otherwise unavailable for this run, \
-explicitly acknowledge the missing valuation context in `rationale` and rely on the remaining risk, \
-technical, sentiment, news, and trader inputs without inventing valuation floors.
-5. Approve only if the proposal's action, target, stop, and confidence are defensible.
-6. If rejecting, make the blocking reason explicit in `rationale`.
-7. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and \
-calibrate confidence conservatively.
-8. If the final `action` is Hold or Sell, you MUST provide `entry_guidance` with a specific \
-price level or condition at which the asset becomes a buy.
-9. Always provide `suggested_position` with concrete portfolio percentage ranges.
-10. Return ONLY the single JSON object required by `ExecutionStatus`.
-11. Set `action` to the trade direction you endorse. This may match the trader's proposed \
-action or differ if your review warrants a change. If your decision is `Rejected`, \
-`Hold` is the expected default unless the rejection is specifically about direction \
-(e.g., the trader said Buy but evidence supports Sell).
-
-Do not restate the entire pipeline.";
-
 fn fund_manager_system_prompt_template(state: &TradingState) -> &str {
     state
         .analysis_runtime_policy
         .as_ref()
-        .map(|policy| policy.prompt_bundle.fund_manager.as_ref())
-        .filter(|template| !template.is_empty())
-        .unwrap_or(FUND_MANAGER_SYSTEM_PROMPT)
+        .expect(
+            "fund manager prompt: missing runtime policy — preflight is the sole writer of \
+             state.analysis_runtime_policy; tests bypassing preflight must use \
+             `with_baseline_runtime_policy`",
+        )
+        .prompt_bundle
+        .fund_manager
+        .as_ref()
 }
 
 pub(crate) fn build_prompt_context(
@@ -378,15 +306,27 @@ fn push_bounded_line(buffer: &mut String, line: &str, max_chars: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{FUND_MANAGER_SYSTEM_PROMPT, build_prompt_context};
+    use super::build_prompt_context;
     use crate::{
         agents::risk::DualRiskStatus,
+        analysis_packs::resolve_runtime_policy,
         state::{
             DebateMessage, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData,
             RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction,
             TradeProposal, TradingState,
         },
+        workflow::Role,
     };
+
+    fn baseline_fund_manager_prompt() -> &'static str {
+        crate::testing::baseline_pack_prompt_for_role(Role::FundManager)
+    }
+
+    fn with_baseline_policy(state: &mut TradingState) {
+        state.analysis_runtime_policy = Some(
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve"),
+        );
+    }
 
     fn valid_proposal() -> TradeProposal {
         TradeProposal {
@@ -411,6 +351,7 @@ mod tests {
 
     fn populated_state() -> TradingState {
         let mut state = TradingState::new("AAPL", "2026-03-15");
+        with_baseline_policy(&mut state);
         state.trader_proposal = Some(valid_proposal());
         state.aggressive_risk_report = Some(no_violation_risk_report(RiskLevel::Aggressive));
         state.neutral_risk_report = Some(no_violation_risk_report(RiskLevel::Neutral));
@@ -471,20 +412,21 @@ mod tests {
 
     #[test]
     fn system_prompt_contains_decision_instructions() {
+        let prompt = baseline_fund_manager_prompt();
         assert!(
-            FUND_MANAGER_SYSTEM_PROMPT.contains("Dual-risk escalation:"),
+            prompt.contains("Dual-risk escalation:"),
             "system prompt must contain the dual-risk escalation indicator reference"
         );
         assert!(
-            FUND_MANAGER_SYSTEM_PROMPT.contains("Approved"),
+            prompt.contains("Approved"),
             "system prompt must mention Approved decision"
         );
         assert!(
-            FUND_MANAGER_SYSTEM_PROMPT.contains("Rejected"),
+            prompt.contains("Rejected"),
             "system prompt must mention Rejected decision"
         );
         assert!(
-            FUND_MANAGER_SYSTEM_PROMPT.contains("action"),
+            prompt.contains("action"),
             "system prompt must mention action field"
         );
     }
@@ -511,6 +453,7 @@ mod tests {
     #[test]
     fn prompt_context_uses_missing_note_when_risk_reports_absent() {
         let mut state = TradingState::new("AAPL", "2026-03-15");
+        with_baseline_policy(&mut state);
         state.trader_proposal = Some(valid_proposal());
         let (_system_prompt, user_prompt) = build_prompt_context(
             &state,
