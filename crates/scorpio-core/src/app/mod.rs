@@ -120,7 +120,11 @@ impl AnalysisRuntime {
 
         let yfinance = YFinanceClient::from_config(&cfg.rate_limits);
 
-        let pipeline = TradingPipeline::new(
+        // Production callers route through `try_new` so an invalid
+        // `config.analysis_pack` value surfaces as a typed `TradingError`
+        // here rather than silently coercing to "no runtime policy" and
+        // failing later inside `PreflightTask` with a generic message.
+        let pipeline = TradingPipeline::try_new(
             cfg,
             finnhub,
             fred,
@@ -128,7 +132,8 @@ impl AnalysisRuntime {
             snapshot_store,
             quick_handle,
             deep_handle,
-        );
+        )
+        .context("failed to construct TradingPipeline")?;
 
         Ok(Self {
             quick_provider,
