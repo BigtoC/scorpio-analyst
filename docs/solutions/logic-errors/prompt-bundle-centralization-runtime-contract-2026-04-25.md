@@ -1,8 +1,8 @@
 ---
 title: Prompt Bundle Centralization — Runtime Contract Migration
-date: 2026-04-25
+date: 2026-04-26
 type: refactor-followup
-status: stub-pending-completion
+status: shipped
 tags:
   - prompt-bundle
   - topology
@@ -15,11 +15,10 @@ origin_plan: docs/plans/2026-04-25-001-refactor-prompt-bundle-centralization-pla
 
 # Prompt Bundle Centralization — Runtime Contract Migration
 
-> **Stub status.** This document is the planned-pattern outline. The
-> post-merge follow-up edits it to reflect the actually-shipped pattern,
-> including any review-driven changes to Units 4a/4b. **Do not treat the
-> contents below as final until the status frontmatter says
-> `shipped`.**
+This document captures the **shipped** pattern after Units 1-6 of the
+prompt-bundle centralization refactor landed. The runtime contract below is
+authoritative; the origin plan is preserved as a historical record of how
+the work was scoped and reviewed.
 
 ## Problem
 
@@ -121,14 +120,58 @@ rows manually with `DELETE FROM phase_snapshots WHERE schema_version < 3`.
 A future `scorpio db vacuum` subcommand (or TTL-based cleanup) is the right
 home for automated reclamation; this refactor does not introduce one.
 
-## Open follow-ups
+## Shipped follow-ups (Phases 1-10 of the plan)
 
-- **Unit 4a Step 3**: prompt-builder signature flip across ~13 call sites —
-  pending. Behavior-neutral so far thanks to the regression gate.
-- **Unit 4b**: routing flip via `RoutingFlags` reads, maximal-children
-  fan-out + per-child no-op gating, `try_new` + production-caller routing,
-  schema bump, `sanitize_analysis_emphasis` enforcement, fallback constant
-  deletion — pending.
-- **Unit 6 cleanup**: `README.md` / `CLAUDE.md` refresh + dead-constant
-  deletion — pending until 4b removes the fallback constants from the
-  active runtime path.
+All originally-deferred work landed:
+
+- **Phase 1**: Regression gate at `tests/prompt_bundle_regression_gate.rs`
+  drives the `testing::prompt_render` harness across 13 roles × 4
+  scenarios. Golden-byte fixtures live under `tests/fixtures/prompt_bundle/`.
+- **Phase 2**: `THESIS_MEMORY_SCHEMA_VERSION 2 → 3`; warn-line replaced
+  `%err` with `error.kind = "deserialize"` so `serde_json` errors cannot
+  echo payload bytes into logs. Bidirectional thesis-compat tests (v3 binary
+  skips v2 rows; v2 binary skips v3 rows after downgrade).
+- **Phase 3**: `DualRiskStatus::from_reports_with_topology` wired into
+  `fund_manager::agent`. The `risk_stage_enabled_for_state` helper currently
+  always returns `true` (preserving today's `Unknown`-on-missing-reports
+  semantic); future work plumbs `KEY_ROUTING_FLAGS` from `FundManagerTask`
+  to make the `StageDisabled` variant reachable in production.
+- **Phase 4**: `PreflightTask` runs `validate_active_pack_completeness` as
+  fail-loud and invokes `sanitize_analysis_emphasis` against the active
+  pack's emphasis string. The previously-passing `from_pack` test for the
+  inactive crypto stub was updated to assert the new fail-loud contract:
+  construction succeeds, but preflight rejects the empty bundle.
+- **Phase 5**: `TradingPipeline::try_new` introduced alongside the
+  infallible `::new`. `AnalysisRuntime` routes through `try_new` so an
+  invalid `config.analysis_pack` value surfaces as `TradingError::Config`
+  at construction time.
+- **Phase 6**: Activation-path audit at `tests/activation_path_audit.rs`
+  proves every reachable construction path (`new`, `try_new`, `from_pack`,
+  `build_graph_from_pack`) produces a graph whose entry task is
+  `PreflightTask`.
+- **Phase 7**: `render_researcher_system_prompt` and
+  `render_risk_system_prompt` now take `&RuntimePolicy` directly with no
+  legacy-template fallback. Each agent constructor extracts the policy from
+  `state.analysis_runtime_policy` via the per-module
+  `runtime_policy_for_agent` helper, returning a typed `Config` error if
+  the policy is missing (preflight-bypass without `with_baseline_runtime_policy`).
+- **Phase 8**: `state.analysis_runtime_policy` reset confirmed to be
+  hygiene-only — preflight is the sole writer in production.
+- **Phase 9**: Stage-entry conditional edges in `workflow::builder` read
+  `RoutingFlags` (typed) from `KEY_ROUTING_FLAGS`. Loop-back conditionals
+  keep using the per-iteration round counters per the plan. Fallback to the
+  raw round-count read preserves test compatibility for paths that
+  legitimately bypass preflight.
+- **Phase 10**: Legacy `_SYSTEM_PROMPT` constants retained as
+  `#[allow(dead_code)]` drift-detection oracles (the byte-equivalence tests
+  in `agents/researcher/common.rs` and `agents/risk/common.rs` still
+  compare them to the rendered pack assets). Vacuous fallback test helpers
+  (`render_legacy_fallback_system_prompt_for_role`,
+  `render_blank_slot_fallback_system_prompt_for_role`) and their tests
+  removed because the renderer paths they exercised are gone. README /
+  CLAUDE.md refreshed.
+
+The deferred items called out in earlier drafts of this document
+(real-world abstraction validation against a real second pack;
+`scorpio db vacuum` for thesis-row reclamation) remain deferred to the
+slice that ships a second selectable pack.
