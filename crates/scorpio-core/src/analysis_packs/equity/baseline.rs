@@ -4,6 +4,7 @@
 //! Corporate equities receive full deterministic valuation; ETFs and
 //! unsupported shapes fall back to valuation-not-assessed.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
@@ -12,26 +13,59 @@ use super::super::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
 };
 
+/// Cross-cutting evidence-discipline rules + analyst inference guards every
+/// equity analyst's system prompt enforces. Loaded once at compile time and
+/// appended to each analyst slot in [`baseline_prompt_bundle`].
+const ANALYST_RUNTIME_CONTRACT: &str = include_str!("prompts/analyst_runtime_contract.md");
+
 fn include_prompt(path: &'static str) -> &'static str {
     path.strip_suffix('\n').unwrap_or(path)
 }
 
+/// Append the analyst runtime contract to a raw analyst prompt template.
+///
+/// The contract — the three evidence-discipline rules and the analyst
+/// unsupported-inference guards — is cross-cutting and identical for every
+/// equity analyst, so each pack injects it once at load time rather than
+/// having every renderer re-append it on every call.
+fn with_analyst_runtime_contract(raw: &'static str) -> Cow<'static, str> {
+    Cow::Owned(format!(
+        "{raw}\n\n{contract}",
+        raw = include_prompt(raw),
+        contract = include_prompt(ANALYST_RUNTIME_CONTRACT),
+    ))
+}
+
 fn baseline_prompt_bundle() -> PromptBundle {
-    PromptBundle::from_static(
-        include_prompt(include_str!("prompts/fundamental_analyst.md")),
-        include_prompt(include_str!("prompts/sentiment_analyst.md")),
-        include_prompt(include_str!("prompts/news_analyst.md")),
-        include_prompt(include_str!("prompts/technical_analyst.md")),
-        include_prompt(include_str!("prompts/bullish_researcher.md")),
-        include_prompt(include_str!("prompts/bearish_researcher.md")),
-        include_prompt(include_str!("prompts/debate_moderator.md")),
-        include_prompt(include_str!("prompts/trader.md")),
-        include_prompt(include_str!("prompts/aggressive_risk.md")),
-        include_prompt(include_str!("prompts/conservative_risk.md")),
-        include_prompt(include_str!("prompts/neutral_risk.md")),
-        include_prompt(include_str!("prompts/risk_moderator.md")),
-        include_prompt(include_str!("prompts/fund_manager.md")),
-    )
+    PromptBundle {
+        fundamental_analyst: with_analyst_runtime_contract(include_str!(
+            "prompts/fundamental_analyst.md"
+        )),
+        sentiment_analyst: with_analyst_runtime_contract(include_str!(
+            "prompts/sentiment_analyst.md"
+        )),
+        news_analyst: with_analyst_runtime_contract(include_str!("prompts/news_analyst.md")),
+        technical_analyst: with_analyst_runtime_contract(include_str!(
+            "prompts/technical_analyst.md"
+        )),
+        bullish_researcher: Cow::Borrowed(include_prompt(include_str!(
+            "prompts/bullish_researcher.md"
+        ))),
+        bearish_researcher: Cow::Borrowed(include_prompt(include_str!(
+            "prompts/bearish_researcher.md"
+        ))),
+        debate_moderator: Cow::Borrowed(include_prompt(include_str!(
+            "prompts/debate_moderator.md"
+        ))),
+        trader: Cow::Borrowed(include_prompt(include_str!("prompts/trader.md"))),
+        aggressive_risk: Cow::Borrowed(include_prompt(include_str!("prompts/aggressive_risk.md"))),
+        conservative_risk: Cow::Borrowed(include_prompt(include_str!(
+            "prompts/conservative_risk.md"
+        ))),
+        neutral_risk: Cow::Borrowed(include_prompt(include_str!("prompts/neutral_risk.md"))),
+        risk_moderator: Cow::Borrowed(include_prompt(include_str!("prompts/risk_moderator.md"))),
+        fund_manager: Cow::Borrowed(include_prompt(include_str!("prompts/fund_manager.md"))),
+    }
 }
 
 /// Build the baseline pack manifest.
