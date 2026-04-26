@@ -190,28 +190,22 @@ pub(crate) fn analysis_emphasis_for_prompt(state: &TradingState) -> String {
 
 /// Evidence-discipline rule: prefer authoritative runtime evidence, never infer unsupported claims.
 ///
-/// Returns a terse imperative rule suitable for appending to an agent system prompt.
-pub(crate) fn build_authoritative_source_prompt_rule() -> &'static str {
-    "Prefer authoritative runtime evidence (tool output, schema data) over inference or recalled \
+/// Terse imperative rule appended verbatim to analyst-style system prompts.
+pub(crate) const AUTHORITATIVE_SOURCE_PROMPT_RULE: &str = "Prefer authoritative runtime evidence (tool output, schema data) over inference or recalled \
 memory. Never infer estimates, transcript commentary, or quarter labels unless the runtime \
-explicitly provides them."
-}
+explicitly provides them.";
 
 /// Evidence-discipline rule: handle missing data honestly without padding.
 ///
-/// Returns a terse imperative rule suitable for appending to an agent system prompt.
-pub(crate) fn build_missing_data_prompt_rule() -> &'static str {
-    "When evidence is sparse or missing, say so explicitly in `summary` rather than padding weak \
-claims. Return `null` or `[]` for missing structured fields; do not guess or extrapolate values."
-}
+/// Terse imperative rule appended verbatim to analyst-style system prompts.
+pub(crate) const MISSING_DATA_PROMPT_RULE: &str = "When evidence is sparse or missing, say so explicitly in `summary` rather than padding weak \
+claims. Return `null` or `[]` for missing structured fields; do not guess or extrapolate values.";
 
 /// Evidence-discipline rule: separate observed facts from interpretation.
 ///
-/// Returns a terse imperative rule suitable for appending to an agent system prompt.
-pub(crate) fn build_data_quality_prompt_rule() -> &'static str {
-    "Separate observed facts (tool output) from interpretation (your reasoning). Do not present \
-interpretation as established fact."
-}
+/// Terse imperative rule appended verbatim to analyst-style system prompts.
+pub(crate) const DATA_QUALITY_PROMPT_RULE: &str = "Separate observed facts (tool output) from interpretation (your reasoning). Do not present \
+interpretation as established fact.";
 
 // ─── Typed evidence and data-quality context builders ────────────────────────
 
@@ -387,22 +381,24 @@ mod tests {
 
     #[test]
     fn test_authoritative_source_rule_mentions_runtime_evidence() {
-        let rule = build_authoritative_source_prompt_rule();
-        assert!(rule.contains("runtime"));
-        assert!(!rule.is_empty());
+        assert!(AUTHORITATIVE_SOURCE_PROMPT_RULE.contains("runtime"));
+        assert!(!AUTHORITATIVE_SOURCE_PROMPT_RULE.is_empty());
     }
 
     #[test]
     fn test_missing_data_rule_mentions_null_or_empty() {
-        let rule = build_missing_data_prompt_rule();
-        assert!(rule.contains("null") || rule.contains("[]"));
+        assert!(
+            MISSING_DATA_PROMPT_RULE.contains("null") || MISSING_DATA_PROMPT_RULE.contains("[]")
+        );
     }
 
     #[test]
     fn test_data_quality_rule_mentions_facts_and_interpretation() {
-        let rule = build_data_quality_prompt_rule();
-        assert!(rule.contains("facts") || rule.contains("observed"));
-        assert!(rule.contains("interpretation"));
+        assert!(
+            DATA_QUALITY_PROMPT_RULE.contains("facts")
+                || DATA_QUALITY_PROMPT_RULE.contains("observed")
+        );
+        assert!(DATA_QUALITY_PROMPT_RULE.contains("interpretation"));
     }
 
     #[test]

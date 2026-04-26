@@ -10,6 +10,11 @@ use serde::de::DeserializeOwned;
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
 use crate::{
+    agents::shared::{
+        AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE, MISSING_DATA_PROMPT_RULE,
+        sanitize_prompt_context,
+    },
+    analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::MAX_SUMMARY_CHARS,
     error::{RetryPolicy, TradingError},
@@ -18,6 +23,33 @@ use crate::{
         factory::{LlmAgent, prompt_text_with_retry, prompt_typed_with_retry},
     },
 };
+
+/// Render an equity analyst's system prompt from the active pack's slot.
+///
+/// `base_template` is the role's `prompt_bundle.<analyst>_analyst` text, which
+/// preflight's completeness gate has already proven non-empty. Substitutes the
+/// `{ticker}`, `{current_date}`, and `{analysis_emphasis}` placeholders, then
+/// appends the three shared evidence-discipline rules and the analyst-specific
+/// unsupported-inference guards every equity analyst agrees on.
+pub(super) fn render_analyst_system_prompt(
+    base_template: &str,
+    symbol: &str,
+    target_date: &str,
+    policy: &RuntimePolicy,
+) -> String {
+    let analysis_emphasis = sanitize_prompt_context(&policy.analysis_emphasis);
+    let base = base_template
+        .replace("{ticker}", symbol)
+        .replace("{current_date}", target_date)
+        .replace("{analysis_emphasis}", &analysis_emphasis);
+
+    format!(
+        "{base}\n\n{AUTHORITATIVE_SOURCE_PROMPT_RULE}\n{MISSING_DATA_PROMPT_RULE}\n{DATA_QUALITY_PROMPT_RULE}\n\
+Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
+If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
+Separate observed facts from interpretation.",
+    )
+}
 
 /// Shared runtime fields derived from the analyst request context.
 ///

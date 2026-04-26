@@ -11,10 +11,7 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
-    agents::shared::{
-        agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
-        build_data_quality_prompt_rule, build_missing_data_prompt_rule, sanitize_prompt_context,
-    },
+    agents::shared::agent_token_usage_from_completion,
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::NEWS_ANALYST_MAX_TURNS,
@@ -26,35 +23,27 @@ use crate::{
     state::{AgentTokenUsage, NewsData, TradingState},
 };
 
-use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
+use super::common::{
+    analyst_runtime_config, render_analyst_system_prompt, run_analyst_inference,
+    validate_summary_content,
+};
 
 /// Build the rendered system prompt for the News Analyst.
 ///
-/// Reads the role's prompt template directly from the active pack's
-/// `RuntimePolicy.prompt_bundle.news_analyst` slot and substitutes runtime
-/// placeholders, then appends the three shared evidence-discipline rule
-/// helpers plus analyst-specific unsupported-inference guards. Preflight's
-/// completeness gate ensures the slot is non-empty before this fires.
+/// Reads the role's template from `RuntimePolicy.prompt_bundle.news_analyst`
+/// and delegates substitution and rule appending to the shared
+/// [`render_analyst_system_prompt`] helper. Preflight's completeness gate
+/// ensures the slot is non-empty before this fires.
 pub(crate) fn build_news_system_prompt(
     symbol: &str,
     target_date: &str,
     policy: &RuntimePolicy,
 ) -> String {
-    let analysis_emphasis = sanitize_prompt_context(&policy.analysis_emphasis);
-    let base = policy.prompt_bundle.news_analyst.as_ref();
-
-    format!(
-        "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
-Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
-If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
-Separate observed facts from interpretation.",
-        base = base
-            .replace("{ticker}", symbol)
-            .replace("{current_date}", target_date)
-            .replace("{analysis_emphasis}", &analysis_emphasis),
-        auth_rule = build_authoritative_source_prompt_rule(),
-        missing_rule = build_missing_data_prompt_rule(),
-        quality_rule = build_data_quality_prompt_rule(),
+    render_analyst_system_prompt(
+        policy.prompt_bundle.news_analyst.as_ref(),
+        symbol,
+        target_date,
+        policy,
     )
 }
 
@@ -631,8 +620,7 @@ mod tests {
     #[test]
     fn news_rendered_prompt_includes_evidence_discipline_rules() {
         use crate::agents::shared::{
-            build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
-            build_missing_data_prompt_rule,
+            AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE, MISSING_DATA_PROMPT_RULE,
         };
         use crate::analysis_packs::resolve_runtime_policy;
 
@@ -641,15 +629,15 @@ mod tests {
         let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
-            prompt.contains(build_authoritative_source_prompt_rule()),
+            prompt.contains(AUTHORITATIVE_SOURCE_PROMPT_RULE),
             "rendered prompt must contain authoritative source rule"
         );
         assert!(
-            prompt.contains(build_missing_data_prompt_rule()),
+            prompt.contains(MISSING_DATA_PROMPT_RULE),
             "rendered prompt must contain missing data rule"
         );
         assert!(
-            prompt.contains(build_data_quality_prompt_rule()),
+            prompt.contains(DATA_QUALITY_PROMPT_RULE),
             "rendered prompt must contain data quality rule"
         );
         assert!(
@@ -670,8 +658,8 @@ mod tests {
     fn news_rendered_prompt_uses_runtime_policy_prompt_bundle() {
         use crate::{
             agents::shared::{
-                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
-                build_missing_data_prompt_rule,
+                AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE,
+                MISSING_DATA_PROMPT_RULE,
             },
             analysis_packs::resolve_runtime_policy,
         };
@@ -692,9 +680,9 @@ mod tests {
             "runtime-policy prompt bundle should drive the news template: {prompt}"
         );
         assert!(
-            prompt.contains(build_authoritative_source_prompt_rule())
-                && prompt.contains(build_missing_data_prompt_rule())
-                && prompt.contains(build_data_quality_prompt_rule()),
+            prompt.contains(AUTHORITATIVE_SOURCE_PROMPT_RULE)
+                && prompt.contains(MISSING_DATA_PROMPT_RULE)
+                && prompt.contains(DATA_QUALITY_PROMPT_RULE),
             "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
         );
     }
