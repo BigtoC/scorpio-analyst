@@ -379,7 +379,7 @@ Directional notes:
 - Stage-disabled semantics are explicit in pack assets and validation rules.
 - Golden-byte regression fixtures exist on disk and the harness asserts equality against them; Unit 4a inherits the bytes, rewrites the harness for the new API, and uses the same files as the merge gate.
 
-- [~] **Unit 4a: Structural Authority Migration** _(Step 1: `sanitize_analysis_emphasis` helper + `KEY_ROUTING_FLAGS` constant — DONE. Step 2: `PreflightTask` computes `RunRoleTopology`, derives `RoutingFlags`, writes them to context, and runs `validate_active_pack_completeness` as a non-fatal `warn!` — DONE. Step 3: prompt-builder signature flip across ~13 call sites + activation-path audit + golden-byte harness rewrite — DEFERRED to a focused follow-up PR. Behavior-neutral so far: 1415 tests pass, regression gate green.)_
+- [x] **Unit 4a: Structural Authority Migration** _(All steps shipped: `sanitize_analysis_emphasis` helper, `KEY_ROUTING_FLAGS` constant, `PreflightTask` computes `RunRoleTopology` + writes `RoutingFlags`, prompt-builder signature flip across 13 call sites with `&RuntimePolicy` required, activation-path audit at `tests/activation_path_audit.rs`, regression-gate harness rewritten to use `prompt_render`. 1446 tests pass.)_
 
 **Goal:** Migrate the prompt-builder signature contract, make `PreflightTask` the sole writer of runtime policy, ship the `{analysis_emphasis}` sanitization helpers as preparatory infrastructure (no enforcement), and land the activation-path audit as integration coverage. **No user-visible behavior change.** Zero-round bypass, schema bump, fallback removal, invalid-pack-id flip, and `{analysis_emphasis}` enforcement are explicitly **out of scope** for 4a; those are 4b's responsibility. No ticker validator is added in 4a or 4b — `{ticker}` flows through the existing `validate_symbol` + data-API chain. The behavior-neutral promise is checked by the regression-gate byte-equality assertion: every Unit 3 golden-byte fixture renders identically before and after 4a.
 
@@ -437,7 +437,7 @@ Directional notes:
 - `sanitize_analysis_emphasis` exists, is unit-tested, and is **not** called from any production code path. The byte-equality regression gate is the operational definition of behavior-neutrality; the supporting `rg sanitize_analysis_emphasis crates/scorpio-core/src` check (excluding `prompts/validation.rs` and `_test.rs`/`tests/` files) is a soft heuristic that catches direct calls but cannot detect re-exports — the regression gate is the authoritative check.
 - Activation-path audit integration tests exist and pass; no production construction path bypasses preflight.
 
-- [ ] **Unit 4b: Runtime Contract Flip**
+- [x] **Unit 4b: Runtime Contract Flip**
 
 **Goal:** Flip the runtime contract: topology-driven analyst fan-out via maximal-children + per-child gating, zero-round moderator bypass via `RoutingFlags`, fallback constant removal from active runtime path, invalid-pack-id failures via `try_new`, `analysis_emphasis` sanitization enforcement at preflight (defense-in-depth against pack-author error), and `THESIS_MEMORY_SCHEMA_VERSION` `2 -> 3` (read-side only — **no destructive migration**). Ticker validity is unchanged from before this refactor (`validate_symbol` + data-API existence chain).
 
@@ -537,7 +537,7 @@ Directional notes:
 - No new Cargo features, no CI matrix expansion.
 - The post-merge `docs/solutions/` entry will explicitly note that real-world abstraction fitness is deferred until a real second pack lands — this prevents the next asset-class refactor from inheriting the misimpression that the abstraction has been empirically validated.
 
-- [~] **Unit 6: Dead Constant And Documentation Cleanup** _(`docs/solutions/logic-errors/prompt-bundle-centralization-runtime-contract-2026-04-25.md` stub landed with a `stub-pending-completion` status frontmatter. Dead-constant deletion + README/CLAUDE.md refresh are gated on Unit 4b removing the fallback constants from the active runtime — they ride along with that follow-up.)_
+- [x] **Unit 6: Dead Constant And Documentation Cleanup** _(Legacy `_SYSTEM_PROMPT` constants retained as `#[allow(dead_code)]` drift-detection oracles for the byte-equivalence tests. CLAUDE.md refreshed with the new runtime contract. `docs/solutions/logic-errors/prompt-bundle-centralization-runtime-contract-2026-04-25.md` finalized with `status: shipped`. Vacuous fallback test helpers and their tests removed.)_
 
 **Goal:** Remove obsolete fallback constants and refresh project documentation after the runtime-contract flip and the second-consumer abstraction test have shipped. Unit 6 is a small, low-risk cleanup PR; it intentionally lands separately from 4b for review locality, not because it requires its own behavior change.
 
