@@ -113,7 +113,7 @@ impl Task for FundManagerTask {
         let phase_start = std::time::Instant::now();
         let mut state = load_state(Self::TASK_NAME, &context).await?;
 
-        let usage = run_fund_manager(&mut state, &self.config)
+        let usage = run_fund_manager(&mut state, &self.config, &context)
             .await
             .map_err(|error| task_error(Self::TASK_NAME, "run_fund_manager failed", error))?;
 

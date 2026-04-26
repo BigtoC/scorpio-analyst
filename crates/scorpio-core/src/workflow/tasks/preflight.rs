@@ -233,16 +233,15 @@ impl Task for PreflightTask {
         context.set(KEY_ROUTING_FLAGS, routing_flags).await;
 
         // ── Active-pack completeness gate (fail-loud) ─────────────────────
-        // Look up the resolved manifest for the active pack id and validate
-        // the prompt bundle against the topology. Failures surface as
+        // Validate the resolved runtime policy that this graph will actually
+        // use against the topology. Failures surface as
         // `TaskExecutionFailed`, halting the pipeline before any analyst or
         // model task fires. The baseline pack is complete under the fully
         // enabled topology (covered by `analysis_packs::completeness::tests`
         // and the regression-gate sanity), so production runs never trip
         // this gate today; it exists to defend against future packs that
         // ship incomplete prompt bundles.
-        let manifest = crate::analysis_packs::resolve_pack(runtime_policy.pack_id);
-        if let Err(err) = validate_active_pack_completeness(&manifest, &topology) {
+        if let Err(err) = validate_active_pack_completeness(runtime_policy, &topology) {
             return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: active pack {:?} is incomplete under runtime topology: {err}",
                 err.pack_id
