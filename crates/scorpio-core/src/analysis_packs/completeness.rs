@@ -6,7 +6,7 @@
 //! per-run question "does this pack carry every prompt slot the configured
 //! topology will ask for?" and is invoked by `PreflightTask` once per cycle.
 
-use crate::analysis_packs::manifest::{AnalysisPackManifest, PackId};
+use crate::analysis_packs::{RuntimePolicy, manifest::PackId};
 use crate::prompts::is_effectively_empty;
 use crate::workflow::{PromptSlot, RunRoleTopology, required_prompt_slots};
 
@@ -73,13 +73,13 @@ impl std::error::Error for CompletenessError {}
 /// `PreflightTask` runs against the active pack before any analyst or
 /// model task fires.
 pub fn validate_active_pack_completeness(
-    manifest: &AnalysisPackManifest,
+    policy: &RuntimePolicy,
     topology: &RunRoleTopology,
 ) -> Result<(), CompletenessError> {
     let required = required_prompt_slots(topology);
     let mut missing: Vec<PromptSlot> = Vec::new();
     for slot in required {
-        let content = slot.read(&manifest.prompt_bundle);
+        let content = slot.read(&policy.prompt_bundle);
         if is_effectively_empty(content) {
             missing.push(slot);
         }
@@ -88,7 +88,7 @@ pub fn validate_active_pack_completeness(
         Ok(())
     } else {
         Err(CompletenessError {
-            pack_id: manifest.id,
+            pack_id: policy.pack_id,
             missing_slots: missing,
             unknown_inputs: topology.unknown_inputs.clone(),
         })
@@ -100,7 +100,7 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
-    use crate::analysis_packs::resolve_pack;
+    use crate::analysis_packs::{resolve_pack, resolve_runtime_policy_for_manifest};
     use crate::prompts::PromptBundle;
     use crate::workflow::build_run_topology;
 
@@ -109,11 +109,16 @@ mod tests {
         build_run_topology(&manifest.required_inputs, 2, 2)
     }
 
+    fn resolve_policy(manifest: &crate::analysis_packs::AnalysisPackManifest) -> RuntimePolicy {
+        resolve_runtime_policy_for_manifest(manifest).expect("manifest should resolve shape-only")
+    }
+
     #[test]
     fn baseline_pack_is_complete_under_fully_enabled_topology() {
         let manifest = resolve_pack(PackId::Baseline);
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
-        let result = validate_active_pack_completeness(&manifest, &topology);
+        let result = validate_active_pack_completeness(&policy, &topology);
         assert!(
             result.is_ok(),
             "baseline pack should be complete: {result:?}"
@@ -124,8 +129,9 @@ mod tests {
     fn fully_empty_bundle_reports_thirteen_missing_slots() {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle = PromptBundle::empty();
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("empty bundle must fail completeness");
         assert_eq!(err.missing_slots.len(), 13);
         assert!(err.unknown_inputs.is_empty());
@@ -136,8 +142,9 @@ mod tests {
     fn whitespace_only_slot_is_reported_as_missing() {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle.fundamental_analyst = Cow::Borrowed("   \t\n");
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("whitespace-only slot must fail");
         assert_eq!(err.missing_slots, vec![PromptSlot::FundamentalAnalyst]);
     }
@@ -148,8 +155,9 @@ mod tests {
         // Replace the trader slot with placeholder-only content. After
         // substitution this would render to a degenerate prompt.
         manifest.prompt_bundle.trader = Cow::Borrowed("{ticker} {current_date}");
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("placeholder-only slot must fail");
         assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
     }
@@ -158,8 +166,9 @@ mod tests {
     fn unknown_placeholder_only_slot_is_reported_as_missing() {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle.trader = Cow::Borrowed("{ticker_symbol}");
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("unknown placeholder typo must fail completeness");
         assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
     }
@@ -169,8 +178,9 @@ mod tests {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle.trader =
             Cow::Borrowed("Analyze {ticker_symbol} with valuation discipline.");
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("unknown placeholder typo must fail completeness even with prose");
         assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
     }
@@ -182,9 +192,10 @@ mod tests {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle.fundamental_analyst = Cow::Borrowed("");
         manifest.prompt_bundle.fund_manager = Cow::Borrowed("");
+        let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
         let err =
-            validate_active_pack_completeness(&manifest, &topology).expect_err("two missing slots");
+            validate_active_pack_completeness(&policy, &topology).expect_err("two missing slots");
         // BTreeSet order matches PromptSlot variant declaration order:
         // FundamentalAnalyst comes before FundManager.
         assert_eq!(
@@ -199,8 +210,9 @@ mod tests {
         // fund_manager slots are required, so the error lists 6 slots, not 13.
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle = PromptBundle::empty();
+        let policy = resolve_policy(&manifest);
         let topology = build_run_topology(&manifest.required_inputs, 0, 0);
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("empty bundle, six required slots");
         assert_eq!(err.missing_slots.len(), 6);
         // None of the debate or risk slots should be in the error.
@@ -227,8 +239,9 @@ mod tests {
             required_inputs: vec!["news".to_owned(), "tokenomics".to_owned()],
             ..resolve_pack(PackId::Baseline)
         };
+        let policy = resolve_policy(&manifest);
         let topology = build_run_topology(&manifest.required_inputs, 0, 0);
-        let err = validate_active_pack_completeness(&manifest, &topology)
+        let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("unknown required_inputs must fail completeness");
         assert_eq!(err.missing_slots, Vec::<PromptSlot>::new());
         assert_eq!(err.unknown_inputs, vec!["tokenomics".to_owned()]);

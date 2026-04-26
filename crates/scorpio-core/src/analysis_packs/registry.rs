@@ -9,7 +9,7 @@
 use tracing::info;
 
 use super::completeness::{CompletenessError, validate_active_pack_completeness};
-use super::{AnalysisPackManifest, PackId, crypto, equity};
+use super::{AnalysisPackManifest, PackId, crypto, equity, resolve_runtime_policy_for_manifest};
 use crate::workflow::build_run_topology;
 
 /// Resolve a [`PackId`] into its full [`AnalysisPackManifest`].
@@ -60,7 +60,9 @@ pub fn pack_diagnostics() -> Vec<CompletenessError> {
         // stage were enabled?" That's the most useful baseline-suitable
         // signal at startup time when no per-run round-count config exists.
         let topology = build_run_topology(&manifest.required_inputs, 1, 1);
-        if let Err(err) = validate_active_pack_completeness(&manifest, &topology) {
+        let policy = resolve_runtime_policy_for_manifest(&manifest)
+            .expect("pack diagnostics should only inspect shape-valid manifests");
+        if let Err(err) = validate_active_pack_completeness(&policy, &topology) {
             errors.push(err);
         }
     }
