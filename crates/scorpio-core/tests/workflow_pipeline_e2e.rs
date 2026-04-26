@@ -250,7 +250,14 @@ async fn from_pack_ignores_invalid_config_analysis_pack_and_runs_with_provided_p
 }
 
 #[tokio::test]
-async fn from_pack_runs_registered_non_selectable_pack_without_reparsing_config_boundary() {
+async fn from_pack_construction_accepts_non_selectable_pack_but_preflight_rejects_stub_bundle() {
+    // The crypto pack is registered (resolvable via `resolve_pack`) but ships
+    // `PromptBundle::empty()`. Construction via `from_pack` must succeed —
+    // proving the API surface accepts any registered manifest — but
+    // `PreflightTask`'s active-pack completeness gate must reject the run
+    // *before* any analyst or model task fires, because an empty bundle
+    // cannot produce real prompts. This test pins the contract that
+    // construction-time acceptance is decoupled from runtime completeness.
     let pack = resolve_pack(PackId::CryptoDigitalAsset);
     let (pipeline, _store, _dir) = make_pipeline_from_pack(
         &pack,
@@ -263,31 +270,27 @@ async fn from_pack_runs_registered_non_selectable_pack_without_reparsing_config_
     .await;
     pipeline
         .install_stub_tasks_for_test()
-        .expect("stub install must succeed");
+        .expect("stub install must succeed even for non-selectable packs");
 
-    let final_state = pipeline
+    let err = pipeline
         .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
         .await
-        .expect("from_pack should allow directly resolved registered packs");
-
-    assert_eq!(
-        final_state.analysis_pack_name.as_deref(),
-        Some("crypto_digital_asset")
+        .expect_err(
+            "preflight must reject the inactive crypto stub — its empty bundle cannot render \
+             any prompts at runtime",
+        );
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("PreflightTask"),
+        "error must originate from PreflightTask, got: {msg}"
     );
-    assert_eq!(
-        final_state
-            .analysis_runtime_policy
-            .as_ref()
-            .map(|policy| policy.pack_id),
-        Some(PackId::CryptoDigitalAsset)
+    assert!(
+        msg.contains("CryptoDigitalAsset"),
+        "error must name the offending pack, got: {msg}"
     );
-    assert_eq!(
-        final_state
-            .data_coverage
-            .as_ref()
-            .expect("data coverage must be computed")
-            .required_inputs,
-        vec!["tokenomics", "onchain", "social", "derivatives"]
+    assert!(
+        msg.contains("incomplete") || msg.contains("missing"),
+        "error must surface the completeness failure mode, got: {msg}"
     );
 }
 

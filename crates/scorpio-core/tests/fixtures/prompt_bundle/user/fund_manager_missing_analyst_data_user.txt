@@ -1,0 +1,29 @@
+Produce an ExecutionStatus JSON for AAPL as of 2026-04-25.
+Dual-risk escalation: absent
+Data quality note: One or more upstream inputs are missing. Explicitly acknowledge the missing data in `rationale` and lower confidence appropriately.
+Past learnings: No prior thesis memory available for this symbol.
+Deterministic scenario valuation: not computed for this run. Do not fabricate valuation metrics.
+Trader proposal: {"action":"Hold","target_price":190.0,"stop_loss":170.0,"confidence":0.62,"rationale":"Hold while waiting for valuation and momentum to align more clearly.","valuation_assessment":"Fair value to slightly rich versus current assumptions.","scenario_valuation":null}
+Aggressive risk report: {"risk_level":"Aggressive","assessment":"Aggressive view: upside remains actionable with tight monitoring.","recommended_adjustments":["tighten monitoring around support"],"flags_violation":false}
+Neutral risk report: {"risk_level":"Neutral","assessment":"Neutral view: risk and reward are balanced enough for a Hold stance.","recommended_adjustments":["tighten monitoring around support"],"flags_violation":false}
+Conservative risk report: {"risk_level":"Conservative","assessment":"Conservative view: controls are acceptable but valuation leaves less room for error.","recommended_adjustments":["tighten monitoring around support"],"flags_violation":false}
+Risk discussion history: [aggressive_risk]: The setup still supports measured upside exposure.
+[risk_moderator]: Consensus: controls are adequate, but valuation requires discipline.
+Fundamental data: (data unavailable — acknowledge the gap and calibrate confidence conservatively)
+Technical data: (data unavailable — acknowledge the gap and calibrate confidence conservatively)
+Sentiment data: (data unavailable — acknowledge the gap and calibrate confidence conservatively)
+News data: (data unavailable — acknowledge the gap and calibrate confidence conservatively)
+Typed evidence snapshot:
+- fundamentals: null
+- sentiment: null
+- news: null
+- technical: null
+Data quality snapshot:
+- required_inputs: ["fundamentals","sentiment","news","technical"]
+- missing_inputs: ["fundamentals","sentiment","news","technical"]
+- providers_used: []
+Analysis strategy: Balanced Institutional (baseline)
+Emphasis: Weight all data sources equally. Use DCF and multiples for valuation when available. Consider both fundamental quality and market sentiment.
+Event-news status: not_configured
+
+Consensus estimates status: not_configured

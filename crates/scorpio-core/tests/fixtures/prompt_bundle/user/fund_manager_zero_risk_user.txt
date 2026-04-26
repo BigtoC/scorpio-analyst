@@ -1,0 +1,28 @@
+Produce an ExecutionStatus JSON for AAPL as of 2026-04-25.
+Dual-risk escalation: unknown
+Data quality note: One or more upstream inputs are missing. Explicitly acknowledge the missing data in `rationale` and lower confidence appropriately.
+Past learnings: No prior thesis memory available for this symbol.
+Deterministic scenario valuation: not computed for this run. Do not fabricate valuation metrics.
+Trader proposal: {"action":"Hold","target_price":190.0,"stop_loss":170.0,"confidence":0.62,"rationale":"Hold while waiting for valuation and momentum to align more clearly.","valuation_assessment":"Fair value to slightly rich versus current assumptions.","scenario_valuation":null}
+Aggressive risk report: (no risk report available — treat as unknown)
+Neutral risk report: (no risk report available — treat as unknown)
+Conservative risk report: (no risk report available — treat as unknown)
+Risk discussion history: (no risk discussion history available)
+Fundamental data: {"revenue_growth_pct":12.5,"pe_ratio":24.5,"eps":6.05,"current_ratio":1.1,"debt_to_equity":1.8,"gross_margin":0.44,"net_income":97000000000.0,"insider_transactions":[],"summary":"Revenue growth remains healthy while margins stay resilient."}
+Technical data: {"rsi":55.0,"macd":null,"atr":3.2,"sma_20":178.0,"sma_50":171.0,"ema_12":179.2,"ema_26":176.4,"bollinger_upper":185.0,"bollinger_lower":171.5,"support_level":176.0,"resistance_level":184.5,"volume_avg":72000000.0,"summary":"Trend is constructive with price holding above key moving averages."}
+Sentiment data: {"overall_score":0.42,"source_breakdown":[],"engagement_peaks":[],"summary":"Market narrative is constructive but no longer euphoric."}
+News data: {"articles":[],"macro_events":[],"summary":"Recent news flow is mixed but not thesis-breaking."}
+Typed evidence snapshot:
+- fundamentals: {"kind":"fundamental","payload":{"revenue_growth_pct":12.5,"pe_ratio":24.5,"eps":6.05,"current_ratio":1.1,"debt_to_equity":1.8,"gross_margin":0.44,"net_income":97000000000.0,"insider_transactions":[],"summary":"Revenue growth remains healthy while margins stay resilient."},"sources":[{"provider":"finnhub","datasets":["fundamentals"],"fetched_at":"2026-04-25T00:00:00Z","effective_at":null,"url":null,"citation":null}],"quality_flags":[]}
+- sentiment: {"kind":"sentiment","payload":{"overall_score":0.42,"source_breakdown":[],"engagement_peaks":[],"summary":"Market narrative is constructive but no longer euphoric."},"sources":[{"provider":"finnhub","datasets":["company_news_sentiment_inputs"],"fetched_at":"2026-04-25T00:00:00Z","effective_at":null,"url":null,"citation":null}],"quality_flags":[]}
+- news: {"kind":"news","payload":{"articles":[],"macro_events":[],"summary":"Recent news flow is mixed but not thesis-breaking."},"sources":[{"provider":"finnhub","datasets":["company_news"],"fetched_at":"2026-04-25T00:00:00Z","effective_at":null,"url":null,"citation":null},{"provider":"fred","datasets":["macro_indicators"],"fetched_at":"2026-04-25T00:00:00Z","effective_at":null,"url":null,"citation":null}],"quality_flags":[]}
+- technical: {"kind":"technical","payload":{"rsi":55.0,"macd":null,"atr":3.2,"sma_20":178.0,"sma_50":171.0,"ema_12":179.2,"ema_26":176.4,"bollinger_upper":185.0,"bollinger_lower":171.5,"support_level":176.0,"resistance_level":184.5,"volume_avg":72000000.0,"summary":"Trend is constructive with price holding above key moving averages."},"sources":[{"provider":"yfinance","datasets":["ohlcv"],"fetched_at":"2026-04-25T00:00:00Z","effective_at":null,"url":null,"citation":null}],"quality_flags":[]}
+Data quality snapshot:
+- required_inputs: ["fundamentals","sentiment","news","technical"]
+- missing_inputs: []
+- providers_used: ["finnhub","fred","yfinance"]
+Analysis strategy: Balanced Institutional (baseline)
+Emphasis: Weight all data sources equally. Use DCF and multiples for valuation when available. Consider both fundamental quality and market sentiment.
+Event-news status: not_configured
+
+Consensus estimates status: not_configured

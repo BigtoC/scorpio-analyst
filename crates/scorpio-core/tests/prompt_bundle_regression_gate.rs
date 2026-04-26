@@ -26,7 +26,10 @@ use std::path::PathBuf;
 
 use scorpio_core::{
     analysis_packs::{PackId, resolve_pack, validate_active_pack_completeness},
-    testing::{PromptRenderScenario, canonical_fixture_identity, render_baseline_prompt_for_role},
+    testing::{
+        PromptRenderScenario, canonical_fixture_identity, render_baseline_prompt_for_role,
+        render_prompt_output_for_role,
+    },
     workflow::{Role, build_run_topology},
 };
 
@@ -72,6 +75,28 @@ fn fixture_path(role: Role) -> PathBuf {
     fixtures_dir().join(filename)
 }
 
+fn user_prompt_fixture_path(role: Role, scenario: PromptRenderScenario) -> PathBuf {
+    let filename = match (role, scenario) {
+        (Role::Trader, PromptRenderScenario::AllInputsPresent) => {
+            "trader_all_inputs_present_user.txt"
+        }
+        (Role::Trader, PromptRenderScenario::ZeroDebate) => "trader_zero_debate_user.txt",
+        (Role::Trader, PromptRenderScenario::MissingAnalystData) => {
+            "trader_missing_analyst_data_user.txt"
+        }
+        (Role::FundManager, PromptRenderScenario::AllInputsPresent) => {
+            "fund_manager_all_inputs_present_user.txt"
+        }
+        (Role::FundManager, PromptRenderScenario::ZeroRisk) => "fund_manager_zero_risk_user.txt",
+        (Role::FundManager, PromptRenderScenario::MissingAnalystData) => {
+            "fund_manager_missing_analyst_data_user.txt"
+        }
+        _ => panic!("unsupported user-prompt fixture request for {role:?} / {scenario:?}"),
+    };
+
+    fixtures_dir().join("user").join(filename)
+}
+
 fn update_fixtures_enabled() -> bool {
     std::env::var("UPDATE_FIXTURES")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -99,6 +124,34 @@ fn assert_or_update(role: Role, rendered: &str) {
         rendered,
         expected,
         "rendered baseline prompt for {role:?} drifted from golden bytes at {}.\n\
+         If the change was intentional, regenerate fixtures with UPDATE_FIXTURES=1.",
+        path.display()
+    );
+}
+
+fn assert_or_update_user_prompt(role: Role, scenario: PromptRenderScenario, rendered: &str) {
+    let path = user_prompt_fixture_path(role, scenario);
+    if update_fixtures_enabled() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create user-prompt fixtures dir");
+        }
+        fs::write(&path, rendered).expect("write user-prompt fixture");
+        return;
+    }
+
+    let expected = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "missing user-prompt fixture for {role:?} / {scenario:?} at {}: {e}.\n\
+             Generate it by running:\n  \
+             UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers",
+            path.display()
+        )
+    });
+
+    assert_eq!(
+        rendered,
+        expected,
+        "rendered user prompt for {role:?} / {scenario:?} drifted from golden bytes at {}.\n\
          If the change was intentional, regenerate fixtures with UPDATE_FIXTURES=1.",
         path.display()
     );
@@ -150,6 +203,39 @@ fn fixtures_contain_canonical_substitutions() {
             "{role:?} fixture must not contain unrendered {{current_date}} placeholder"
         );
     }
+
+    for (role, scenario) in [
+        (Role::Trader, PromptRenderScenario::AllInputsPresent),
+        (Role::Trader, PromptRenderScenario::ZeroDebate),
+        (Role::Trader, PromptRenderScenario::MissingAnalystData),
+        (Role::FundManager, PromptRenderScenario::AllInputsPresent),
+        (Role::FundManager, PromptRenderScenario::ZeroRisk),
+        (Role::FundManager, PromptRenderScenario::MissingAnalystData),
+    ] {
+        let path = user_prompt_fixture_path(role, scenario);
+        let content = fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "user-prompt fixture missing for {role:?} / {scenario:?} at {}",
+                path.display()
+            )
+        });
+        assert!(
+            content.contains(fixture_ticker),
+            "{role:?} / {scenario:?} user fixture should contain the canonical ticker"
+        );
+        assert!(
+            content.contains(fixture_date),
+            "{role:?} / {scenario:?} user fixture should contain the canonical date"
+        );
+        assert!(
+            !content.contains("{ticker}"),
+            "{role:?} / {scenario:?} user fixture must not contain unrendered {{ticker}} placeholder"
+        );
+        assert!(
+            !content.contains("{current_date}"),
+            "{role:?} / {scenario:?} user fixture must not contain unrendered {{current_date}} placeholder"
+        );
+    }
 }
 
 #[test]
@@ -190,6 +276,103 @@ fn trader_prompt_scenarios_capture_missing_input_states() {
         "missing-analyst-data trader prompt should serialize absent analyst inputs explicitly"
     );
 }
+
+#[test]
+fn trader_and_fund_manager_user_prompts_match_golden_fixtures() {
+    for (role, scenario) in [
+        (Role::Trader, PromptRenderScenario::AllInputsPresent),
+        (Role::Trader, PromptRenderScenario::ZeroDebate),
+        (Role::Trader, PromptRenderScenario::MissingAnalystData),
+        (Role::FundManager, PromptRenderScenario::AllInputsPresent),
+        (Role::FundManager, PromptRenderScenario::ZeroRisk),
+        (Role::FundManager, PromptRenderScenario::MissingAnalystData),
+    ] {
+        let rendered = render_prompt_output_for_role(role, scenario)
+            .user_prompt
+            .expect("Trader and FundManager should expose user prompts");
+        assert_or_update_user_prompt(role, scenario, &rendered);
+    }
+}
+
+#[test]
+fn all_inputs_present_user_prompts_capture_non_null_typed_evidence() {
+    for role in [Role::Trader, Role::FundManager] {
+        let rendered = render_prompt_output_for_role(role, PromptRenderScenario::AllInputsPresent)
+            .user_prompt
+            .expect("Trader and FundManager should expose user prompts");
+
+        for label in ["fundamentals", "sentiment", "news", "technical"] {
+            assert!(
+                !rendered.contains(&format!("- {label}: null")),
+                "all-inputs-present user prompt for {role:?} should serialize non-null {label} evidence"
+            );
+        }
+    }
+}
+
+#[test]
+fn fund_manager_missing_analyst_data_keeps_risk_inputs_present() {
+    let rendered =
+        render_prompt_output_for_role(Role::FundManager, PromptRenderScenario::MissingAnalystData)
+            .user_prompt
+            .expect("FundManager should expose a user prompt");
+
+    assert!(
+        rendered.contains("Dual-risk escalation: absent"),
+        "missing-analyst-data scenario should keep the dual-risk signal tied to present risk reports"
+    );
+    assert!(
+        rendered.contains("Aggressive risk report: {\"risk_level\":\"Aggressive\""),
+        "missing-analyst-data scenario should preserve risk reports"
+    );
+    assert!(
+        rendered.contains("Fundamental data: (data unavailable"),
+        "missing-analyst-data scenario should still surface absent analyst payloads"
+    );
+}
+
+#[test]
+fn user_prompt_inert_scenarios_match_happy_path() {
+    let trader_all =
+        render_prompt_output_for_role(Role::Trader, PromptRenderScenario::AllInputsPresent)
+            .user_prompt
+            .expect("Trader should expose a user prompt");
+    let trader_zero_risk =
+        render_prompt_output_for_role(Role::Trader, PromptRenderScenario::ZeroRisk)
+            .user_prompt
+            .expect("Trader should expose a user prompt");
+    assert_eq!(
+        trader_zero_risk, trader_all,
+        "Trader user prompt should be unchanged by downstream risk-stage output"
+    );
+
+    let fund_manager_all =
+        render_prompt_output_for_role(Role::FundManager, PromptRenderScenario::AllInputsPresent)
+            .user_prompt
+            .expect("FundManager should expose a user prompt");
+    let fund_manager_zero_debate =
+        render_prompt_output_for_role(Role::FundManager, PromptRenderScenario::ZeroDebate)
+            .user_prompt
+            .expect("FundManager should expose a user prompt");
+    assert_eq!(
+        fund_manager_zero_debate, fund_manager_all,
+        "FundManager user prompt should be unchanged when only researcher debate output is absent"
+    );
+}
+
+// Two vestigial tests were removed in Phase 7 of the prompt-bundle
+// centralization migration:
+//
+// - `baseline_runtime_policy_and_legacy_fallback_system_prompts_match`
+// - `blank_selected_prompt_slots_fall_back_to_legacy_rendering`
+//
+// Both asserted byte-equivalence between two renderer paths (runtime-policy
+// vs. legacy-template fallback) that are now collapsed into a single path:
+// the renderer requires `&RuntimePolicy` and has no fallback branch.
+// `validate_active_pack_completeness` rejects packs whose required slots are
+// empty before any renderer runs, so the legacy fallback is unreachable.
+// The remaining golden-byte assertions still gate the merge: the rendered
+// output for every role × scenario must match `tests/fixtures/prompt_bundle/`.
 
 #[test]
 fn baseline_manifest_is_complete_under_fully_enabled_topology() {

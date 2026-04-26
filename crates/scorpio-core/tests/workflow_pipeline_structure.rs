@@ -97,20 +97,13 @@ impl Task for RuntimeSurfaceProbe {
             })
             .transpose()?;
 
-        let has_routing_flags = match ctx.get::<String>(KEY_ROUTING_FLAGS).await {
-            Some(json) => {
-                serde_json::from_str::<scorpio_core::workflow::RoutingFlags>(&json).map_err(
-                    |error| {
-                        graph_flow::GraphError::TaskExecutionFailed(format!(
-                            "RuntimeSurfaceProbe({}): routing_flags deserialization failed: {error}",
-                            self.task_id
-                        ))
-                    },
-                )?;
-                true
-            }
-            None => false,
-        };
+        // RoutingFlags is now stored as the typed struct directly (Phase 9
+        // of the prompt-bundle centralization migration replaced the JSON
+        // round-trip with a typed read in the conditional-edge closures).
+        let has_routing_flags = ctx
+            .get::<scorpio_core::workflow::RoutingFlags>(KEY_ROUTING_FLAGS)
+            .await
+            .is_some();
 
         self.observations
             .lock()
