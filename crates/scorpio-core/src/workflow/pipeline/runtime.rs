@@ -126,6 +126,11 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.prior_thesis = None;
     state.current_thesis = None;
     state.analysis_pack_name = None;
+    // PreflightTask is the sole writer of `analysis_runtime_policy` per the
+    // Unit 4a structural authority migration. Clearing it here is hygiene
+    // for reused `TradingState` instances — preflight will write the
+    // resolved policy back during its run. No call site outside preflight
+    // (and the gated `testing::runtime_policy` helpers) sets this field.
     state.analysis_runtime_policy = None;
     state.token_usage = Default::default();
 }

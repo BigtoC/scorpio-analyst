@@ -178,6 +178,65 @@ impl TradingPipeline {
         }
     }
 
+    /// Construct a pipeline, surfacing pack-resolution failures as a typed
+    /// error instead of silently coercing them away.
+    ///
+    /// Production callers (`AnalysisRuntime::run`, the `scorpio analyze` CLI,
+    /// backtest entries) route through `try_new` so an invalid
+    /// `config.analysis_pack` value fails before any graph node executes.
+    /// `PreflightTask` would otherwise reject the run with a generic "pack
+    /// resolution failed" error; `try_new` produces a clearer diagnostic at
+    /// pipeline-construction time.
+    ///
+    /// `new` remains available for tests and documents the legacy
+    /// behavior (silently coerces an invalid pack id to "no runtime policy"
+    /// and lets `PreflightTask` issue the eventual diagnostic).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TradingError::Config`] when `config.analysis_pack` does not
+    /// resolve to a registered pack.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        config: Config,
+        finnhub: FinnhubClient,
+        fred: FredClient,
+        yfinance: YFinanceClient,
+        snapshot_store: SnapshotStore,
+        quick_handle: CompletionModelHandle,
+        deep_handle: CompletionModelHandle,
+    ) -> Result<Self, crate::error::TradingError> {
+        let config = Arc::new(config);
+        let snapshot_store = Arc::new(snapshot_store);
+        let runtime_policy = crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack)
+            .map_err(|e| {
+            crate::error::TradingError::Config(anyhow::anyhow!(
+                "TradingPipeline::try_new: invalid analysis_pack {:?}: {e}",
+                config.analysis_pack
+            ))
+        })?;
+        let graph = runtime::build_graph(
+            Arc::clone(&config),
+            &finnhub,
+            &fred,
+            &yfinance,
+            Arc::clone(&snapshot_store),
+            &quick_handle,
+            &deep_handle,
+        );
+        Ok(Self {
+            config,
+            finnhub,
+            fred,
+            yfinance,
+            snapshot_store,
+            quick_handle,
+            deep_handle,
+            runtime_policy: Some(runtime_policy),
+            graph,
+        })
+    }
+
     /// Assemble a pipeline from pre-built parts, including the graph.
     ///
     /// Used by `workflow::builder::TradingPipeline::from_pack` so the Phase 7

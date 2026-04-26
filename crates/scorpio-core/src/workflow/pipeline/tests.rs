@@ -463,3 +463,100 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         vec!["finnhub", "fred"]
     );
 }
+
+#[tokio::test]
+async fn try_new_rejects_invalid_pack_id_with_typed_error() {
+    // Construction-time pack-resolution failure surfaces as TradingError::Config
+    // before any graph-build work runs. Production callers go through this
+    // path so an invalid `config.analysis_pack` value never reaches preflight.
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "totally-not-a-real-pack".to_owned(),
+    };
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-try-new-bad-pack.db").await;
+    let result = crate::workflow::TradingPipeline::try_new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-test",
+            10,
+        )),
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+    let err = result.expect_err("invalid pack id must surface as a typed error");
+    let msg = format!("{err}");
+    assert!(
+        matches!(err, crate::error::TradingError::Config(_)),
+        "expected TradingError::Config, got: {msg}"
+    );
+    assert!(
+        msg.contains("totally-not-a-real-pack"),
+        "error must name the offending pack id, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn try_new_succeeds_for_baseline_pack_id() {
+    // The happy path: construction with a valid pack id produces a usable
+    // pipeline whose runtime_policy is hydrated to the resolved manifest.
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-try-new-ok.db").await;
+    let pipeline = crate::workflow::TradingPipeline::try_new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-test",
+            10,
+        )),
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    )
+    .expect("baseline pack id must resolve");
+
+    assert_eq!(
+        pipeline.runtime_policy.as_ref().map(|p| p.pack_id),
+        Some(crate::analysis_packs::PackId::Baseline)
+    );
+}
