@@ -74,12 +74,18 @@ pub fn render_prompt_output_for_role(
 // helpers themselves.
 
 fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
+    let analyst_policy = || {
+        state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("test fixture must hydrate runtime policy")
+    };
     match role {
         Role::FundamentalAnalyst => PromptRenderOutput {
             system_prompt: build_fundamental_system_prompt(
                 &state.asset_symbol,
                 &state.target_date,
-                state.analysis_runtime_policy.as_ref(),
+                analyst_policy(),
             ),
             user_prompt: None,
         },
@@ -87,7 +93,7 @@ fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
             system_prompt: build_sentiment_system_prompt(
                 &state.asset_symbol,
                 &state.target_date,
-                state.analysis_runtime_policy.as_ref(),
+                analyst_policy(),
             ),
             user_prompt: None,
         },
@@ -95,7 +101,7 @@ fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
             system_prompt: build_news_system_prompt(
                 &state.asset_symbol,
                 &state.target_date,
-                state.analysis_runtime_policy.as_ref(),
+                analyst_policy(),
             ),
             user_prompt: None,
         },
@@ -103,7 +109,7 @@ fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
             system_prompt: build_technical_system_prompt(
                 &state.asset_symbol,
                 &state.target_date,
-                state.analysis_runtime_policy.as_ref(),
+                analyst_policy(),
             ),
             user_prompt: None,
         },
