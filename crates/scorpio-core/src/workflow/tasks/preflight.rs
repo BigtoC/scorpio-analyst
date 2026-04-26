@@ -227,30 +227,43 @@ impl Task for PreflightTask {
             max_risk_rounds,
         );
         let routing_flags = RoutingFlags::from_topology(&topology);
-        let routing_json = serde_json::to_string(&routing_flags).map_err(|e| {
-            graph_flow::GraphError::TaskExecutionFailed(format!(
-                "PreflightTask: orchestration corruption: RoutingFlags serialization failed: {e}"
-            ))
-        })?;
-        context.set(KEY_ROUTING_FLAGS, routing_json).await;
+        // Store RoutingFlags as a typed struct so the conditional-edge
+        // closures in `workflow::builder` can read it via `get_sync` without
+        // a JSON round-trip on every iteration.
+        context.set(KEY_ROUTING_FLAGS, routing_flags).await;
 
-        // ── Active-pack completeness diagnostic (Unit 4a: log-only) ──────
+        // ── Active-pack completeness gate (fail-loud) ─────────────────────
         // Look up the resolved manifest for the active pack id and validate
-        // the prompt bundle against the topology. In Unit 4a this is a
-        // **non-fatal warning** to keep the unit behavior-neutral; Unit 4b
-        // promotes it to a hard failure so an incomplete active pack is
-        // rejected at preflight before any model call fires.
+        // the prompt bundle against the topology. Failures surface as
+        // `TaskExecutionFailed`, halting the pipeline before any analyst or
+        // model task fires. The baseline pack is complete under the fully
+        // enabled topology (covered by `analysis_packs::completeness::tests`
+        // and the regression-gate sanity), so production runs never trip
+        // this gate today; it exists to defend against future packs that
+        // ship incomplete prompt bundles.
         let manifest = crate::analysis_packs::resolve_pack(runtime_policy.pack_id);
         if let Err(err) = validate_active_pack_completeness(&manifest, &topology) {
-            let missing_slots: Vec<&'static str> =
-                err.missing_slots.iter().map(|slot| slot.name()).collect();
-            tracing::warn!(
-                pack_id = %err.pack_id,
-                missing_slot_count = err.missing_slots.len(),
-                missing_slots = ?missing_slots,
-                "active pack failed completeness validation under runtime topology \
-                 (non-fatal in 4a; Unit 4b promotes this to TaskExecutionFailed)"
-            );
+            return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: active pack {:?} is incomplete under runtime topology: {err}",
+                err.pack_id
+            )));
+        }
+
+        // ── Pack-author injection guard (defense-in-depth) ────────────────
+        // `analysis_emphasis` is pack-manifest-owned and compile-time embedded
+        // for builtin packs, but a future runtime-loaded pack or a careless
+        // edit could ship adversarial content. The strict 0x20-0x7E ASCII +
+        // role-injection-tag rejection runs here so a malformed value fails
+        // before substitution into any LLM system prompt. Builtin packs
+        // produce well-formed values today, so this gate is silent for
+        // production runs.
+        if let Err(err) =
+            crate::prompts::sanitize_analysis_emphasis(&runtime_policy.analysis_emphasis)
+        {
+            return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: pack {:?} has invalid analysis_emphasis: {err}",
+                runtime_policy.pack_id
+            )));
         }
 
         // ── Seed typed null placeholders for cache keys ───────────────────
