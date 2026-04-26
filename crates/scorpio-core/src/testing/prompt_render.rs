@@ -1,3 +1,5 @@
+use chrono::{TimeZone, Utc};
+
 use crate::{
     agents::{
         analyst::equity::{
@@ -5,21 +7,16 @@ use crate::{
             build_sentiment_system_prompt, build_technical_system_prompt,
         },
         fund_manager::build_prompt_context as build_fund_manager_prompt_context,
-        researcher::{
-            BEARISH_SYSTEM_PROMPT, BULLISH_SYSTEM_PROMPT, MODERATOR_SYSTEM_PROMPT,
-            render_researcher_system_prompt,
-        },
-        risk::{
-            AGGRESSIVE_SYSTEM_PROMPT, CONSERVATIVE_SYSTEM_PROMPT, DualRiskStatus,
-            NEUTRAL_SYSTEM_PROMPT, RISK_MODERATOR_SYSTEM_PROMPT, render_risk_system_prompt,
-        },
+        researcher::render_researcher_system_prompt,
+        risk::{DualRiskStatus, render_risk_system_prompt},
         trader::build_prompt_context_for_test as build_trader_prompt_context,
     },
     analysis_packs::resolve_runtime_policy,
     state::{
-        DataCoverageReport, DebateMessage, FundamentalData, MarketVolatilityData, NewsData,
-        ProvenanceSummary, RiskLevel, RiskReport, SentimentData, TechnicalData, TradeAction,
-        TradeProposal, TradingState, VixRegime, VixTrend,
+        DataCoverageReport, DebateMessage, EvidenceKind, EvidenceRecord, EvidenceSource,
+        FundamentalData, MarketVolatilityData, NewsData, ProvenanceSummary, RiskLevel, RiskReport,
+        SentimentData, TechnicalData, TradeAction, TradeProposal, TradingState, VixRegime,
+        VixTrend,
     },
     workflow::Role,
 };
@@ -35,79 +32,181 @@ pub enum PromptRenderScenario {
     MissingAnalystData,
 }
 
+/// Fully rendered prompt output for a role/scenario pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptRenderOutput {
+    pub system_prompt: String,
+    pub user_prompt: Option<String>,
+}
+
+/// Render the baseline system prompt bytes for one role under one canned test
+/// scenario.
 #[must_use]
 pub fn render_baseline_prompt_for_role(role: Role, scenario: PromptRenderScenario) -> String {
-    let state = build_state(scenario);
+    render_prompt_output_for_role(role, scenario).system_prompt
+}
+
+/// Render the full prompt output for one role under one canned test scenario.
+#[must_use]
+pub fn render_prompt_output_for_role(
+    role: Role,
+    scenario: PromptRenderScenario,
+) -> PromptRenderOutput {
+    render_prompt_output(role, build_state(scenario))
+}
+
+// `render_legacy_fallback_system_prompt_for_role` and
+// `render_blank_slot_fallback_system_prompt_for_role` were removed in Phase 7
+// of the prompt-bundle centralization migration. Both helpers exercised
+// renderer code paths that no longer exist:
+//
+// - the legacy-fallback helper set `state.analysis_runtime_policy = None`
+//   to force the renderer to use a hardcoded `legacy_template` constant,
+//   but the renderer now requires `&RuntimePolicy` and has no fallback
+//   branch; preflight is the sole writer of the runtime policy.
+// - the blank-slot-fallback helper blanked the active role's bundle slot to
+//   force the same legacy fallback, which is also gone.
+//
+// `validate_active_pack_completeness` now rejects packs whose required
+// slots are empty *before* the renderer runs, so the conditions both
+// helpers used to simulate are unreachable in production. The byte-
+// equivalence assertions they powered have been removed alongside the
+// helpers themselves.
+
+fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
     match role {
-        Role::FundamentalAnalyst => build_fundamental_system_prompt(
-            &state.asset_symbol,
-            &state.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        ),
-        Role::SentimentAnalyst => build_sentiment_system_prompt(
-            &state.asset_symbol,
-            &state.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        ),
-        Role::NewsAnalyst => build_news_system_prompt(
-            &state.asset_symbol,
-            &state.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        ),
-        Role::TechnicalAnalyst => build_technical_system_prompt(
-            &state.asset_symbol,
-            &state.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        ),
-        Role::BullishResearcher => {
-            render_researcher_system_prompt(BULLISH_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.bullish_researcher.as_ref()
-            })
-        }
-        Role::BearishResearcher => {
-            render_researcher_system_prompt(BEARISH_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.bearish_researcher.as_ref()
-            })
-        }
-        Role::DebateModerator => {
-            render_researcher_system_prompt(MODERATOR_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.debate_moderator.as_ref()
-            })
-        }
+        Role::FundamentalAnalyst => PromptRenderOutput {
+            system_prompt: build_fundamental_system_prompt(
+                &state.asset_symbol,
+                &state.target_date,
+                state.analysis_runtime_policy.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::SentimentAnalyst => PromptRenderOutput {
+            system_prompt: build_sentiment_system_prompt(
+                &state.asset_symbol,
+                &state.target_date,
+                state.analysis_runtime_policy.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::NewsAnalyst => PromptRenderOutput {
+            system_prompt: build_news_system_prompt(
+                &state.asset_symbol,
+                &state.target_date,
+                state.analysis_runtime_policy.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::TechnicalAnalyst => PromptRenderOutput {
+            system_prompt: build_technical_system_prompt(
+                &state.asset_symbol,
+                &state.target_date,
+                state.analysis_runtime_policy.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::BullishResearcher => PromptRenderOutput {
+            system_prompt: render_researcher_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.bullish_researcher.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::BearishResearcher => PromptRenderOutput {
+            system_prompt: render_researcher_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.bearish_researcher.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::DebateModerator => PromptRenderOutput {
+            system_prompt: render_researcher_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.debate_moderator.as_ref(),
+            ),
+            user_prompt: None,
+        },
         Role::Trader => {
-            build_trader_prompt_context(&state, &state.asset_symbol, &state.target_date)
-                .system_prompt
+            let context =
+                build_trader_prompt_context(&state, &state.asset_symbol, &state.target_date);
+            PromptRenderOutput {
+                system_prompt: context.system_prompt,
+                user_prompt: Some(context.user_prompt),
+            }
         }
-        Role::AggressiveRisk => {
-            render_risk_system_prompt(AGGRESSIVE_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.aggressive_risk.as_ref()
-            })
-        }
-        Role::ConservativeRisk => {
-            render_risk_system_prompt(CONSERVATIVE_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.conservative_risk.as_ref()
-            })
-        }
-        Role::NeutralRisk => render_risk_system_prompt(NEUTRAL_SYSTEM_PROMPT, &state, |bundle| {
-            bundle.neutral_risk.as_ref()
-        }),
-        Role::RiskModerator => {
-            render_risk_system_prompt(RISK_MODERATOR_SYSTEM_PROMPT, &state, |bundle| {
-                bundle.risk_moderator.as_ref()
-            })
-        }
+        Role::AggressiveRisk => PromptRenderOutput {
+            system_prompt: render_risk_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.aggressive_risk.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::ConservativeRisk => PromptRenderOutput {
+            system_prompt: render_risk_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.conservative_risk.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::NeutralRisk => PromptRenderOutput {
+            system_prompt: render_risk_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.neutral_risk.as_ref(),
+            ),
+            user_prompt: None,
+        },
+        Role::RiskModerator => PromptRenderOutput {
+            system_prompt: render_risk_system_prompt(
+                state
+                    .analysis_runtime_policy
+                    .as_ref()
+                    .expect("test fixture must hydrate runtime policy"),
+                &state,
+                |bundle| bundle.risk_moderator.as_ref(),
+            ),
+            user_prompt: None,
+        },
         Role::FundManager => {
             let dual_risk = DualRiskStatus::from_reports(
                 state.conservative_risk_report.as_ref(),
                 state.neutral_risk_report.as_ref(),
             );
-            let (system_prompt, _) = build_fund_manager_prompt_context(
+            let (system_prompt, user_prompt) = build_fund_manager_prompt_context(
                 &state,
                 &state.asset_symbol,
                 &state.target_date,
                 dual_risk,
             );
-            system_prompt
+            PromptRenderOutput {
+                system_prompt,
+                user_prompt: Some(user_prompt),
+            }
         }
     }
 }
@@ -116,6 +215,12 @@ pub fn render_baseline_prompt_for_role(role: Role, scenario: PromptRenderScenari
 pub fn canonical_fixture_identity() -> (&'static str, &'static str) {
     (FIXTURE_TICKER, FIXTURE_DATE)
 }
+
+// `blank_selected_slot` was removed in Phase 10 of the prompt-bundle
+// centralization migration — it powered the now-deleted
+// `render_blank_slot_fallback_system_prompt_for_role` helper. Production
+// preflight rejects packs with empty required slots, so the simulated
+// "blank slot" failure mode no longer has a callable surface in tests.
 
 fn build_state(scenario: PromptRenderScenario) -> TradingState {
     let mut state = TradingState::new(FIXTURE_TICKER, FIXTURE_DATE);
@@ -131,13 +236,6 @@ fn build_state(scenario: PromptRenderScenario) -> TradingState {
         ],
         missing_inputs: Vec::new(),
     });
-    state.provenance_summary = Some(ProvenanceSummary {
-        providers_used: vec![
-            "finnhub".to_owned(),
-            "fred".to_owned(),
-            "yfinance".to_owned(),
-        ],
-    });
     state.set_market_volatility(sample_market_volatility());
 
     match scenario {
@@ -147,6 +245,10 @@ fn build_state(scenario: PromptRenderScenario) -> TradingState {
         PromptRenderScenario::MissingAnalystData => populate_missing_analyst_data(&mut state),
     }
 
+    state.provenance_summary = Some(ProvenanceSummary {
+        providers_used: providers_used_for_state(&state),
+    });
+
     state
 }
 
@@ -155,6 +257,36 @@ fn populate_all_inputs_present(state: &mut TradingState) {
     state.set_market_sentiment(sample_sentiment_data());
     state.set_macro_news(sample_news_data());
     state.set_technical_indicators(sample_technical_data());
+    state.set_evidence_fundamental(EvidenceRecord {
+        kind: EvidenceKind::Fundamental,
+        payload: sample_fundamental_data(),
+        sources: vec![sample_evidence_source("finnhub", &["fundamentals"])],
+        quality_flags: vec![],
+    });
+    state.set_evidence_sentiment(EvidenceRecord {
+        kind: EvidenceKind::Sentiment,
+        payload: sample_sentiment_data(),
+        sources: vec![sample_evidence_source(
+            "finnhub",
+            &["company_news_sentiment_inputs"],
+        )],
+        quality_flags: vec![],
+    });
+    state.set_evidence_news(EvidenceRecord {
+        kind: EvidenceKind::News,
+        payload: sample_news_data(),
+        sources: vec![
+            sample_evidence_source("finnhub", &["company_news"]),
+            sample_evidence_source("fred", &["macro_indicators"]),
+        ],
+        quality_flags: vec![],
+    });
+    state.set_evidence_technical(EvidenceRecord {
+        kind: EvidenceKind::Technical,
+        payload: sample_technical_data(),
+        sources: vec![sample_evidence_source("yfinance", &["ohlcv"])],
+        quality_flags: vec![],
+    });
     state.consensus_summary = Some(
         "Hold - strongest bull evidence is growth, strongest bear evidence is rates, unresolved uncertainty is demand durability."
             .to_owned(),
@@ -221,6 +353,68 @@ fn populate_missing_analyst_data(state: &mut TradingState) {
         ],
     });
     state.trader_proposal = Some(sample_trade_proposal());
+    state.aggressive_risk_report = Some(sample_risk_report(
+        RiskLevel::Aggressive,
+        "Aggressive view: upside remains actionable with tight monitoring.",
+        false,
+    ));
+    state.conservative_risk_report = Some(sample_risk_report(
+        RiskLevel::Conservative,
+        "Conservative view: controls are acceptable but valuation leaves less room for error.",
+        false,
+    ));
+    state.neutral_risk_report = Some(sample_risk_report(
+        RiskLevel::Neutral,
+        "Neutral view: risk and reward are balanced enough for a Hold stance.",
+        false,
+    ));
+    state.risk_discussion_history = vec![
+        DebateMessage {
+            role: "aggressive_risk".to_owned(),
+            content: "The setup still supports measured upside exposure.".to_owned(),
+        },
+        DebateMessage {
+            role: "risk_moderator".to_owned(),
+            content: "Consensus: controls are adequate, but valuation requires discipline."
+                .to_owned(),
+        },
+    ];
+}
+
+fn sample_evidence_source(provider: &str, datasets: &[&str]) -> EvidenceSource {
+    EvidenceSource {
+        provider: provider.to_owned(),
+        datasets: datasets
+            .iter()
+            .map(|dataset| (*dataset).to_owned())
+            .collect(),
+        fetched_at: Utc
+            .with_ymd_and_hms(2026, 4, 25, 0, 0, 0)
+            .single()
+            .expect("fixed evidence timestamp should be valid"),
+        effective_at: None,
+        url: None,
+        citation: None,
+    }
+}
+
+fn providers_used_for_state(state: &TradingState) -> Vec<String> {
+    let mut providers = Vec::new();
+    if let Some(record) = state.evidence_fundamental() {
+        providers.extend(record.sources.iter().map(|source| source.provider.clone()));
+    }
+    if let Some(record) = state.evidence_sentiment() {
+        providers.extend(record.sources.iter().map(|source| source.provider.clone()));
+    }
+    if let Some(record) = state.evidence_news() {
+        providers.extend(record.sources.iter().map(|source| source.provider.clone()));
+    }
+    if let Some(record) = state.evidence_technical() {
+        providers.extend(record.sources.iter().map(|source| source.provider.clone()));
+    }
+    providers.sort_unstable();
+    providers.dedup();
+    providers
 }
 
 fn sample_fundamental_data() -> FundamentalData {

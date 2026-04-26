@@ -9,7 +9,8 @@ pub mod prompt_render;
 pub mod runtime_policy;
 
 pub use prompt_render::{
-    PromptRenderScenario, canonical_fixture_identity, render_baseline_prompt_for_role,
+    PromptRenderOutput, PromptRenderScenario, canonical_fixture_identity,
+    render_baseline_prompt_for_role, render_prompt_output_for_role,
 };
 pub use runtime_policy::{
     baseline_pack_prompt_for_role, with_baseline_runtime_policy, with_runtime_policy,
