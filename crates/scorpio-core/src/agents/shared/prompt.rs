@@ -186,32 +186,11 @@ pub(crate) fn analysis_emphasis_for_prompt(state: &TradingState) -> String {
         .unwrap_or_default()
 }
 
-// ─── Evidence-discipline static rule helpers ──────────────────────────────────
-
-/// Evidence-discipline rule: prefer authoritative runtime evidence, never infer unsupported claims.
-///
-/// Terse imperative rule appended verbatim to analyst-style system prompts.
-pub(crate) const AUTHORITATIVE_SOURCE_PROMPT_RULE: &str = "Prefer authoritative runtime evidence (tool output, schema data) over inference or recalled \
-memory. Never infer estimates, transcript commentary, or quarter labels unless the runtime \
-explicitly provides them.";
-
-/// Evidence-discipline rule: handle missing data honestly without padding.
-///
-/// Terse imperative rule appended verbatim to analyst-style system prompts.
-pub(crate) const MISSING_DATA_PROMPT_RULE: &str = "When evidence is sparse or missing, say so explicitly in `summary` rather than padding weak \
-claims. Return `null` or `[]` for missing structured fields; do not guess or extrapolate values.";
-
-/// Evidence-discipline rule: separate observed facts from interpretation.
-///
-/// Terse imperative rule appended verbatim to analyst-style system prompts.
-pub(crate) const DATA_QUALITY_PROMPT_RULE: &str = "Separate observed facts (tool output) from interpretation (your reasoning). Do not present \
-interpretation as established fact.";
-
-/// Analyst-specific unsupported-inference guards appended after the three
-/// evidence-discipline rules in every equity analyst's rendered system prompt.
-pub(crate) const ANALYST_INFERENCE_GUARDS: &str = "Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
-If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
-Separate observed facts from interpretation.";
+// The cross-cutting analyst evidence-discipline rules + unsupported-inference
+// guards used to live here as four constants. They moved to the equity pack's
+// `prompts/analyst_runtime_contract.md` and are now appended at pack load time
+// in `analysis_packs::equity::baseline::baseline_prompt_bundle`. Renderers no
+// longer re-append them on every call.
 
 // ─── Typed evidence and data-quality context builders ────────────────────────
 
@@ -385,27 +364,11 @@ mod tests {
         TradingState::new("AAPL", "2026-01-15")
     }
 
-    #[test]
-    fn test_authoritative_source_rule_mentions_runtime_evidence() {
-        assert!(AUTHORITATIVE_SOURCE_PROMPT_RULE.contains("runtime"));
-        assert!(!AUTHORITATIVE_SOURCE_PROMPT_RULE.is_empty());
-    }
-
-    #[test]
-    fn test_missing_data_rule_mentions_null_or_empty() {
-        assert!(
-            MISSING_DATA_PROMPT_RULE.contains("null") || MISSING_DATA_PROMPT_RULE.contains("[]")
-        );
-    }
-
-    #[test]
-    fn test_data_quality_rule_mentions_facts_and_interpretation() {
-        assert!(
-            DATA_QUALITY_PROMPT_RULE.contains("facts")
-                || DATA_QUALITY_PROMPT_RULE.contains("observed")
-        );
-        assert!(DATA_QUALITY_PROMPT_RULE.contains("interpretation"));
-    }
+    // Coverage of the analyst runtime contract (authoritative source / missing
+    // data / data quality / unsupported-inference guards) lives in each
+    // analyst module's `*_rendered_prompt_includes_evidence_discipline_rules`
+    // test and in the baseline pack's bundle tests. The constants those tests
+    // used to reference moved into `analyst_runtime_contract.md`.
 
     #[test]
     fn build_evidence_context_empty_state_returns_non_empty_fallback() {

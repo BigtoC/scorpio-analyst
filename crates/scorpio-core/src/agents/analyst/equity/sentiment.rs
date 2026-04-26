@@ -621,50 +621,30 @@ mod tests {
 
     #[test]
     fn sentiment_rendered_prompt_includes_evidence_discipline_rules() {
-        use crate::agents::shared::{
-            AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE, MISSING_DATA_PROMPT_RULE,
-        };
         use crate::analysis_packs::resolve_runtime_policy;
 
         let policy =
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
         let prompt = build_sentiment_system_prompt("AAPL", "2026-01-01", &policy);
 
-        assert!(
-            prompt.contains(AUTHORITATIVE_SOURCE_PROMPT_RULE),
-            "rendered prompt must contain authoritative source rule"
-        );
-        assert!(
-            prompt.contains(MISSING_DATA_PROMPT_RULE),
-            "rendered prompt must contain missing data rule"
-        );
-        assert!(
-            prompt.contains(DATA_QUALITY_PROMPT_RULE),
-            "rendered prompt must contain data quality rule"
-        );
-        assert!(
-            prompt.contains("Do not infer estimates"),
-            "rendered prompt must contain 'Do not infer estimates'"
-        );
-        assert!(
-            prompt.contains("sparse or missing"),
-            "rendered prompt must contain 'sparse or missing'"
-        );
-        assert!(
-            prompt.contains("Separate observed facts"),
-            "rendered prompt must contain 'Separate observed facts'"
-        );
+        for phrase in [
+            "Prefer authoritative runtime evidence",
+            "When evidence is sparse or missing",
+            "Separate observed facts (tool output) from interpretation",
+            "Do not infer estimates",
+            "sparse or missing",
+            "Separate observed facts",
+        ] {
+            assert!(
+                prompt.contains(phrase),
+                "rendered prompt must contain runtime-contract phrase {phrase:?}"
+            );
+        }
     }
 
     #[test]
     fn sentiment_rendered_prompt_uses_runtime_policy_prompt_bundle() {
-        use crate::{
-            agents::shared::{
-                AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE,
-                MISSING_DATA_PROMPT_RULE,
-            },
-            analysis_packs::resolve_runtime_policy,
-        };
+        use crate::analysis_packs::resolve_runtime_policy;
 
         let mut policy =
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
@@ -680,12 +660,6 @@ mod tests {
                 "Pack sentiment prompt for AAPL at 2026-01-01. Emphasis: weight narrative skew."
             ),
             "runtime-policy prompt bundle should drive the sentiment template: {prompt}"
-        );
-        assert!(
-            prompt.contains(AUTHORITATIVE_SOURCE_PROMPT_RULE)
-                && prompt.contains(MISSING_DATA_PROMPT_RULE)
-                && prompt.contains(DATA_QUALITY_PROMPT_RULE),
-            "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
         );
     }
 }

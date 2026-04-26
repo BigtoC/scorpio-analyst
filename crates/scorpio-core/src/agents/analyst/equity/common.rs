@@ -10,10 +10,7 @@ use serde::de::DeserializeOwned;
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
 use crate::{
-    agents::shared::{
-        ANALYST_INFERENCE_GUARDS, AUTHORITATIVE_SOURCE_PROMPT_RULE, DATA_QUALITY_PROMPT_RULE,
-        MISSING_DATA_PROMPT_RULE, sanitize_prompt_context,
-    },
+    agents::shared::sanitize_prompt_context,
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::MAX_SUMMARY_CHARS,
@@ -27,10 +24,11 @@ use crate::{
 /// Render an equity analyst's system prompt from the active pack's slot.
 ///
 /// `base_template` is the role's `prompt_bundle.<analyst>_analyst` text, which
-/// preflight's completeness gate has already proven non-empty. Substitutes the
-/// `{ticker}`, `{current_date}`, and `{analysis_emphasis}` placeholders, then
-/// appends the three shared evidence-discipline rules and the analyst-specific
-/// unsupported-inference guards every equity analyst agrees on.
+/// preflight's completeness gate has already proven non-empty. The pack has
+/// already appended the analyst runtime contract (evidence-discipline rules +
+/// unsupported-inference guards) at load time, so this helper is purely a
+/// placeholder-substitution step over `{ticker}`, `{current_date}`, and
+/// `{analysis_emphasis}`.
 pub(super) fn render_analyst_system_prompt(
     base_template: &str,
     symbol: &str,
@@ -38,18 +36,10 @@ pub(super) fn render_analyst_system_prompt(
     policy: &RuntimePolicy,
 ) -> String {
     let analysis_emphasis = sanitize_prompt_context(&policy.analysis_emphasis);
-    let base = base_template
+    base_template
         .replace("{ticker}", symbol)
         .replace("{current_date}", target_date)
-        .replace("{analysis_emphasis}", &analysis_emphasis);
-
-    format!(
-        "{base}\n\n\
-         {AUTHORITATIVE_SOURCE_PROMPT_RULE}\n\
-         {MISSING_DATA_PROMPT_RULE}\n\
-         {DATA_QUALITY_PROMPT_RULE}\n\
-         {ANALYST_INFERENCE_GUARDS}",
-    )
+        .replace("{analysis_emphasis}", &analysis_emphasis)
 }
 
 /// Shared runtime fields derived from the analyst request context.
