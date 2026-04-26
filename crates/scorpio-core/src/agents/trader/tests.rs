@@ -7,6 +7,7 @@ use secrecy::SecretString;
 use super::schema::TraderProposalResponse;
 use super::*;
 use crate::agents::shared::UNTRUSTED_CONTEXT_NOTICE;
+use crate::testing::with_baseline_runtime_policy;
 use crate::{
     config::{ProviderSettings, ProvidersConfig, TradingConfig},
     providers::factory::RetryOutcome,
@@ -77,13 +78,6 @@ fn empty_state() -> TradingState {
     let mut state = TradingState::new("AAPL", "2026-03-15");
     with_baseline_runtime_policy(&mut state);
     state
-}
-
-fn with_baseline_runtime_policy(state: &mut TradingState) {
-    state.analysis_runtime_policy = Some(
-        crate::analysis_packs::resolve_runtime_policy("baseline")
-            .expect("baseline runtime policy should resolve"),
-    );
 }
 
 fn populated_state() -> TradingState {
@@ -778,7 +772,7 @@ fn system_prompt_contains_alignment_divergence_and_missing_data_instructions() {
     let prompt = baseline_trader_prompt();
     assert!(prompt.contains("Align with the moderator's stance"));
     assert!(prompt.contains("explicitly explain why in `rationale`"));
-    assert!(prompt.contains("explicitly acknowledge the material data gap"));
+    assert!(prompt.contains("Treat any analyst input rendered as `null`"));
 }
 
 #[test]
@@ -850,11 +844,11 @@ fn prompt_context_includes_absence_note_when_prior_thesis_missing() {
 }
 
 #[test]
-fn missing_consensus_summary_uses_absence_note() {
+fn missing_consensus_summary_serializes_as_null() {
     let state = empty_state();
     let prompt =
         build_prompt_context(&state, &state.asset_symbol, &state.target_date).system_prompt;
-    assert!(prompt.contains("no debate consensus available"));
+    assert!(prompt.contains("- Research consensus: null"));
 }
 
 #[test]
@@ -951,7 +945,7 @@ async fn provider_facing_prompt_contains_alignment_and_divergence_instructions()
 }
 
 #[tokio::test]
-async fn provider_facing_prompt_mentions_missing_data_when_inputs_are_absent() {
+async fn provider_facing_prompt_uses_pack_owned_missing_data_instruction_when_inputs_are_absent() {
     let mut state = empty_state();
     let inference = StubInference::new(vec![Ok(TypedPromptResponse::new(
         TraderProposalResponse::from(TradeProposal {
@@ -971,8 +965,8 @@ async fn provider_facing_prompt_mentions_missing_data_when_inputs_are_absent() {
         .await
         .unwrap();
     let prompt = inference.observed_system_prompts().pop().unwrap();
-    assert!(prompt.contains("explicitly acknowledge the material data gap"));
-    assert!(prompt.contains("One or more upstream inputs are missing"));
+    assert!(prompt.contains("Treat any analyst input rendered as `null`"));
+    assert!(prompt.contains("- Research consensus: null"));
 }
 
 #[test]

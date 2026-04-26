@@ -8,9 +8,6 @@ use crate::{
     state::TradingState,
 };
 
-pub(super) const MISSING_CONSENSUS_NOTE: &str =
-    "(no debate consensus available - base the proposal on analyst data alone)";
-
 #[cfg_attr(
     any(test, feature = "test-helpers"),
     derive(Debug, Clone, PartialEq, Eq)
@@ -41,17 +38,6 @@ pub(crate) fn build_prompt_context(
 ) -> PromptContext {
     let symbol = sanitize_symbol_for_prompt(symbol);
     let target_date = sanitize_date_for_prompt(target_date);
-    let missing_analyst_data = state.fundamental_metrics().is_none()
-        || state.technical_indicators().is_none()
-        || state.market_sentiment().is_none()
-        || state.macro_news().is_none();
-    let missing_consensus = state.consensus_summary.is_none();
-
-    let data_quality_note = if missing_analyst_data || missing_consensus {
-        "One or more upstream inputs are missing. Explicitly acknowledge the missing data in `rationale` and lower confidence appropriately."
-    } else {
-        "All analyst inputs and the debate consensus are available for this run."
-    };
 
     let system_prompt = trader_system_prompt_template(state)
         .replace("{ticker}", &symbol)
@@ -59,12 +45,11 @@ pub(crate) fn build_prompt_context(
         .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
         .replace(
             "{consensus_summary}",
-            &sanitize_prompt_context(
-                state
-                    .consensus_summary
-                    .as_deref()
-                    .unwrap_or(MISSING_CONSENSUS_NOTE),
-            ),
+            &state
+                .consensus_summary
+                .as_deref()
+                .map(sanitize_prompt_context)
+                .unwrap_or_else(|| "null".to_owned()),
         )
         .replace(
             "{fundamental_report}",
@@ -87,7 +72,7 @@ pub(crate) fn build_prompt_context(
             &serialize_prompt_value(&state.market_volatility()),
         )
         .replace("{past_memory_str}", "see user context")
-        .replace("{data_quality_note}", data_quality_note)
+        .replace("{data_quality_note}", "see user context")
         .replace("{untrusted_context_notice}", UNTRUSTED_CONTEXT_NOTICE);
 
     let enrichment = build_enrichment_context(state);
