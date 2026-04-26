@@ -27,8 +27,8 @@ use super::snapshot::SnapshotStore;
 use super::tasks::{
     AggressiveRiskTask, AnalystSyncTask, BearishResearcherTask, BullishResearcherTask,
     ConservativeRiskTask, DebateModeratorTask, FundManagerTask, KEY_DEBATE_ROUND,
-    KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND, NeutralRiskTask, PreflightTask,
-    RiskModeratorTask, TraderTask,
+    KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND, KEY_ROUTING_FLAGS, NeutralRiskTask,
+    PreflightTask, RiskModeratorTask, TraderTask,
 };
 use crate::agents::analyst::AnalystRegistry;
 use crate::analysis_packs::{AnalysisPackManifest, resolve_runtime_policy_for_manifest};
@@ -92,9 +92,18 @@ pub fn build_graph_from_pack(
     graph.add_task(analyst_sync);
     graph.add_edge(TASKS.analyst_fan_out, TASKS.analyst_sync);
 
+    // Stage-entry routing: enter the debate stage iff `RoutingFlags`
+    // (written by `PreflightTask`) does not skip it. `RoutingFlags` is
+    // derived once per cycle from the topology, replacing the previous
+    // direct read of `KEY_MAX_DEBATE_ROUNDS`. Loop-back conditionals below
+    // keep using the per-iteration round counter.
     graph.add_conditional_edge(
         TASKS.analyst_sync,
-        |ctx| ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0) > 0,
+        |ctx| {
+            ctx.get_sync::<crate::workflow::topology::RoutingFlags>(KEY_ROUTING_FLAGS)
+                .map(|flags| !flags.skip_debate)
+                .unwrap_or_else(|| ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0) > 0)
+        },
         TASKS.bullish_researcher,
         TASKS.debate_moderator,
     );
@@ -130,9 +139,15 @@ pub fn build_graph_from_pack(
         Arc::clone(&config),
         Arc::clone(&snapshot_store),
     ));
+    // Stage-entry routing: enter the risk stage iff `RoutingFlags` does
+    // not skip it. Same source as the debate-entry closure above.
     graph.add_conditional_edge(
         TASKS.trader,
-        |ctx| ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0) > 0,
+        |ctx| {
+            ctx.get_sync::<crate::workflow::topology::RoutingFlags>(KEY_ROUTING_FLAGS)
+                .map(|flags| !flags.skip_risk)
+                .unwrap_or_else(|| ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0) > 0)
+        },
         TASKS.aggressive_risk,
         TASKS.risk_moderator,
     );
