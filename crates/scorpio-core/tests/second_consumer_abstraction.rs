@@ -1,3 +1,5 @@
+#![cfg(feature = "test-helpers")]
+
 //! Unit 5: Second-Consumer API-Shape Contract Test (R8).
 //!
 //! Constructs a synthetic non-baseline `AnalysisPackManifest` in test code
@@ -26,6 +28,7 @@ use scorpio_core::analysis_packs::{
     validate_active_pack_completeness,
 };
 use scorpio_core::prompts::PromptBundle;
+use scorpio_core::testing::runtime_policy_from_manifest;
 use scorpio_core::workflow::{PromptSlot, Role, build_run_topology, required_prompt_slots};
 
 /// Build a synthetic non-baseline manifest with a one-role analyst roster
@@ -89,11 +92,16 @@ fn synthetic_one_role_manifest_with_blank_trader() -> AnalysisPackManifest {
     manifest
 }
 
+fn resolve_policy(manifest: &AnalysisPackManifest) -> scorpio_core::analysis_packs::RuntimePolicy {
+    runtime_policy_from_manifest(manifest)
+}
+
 #[test]
 fn synthetic_manifest_passes_completeness_under_zero_round_topology() {
     let manifest = synthetic_one_role_manifest();
+    let policy = resolve_policy(&manifest);
     let topology = build_run_topology(&manifest.required_inputs, 0, 0);
-    let result = validate_active_pack_completeness(&manifest, &topology);
+    let result = validate_active_pack_completeness(&policy, &topology);
     assert!(
         result.is_ok(),
         "synthetic one-role manifest should be complete under zero-rounds topology: {result:?}"
@@ -103,8 +111,9 @@ fn synthetic_manifest_passes_completeness_under_zero_round_topology() {
 #[test]
 fn synthetic_manifest_with_blank_required_slot_fails_completeness() {
     let manifest = synthetic_one_role_manifest_with_blank_trader();
+    let policy = resolve_policy(&manifest);
     let topology = build_run_topology(&manifest.required_inputs, 0, 0);
-    let err = validate_active_pack_completeness(&manifest, &topology)
+    let err = validate_active_pack_completeness(&policy, &topology)
         .expect_err("blanking the trader slot must fail completeness");
     assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
 }
@@ -144,8 +153,9 @@ fn synthetic_manifest_completeness_scales_with_topology_enable_flags() {
     // researcher / risk / moderator slots. This proves the topology's
     // stage-enable flags actually drive the required-slot set.
     let manifest = synthetic_one_role_manifest();
+    let policy = resolve_policy(&manifest);
     let full_topology = build_run_topology(&manifest.required_inputs, 1, 1);
-    let err = validate_active_pack_completeness(&manifest, &full_topology)
+    let err = validate_active_pack_completeness(&policy, &full_topology)
         .expect_err("fully-enabled topology over a partial bundle must fail completeness");
     // Researchers + debate moderator + 3 risk agents + risk moderator = 7
     // additional required slots beyond the zero-rounds case.
@@ -170,8 +180,9 @@ fn one_role_topology_tracks_only_the_declared_spawned_analyst() {
 fn synthetic_manifest_fails_closed_when_required_inputs_include_unknown_entry() {
     let mut manifest = synthetic_one_role_manifest();
     manifest.required_inputs.push("tokenomics".to_owned());
+    let policy = resolve_policy(&manifest);
     let topology = build_run_topology(&manifest.required_inputs, 0, 0);
-    let err = validate_active_pack_completeness(&manifest, &topology)
+    let err = validate_active_pack_completeness(&policy, &topology)
         .expect_err("unknown required_inputs must fail this API-shape contract test");
     assert_eq!(err.missing_slots, Vec::<PromptSlot>::new());
     assert_eq!(err.unknown_inputs, vec!["tokenomics".to_owned()]);

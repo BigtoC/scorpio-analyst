@@ -28,7 +28,7 @@ use scorpio_core::{
     analysis_packs::{PackId, resolve_pack, validate_active_pack_completeness},
     testing::{
         PromptRenderScenario, canonical_fixture_identity, render_baseline_prompt_for_role,
-        render_prompt_output_for_role,
+        render_prompt_output_for_role, runtime_policy_from_manifest,
     },
     workflow::{Role, build_run_topology},
 };
@@ -253,9 +253,8 @@ fn trader_prompt_scenarios_capture_missing_input_states() {
         "missing debate consensus should change the trader system prompt"
     );
     assert!(
-        zero_debate
-            .contains("(no debate consensus available - base the proposal on analyst data alone)"),
-        "zero-debate trader prompt should surface the explicit missing-consensus note"
+        zero_debate.contains("- Research consensus: null"),
+        "zero-debate trader prompt should serialize the absent consensus as null"
     );
 
     assert_eq!(
@@ -268,8 +267,8 @@ fn trader_prompt_scenarios_capture_missing_input_states() {
         "missing analyst inputs should change the trader system prompt"
     );
     assert!(
-        missing_analyst_data.contains("One or more upstream inputs are missing."),
-        "missing-analyst-data trader prompt should carry the degraded data-quality note"
+        missing_analyst_data.contains("- Data quality note: see user context"),
+        "missing-analyst-data trader prompt should keep template-owned data-quality wording"
     );
     assert!(
         missing_analyst_data.contains("null"),
@@ -326,8 +325,8 @@ fn fund_manager_missing_analyst_data_keeps_risk_inputs_present() {
         "missing-analyst-data scenario should preserve risk reports"
     );
     assert!(
-        rendered.contains("Fundamental data: (data unavailable"),
-        "missing-analyst-data scenario should still surface absent analyst payloads"
+        rendered.contains("Fundamental data: null"),
+        "missing-analyst-data scenario should serialize absent analyst payloads as null"
     );
 }
 
@@ -381,8 +380,9 @@ fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // unit test in completeness.rs but mirrored here so a workspace-level
     // run still proves it.
     let manifest = resolve_pack(PackId::Baseline);
+    let policy = runtime_policy_from_manifest(&manifest);
     let topology = build_run_topology(&manifest.required_inputs, 1, 1);
-    let result = validate_active_pack_completeness(&manifest, &topology);
+    let result = validate_active_pack_completeness(&policy, &topology);
     assert!(
         result.is_ok(),
         "baseline pack must be complete or the gate is meaningless: {result:?}"

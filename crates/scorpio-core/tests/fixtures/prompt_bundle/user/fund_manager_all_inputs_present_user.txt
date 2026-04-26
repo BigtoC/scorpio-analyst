@@ -1,6 +1,6 @@
 Produce an ExecutionStatus JSON for AAPL as of 2026-04-25.
 Dual-risk escalation: absent
-Data quality note: All upstream inputs are available for this run.
+Upstream data state: complete
 Past learnings: No prior thesis memory available for this symbol.
 Deterministic scenario valuation: not computed for this run. Do not fabricate valuation metrics.
 Trader proposal: {"action":"Hold","target_price":190.0,"stop_loss":170.0,"confidence":0.62,"rationale":"Hold while waiting for valuation and momentum to align more clearly.","valuation_assessment":"Fair value to slightly rich versus current assumptions.","scenario_valuation":null}

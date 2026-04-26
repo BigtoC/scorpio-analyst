@@ -10,6 +10,7 @@ use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_core::{
     analysis_packs::{PackId, resolve_pack},
     error::TradingError,
+    prompts::PromptBundle,
     state::{
         AssetShape, DataCoverageReport, Decision, DerivedValuation, EvidenceKind, EvidenceRecord,
         EvidenceSource, ExecutionStatus, FundamentalData, ProvenanceSummary, ScenarioValuation,
@@ -107,11 +108,50 @@ async fn e2e_zero_debate_zero_risk_routing_and_accounting() {
         .collect();
     assert!(debate_rounds.is_empty());
     assert!(risk_rounds.is_empty());
-    assert!(phase_names.contains(&"Researcher Debate Moderation"));
-    assert!(phase_names.contains(&"Risk Discussion Moderation"));
+    assert!(!phase_names.contains(&"Researcher Debate Moderation"));
+    assert!(!phase_names.contains(&"Risk Discussion Moderation"));
     assert!(final_state.debate_history.is_empty());
-    assert_eq!(final_state.risk_discussion_history.len(), 1);
+    assert!(final_state.risk_discussion_history.is_empty());
     assert!(final_state.final_execution_status.is_some());
+}
+
+#[tokio::test]
+async fn from_pack_preflight_validates_the_supplied_manifest_not_the_registry_copy() {
+    let mut pack = resolve_pack(PackId::Baseline);
+    pack.name = "Custom baseline-shaped test pack".to_owned();
+    pack.prompt_bundle = PromptBundle {
+        trader: "".into(),
+        ..pack.prompt_bundle
+    };
+
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "from-pack-custom-manifest.db",
+        "from-pack-custom-manifest",
+        "baseline",
+        0,
+        0,
+    )
+    .await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let err = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect_err("preflight should validate the supplied custom manifest");
+
+    match err {
+        TradingError::GraphFlow { task, cause, .. } => {
+            assert_eq!(task, "preflight");
+            assert!(
+                cause.contains("trader"),
+                "cause should mention missing trader slot: {cause}"
+            );
+        }
+        other => panic!("expected preflight graph-flow error, got: {other:?}"),
+    }
 }
 
 #[tokio::test]

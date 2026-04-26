@@ -11,7 +11,6 @@ use crate::{
         risk::{DualRiskStatus, render_risk_system_prompt},
         trader::build_prompt_context_for_test as build_trader_prompt_context,
     },
-    analysis_packs::resolve_runtime_policy,
     state::{
         DataCoverageReport, DebateMessage, EvidenceKind, EvidenceRecord, EvidenceSource,
         FundamentalData, MarketVolatilityData, NewsData, ProvenanceSummary, RiskLevel, RiskReport,
@@ -52,7 +51,7 @@ pub fn render_prompt_output_for_role(
     role: Role,
     scenario: PromptRenderScenario,
 ) -> PromptRenderOutput {
-    render_prompt_output(role, build_state(scenario))
+    render_prompt_output(role, build_state(scenario), scenario)
 }
 
 // `render_legacy_fallback_system_prompt_for_role` and
@@ -73,7 +72,11 @@ pub fn render_prompt_output_for_role(
 // equivalence assertions they powered have been removed alongside the
 // helpers themselves.
 
-fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
+fn render_prompt_output(
+    role: Role,
+    state: TradingState,
+    scenario: PromptRenderScenario,
+) -> PromptRenderOutput {
     let analyst_policy = || {
         state
             .analysis_runtime_policy
@@ -199,9 +202,10 @@ fn render_prompt_output(role: Role, state: TradingState) -> PromptRenderOutput {
             user_prompt: None,
         },
         Role::FundManager => {
-            let dual_risk = DualRiskStatus::from_reports(
+            let dual_risk = DualRiskStatus::from_reports_with_topology(
                 state.conservative_risk_report.as_ref(),
                 state.neutral_risk_report.as_ref(),
+                !matches!(scenario, PromptRenderScenario::ZeroRisk),
             );
             let (system_prompt, user_prompt) = build_fund_manager_prompt_context(
                 &state,
@@ -230,8 +234,7 @@ pub fn canonical_fixture_identity() -> (&'static str, &'static str) {
 
 fn build_state(scenario: PromptRenderScenario) -> TradingState {
     let mut state = TradingState::new(FIXTURE_TICKER, FIXTURE_DATE);
-    state.analysis_runtime_policy =
-        Some(resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve"));
+    super::runtime_policy::with_baseline_runtime_policy(&mut state);
     state.analysis_pack_name = Some("baseline".to_owned());
     state.data_coverage = Some(DataCoverageReport {
         required_inputs: vec![

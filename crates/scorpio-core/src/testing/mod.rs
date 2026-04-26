@@ -13,5 +13,6 @@ pub use prompt_render::{
     render_baseline_prompt_for_role, render_prompt_output_for_role,
 };
 pub use runtime_policy::{
-    baseline_pack_prompt_for_role, with_baseline_runtime_policy, with_runtime_policy,
+    baseline_pack_prompt_for_role, runtime_policy_from_manifest, with_baseline_runtime_policy,
+    with_runtime_policy,
 };

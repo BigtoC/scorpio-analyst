@@ -44,6 +44,16 @@ pub fn with_runtime_policy(state: &mut TradingState, policy: RuntimePolicy) {
     state.analysis_runtime_policy = Some(policy);
 }
 
+/// Resolve a test runtime policy from a manifest without going through
+/// `PreflightTask`.
+///
+/// This keeps integration tests on the same runtime-policy contract as
+/// production while avoiding any expansion of the public analysis-pack API.
+pub fn runtime_policy_from_manifest(manifest: &AnalysisPackManifest) -> RuntimePolicy {
+    resolve_runtime_policy_for_manifest(manifest)
+        .expect("test manifest must resolve to a runtime policy")
+}
+
 /// Borrow the baseline pack's prompt-asset text for a given role.
 ///
 /// Mirrors how the production runtime reads a slot off the active pack's
@@ -99,6 +109,16 @@ mod tests {
         with_baseline_runtime_policy(&mut state);
         with_baseline_runtime_policy(&mut state);
         assert!(state.analysis_runtime_policy.is_some());
+    }
+
+    #[test]
+    fn runtime_policy_from_manifest_matches_baseline_resolution() {
+        let manifest = resolve_pack(PackId::Baseline);
+        let from_manifest = runtime_policy_from_manifest(&manifest);
+        let from_string = resolve_runtime_policy_for_manifest(&manifest)
+            .expect("baseline manifest should resolve through internal helper");
+
+        assert_eq!(from_manifest, from_string);
     }
 
     #[test]
