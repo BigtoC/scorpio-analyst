@@ -24,10 +24,13 @@ use super::SnapshotStore;
 ///
 /// Bumping this version is a one-time breaking change: existing
 /// thesis-memory continuity is reset; prior-run theses will not be carried
-/// forward. No SQL migration runs — pre-v2 rows remain on disk as
-/// unsupported. Developers may optionally delete
-/// `~/.scorpio-analyst/phase_snapshots.db` for a clean slate.
-pub(crate) const THESIS_MEMORY_SCHEMA_VERSION: i64 = 2;
+/// forward. No SQL migration runs — pre-v3 rows remain on disk as
+/// unsupported but are silently skipped on read in either direction (a v3
+/// binary skips v2 rows; a v2 binary running against a database that already
+/// contains v3 rows skips them via the same `!=` check). Developers may
+/// optionally delete `~/.scorpio-analyst/phase_snapshots.db` for a clean
+/// slate or run `DELETE FROM phase_snapshots WHERE schema_version < 3`.
+pub(crate) const THESIS_MEMORY_SCHEMA_VERSION: i64 = 3;
 
 impl SnapshotStore {
     /// Load the most recent prior thesis for a canonical symbol.
@@ -92,11 +95,16 @@ impl SnapshotStore {
 
             let state: TradingState = match serde_json::from_str(&state_json) {
                 Ok(s) => s,
-                Err(err) => {
+                Err(_err) => {
+                    // Drop `%err` from the log line: `serde_json` error
+                    // formatting can echo offending payload bytes (snippets,
+                    // type-error contexts) which would leak `trading_state_json`
+                    // contents to log aggregators. Emit only a structural
+                    // category tag so future log review never has to redact.
                     warn!(
                         symbol,
                         schema_version,
-                        %err,
+                        error.kind = "deserialize",
                         "prior-thesis snapshot failed to deserialize (schema evolution); skipping"
                     );
                     continue;
