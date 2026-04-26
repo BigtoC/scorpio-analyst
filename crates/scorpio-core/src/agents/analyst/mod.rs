@@ -95,6 +95,19 @@ pub async fn run_analyst_team(
     let analyst_handles = state.analyst_handles();
     let model_id = handle.model_id().to_owned();
 
+    // Resolve the active pack's runtime policy once. PreflightTask is the
+    // sole writer of `state.analysis_runtime_policy`; if it has not run
+    // before this orchestrator (only possible from tests that bypass
+    // preflight), produce a typed error rather than silently rendering
+    // against missing context.
+    let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+        TradingError::Config(anyhow::anyhow!(
+            "run_analyst_team: missing runtime policy — preflight is the sole writer of \
+             state.analysis_runtime_policy; tests bypassing preflight must use \
+             `with_baseline_runtime_policy`"
+        ))
+    })?;
+
     // ── Pre-fetch news once; both Sentiment and News analysts share the result ─
     //
     // This eliminates the duplicate Finnhub `get_news` call (P1).  If the
@@ -104,7 +117,8 @@ pub async fn run_analyst_team(
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
     let fundamental_task = {
-        let analyst = FundamentalAnalyst::new(handle.clone(), finnhub.clone(), state, llm_config);
+        let analyst =
+            FundamentalAnalyst::new(handle.clone(), finnhub.clone(), state, policy, llm_config);
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
@@ -113,6 +127,7 @@ pub async fn run_analyst_team(
             handle.clone(),
             finnhub.clone(),
             state,
+            policy,
             llm_config,
             cached_news.clone(),
         );
@@ -125,6 +140,7 @@ pub async fn run_analyst_team(
             finnhub.clone(),
             fred.clone(),
             state,
+            policy,
             llm_config,
             cached_news,
         );
@@ -132,7 +148,8 @@ pub async fn run_analyst_team(
     };
 
     let technical_task = {
-        let analyst = TechnicalAnalyst::new(handle.clone(), yfinance.clone(), state, llm_config);
+        let analyst =
+            TechnicalAnalyst::new(handle.clone(), yfinance.clone(), state, policy, llm_config);
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
 
