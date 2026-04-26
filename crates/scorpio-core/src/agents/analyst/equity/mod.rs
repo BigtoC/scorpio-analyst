@@ -7,11 +7,18 @@
 pub(crate) mod common;
 mod fundamental;
 mod news;
-mod prompt;
 mod sentiment;
 mod technical;
 
 pub use fundamental::FundamentalAnalyst;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use fundamental::build_fundamental_system_prompt;
 pub use news::NewsAnalyst;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use news::build_news_system_prompt;
 pub use sentiment::SentimentAnalyst;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use sentiment::build_sentiment_system_prompt;
 pub use technical::TechnicalAnalyst;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use technical::build_technical_system_prompt;

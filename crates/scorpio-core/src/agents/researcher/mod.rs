@@ -17,10 +17,11 @@ mod bearish;
 mod bullish;
 mod common;
 mod moderator;
-mod prompt;
 
 pub use bearish::BearishResearcher;
 pub use bullish::BullishResearcher;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use common::render_researcher_system_prompt;
 pub use moderator::DebateModerator;
 
 use crate::{

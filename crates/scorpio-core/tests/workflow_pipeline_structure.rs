@@ -5,9 +5,11 @@ mod workflow_pipeline_make_pipeline;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 
-use graph_flow::{Context, NextAction, Task};
+use graph_flow::{Context, NextAction, Task, TaskResult};
 use scorpio_core::{
+    analysis_packs::{PackId, resolve_pack},
     data::FredClient,
     state::{
         AgentTokenUsage, FundamentalData, NewsData, SentimentData, TechnicalData, TradingState,
@@ -16,13 +18,14 @@ use scorpio_core::{
         SnapshotPhase, SnapshotStore,
         test_support::{
             AnalystSyncTask, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
-            KEY_RISK_ROUND, deserialize_state_from_context, serialize_state_to_context,
-            write_prefixed_result, write_round_debate_usage, write_round_risk_usage,
+            KEY_RISK_ROUND, KEY_RUNTIME_POLICY, deserialize_state_from_context,
+            serialize_state_to_context, write_prefixed_result, write_round_debate_usage,
+            write_round_risk_usage,
         },
     },
 };
 use tempfile::tempdir;
-use workflow_pipeline_make_pipeline::make_pipeline;
+use workflow_pipeline_make_pipeline::{make_pipeline, make_pipeline_from_pack};
 
 fn sample_state() -> TradingState {
     TradingState::new("AAPL", "2026-03-19")
@@ -48,6 +51,95 @@ async fn make_store() -> (Arc<SnapshotStore>, tempfile::TempDir) {
 const ANALYST_PREFIX: &str = "analyst";
 const OK_SUFFIX: &str = "ok";
 const ERR_SUFFIX: &str = "err";
+const KEY_ROUTING_FLAGS: &str = "routing_flags";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSurfaceObservation {
+    analysis_pack_name: Option<String>,
+    has_state_runtime_policy: bool,
+    runtime_policy_pack_name: Option<String>,
+    has_routing_flags: bool,
+}
+
+struct RuntimeSurfaceProbe {
+    task_id: &'static str,
+    observations: Arc<Mutex<Vec<RuntimeSurfaceObservation>>>,
+}
+
+#[async_trait::async_trait]
+impl Task for RuntimeSurfaceProbe {
+    fn id(&self) -> &str {
+        self.task_id
+    }
+
+    async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "RuntimeSurfaceProbe({}): state deserialization failed: {error}",
+                    self.task_id
+                ))
+            })?;
+
+        let runtime_policy_pack_name = ctx
+            .get::<String>(KEY_RUNTIME_POLICY)
+            .await
+            .map(|json| {
+                serde_json::from_str::<scorpio_core::analysis_packs::RuntimePolicy>(&json)
+                    .map(|policy| policy.pack_id.to_string())
+                    .map_err(|error| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "RuntimeSurfaceProbe({}): runtime_policy deserialization failed: {error}",
+                            self.task_id
+                        ))
+                    })
+            })
+            .transpose()?;
+
+        // RoutingFlags is now stored as the typed struct directly (Phase 9
+        // of the prompt-bundle centralization migration replaced the JSON
+        // round-trip with a typed read in the conditional-edge closures).
+        let has_routing_flags = ctx
+            .get::<scorpio_core::workflow::RoutingFlags>(KEY_ROUTING_FLAGS)
+            .await
+            .is_some();
+
+        self.observations
+            .lock()
+            .expect("probe observation mutex")
+            .push(RuntimeSurfaceObservation {
+                analysis_pack_name: state.analysis_pack_name.clone(),
+                has_state_runtime_policy: state.analysis_runtime_policy.is_some(),
+                runtime_policy_pack_name,
+                has_routing_flags,
+            });
+
+        Ok(TaskResult::new(None, NextAction::End))
+    }
+}
+
+async fn observe_runtime_surfaces_at(
+    pipeline: &scorpio_core::workflow::TradingPipeline,
+    task_id: &'static str,
+) -> RuntimeSurfaceObservation {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    pipeline
+        .replace_task_for_test(Arc::new(RuntimeSurfaceProbe {
+            task_id,
+            observations: Arc::clone(&observations),
+        }))
+        .expect("probe replacement must succeed");
+
+    pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("probe run should succeed");
+
+    let mut locked = observations.lock().expect("probe observation mutex");
+    assert_eq!(locked.len(), 1, "probe should observe exactly one boundary");
+    locked.pop().expect("probe observation should exist")
+}
 
 async fn set_analyst_ok(ctx: &Context, analyst: &str, ok: bool) {
     ctx.set(format!("{ANALYST_PREFIX}.{analyst}.{OK_SUFFIX}"), ok)
@@ -396,6 +488,86 @@ fn pipeline_graph_topology_has_correct_start_and_all_nodes() {
             "graph must contain node '{id}'"
         );
     }
+}
+
+#[tokio::test]
+async fn activation_path_audit_new_enters_graph_without_runtime_surfaces_pre_hydrated() {
+    let (pipeline, _store, _dir) = make_pipeline(
+        "activation-new-preflight.db",
+        "activation-new-preflight",
+        1,
+        1,
+    )
+    .await;
+
+    let observed = observe_runtime_surfaces_at(&pipeline, "preflight").await;
+
+    assert_eq!(observed.analysis_pack_name, None);
+    assert!(!observed.has_state_runtime_policy);
+    assert_eq!(observed.runtime_policy_pack_name, None);
+    assert!(!observed.has_routing_flags);
+}
+
+#[tokio::test]
+async fn activation_path_audit_from_pack_enters_graph_without_runtime_surfaces_pre_hydrated() {
+    let pack = resolve_pack(PackId::Baseline);
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "activation-from-pack-preflight.db",
+        "activation-from-pack-preflight",
+        "baseline",
+        1,
+        1,
+    )
+    .await;
+
+    let observed = observe_runtime_surfaces_at(&pipeline, "preflight").await;
+
+    assert_eq!(observed.analysis_pack_name, None);
+    assert!(!observed.has_state_runtime_policy);
+    assert_eq!(observed.runtime_policy_pack_name, None);
+    assert!(!observed.has_routing_flags);
+}
+
+#[tokio::test]
+async fn activation_path_audit_new_reaches_analyst_boundary_with_preflight_runtime_surfaces() {
+    let (pipeline, _store, _dir) =
+        make_pipeline("activation-new-analyst.db", "activation-new-analyst", 1, 1).await;
+
+    let observed = observe_runtime_surfaces_at(&pipeline, "analyst_fanout").await;
+
+    assert_eq!(observed.analysis_pack_name.as_deref(), Some("baseline"));
+    assert!(observed.has_state_runtime_policy);
+    assert_eq!(
+        observed.runtime_policy_pack_name.as_deref(),
+        Some("baseline")
+    );
+    assert!(observed.has_routing_flags);
+}
+
+#[tokio::test]
+async fn activation_path_audit_from_pack_reaches_analyst_boundary_with_preflight_runtime_surfaces()
+{
+    let pack = resolve_pack(PackId::Baseline);
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "activation-from-pack-analyst.db",
+        "activation-from-pack-analyst",
+        "baseline",
+        1,
+        1,
+    )
+    .await;
+
+    let observed = observe_runtime_surfaces_at(&pipeline, "analyst_fanout").await;
+
+    assert_eq!(observed.analysis_pack_name.as_deref(), Some("baseline"));
+    assert!(observed.has_state_runtime_policy);
+    assert_eq!(
+        observed.runtime_policy_pack_name.as_deref(),
+        Some("baseline")
+    );
+    assert!(observed.has_routing_flags);
 }
 
 #[test]

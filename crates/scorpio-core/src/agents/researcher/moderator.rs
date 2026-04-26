@@ -21,7 +21,6 @@ use super::common::{
     DebaterCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, format_debate_history,
     validate_consensus_summary,
 };
-use super::prompt::MODERATOR_SYSTEM_PROMPT;
 
 /// The Debate Moderator agent.
 ///
@@ -53,10 +52,11 @@ impl DebateModerator {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "DebateModerator")?;
         Ok(Self {
             core: DebaterCore::new(
                 handle,
-                MODERATOR_SYSTEM_PROMPT,
+                policy,
                 |bundle| bundle.debate_moderator.as_ref(),
                 state,
                 llm_config,

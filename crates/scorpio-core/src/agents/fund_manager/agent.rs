@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use graph_flow::Context;
 use rig::agent::PromptResponse;
 
 use super::{
@@ -100,13 +101,14 @@ impl FundManagerAgent {
     ///   returns a response that fails domain validation.
     /// - [`TradingError::Rig`] / [`TradingError::NetworkTimeout`] for LLM failures.
     pub async fn run(&self, state: &mut TradingState) -> Result<AgentTokenUsage, TradingError> {
-        self.run_with_inference(state, &RigFundManagerInference)
+        self.run_with_inference(state, true, &RigFundManagerInference)
             .await
     }
 
     pub(super) async fn run_with_inference<I: FundManagerInference>(
         &self,
         state: &mut TradingState,
+        risk_stage_enabled: bool,
         inference: &I,
     ) -> Result<AgentTokenUsage, TradingError> {
         let started_at = Instant::now();
@@ -123,9 +125,16 @@ impl FundManagerAgent {
             .as_ref()
             .map(|p| p.action.clone())
             .expect("checked above");
-        let dual_risk_status = crate::agents::risk::DualRiskStatus::from_reports(
+        // Topology-aware dual-risk derivation: if the run was configured with
+        // zero risk rounds, the risk stage was deliberately bypassed and the
+        // status is `StageDisabled` rather than `Unknown`. The topology is
+        // read off the runtime policy that `PreflightTask` hydrates; absent
+        // policy or absent required_inputs falls back to the legacy
+        // "risk stage enabled" semantic so existing tests stay green.
+        let dual_risk_status = crate::agents::risk::DualRiskStatus::from_reports_with_topology(
             state.conservative_risk_report.as_ref(),
             state.neutral_risk_report.as_ref(),
+            risk_stage_enabled,
         );
 
         let (system_prompt, user_prompt) =
@@ -143,7 +152,7 @@ impl FundManagerAgent {
 
         let mut status = parse_and_validate_execution_status(
             &outcome.result.output,
-            state_has_missing_inputs(state),
+            state_has_missing_inputs(state, dual_risk_status),
             &state.target_date,
             dual_risk_status,
             trader_proposal_action,
@@ -167,13 +176,28 @@ impl FundManagerAgent {
 pub(super) async fn run_fund_manager(
     state: &mut TradingState,
     config: &Config,
+    context: &Context,
 ) -> Result<AgentTokenUsage, TradingError> {
-    run_fund_manager_with_inference(state, config, &RigFundManagerInference).await
+    let routing_flags = context
+        .get_sync::<crate::workflow::RoutingFlags>(crate::workflow::KEY_ROUTING_FLAGS)
+        .ok_or_else(|| {
+            TradingError::Config(anyhow::anyhow!(
+                "fund manager: missing routing flags — preflight must run before fund manager"
+            ))
+        })?;
+    run_fund_manager_with_inference(
+        state,
+        config,
+        !routing_flags.skip_risk,
+        &RigFundManagerInference,
+    )
+    .await
 }
 
 pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
     state: &mut TradingState,
     config: &Config,
+    risk_stage_enabled: bool,
     inference: &I,
 ) -> Result<AgentTokenUsage, TradingError> {
     let handle = create_completion_model(
@@ -184,5 +208,7 @@ pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
     )?;
     let agent =
         FundManagerAgent::new(handle, &state.asset_symbol, &state.target_date, &config.llm)?;
-    agent.run_with_inference(state, inference).await
+    agent
+        .run_with_inference(state, risk_stage_enabled, inference)
+        .await
 }

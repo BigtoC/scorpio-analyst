@@ -10,6 +10,7 @@ use graph_flow::{Context, NextAction, TaskResult};
 use scorpio_core::{
     analysis_packs::{PackId, resolve_pack},
     error::TradingError,
+    prompts::PromptBundle,
     state::{
         AssetShape, DataCoverageReport, Decision, DerivedValuation, EvidenceKind, EvidenceRecord,
         EvidenceSource, ExecutionStatus, FundamentalData, ProvenanceSummary, ScenarioValuation,
@@ -107,11 +108,50 @@ async fn e2e_zero_debate_zero_risk_routing_and_accounting() {
         .collect();
     assert!(debate_rounds.is_empty());
     assert!(risk_rounds.is_empty());
-    assert!(phase_names.contains(&"Researcher Debate Moderation"));
-    assert!(phase_names.contains(&"Risk Discussion Moderation"));
+    assert!(!phase_names.contains(&"Researcher Debate Moderation"));
+    assert!(!phase_names.contains(&"Risk Discussion Moderation"));
     assert!(final_state.debate_history.is_empty());
-    assert_eq!(final_state.risk_discussion_history.len(), 1);
+    assert!(final_state.risk_discussion_history.is_empty());
     assert!(final_state.final_execution_status.is_some());
+}
+
+#[tokio::test]
+async fn from_pack_preflight_validates_the_supplied_manifest_not_the_registry_copy() {
+    let mut pack = resolve_pack(PackId::Baseline);
+    pack.name = "Custom baseline-shaped test pack".to_owned();
+    pack.prompt_bundle = PromptBundle {
+        trader: "".into(),
+        ..pack.prompt_bundle
+    };
+
+    let (pipeline, _store, _dir) = make_pipeline_from_pack(
+        &pack,
+        "from-pack-custom-manifest.db",
+        "from-pack-custom-manifest",
+        "baseline",
+        0,
+        0,
+    )
+    .await;
+    pipeline
+        .install_stub_tasks_for_test()
+        .expect("stub install must succeed");
+
+    let err = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect_err("preflight should validate the supplied custom manifest");
+
+    match err {
+        TradingError::GraphFlow { task, cause, .. } => {
+            assert_eq!(task, "preflight");
+            assert!(
+                cause.contains("trader"),
+                "cause should mention missing trader slot: {cause}"
+            );
+        }
+        other => panic!("expected preflight graph-flow error, got: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -250,7 +290,14 @@ async fn from_pack_ignores_invalid_config_analysis_pack_and_runs_with_provided_p
 }
 
 #[tokio::test]
-async fn from_pack_runs_registered_non_selectable_pack_without_reparsing_config_boundary() {
+async fn from_pack_construction_accepts_non_selectable_pack_but_preflight_rejects_stub_bundle() {
+    // The crypto pack is registered (resolvable via `resolve_pack`) but ships
+    // `PromptBundle::empty()`. Construction via `from_pack` must succeed —
+    // proving the API surface accepts any registered manifest — but
+    // `PreflightTask`'s active-pack completeness gate must reject the run
+    // *before* any analyst or model task fires, because an empty bundle
+    // cannot produce real prompts. This test pins the contract that
+    // construction-time acceptance is decoupled from runtime completeness.
     let pack = resolve_pack(PackId::CryptoDigitalAsset);
     let (pipeline, _store, _dir) = make_pipeline_from_pack(
         &pack,
@@ -263,31 +310,27 @@ async fn from_pack_runs_registered_non_selectable_pack_without_reparsing_config_
     .await;
     pipeline
         .install_stub_tasks_for_test()
-        .expect("stub install must succeed");
+        .expect("stub install must succeed even for non-selectable packs");
 
-    let final_state = pipeline
+    let err = pipeline
         .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
         .await
-        .expect("from_pack should allow directly resolved registered packs");
-
-    assert_eq!(
-        final_state.analysis_pack_name.as_deref(),
-        Some("crypto_digital_asset")
+        .expect_err(
+            "preflight must reject the inactive crypto stub — its empty bundle cannot render \
+             any prompts at runtime",
+        );
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("PreflightTask"),
+        "error must originate from PreflightTask, got: {msg}"
     );
-    assert_eq!(
-        final_state
-            .analysis_runtime_policy
-            .as_ref()
-            .map(|policy| policy.pack_id),
-        Some(PackId::CryptoDigitalAsset)
+    assert!(
+        msg.contains("CryptoDigitalAsset"),
+        "error must name the offending pack, got: {msg}"
     );
-    assert_eq!(
-        final_state
-            .data_coverage
-            .as_ref()
-            .expect("data coverage must be computed")
-            .required_inputs,
-        vec!["tokenomics", "onchain", "social", "derivatives"]
+    assert!(
+        msg.contains("incomplete") || msg.contains("missing"),
+        "error must surface the completeness failure mode, got: {msg}"
     );
 }
 

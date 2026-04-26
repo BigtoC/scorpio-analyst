@@ -156,10 +156,20 @@ impl Task for FundamentalAnalystTask {
             }
         };
 
+        let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed(
+                "FundamentalAnalystTask: orchestration corruption: \
+                 state.analysis_runtime_policy is missing — preflight is the sole writer \
+                 and must run before analyst fan-out"
+                    .to_owned(),
+            )
+        })?;
+
         let analyst = FundamentalAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
             &state,
+            policy,
             &self.llm_config,
         );
 
@@ -242,10 +252,20 @@ impl Task for SentimentAnalystTask {
 
         let cached_news_opt = read_cached_news("SentimentAnalystTask", &context).await?;
 
+        let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed(
+                "SentimentAnalystTask: orchestration corruption: \
+                 state.analysis_runtime_policy is missing — preflight is the sole writer \
+                 and must run before analyst fan-out"
+                    .to_owned(),
+            )
+        })?;
+
         let analyst = SentimentAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
             &state,
+            policy,
             &self.llm_config,
             cached_news_opt,
         );
@@ -331,11 +351,21 @@ impl Task for NewsAnalystTask {
 
         let cached_news_opt = read_cached_news("NewsAnalystTask", &context).await?;
 
+        let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed(
+                "NewsAnalystTask: orchestration corruption: \
+                 state.analysis_runtime_policy is missing — preflight is the sole writer \
+                 and must run before analyst fan-out"
+                    .to_owned(),
+            )
+        })?;
+
         let analyst = NewsAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
             self.fred.clone(),
             &state,
+            policy,
             &self.llm_config,
             cached_news_opt,
         );
@@ -416,10 +446,20 @@ impl Task for TechnicalAnalystTask {
             }
         };
 
+        let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed(
+                "TechnicalAnalystTask: orchestration corruption: \
+                 state.analysis_runtime_policy is missing — preflight is the sole writer \
+                 and must run before analyst fan-out"
+                    .to_owned(),
+            )
+        })?;
+
         let analyst = TechnicalAnalyst::new(
             self.handle.clone(),
             self.yfinance.clone(),
             &state,
+            policy,
             &self.llm_config,
         );
 

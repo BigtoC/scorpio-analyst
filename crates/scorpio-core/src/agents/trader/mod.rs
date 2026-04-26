@@ -34,6 +34,8 @@ mod schema;
 #[cfg(test)]
 mod tests;
 use prompt::build_prompt_context;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) use prompt::build_prompt_context as build_prompt_context_for_test;
 use schema::TraderProposalResponse;
 
 trait TraderInference {

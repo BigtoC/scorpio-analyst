@@ -14,10 +14,7 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
-    agents::shared::{
-        agent_token_usage_from_completion, build_authoritative_source_prompt_rule,
-        build_data_quality_prompt_rule, build_missing_data_prompt_rule, sanitize_prompt_context,
-    },
+    agents::shared::agent_token_usage_from_completion,
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::FUNDAMENTAL_ANALYST_MAX_TURNS,
@@ -27,41 +24,27 @@ use crate::{
     state::{AgentTokenUsage, FundamentalData, TradingState},
 };
 
-use super::common::{analyst_runtime_config, run_analyst_inference, validate_summary_content};
-use super::prompt::FUNDAMENTAL_SYSTEM_PROMPT;
+use super::common::{
+    analyst_runtime_config, render_analyst_system_prompt, run_analyst_inference,
+    validate_summary_content,
+};
 
 /// Build the rendered system prompt for the Fundamental Analyst.
 ///
-/// Applies `{ticker}` / `{current_date}` substitution and appends the three shared
-/// evidence-discipline rule helpers plus analyst-specific unsupported-inference guards.
-fn fundamental_system_prompt_template(policy: Option<&RuntimePolicy>) -> &str {
-    policy
-        .map(|policy| policy.prompt_bundle.fundamental_analyst.as_ref())
-        .filter(|template| !template.is_empty())
-        .unwrap_or(FUNDAMENTAL_SYSTEM_PROMPT)
-}
-
+/// Reads the role's template from `RuntimePolicy.prompt_bundle.fundamental_analyst`
+/// and delegates substitution and rule appending to the shared
+/// [`render_analyst_system_prompt`] helper. Preflight's completeness gate
+/// ensures the slot is non-empty.
 pub(crate) fn build_fundamental_system_prompt(
     symbol: &str,
     target_date: &str,
-    policy: Option<&RuntimePolicy>,
+    policy: &RuntimePolicy,
 ) -> String {
-    let analysis_emphasis = policy
-        .map(|policy| sanitize_prompt_context(&policy.analysis_emphasis))
-        .unwrap_or_default();
-
-    format!(
-        "{base}\n\n{auth_rule}\n{missing_rule}\n{quality_rule}\n\
-Do not infer estimates, transcript commentary, or quarter labels unless the runtime provides them.\n\
-If evidence is sparse or missing, say so explicitly in `summary` rather than padding weak claims.\n\
-Separate observed facts from interpretation.",
-        base = fundamental_system_prompt_template(policy)
-            .replace("{ticker}", symbol)
-            .replace("{current_date}", target_date)
-            .replace("{analysis_emphasis}", &analysis_emphasis),
-        auth_rule = build_authoritative_source_prompt_rule(),
-        missing_rule = build_missing_data_prompt_rule(),
-        quality_rule = build_data_quality_prompt_rule(),
+    render_analyst_system_prompt(
+        policy.prompt_bundle.fundamental_analyst.as_ref(),
+        symbol,
+        target_date,
+        policy,
     )
 }
 
@@ -91,14 +74,12 @@ impl FundamentalAnalyst {
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
         state: &TradingState,
+        policy: &RuntimePolicy,
         llm_config: &LlmConfig,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt = build_fundamental_system_prompt(
-            &runtime.symbol,
-            &runtime.target_date,
-            state.analysis_runtime_policy.as_ref(),
-        );
+        let system_prompt =
+            build_fundamental_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
         Self {
             handle,
@@ -443,17 +424,22 @@ mod tests {
 
     #[test]
     fn fundamental_prompt_requires_exactly_one_json_object_response() {
-        assert!(
-            FUNDAMENTAL_SYSTEM_PROMPT.contains("exactly one JSON object"),
-            "FUNDAMENTAL_SYSTEM_PROMPT must contain 'exactly one JSON object'"
+        // Drift-detection guard against the canonical runtime source — the
+        // baseline pack's `PromptBundle.fundamental_analyst` slot.
+        let prompt = crate::testing::baseline_pack_prompt_for_role(
+            crate::workflow::Role::FundamentalAnalyst,
         );
         assert!(
-            FUNDAMENTAL_SYSTEM_PROMPT.contains("no prose"),
-            "FUNDAMENTAL_SYSTEM_PROMPT must contain 'no prose'"
+            prompt.contains("exactly one JSON object"),
+            "baseline fundamental prompt must contain 'exactly one JSON object'"
         );
         assert!(
-            FUNDAMENTAL_SYSTEM_PROMPT.contains("no markdown fences"),
-            "FUNDAMENTAL_SYSTEM_PROMPT must contain 'no markdown fences'"
+            prompt.contains("no prose"),
+            "baseline fundamental prompt must contain 'no prose'"
+        );
+        assert!(
+            prompt.contains("no markdown fences"),
+            "baseline fundamental prompt must contain 'no markdown fences'"
         );
     }
 
@@ -528,48 +514,30 @@ mod tests {
 
     #[test]
     fn fundamental_rendered_prompt_includes_evidence_discipline_rules() {
-        use crate::agents::shared::{
-            build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
-            build_missing_data_prompt_rule,
-        };
+        use crate::analysis_packs::resolve_runtime_policy;
 
-        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01", None);
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01", &policy);
 
-        assert!(
-            prompt.contains(build_authoritative_source_prompt_rule()),
-            "rendered prompt must contain authoritative source rule"
-        );
-        assert!(
-            prompt.contains(build_missing_data_prompt_rule()),
-            "rendered prompt must contain missing data rule"
-        );
-        assert!(
-            prompt.contains(build_data_quality_prompt_rule()),
-            "rendered prompt must contain data quality rule"
-        );
-        assert!(
-            prompt.contains("Do not infer estimates"),
-            "rendered prompt must contain 'Do not infer estimates'"
-        );
-        assert!(
-            prompt.contains("sparse or missing"),
-            "rendered prompt must contain 'sparse or missing'"
-        );
-        assert!(
-            prompt.contains("Separate observed facts"),
-            "rendered prompt must contain 'Separate observed facts'"
-        );
+        for phrase in [
+            "Prefer authoritative runtime evidence",
+            "When evidence is sparse or missing",
+            "Separate observed facts (tool output) from interpretation",
+            "Do not infer estimates",
+            "sparse or missing",
+            "Separate observed facts",
+        ] {
+            assert!(
+                prompt.contains(phrase),
+                "rendered prompt must contain runtime-contract phrase {phrase:?}"
+            );
+        }
     }
 
     #[test]
-    fn fundamental_rendered_prompt_prefers_runtime_policy_prompt_bundle() {
-        use crate::{
-            agents::shared::{
-                build_authoritative_source_prompt_rule, build_data_quality_prompt_rule,
-                build_missing_data_prompt_rule,
-            },
-            analysis_packs::resolve_runtime_policy,
-        };
+    fn fundamental_rendered_prompt_uses_runtime_policy_prompt_bundle() {
+        use crate::analysis_packs::resolve_runtime_policy;
 
         let mut policy =
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
@@ -578,23 +546,13 @@ mod tests {
             "Pack fundamental prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01", Some(&policy));
+        let prompt = build_fundamental_system_prompt("AAPL", "2026-01-01", &policy);
 
         assert!(
             prompt.contains(
                 "Pack fundamental prompt for AAPL at 2026-01-01. Emphasis: focus on balance-sheet durability."
             ),
-            "runtime-policy prompt bundle should override the legacy fundamental template: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Your job is to turn raw company financial data"),
-            "legacy fundamental template should not leak through when a pack override is present: {prompt}"
-        );
-        assert!(
-            prompt.contains(build_authoritative_source_prompt_rule())
-                && prompt.contains(build_missing_data_prompt_rule())
-                && prompt.contains(build_data_quality_prompt_rule()),
-            "evidence-discipline rules must still be appended after prompt-bundle rendering: {prompt}"
+            "runtime-policy prompt bundle should drive the fundamental template: {prompt}"
         );
     }
 }

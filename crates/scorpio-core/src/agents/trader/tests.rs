@@ -7,7 +7,7 @@ use secrecy::SecretString;
 use super::schema::TraderProposalResponse;
 use super::*;
 use crate::agents::shared::UNTRUSTED_CONTEXT_NOTICE;
-use crate::agents::trader::prompt::TRADER_SYSTEM_PROMPT;
+use crate::testing::with_baseline_runtime_policy;
 use crate::{
     config::{ProviderSettings, ProvidersConfig, TradingConfig},
     providers::factory::RetryOutcome,
@@ -16,7 +16,12 @@ use crate::{
         NewsData, ScenarioValuation, SentimentData, SentimentSource, TechnicalData, ThesisMemory,
         TradeAction, TradeProposal, TradingState,
     },
+    workflow::Role,
 };
+
+fn baseline_trader_prompt() -> &'static str {
+    crate::testing::baseline_pack_prompt_for_role(Role::Trader)
+}
 
 fn sample_llm_config() -> LlmConfig {
     LlmConfig {
@@ -70,11 +75,14 @@ fn valid_proposal() -> TradeProposal {
 }
 
 fn empty_state() -> TradingState {
-    TradingState::new("AAPL", "2026-03-15")
+    let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
+    state
 }
 
 fn populated_state() -> TradingState {
     let mut state = TradingState::new("AAPL", "2026-03-15");
+    with_baseline_runtime_policy(&mut state);
     state.consensus_summary = Some(
         "Hold - bullish evidence is growth, bearish evidence is rates, unresolved uncertainty is demand durability."
             .to_owned(),
@@ -761,9 +769,10 @@ fn usage_from_typed_response_unavailable_when_all_zero() {
 
 #[test]
 fn system_prompt_contains_alignment_divergence_and_missing_data_instructions() {
-    assert!(TRADER_SYSTEM_PROMPT.contains("Align with the moderator's stance"));
-    assert!(TRADER_SYSTEM_PROMPT.contains("explicitly explain why in `rationale`"));
-    assert!(TRADER_SYSTEM_PROMPT.contains("explicitly acknowledge the material data gap"));
+    let prompt = baseline_trader_prompt();
+    assert!(prompt.contains("Align with the moderator's stance"));
+    assert!(prompt.contains("explicitly explain why in `rationale`"));
+    assert!(prompt.contains("Treat any analyst input rendered as `null`"));
 }
 
 #[test]
@@ -835,11 +844,11 @@ fn prompt_context_includes_absence_note_when_prior_thesis_missing() {
 }
 
 #[test]
-fn missing_consensus_summary_uses_absence_note() {
+fn missing_consensus_summary_serializes_as_null() {
     let state = empty_state();
     let prompt =
         build_prompt_context(&state, &state.asset_symbol, &state.target_date).system_prompt;
-    assert!(prompt.contains("no debate consensus available"));
+    assert!(prompt.contains("- Research consensus: null"));
 }
 
 #[test]
@@ -936,7 +945,7 @@ async fn provider_facing_prompt_contains_alignment_and_divergence_instructions()
 }
 
 #[tokio::test]
-async fn provider_facing_prompt_mentions_missing_data_when_inputs_are_absent() {
+async fn provider_facing_prompt_uses_pack_owned_missing_data_instruction_when_inputs_are_absent() {
     let mut state = empty_state();
     let inference = StubInference::new(vec![Ok(TypedPromptResponse::new(
         TraderProposalResponse::from(TradeProposal {
@@ -956,8 +965,8 @@ async fn provider_facing_prompt_mentions_missing_data_when_inputs_are_absent() {
         .await
         .unwrap();
     let prompt = inference.observed_system_prompts().pop().unwrap();
-    assert!(prompt.contains("explicitly acknowledge the material data gap"));
-    assert!(prompt.contains("One or more upstream inputs are missing"));
+    assert!(prompt.contains("Treat any analyst input rendered as `null`"));
+    assert!(prompt.contains("- Research consensus: null"));
 }
 
 #[test]
@@ -977,7 +986,8 @@ fn constructor_rejects_wrong_model_id() {
 // Task 4.8 — trader prompt includes typed evidence and data quality sections.
 #[test]
 fn build_prompt_context_user_prompt_includes_evidence_and_data_quality() {
-    let state = TradingState::new("AAPL", "2026-01-15");
+    let mut state = TradingState::new("AAPL", "2026-01-15");
+    with_baseline_runtime_policy(&mut state);
     let ctx = build_prompt_context(&state, &state.asset_symbol, &state.target_date);
     assert!(ctx.user_prompt.contains("Typed evidence snapshot:"));
     assert!(ctx.user_prompt.contains("- fundamentals: null"));
@@ -1000,7 +1010,7 @@ fn build_prompt_context_user_prompt_includes_pack_context() {
 }
 
 #[test]
-fn build_prompt_context_prefers_runtime_policy_trader_prompt_bundle() {
+fn build_prompt_context_renders_runtime_policy_trader_prompt_bundle() {
     let mut state = empty_state();
     let mut policy = crate::analysis_packs::resolve_runtime_policy("baseline")
         .expect("baseline runtime policy should resolve");
@@ -1013,12 +1023,6 @@ fn build_prompt_context_prefers_runtime_policy_trader_prompt_bundle() {
         ctx.system_prompt
             .contains("Pack-owned trader prompt for AAPL at 2026-03-15."),
         "system prompt should render the runtime-policy trader prompt bundle: {}",
-        ctx.system_prompt
-    );
-    assert!(
-        !ctx.system_prompt
-            .contains("Your job is to synthesize the research consensus"),
-        "legacy trader prompt should not leak through when a pack override is present: {}",
         ctx.system_prompt
     );
 }
@@ -1210,26 +1214,22 @@ fn prompt_context_user_prompt_omits_absent_valuation_metrics_for_partial_valuati
 
 #[test]
 fn system_prompt_instructs_to_use_precomputed_valuation_not_invent_metrics() {
+    let prompt = baseline_trader_prompt();
     assert!(
-        TRADER_SYSTEM_PROMPT.contains("pre-computed deterministic valuation"),
-        "system prompt must reference pre-computed valuation: {}",
-        TRADER_SYSTEM_PROMPT
+        prompt.contains("pre-computed deterministic valuation"),
+        "system prompt must reference pre-computed valuation: {prompt}"
     );
     assert!(
-        TRADER_SYSTEM_PROMPT.contains("Do NOT fabricate"),
-        "system prompt must warn against fabricating metrics: {}",
-        TRADER_SYSTEM_PROMPT
+        prompt.contains("Do NOT fabricate"),
+        "system prompt must warn against fabricating metrics: {prompt}"
     );
     assert!(
-        TRADER_SYSTEM_PROMPT.contains("not applicable"),
-        "system prompt must describe not-assessed ETF path: {}",
-        TRADER_SYSTEM_PROMPT
+        prompt.contains("not applicable"),
+        "system prompt must describe not-assessed ETF path: {prompt}"
     );
     assert!(
-        TRADER_SYSTEM_PROMPT.contains("not computed")
-            || TRADER_SYSTEM_PROMPT.contains("unavailable"),
-        "system prompt must describe not-computed fallback path: {}",
-        TRADER_SYSTEM_PROMPT
+        prompt.contains("not computed") || prompt.contains("unavailable"),
+        "system prompt must describe not-computed fallback path: {prompt}"
     );
 }
 

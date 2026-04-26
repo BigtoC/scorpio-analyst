@@ -23,17 +23,19 @@ use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::debug;
 
 use crate::{
-    analysis_packs::RuntimePolicy,
+    analysis_packs::{RuntimePolicy, validate_active_pack_completeness},
     data::{adapters::ProviderCapabilities, resolve_symbol},
     workflow::{
         SnapshotStore,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+        topology::{RoutingFlags, build_run_topology},
     },
 };
 
 use super::common::{
-    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_PROVIDER_CAPABILITIES,
-    KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_RUNTIME_POLICY,
+    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_MAX_DEBATE_ROUNDS,
+    KEY_MAX_RISK_ROUNDS, KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS,
+    KEY_RESOLVED_INSTRUMENT, KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY,
 };
 
 const TASK_ID: &str = "preflight";
@@ -210,6 +212,58 @@ impl Task for PreflightTask {
             ))
         })?;
         context.set(KEY_RUNTIME_POLICY, policy_json).await;
+
+        // ── Build per-run topology + routing flags ───────────────────────
+        // Read the configured round counts already written into context by
+        // `run_analysis_cycle`. Falling back to zero on a missing key is
+        // structurally safe because the conditional-edge closures already
+        // tolerate `None` the same way; in practice both keys are present
+        // for every active pipeline run.
+        let max_debate_rounds = context.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
+        let max_risk_rounds = context.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
+        let topology = build_run_topology(
+            &runtime_policy.required_inputs,
+            max_debate_rounds,
+            max_risk_rounds,
+        );
+        let routing_flags = RoutingFlags::from_topology(&topology);
+        // Store RoutingFlags as a typed struct so the conditional-edge
+        // closures in `workflow::builder` can read it via `get_sync` without
+        // a JSON round-trip on every iteration.
+        context.set(KEY_ROUTING_FLAGS, routing_flags).await;
+
+        // ── Active-pack completeness gate (fail-loud) ─────────────────────
+        // Validate the resolved runtime policy that this graph will actually
+        // use against the topology. Failures surface as
+        // `TaskExecutionFailed`, halting the pipeline before any analyst or
+        // model task fires. The baseline pack is complete under the fully
+        // enabled topology (covered by `analysis_packs::completeness::tests`
+        // and the regression-gate sanity), so production runs never trip
+        // this gate today; it exists to defend against future packs that
+        // ship incomplete prompt bundles.
+        if let Err(err) = validate_active_pack_completeness(runtime_policy, &topology) {
+            return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: active pack {:?} is incomplete under runtime topology: {err}",
+                err.pack_id
+            )));
+        }
+
+        // ── Pack-author injection guard (defense-in-depth) ────────────────
+        // `analysis_emphasis` is pack-manifest-owned and compile-time embedded
+        // for builtin packs, but a future runtime-loaded pack or a careless
+        // edit could ship adversarial content. The strict 0x20-0x7E ASCII +
+        // role-injection-tag rejection runs here so a malformed value fails
+        // before substitution into any LLM system prompt. Builtin packs
+        // produce well-formed values today, so this gate is silent for
+        // production runs.
+        if let Err(err) =
+            crate::prompts::sanitize_analysis_emphasis(&runtime_policy.analysis_emphasis)
+        {
+            return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: pack {:?} has invalid analysis_emphasis: {err}",
+                runtime_policy.pack_id
+            )));
+        }
 
         // ── Seed typed null placeholders for cache keys ───────────────────
         // Each key is always present after preflight so downstream consumers can

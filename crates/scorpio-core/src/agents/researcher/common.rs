@@ -147,19 +147,37 @@ pub(super) fn format_debate_history(history: &[DebateMessage]) -> String {
         .join("\n\n")
 }
 
-pub(super) fn render_researcher_system_prompt(
-    legacy_template: &str,
+/// Borrow the runtime policy from `state` or return a typed `Config` error
+/// naming the offending agent. Production paths are guaranteed to have a
+/// hydrated policy after `PreflightTask` runs, so this only fires for
+/// unit tests that deliberately bypass preflight without using
+/// `with_baseline_runtime_policy`.
+pub(super) fn runtime_policy_for_agent<'a>(
+    state: &'a TradingState,
+    agent: &'static str,
+) -> Result<&'a crate::analysis_packs::RuntimePolicy, TradingError> {
+    state.analysis_runtime_policy.as_ref().ok_or_else(|| {
+        TradingError::Config(anyhow::anyhow!(
+            "{agent}: missing runtime policy — preflight is the sole writer of \
+             state.analysis_runtime_policy; use `with_baseline_runtime_policy` \
+             in tests that bypass preflight"
+        ))
+    })
+}
+
+pub(crate) fn render_researcher_system_prompt(
+    policy: &crate::analysis_packs::RuntimePolicy,
     state: &TradingState,
     bundle_slot: fn(&PromptBundle) -> &str,
 ) -> String {
+    // `&RuntimePolicy` is required: preflight is the sole writer of
+    // `state.analysis_runtime_policy`, and `validate_active_pack_completeness`
+    // rejects packs whose required slots are empty before this renderer is
+    // ever reached. The renderer therefore reads the slot directly with no
+    // legacy fallback — production always sees a non-empty template.
     let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
     let target_date = sanitize_date_for_prompt(&state.target_date);
-    let template = state
-        .analysis_runtime_policy
-        .as_ref()
-        .map(|policy| bundle_slot(&policy.prompt_bundle))
-        .filter(|template| !template.is_empty())
-        .unwrap_or(legacy_template);
+    let template = bundle_slot(&policy.prompt_bundle);
 
     template
         .replace("{ticker}", &symbol)
@@ -184,14 +202,16 @@ pub(super) struct DebaterCore {
 }
 
 impl DebaterCore {
-    /// Build the shared core from a completion handle, system-prompt template, and config.
+    /// Build the shared core from a completion handle and runtime policy.
     ///
-    /// Calls [`researcher_runtime_config`] and then substitutes `{ticker}`,
-    /// `{current_date}`, and `{past_memory_str}` placeholders in
-    /// `system_prompt_template` before constructing the underlying [`LlmAgent`].
+    /// Reads the role's prompt slot from `policy.prompt_bundle` via
+    /// `bundle_slot`, then substitutes `{ticker}`, `{current_date}`,
+    /// `{past_memory_str}`, and `{analysis_emphasis}` placeholders before
+    /// constructing the underlying [`LlmAgent`]. Preflight's completeness
+    /// gate ensures the bundle slot is non-empty when this fires.
     pub(super) fn new(
         handle: &CompletionModelHandle,
-        system_prompt_template: &str,
+        policy: &crate::analysis_packs::RuntimePolicy,
         bundle_slot: fn(&PromptBundle) -> &str,
         state: &TradingState,
         llm_config: &LlmConfig,
@@ -206,8 +226,7 @@ impl DebaterCore {
 
         let runtime = researcher_runtime_config(llm_config);
 
-        let system_prompt =
-            render_researcher_system_prompt(system_prompt_template, state, bundle_slot);
+        let system_prompt = render_researcher_system_prompt(policy, state, bundle_slot);
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -543,21 +562,19 @@ mod tests {
                 .into();
         state.analysis_runtime_policy = Some(policy);
 
-        let prompt = render_researcher_system_prompt(
-            "Legacy bullish prompt for {ticker} at {current_date}.",
-            &state,
-            |bundle| bundle.bullish_researcher.as_ref(),
-        );
+        let policy = state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("policy hydrated above");
+        let prompt = render_researcher_system_prompt(policy, &state, |bundle| {
+            bundle.bullish_researcher.as_ref()
+        });
 
         assert!(
             prompt.contains(
                 "Bull pack prompt for AAPL at 2026-03-15. Emphasis: press the upside evidence."
             ),
-            "runtime policy should override the bullish researcher system prompt: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Legacy bullish prompt"),
-            "legacy bullish template should not leak through when pack override is present: {prompt}"
+            "runtime policy should drive the bullish researcher system prompt: {prompt}"
         );
     }
 
@@ -572,60 +589,32 @@ mod tests {
                 .into();
         state.analysis_runtime_policy = Some(policy);
 
-        let prompt = render_researcher_system_prompt(
-            "Legacy moderator prompt for {ticker} at {current_date}.",
-            &state,
-            |bundle| bundle.debate_moderator.as_ref(),
-        );
+        let policy = state
+            .analysis_runtime_policy
+            .as_ref()
+            .expect("policy hydrated above");
+        let prompt = render_researcher_system_prompt(policy, &state, |bundle| {
+            bundle.debate_moderator.as_ref()
+        });
 
         assert!(
             prompt.contains(
                 "Moderator pack prompt for AAPL at 2026-03-15. Emphasis: balance both sides."
             ),
-            "runtime policy should override the debate moderator system prompt: {prompt}"
-        );
-        assert!(
-            !prompt.contains("Legacy moderator prompt"),
-            "legacy moderator template should not leak through when pack override is present: {prompt}"
+            "runtime policy should drive the debate moderator system prompt: {prompt}"
         );
     }
 
-    #[test]
-    fn baseline_runtime_policy_bundle_matches_legacy_bullish_rendering() {
-        let mut state = TradingState::new("AAPL", "2026-03-15");
-        state.analysis_runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
-
-        let prompt = render_researcher_system_prompt(
-            super::super::prompt::BULLISH_SYSTEM_PROMPT,
-            &state,
-            |bundle| bundle.bullish_researcher.as_ref(),
-        );
-
-        let expected = super::super::prompt::BULLISH_SYSTEM_PROMPT
-            .replace("{ticker}", "AAPL")
-            .replace("{current_date}", "2026-03-15");
-
-        assert_eq!(prompt, expected);
-    }
-
-    #[test]
-    fn baseline_runtime_policy_bundle_matches_legacy_moderator_rendering() {
-        let mut state = TradingState::new("AAPL", "2026-03-15");
-        state.analysis_runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy("baseline").ok();
-
-        let prompt = render_researcher_system_prompt(
-            super::super::prompt::MODERATOR_SYSTEM_PROMPT,
-            &state,
-            |bundle| bundle.debate_moderator.as_ref(),
-        );
-
-        let expected = super::super::prompt::MODERATOR_SYSTEM_PROMPT
-            .replace("{ticker}", "AAPL")
-            .replace("{current_date}", "2026-03-15")
-            .replace("{past_memory_str}", "see untrusted user context");
-
-        assert_eq!(prompt, expected);
-    }
+    // The previous `baseline_runtime_policy_bundle_matches_legacy_*_rendering`
+    // tests asserted byte-equivalence between the legacy `_SYSTEM_PROMPT`
+    // constants and the rendered baseline pack assets. After the
+    // prompt-bundle centralization migration, the constants are no longer
+    // the runtime source of truth — they exist only as `#[allow(dead_code)]`
+    // documentation. The rendered baseline bytes are now locked by the
+    // golden-byte regression gate at
+    // `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`, which
+    // diffs full prompt outputs (including injected context) against
+    // on-disk fixtures across 13 roles × 4 scenarios. Re-asserting
+    // equivalence here would duplicate that gate while still tying these
+    // tests to the legacy constants — so they were removed.
 }

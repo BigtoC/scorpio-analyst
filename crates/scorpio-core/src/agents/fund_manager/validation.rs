@@ -110,8 +110,13 @@ pub(super) fn state_has_missing_risk_reports(state: &TradingState) -> bool {
         || state.conservative_risk_report.is_none()
 }
 
-pub(super) fn state_has_missing_inputs(state: &TradingState) -> bool {
-    state_has_missing_analyst_inputs(state) || state_has_missing_risk_reports(state)
+pub(super) fn state_has_missing_inputs(
+    state: &TradingState,
+    dual_risk_status: DualRiskStatus,
+) -> bool {
+    state_has_missing_analyst_inputs(state)
+        || (dual_risk_status != DualRiskStatus::StageDisabled
+            && state_has_missing_risk_reports(state))
 }
 
 /// Return the runtime-authoritative decision timestamp as an RFC 3339 / ISO 8601 string.
@@ -205,6 +210,20 @@ fn validate_dual_risk_rationale(
                 });
             }
         }
+        DualRiskStatus::StageDisabled => {
+            // Deliberate-bypass path: the risk stage was disabled by topology
+            // (zero rounds), not degraded by missing data. Use a dedicated
+            // prefix so the rationale is clearly attributable to configuration
+            // rather than a runtime data gap.
+            const REQUIRED_PREFIX: &str = "Dual-risk escalation: stage-disabled because ";
+            if !first_line.starts_with(REQUIRED_PREFIX) {
+                return Err(TradingError::SchemaViolation {
+                    message: format!(
+                        "FundManager: dual-risk stage disabled — first rationale line must start with \"{REQUIRED_PREFIX}\""
+                    ),
+                });
+            }
+        }
     }
 
     Ok(())
@@ -212,11 +231,90 @@ fn validate_dual_risk_rationale(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_execution_status;
+    use super::{validate_dual_risk_rationale, validate_execution_status};
     use crate::{
+        agents::risk::DualRiskStatus,
         error::TradingError,
         state::{Decision, ExecutionStatus, TradeAction},
     };
+
+    fn make_status(action: TradeAction, decision: Decision, rationale: &str) -> ExecutionStatus {
+        ExecutionStatus {
+            decision,
+            action,
+            rationale: rationale.to_owned(),
+            decided_at: "2026-04-25".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
+        }
+    }
+
+    #[test]
+    fn stage_disabled_requires_dedicated_prefix() {
+        let status = make_status(
+            TradeAction::Hold,
+            Decision::Approved,
+            "Dual-risk escalation: stage-disabled because zero rounds were configured.",
+        );
+        assert!(
+            validate_dual_risk_rationale(&status, DualRiskStatus::StageDisabled, TradeAction::Hold)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn stage_disabled_rejects_unknown_prefix() {
+        // The "indeterminate" prefix is reserved for genuine missing-data
+        // (Unknown). A stage-disabled run must use its own prefix so the
+        // rationale is attributable to configuration, not data degradation.
+        let status = make_status(
+            TradeAction::Hold,
+            Decision::Approved,
+            "Dual-risk escalation: indeterminate because no risk reports were generated.",
+        );
+        let err =
+            validate_dual_risk_rationale(&status, DualRiskStatus::StageDisabled, TradeAction::Hold)
+                .expect_err("stage-disabled must not accept indeterminate prefix");
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
+    }
+
+    #[test]
+    fn unknown_still_rejects_stage_disabled_prefix() {
+        let status = make_status(
+            TradeAction::Hold,
+            Decision::Approved,
+            "Dual-risk escalation: stage-disabled because we never ran risk.",
+        );
+        let err = validate_dual_risk_rationale(&status, DualRiskStatus::Unknown, TradeAction::Hold)
+            .expect_err("unknown must not accept stage-disabled prefix");
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
+    }
+
+    #[test]
+    fn from_reports_with_topology_returns_stage_disabled_when_risk_off() {
+        // Even when reports happen to be present (defensive case), an
+        // explicitly-disabled risk stage takes precedence.
+        let status = DualRiskStatus::from_reports_with_topology(None, None, false);
+        assert_eq!(status, DualRiskStatus::StageDisabled);
+    }
+
+    #[test]
+    fn from_reports_with_topology_delegates_to_from_reports_when_risk_on() {
+        let status = DualRiskStatus::from_reports_with_topology(None, None, true);
+        assert_eq!(status, DualRiskStatus::Unknown);
+    }
+
+    #[test]
+    fn stage_disabled_prompt_value_distinct_from_unknown() {
+        assert_eq!(
+            DualRiskStatus::StageDisabled.as_prompt_value(),
+            "stage_disabled"
+        );
+        assert_ne!(
+            DualRiskStatus::StageDisabled.as_prompt_value(),
+            DualRiskStatus::Unknown.as_prompt_value()
+        );
+    }
 
     #[test]
     fn validate_rejects_empty_rationale() {

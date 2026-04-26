@@ -27,7 +27,7 @@ Instructions:
 3. Align with the moderator's stance unless the analyst evidence clearly justifies a different conclusion.
 4. Make the proposal specific and auditable. Avoid vague wording.
 5. Use `rationale` to capture the thesis, the key supporting signals, and the main invalidation risks in compact form.
-6. If any analyst input is `null` or the research consensus is absent, explicitly acknowledge the material data gap in `rationale` and calibrate confidence conservatively.
+6. Treat any analyst input rendered as `null` or a `null` research consensus as missing upstream context. Explicitly acknowledge the material data gap in `rationale` and calibrate confidence conservatively.
 7. Do not invent fields like entry windows, take-profit ladders, or position size because they are not part of the current `TradeProposal` schema.
 8. If `action` is `Hold`, you must still provide numeric `target_price` and `stop_loss` because the current schema requires them. In that case, use them as monitoring levels: `target_price` for confirmation/re-entry and `stop_loss` for thesis-break risk.
 9. If your proposal diverges from the moderator's consensus stance, you must explicitly explain why in `rationale`.

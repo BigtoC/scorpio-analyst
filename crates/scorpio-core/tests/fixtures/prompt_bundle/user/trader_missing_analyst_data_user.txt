@@ -1,0 +1,23 @@
+Produce a TradeProposal JSON for AAPL as of 2026-04-25.
+
+Past learnings: No prior thesis memory available for this symbol.
+
+Deterministic scenario valuation: not computed for this run. Do not fabricate valuation metrics.
+
+Typed evidence snapshot:
+- fundamentals: null
+- sentiment: null
+- news: null
+- technical: null
+
+Data quality snapshot:
+- required_inputs: ["fundamentals","sentiment","news","technical"]
+- missing_inputs: ["fundamentals","sentiment","news","technical"]
+- providers_used: []
+
+Event-news status: not_configured
+
+Consensus estimates status: not_configured
+
+Analysis strategy: Balanced Institutional (baseline)
+Emphasis: Weight all data sources equally. Use DCF and multiples for valuation when available. Consider both fundamental quality and market sentiment.

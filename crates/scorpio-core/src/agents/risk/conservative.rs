@@ -24,8 +24,6 @@ use super::common::{
     validate_raw_model_output_size, validate_risk_text,
 };
 
-use super::prompt::CONSERVATIVE_SYSTEM_PROMPT;
-
 /// The Conservative Risk Analyst agent.
 ///
 /// Maintains a multi-turn chat session so each response can build on prior
@@ -60,9 +58,10 @@ impl ConservativeRiskAgent {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "ConservativeRisk")?;
         let core = RiskAgentCore::new(
             handle,
-            CONSERVATIVE_SYSTEM_PROMPT,
+            policy,
             |bundle| bundle.conservative_risk.as_ref(),
             state,
             llm_config,
@@ -397,9 +396,14 @@ mod tests {
 
     #[test]
     fn conservative_system_prompt_mentions_rsi_macro_and_beta_risks() {
-        assert!(CONSERVATIVE_SYSTEM_PROMPT.contains("RSI"));
-        assert!(CONSERVATIVE_SYSTEM_PROMPT.contains("macroeconomic"));
-        assert!(CONSERVATIVE_SYSTEM_PROMPT.contains("beta"));
+        // Read the prompt from the canonical runtime source — the baseline
+        // pack's `PromptBundle.conservative_risk` slot — so the drift guard
+        // tracks what the runtime actually sends to the LLM.
+        let prompt =
+            crate::testing::baseline_pack_prompt_for_role(crate::workflow::Role::ConservativeRisk);
+        assert!(prompt.contains("RSI"));
+        assert!(prompt.contains("macroeconomic"));
+        assert!(prompt.contains("beta"));
     }
 
     #[test]

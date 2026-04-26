@@ -106,9 +106,28 @@ Core integration tests live in `crates/scorpio-core/tests/` (pipeline, state, ap
     unreadable.
   - When a field is **renamed**, **removed**, or has its **type changed** in a backward-incompatible way, bump
     `THESIS_MEMORY_SCHEMA_VERSION` in `src/workflow/snapshot/thesis.rs`. The thesis lookup skips rows whose version
-    exceeds the constant, so bumping it explicitly retires incompatible data instead of silently failing at runtime.
-  - The thesis lookup degrades gracefully (warn + skip) when deserialization fails, so a stale snapshot never crashes the
-    pipeline. But relying on that for every deploy is a smell — `#[serde(default)]` + version bumps are the real fix.
+    does not match the constant *in either direction* (newer or older), so bumping it explicitly retires incompatible
+    data and a binary downgrade after the bump still ignores newer rows safely.
+  - The thesis lookup degrades gracefully (warn + skip) when deserialization fails. The `warn!` line emits only
+    `symbol`, `schema_version`, and `error.kind = "deserialize"` — never `serde_json` error text, which can echo
+    payload bytes. Relying on warn-and-skip for every deploy is still a smell; `#[serde(default)]` + version bumps
+    are the real fix.
+- **Pack-owned prompts (centralized)**: `AnalysisPackManifest.prompt_bundle` is the single source of every system
+  prompt for active packs. The runtime contract:
+  - `PreflightTask` is the sole writer of `state.analysis_runtime_policy`, the sole runner of
+    `validate_active_pack_completeness`, and the sole writer of `KEY_RUNTIME_POLICY` / `KEY_ROUTING_FLAGS` to context.
+  - Active packs must populate every required prompt slot for the configured topology (analysts, debate stage when
+    `max_debate_rounds > 0`, risk stage when `max_risk_rounds > 0`, plus trader and fund manager). Failures surface
+    as `TaskExecutionFailed` from preflight before any analyst or model task fires.
+  - Prompt builders take `&RuntimePolicy` directly; the renderer reads `policy.prompt_bundle.<role>` with no legacy
+    fallback. The exhaustive `Role` → `PromptSlot` match in `workflow/topology.rs` makes adding a `Role` variant a
+    compile error until the role-to-slot table is extended.
+  - `{analysis_emphasis}` substitution is sanitized at preflight (strict 0x20–0x7E ASCII, role-injection-tag
+    rejection, ≤256 chars). `{ticker}` is not re-validated by this refactor — it continues to flow through the
+    existing `validate_symbol` syntactic gate plus data-API existence chain.
+- **Topology-driven routing**: `RoutingFlags` (written to `KEY_ROUTING_FLAGS` by preflight) governs *entry* into the
+  debate and risk stages. Loop-back conditionals (`round < max`) keep using the per-iteration round counters. Tests
+  that bypass preflight should hydrate runtime policy via `crate::testing::with_baseline_runtime_policy`.
 - **Phased UI**: Phase 1 = CLI (`clap` + `inquire`) — **done**; `scorpio analyze <SYMBOL>` runs the pipeline, `scorpio setup` is an interactive wizard that writes `~/.scorpio-analyst/config.toml`. Phase 2 = interactive TUI (`ratatui`/`crossterm`); Phase 3 = native desktop app (`gpui`, behind `--features gui`). All phases depend on `scorpio-core` — the shared crate exposes `AnalysisRuntime`, `settings::PartialConfig`, and the runtime `Config` type as the preferred entry points.
 
 ### Crate Dependencies

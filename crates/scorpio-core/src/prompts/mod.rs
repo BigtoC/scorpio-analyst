@@ -17,11 +17,13 @@
 //!   semantics the agent-side prompt builders use today, so extractions
 //!   stay byte-identical.
 //!
-//! Agent modules still keep `const _SYSTEM_PROMPT` fallbacks for safety, but
-//! the active runtime path now prefers the pack-owned bundle slots across the
-//! analyst, researcher, trader, risk, and fund-manager agents.
+//! Active runtime prompt prose now flows through pack-owned bundle slots across
+//! the analyst, researcher, trader, risk, and fund-manager agents; prompt
+//! builders are mechanical renderers over runtime policy and state.
 pub mod bundle;
 pub mod templating;
+mod validation;
 
 pub use bundle::PromptBundle;
 pub use templating::render;
+pub use validation::{ANALYSIS_EMPHASIS_MAX_LEN, is_effectively_empty, sanitize_analysis_emphasis};

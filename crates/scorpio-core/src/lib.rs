@@ -33,6 +33,9 @@ pub mod state;
 pub mod valuation;
 pub mod workflow;
 
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod testing;
+
 // Canonical re-export — the facade is the preferred entry point for new
 // consumers, per the Unit 6 documentation guidance. Deeper module paths stay
 // available for existing call sites that reach past the facade.

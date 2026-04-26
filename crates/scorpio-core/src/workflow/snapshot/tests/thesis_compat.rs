@@ -192,6 +192,50 @@ async fn load_prior_thesis_skips_undeserializable_payload_and_returns_none() {
 }
 
 #[tokio::test]
+async fn load_prior_thesis_skips_higher_schema_version_rows_after_downgrade() {
+    // Reverse-direction safety: a v2 binary running against a database that
+    // already contains v3 rows (e.g. an operator who upgraded, ran once, then
+    // rolled back to a prior binary) must skip the v3 rows the same way a v3
+    // binary skips v2 rows. The existing `!=` skip path at thesis.rs:83
+    // handles both directions; this test pins that contract so a future
+    // refactor that switches to `<` would fail.
+    let store = in_memory_store().await;
+    let mut state = TradingState::new("AAPL", "2026-04-26");
+    state.current_thesis = Some(sample_thesis());
+
+    store
+        .save_snapshot(
+            &state.execution_id.to_string(),
+            SnapshotPhase::FundManager,
+            &state,
+            None,
+        )
+        .await
+        .expect("save should succeed");
+
+    // Simulate a v3-binary write by stamping the row at the *current* active
+    // version + 1; the binary running this test is conceptually older.
+    sqlx::query(
+        "UPDATE phase_snapshots SET schema_version = ? WHERE execution_id = ? AND phase_number = 5",
+    )
+    .bind(crate::workflow::snapshot::thesis::THESIS_MEMORY_SCHEMA_VERSION + 1)
+    .bind(state.execution_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("schema-version update should succeed");
+
+    let result = store
+        .load_prior_thesis_for_symbol("AAPL", 30)
+        .await
+        .expect("query should succeed");
+
+    assert!(
+        result.is_none(),
+        "rows with newer schema_version must be skipped on read so downgrade is non-fatal"
+    );
+}
+
+#[tokio::test]
 async fn save_snapshot_persists_symbol_column() {
     let store = in_memory_store().await;
     let state = TradingState::new("MSFT", "2026-04-07");
