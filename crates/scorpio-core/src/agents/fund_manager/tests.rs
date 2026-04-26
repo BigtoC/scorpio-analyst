@@ -8,8 +8,8 @@ use super::{
     FundManagerAgent,
     agent::{FundManagerInference, run_fund_manager_with_inference},
 };
+use crate::testing::with_baseline_runtime_policy;
 use crate::{
-    analysis_packs::resolve_runtime_policy,
     config::{Config, LlmConfig, ProviderSettings, ProvidersConfig, TradingConfig},
     error::{RetryPolicy, TradingError},
     providers::{
@@ -28,11 +28,6 @@ use crate::{
 
 fn baseline_fund_manager_prompt() -> &'static str {
     crate::testing::baseline_pack_prompt_for_role(Role::FundManager)
-}
-
-fn with_baseline_runtime_policy(state: &mut TradingState) {
-    state.analysis_runtime_policy =
-        Some(resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve"));
 }
 
 fn sample_llm_config() -> LlmConfig {
@@ -180,6 +175,10 @@ fn approved_json_with_missing_risk_data_ack() -> String {
     r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because the upstream inputs required for dual-risk evaluation are missing.\nApproved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
 }
 
+fn approved_json_with_stage_disabled_ack() -> String {
+    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: stage-disabled because max_risk_rounds = 0 disabled the risk stage for this run.\nApproved using analyst and trader inputs without risk-stage outputs.","decided_at":"2026-03-15"}"#.to_owned()
+}
+
 fn dual_violation_approved_json() -> String {
     r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: overridden because valuation support and explicit stop tightening offset the flagged downside.\nApproved with Buy on reduced size.","decided_at":"2026-03-15"}"#.to_owned()
 }
@@ -299,7 +298,7 @@ async fn dual_violation_still_invokes_llm_path() {
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert_eq!(
         inference.call_count(),
@@ -318,7 +317,7 @@ async fn llm_retry_exhaustion_under_dual_risk_returns_typed_error_without_fallba
 
     let inference = StubInference::new(vec![Err(TradingError::Rig("network timeout".to_owned()))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         matches!(
@@ -347,7 +346,7 @@ async fn llm_path_when_only_conservative_flags_violation() {
     ))]);
     let agent = fund_manager_for_test();
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -371,7 +370,7 @@ async fn llm_path_when_only_neutral_flags_violation() {
     ))]);
     let agent = fund_manager_for_test();
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -395,7 +394,7 @@ async fn llm_path_when_neither_flags_violation() {
     ))]);
     let agent = fund_manager_for_test();
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -417,7 +416,7 @@ async fn error_when_trader_proposal_is_none() {
 
     let inference = StubInference::new(vec![]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         matches!(result, Err(TradingError::SchemaViolation { .. })),
@@ -443,7 +442,7 @@ async fn approved_execution_status_written_to_state() {
     ))]);
     let agent = fund_manager_for_test();
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -464,7 +463,7 @@ async fn rejected_execution_status_written_to_state() {
     ))]);
     let agent = fund_manager_for_test();
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -482,7 +481,7 @@ async fn schema_violation_on_invalid_decision_value_from_llm() {
     let bad_json = r#"{"decision":"Maybe","action":"Buy","rationale":"Seems fine.","decided_at":"2026-03-15"}"#;
     let inference = StubInference::new(vec![Ok(make_prompt_response(bad_json, nonzero_usage()))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         matches!(result, Err(TradingError::SchemaViolation { .. })),
@@ -499,7 +498,7 @@ async fn schema_violation_on_unparseable_json_from_llm() {
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         matches!(result, Err(TradingError::SchemaViolation { .. })),
@@ -518,7 +517,7 @@ async fn decided_at_is_overwritten_with_runtime_timestamp() {
     let inference = StubInference::new(vec![Ok(make_prompt_response(stale_json, nonzero_usage()))]);
     let agent = fund_manager_for_test();
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -544,7 +543,7 @@ async fn missing_decided_at_is_filled_by_runtime_timestamp() {
     let agent = fund_manager_for_test();
 
     agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -566,7 +565,7 @@ async fn agent_token_usage_populated_for_llm_path() {
     ))]);
     let agent = fund_manager_for_test();
     let usage = agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -588,7 +587,7 @@ async fn agent_token_usage_marks_unavailable_for_llm_path_without_authoritative_
     ))]);
     let agent = fund_manager_for_test();
     let usage = agent
-        .run_with_inference(&mut state, &inference)
+        .run_with_inference(&mut state, true, &inference)
         .await
         .unwrap();
 
@@ -614,7 +613,7 @@ async fn missing_risk_reports_invoke_llm_path() {
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         result.is_ok(),
@@ -649,7 +648,7 @@ async fn missing_analyst_inputs_invoke_llm_path() {
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         result.is_ok(),
@@ -678,13 +677,41 @@ async fn missing_risk_reports_without_acknowledgment_is_rejected() {
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         matches!(result, Err(TradingError::SchemaViolation { .. })),
         "missing risk reports should require acknowledgment, got {result:?}"
     );
     assert!(state.final_execution_status.is_none());
+}
+
+#[tokio::test]
+async fn stage_disabled_risk_reports_do_not_require_missing_data_acknowledgment() {
+    let mut state = populated_state();
+    state.aggressive_risk_report = None;
+    state.neutral_risk_report = None;
+    state.conservative_risk_report = None;
+    state.risk_discussion_history.clear();
+
+    let inference = StubInference::new(vec![Ok(make_prompt_response(
+        &approved_json_with_stage_disabled_ack(),
+        nonzero_usage(),
+    ))]);
+    let agent = fund_manager_for_test();
+    let result = agent
+        .run_with_inference(&mut state, false, &inference)
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "stage-disabled zero-risk runs should not be treated as missing upstream data: {result:?}"
+    );
+    let rationale = &state.final_execution_status.as_ref().unwrap().rationale;
+    assert!(
+        rationale.starts_with("Dual-risk escalation: stage-disabled because "),
+        "rationale should use the stage-disabled prefix: {rationale}"
+    );
 }
 
 #[tokio::test]
@@ -701,7 +728,7 @@ async fn missing_analyst_inputs_without_acknowledgment_is_rejected() {
         nonzero_usage(),
     ))]);
     let agent = fund_manager_for_test();
-    let result = agent.run_with_inference(&mut state, &inference).await;
+    let result = agent.run_with_inference(&mut state, true, &inference).await;
 
     assert!(
         matches!(result, Err(TradingError::SchemaViolation { .. })),
@@ -737,7 +764,7 @@ async fn run_fund_manager_public_entrypoint_works_with_injected_inference() {
         nonzero_usage(),
     ))]);
 
-    let usage = run_fund_manager_with_inference(&mut state, &sample_config(), &inference)
+    let usage = run_fund_manager_with_inference(&mut state, &sample_config(), true, &inference)
         .await
         .unwrap();
 
@@ -1616,6 +1643,38 @@ fn fund_manager_prompt_places_unknown_indicator_near_top() {
 }
 
 #[test]
+fn fund_manager_prompt_uses_stage_disabled_indicator_for_zero_risk_runs() {
+    use super::prompt::build_prompt_context;
+    use crate::agents::risk::DualRiskStatus;
+
+    let mut state = populated_state();
+    state.aggressive_risk_report = None;
+    state.neutral_risk_report = None;
+    state.conservative_risk_report = None;
+    state.risk_discussion_history.clear();
+
+    let (_system, user) = build_prompt_context(
+        &state,
+        &state.asset_symbol,
+        &state.target_date,
+        DualRiskStatus::StageDisabled,
+    );
+
+    assert!(
+        user.contains("Dual-risk escalation: stage_disabled"),
+        "user prompt must say 'stage_disabled': {user}"
+    );
+    assert!(
+        user.contains("Aggressive risk report: null"),
+        "zero-risk stage disablement should surface absent risk reports as raw null context: {user}"
+    );
+    assert!(
+        user.contains("Risk discussion history: null"),
+        "zero-risk stage disablement should surface absent risk history as raw null context: {user}"
+    );
+}
+
+#[test]
 fn fund_manager_system_prompt_contains_exact_first_line_contract() {
     let prompt = baseline_fund_manager_prompt();
     assert!(
@@ -1633,6 +1692,10 @@ fn fund_manager_system_prompt_contains_exact_first_line_contract() {
     assert!(
         prompt.contains("Dual-risk escalation: indeterminate because"),
         "system prompt must contain indeterminate prefix example"
+    );
+    assert!(
+        prompt.contains("Dual-risk escalation: stage-disabled because"),
+        "system prompt must contain stage-disabled prefix example"
     );
 }
 

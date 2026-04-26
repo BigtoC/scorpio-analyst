@@ -110,8 +110,13 @@ pub(super) fn state_has_missing_risk_reports(state: &TradingState) -> bool {
         || state.conservative_risk_report.is_none()
 }
 
-pub(super) fn state_has_missing_inputs(state: &TradingState) -> bool {
-    state_has_missing_analyst_inputs(state) || state_has_missing_risk_reports(state)
+pub(super) fn state_has_missing_inputs(
+    state: &TradingState,
+    dual_risk_status: DualRiskStatus,
+) -> bool {
+    state_has_missing_analyst_inputs(state)
+        || (dual_risk_status != DualRiskStatus::StageDisabled
+            && state_has_missing_risk_reports(state))
 }
 
 /// Return the runtime-authoritative decision timestamp as an RFC 3339 / ISO 8601 string.

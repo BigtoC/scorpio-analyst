@@ -19,6 +19,7 @@ use crate::{
     error::TradingError,
     state::{AgentTokenUsage, TradingState},
 };
+use graph_flow::Context;
 
 pub use self::agent::FundManagerAgent;
 #[cfg(any(test, feature = "test-helpers"))]
@@ -43,6 +44,7 @@ pub use crate::constants::MAX_RATIONALE_CHARS;
 pub async fn run_fund_manager(
     state: &mut TradingState,
     config: &Config,
+    context: &Context,
 ) -> Result<AgentTokenUsage, TradingError> {
-    agent::run_fund_manager(state, config).await
+    agent::run_fund_manager(state, config, context).await
 }

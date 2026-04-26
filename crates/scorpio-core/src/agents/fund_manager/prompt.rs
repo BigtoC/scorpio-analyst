@@ -12,11 +12,7 @@ use crate::{
     state::{DebateMessage, RiskReport, TradingState},
 };
 
-use super::validation::{state_has_missing_analyst_inputs, state_has_missing_risk_reports};
-const MISSING_RISK_REPORT_NOTE: &str = "(no risk report available — treat as unknown)";
-const MISSING_RISK_DISCUSSION_NOTE: &str = "(no risk discussion history available)";
-const MISSING_ANALYST_DATA_NOTE: &str =
-    "(data unavailable — acknowledge the gap and calibrate confidence conservatively)";
+use super::validation::state_has_missing_analyst_inputs;
 
 fn fund_manager_system_prompt_template(state: &TradingState) -> &str {
     state
@@ -42,13 +38,14 @@ pub(crate) fn build_prompt_context(
     let target_date = sanitize_date_for_prompt(target_date);
 
     let missing_analyst_data = state_has_missing_analyst_inputs(state);
-    let missing_risk_reports = state_has_missing_risk_reports(state);
-
-    let data_quality_note = if missing_analyst_data || missing_risk_reports {
-        "One or more upstream inputs are missing. Explicitly acknowledge the missing data in \
-         `rationale` and lower confidence appropriately."
+    let missing_risk_reports = dual_risk_status != DualRiskStatus::StageDisabled
+        && (state.aggressive_risk_report.is_none()
+            || state.neutral_risk_report.is_none()
+            || state.conservative_risk_report.is_none());
+    let upstream_data_state = if missing_analyst_data || missing_risk_reports {
+        "incomplete"
     } else {
-        "All upstream inputs are available for this run."
+        "complete"
     };
 
     let system_prompt = fund_manager_system_prompt_template(state)
@@ -77,7 +74,7 @@ pub(crate) fn build_prompt_context(
         state,
         &symbol,
         &target_date,
-        data_quality_note,
+        upstream_data_state,
         dual_risk_status,
     );
 
@@ -86,7 +83,7 @@ pub(crate) fn build_prompt_context(
 
 fn serialize_risk_discussion_history(history: &[DebateMessage]) -> String {
     if history.is_empty() {
-        return sanitize_prompt_context(MISSING_RISK_DISCUSSION_NOTE);
+        return "null".to_owned();
     }
 
     let mut joined = String::new();
@@ -102,17 +99,14 @@ fn serialize_risk_discussion_history(history: &[DebateMessage]) -> String {
 }
 
 fn serialize_optional_risk_report(report: &Option<RiskReport>) -> String {
-    match report {
-        Some(risk_report) => serialize_prompt_value(&Some(risk_report)),
-        None => sanitize_prompt_context(MISSING_RISK_REPORT_NOTE),
-    }
+    serialize_prompt_value(report)
 }
 
 fn build_user_prompt(
     state: &TradingState,
     symbol: &str,
     target_date: &str,
-    data_quality_note: &str,
+    upstream_data_state: &str,
     dual_risk_status: DualRiskStatus,
 ) -> String {
     let mut prompt = String::new();
@@ -135,7 +129,7 @@ fn build_user_prompt(
     );
     push_bounded_line(
         &mut prompt,
-        &format!("Data quality note: {}", data_quality_note),
+        &format!("Upstream data state: {upstream_data_state}"),
         MAX_USER_PROMPT_CHARS,
     );
     push_bounded_line(
@@ -192,10 +186,7 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Fundamental data: {}",
-            serialize_optional_value_with_missing_note(
-                &state.fundamental_metrics(),
-                MISSING_ANALYST_DATA_NOTE,
-            )
+            serialize_prompt_value(&state.fundamental_metrics())
         ),
         MAX_USER_PROMPT_CHARS,
     );
@@ -203,10 +194,7 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Technical data: {}",
-            serialize_optional_value_with_missing_note(
-                &state.technical_indicators(),
-                MISSING_ANALYST_DATA_NOTE,
-            )
+            serialize_prompt_value(&state.technical_indicators())
         ),
         MAX_USER_PROMPT_CHARS,
     );
@@ -214,22 +202,13 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Sentiment data: {}",
-            serialize_optional_value_with_missing_note(
-                &state.market_sentiment(),
-                MISSING_ANALYST_DATA_NOTE,
-            )
+            serialize_prompt_value(&state.market_sentiment())
         ),
         MAX_USER_PROMPT_CHARS,
     );
     push_bounded_line(
         &mut prompt,
-        &format!(
-            "News data: {}",
-            serialize_optional_value_with_missing_note(
-                &state.macro_news(),
-                MISSING_ANALYST_DATA_NOTE,
-            )
-        ),
+        &format!("News data: {}", serialize_prompt_value(&state.macro_news())),
         MAX_USER_PROMPT_CHARS,
     );
     push_bounded_line(
@@ -254,17 +233,6 @@ fn build_user_prompt(
 
     prompt
 }
-
-fn serialize_optional_value_with_missing_note<T: serde::Serialize>(
-    value: &Option<T>,
-    missing_note: &str,
-) -> String {
-    match value {
-        Some(_) => serialize_prompt_value(value),
-        None => sanitize_prompt_context(missing_note),
-    }
-}
-
 #[cfg(test)]
 pub(super) fn build_user_prompt_for_test(dual_risk_status: DualRiskStatus) -> String {
     use crate::state::TradingState;
@@ -273,7 +241,7 @@ pub(super) fn build_user_prompt_for_test(dual_risk_status: DualRiskStatus) -> St
         &state,
         "AAPL",
         "2026-01-15",
-        "test data quality note",
+        "test_upstream_data_state",
         dual_risk_status,
     )
 }
@@ -462,8 +430,8 @@ mod tests {
             DualRiskStatus::Unknown,
         );
         assert!(
-            user_prompt.contains("no risk report available"),
-            "prompt should note missing risk reports"
+            user_prompt.contains("Aggressive risk report: null"),
+            "prompt should serialize missing risk reports as null"
         );
     }
 
