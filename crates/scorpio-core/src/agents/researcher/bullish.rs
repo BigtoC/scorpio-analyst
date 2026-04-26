@@ -23,7 +23,6 @@ use super::common::{
     DebaterCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, build_debate_result,
     format_debate_history,
 };
-use super::prompt::BULLISH_SYSTEM_PROMPT;
 
 /// The Bullish Researcher agent.
 ///
@@ -56,9 +55,10 @@ impl BullishResearcher {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "BullishResearcher")?;
         let core = DebaterCore::new(
             handle,
-            BULLISH_SYSTEM_PROMPT,
+            policy,
             |bundle| bundle.bullish_researcher.as_ref(),
             state,
             llm_config,

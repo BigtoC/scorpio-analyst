@@ -24,8 +24,6 @@ pub use bullish::BullishResearcher;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) use common::render_researcher_system_prompt;
 pub use moderator::DebateModerator;
-#[cfg(any(test, feature = "test-helpers"))]
-pub(crate) use prompt::{BEARISH_SYSTEM_PROMPT, BULLISH_SYSTEM_PROMPT, MODERATOR_SYSTEM_PROMPT};
 
 use crate::{
     config::Config,

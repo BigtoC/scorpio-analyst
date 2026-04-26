@@ -23,7 +23,6 @@ use super::common::{
     DebaterCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context, build_debate_result,
     format_debate_history,
 };
-use super::prompt::BEARISH_SYSTEM_PROMPT;
 
 /// The Bearish Researcher agent.
 ///
@@ -56,9 +55,10 @@ impl BearishResearcher {
         state: &TradingState,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
+        let policy = super::common::runtime_policy_for_agent(state, "BearishResearcher")?;
         let core = DebaterCore::new(
             handle,
-            BEARISH_SYSTEM_PROMPT,
+            policy,
             |bundle| bundle.bearish_researcher.as_ref(),
             state,
             llm_config,

@@ -1,13 +1,26 @@
 //! System prompts for the researcher team (Bullish, Bearish, Moderator).
 //!
-//! Keeping the prompts in one sibling module matches the convention used by
-//! `trader/prompt.rs`, `fund_manager/prompt.rs`, and `risk/prompt.rs`. Each
-//! agent module imports the constant it needs via `super::prompt::…`. These
-//! are the fallback templates used when the active pack's
-//! [`crate::prompts::PromptBundle`] slot is empty; the agents read the
-//! bundle slot first and fall back to these values.
+//! Historically these constants were the runtime fallback when the active
+//! pack's `PromptBundle` slot was empty. After the prompt-bundle
+//! centralization migration (Phase 7), the renderer reads `&RuntimePolicy`
+//! directly with no legacy fallback — preflight's completeness gate
+//! rejects packs whose required slots are empty before any renderer runs.
+//!
+//! These constants are retained for two reasons:
+//!
+//! 1. **Drift detection.** The byte-equivalence tests in
+//!    `agents/researcher/common.rs` compare the rendered baseline pack
+//!    bundle to these constants, ensuring future template edits keep the
+//!    pack asset and the documentation-grade constant in sync.
+//! 2. **Documentation.** The constants are the canonical "what does this
+//!    role say to the LLM?" reference for new contributors who would
+//!    otherwise have to read the equity prompt assets directly.
+//!
+//! `#[allow(dead_code)]` is set because the constants have no production
+//! caller — the renderer reads `policy.prompt_bundle.<role>` exclusively.
 
 /// System prompt for the Bullish Researcher, adapted from `docs/prompts.md` §2.
+#[allow(dead_code)]
 pub(crate) const BULLISH_SYSTEM_PROMPT: &str = "\
 You are the Bull Researcher for {ticker} as of {current_date}.
 Your role is to argue the strongest evidence-based bullish case using the analyst outputs and debate context.
@@ -23,6 +36,7 @@ Instructions:
 Return plain text only. Do not return JSON, Markdown tables, or a final transaction instruction.";
 
 /// System prompt for the Bearish Researcher, adapted from `docs/prompts.md` §2.
+#[allow(dead_code)]
 pub(crate) const BEARISH_SYSTEM_PROMPT: &str = "\
 You are the Bear Researcher for {ticker} as of {current_date}.
 Your role is to argue the strongest evidence-based bearish case using the analyst outputs and debate context.
@@ -38,6 +52,7 @@ Instructions:
 Return plain text only. Do not return JSON, Markdown tables, or a final transaction instruction.";
 
 /// System prompt for the Debate Moderator, adapted from `docs/prompts.md` §2.
+#[allow(dead_code)]
 pub(crate) const MODERATOR_SYSTEM_PROMPT: &str = "\
 You are the Debate Moderator and Research Manager for {ticker} as of {current_date}.
 Your role is to synthesize the Bull and Bear arguments into a concise consensus handoff for the Trader.
