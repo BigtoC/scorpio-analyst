@@ -112,6 +112,7 @@ Core integration tests live in `crates/scorpio-core/tests/` (pipeline, state, ap
     `symbol`, `schema_version`, and `error.kind = "deserialize"` — never `serde_json` error text, which can echo
     payload bytes. Relying on warn-and-skip for every deploy is still a smell; `#[serde(default)]` + version bumps
     are the real fix.
+  - Snapshotted state structs serialized into `phase_snapshots.trading_state_json` (anything reachable from `TradingState` via serde) must not use `#[serde(deny_unknown_fields)]` — it converts every additive field into a backward-incompatible change. This rule does NOT apply to RPC, tool-argument, or config types where typo detection is more valuable than forward-compat.
 - **Pack-owned prompts (centralized)**: `AnalysisPackManifest.prompt_bundle` is the single source of every system
   prompt for active packs. The runtime contract:
   - `PreflightTask` is the sole writer of `state.analysis_runtime_policy`, the sole runner of
