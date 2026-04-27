@@ -20,7 +20,7 @@ pub struct TechnicalData {
     /// Optional snapshot of the equity options chain (IV, put/call ratio,
     /// expiry distribution). Additive field — older snapshots produced
     /// before the Yahoo options integration will deserialize with `None`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options_summary: Option<String>,
 }
 

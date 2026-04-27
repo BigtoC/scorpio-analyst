@@ -14,7 +14,7 @@ use crate::error::TradingError;
 ///
 /// Stage 1: fields are defined for the full contract; live data population
 /// is deferred.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ConsensusEvidence {
     /// Ticker symbol (canonical uppercase).
     pub symbol: String,
@@ -28,11 +28,11 @@ pub struct ConsensusEvidence {
     pub as_of_date: String,
     /// Aggregated price-target distribution (mean / high / low / analyst count).
     /// Additive field — older snapshots will deserialize with `None`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_target: Option<PriceTargetSummary>,
     /// Aggregated analyst recommendation distribution (strong-buy → strong-sell).
     /// Additive field — older snapshots will deserialize with `None`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommendations: Option<RecommendationsSummary>,
 }
 

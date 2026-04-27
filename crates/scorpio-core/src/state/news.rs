@@ -19,7 +19,7 @@ pub struct NewsArticle {
     pub snippet: String,
     /// Optional source URL for the article. Additive field — older snapshots
     /// produced before Yahoo news enrichment will deserialize with `None`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
 
