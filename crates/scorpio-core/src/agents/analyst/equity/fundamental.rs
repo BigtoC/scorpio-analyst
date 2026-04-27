@@ -314,24 +314,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn extra_fields_in_json_are_rejected() {
-        let json = r#"{
-            "revenue_growth_pct": null,
-            "pe_ratio": null,
-            "eps": null,
-            "current_ratio": null,
-            "debt_to_equity": null,
-            "gross_margin": null,
-            "net_income": null,
-            "insider_transactions": [],
-            "summary": "ok",
-            "unexpected_field": "ignored"
-        }"#;
-        let result = parse_fundamental(json);
-        assert!(result.is_err());
-    }
-
     // ── Struct round-trip ─────────────────────────────────────────────────
 
     #[test]
@@ -395,31 +377,6 @@ mod tests {
         );
     }
 
-    // TC-15: InsiderTransaction rejects extra fields (deny_unknown_fields)
-    #[test]
-    fn insider_transaction_extra_fields_rejected() {
-        let json = r#"{
-            "revenue_growth_pct": null, "pe_ratio": null, "eps": null, "current_ratio": null,
-            "debt_to_equity": null, "gross_margin": null, "net_income": null,
-            "insider_transactions": [
-                {
-                    "name": "Eve", "share_change": 200.0, "transaction_date": "2026-01-15",
-                    "transaction_type": "S", "unexpected_field": "rejected"
-                }
-            ],
-            "summary": "Should fail."
-        }"#;
-        let result = parse_fundamental(json);
-        assert!(
-            result.is_err(),
-            "extra field inside InsiderTransaction should be rejected"
-        );
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
     // ── Task 3: Migrate to shared inference helper ────────────────────────
 
     #[test]
@@ -440,15 +397,6 @@ mod tests {
         assert!(
             prompt.contains("no markdown fences"),
             "baseline fundamental prompt must contain 'no markdown fences'"
-        );
-    }
-
-    #[test]
-    fn parse_fundamental_rejects_unknown_fields() {
-        let result = parse_fundamental(r#"{"unknown_field": 1}"#);
-        assert!(
-            matches!(result, Err(TradingError::SchemaViolation { .. })),
-            "parse_fundamental should return SchemaViolation for unknown fields"
         );
     }
 

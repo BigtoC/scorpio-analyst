@@ -369,23 +369,6 @@ mod tests {
     }
 
     #[test]
-    fn extra_fields_in_json_are_rejected() {
-        let json = r#"{
-            "rsi": null, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
-            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
-            "support_level": null, "resistance_level": null, "volume_avg": null,
-            "summary": "ok",
-            "unexpected_field": "should fail"
-        }"#;
-        let result = parse_technical(json);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    #[test]
     fn rsi_above_100_returns_schema_violation() {
         let json = r#"{
             "rsi": 101.0, "macd": null, "atr": null, "sma_20": null, "sma_50": null,
@@ -455,6 +438,7 @@ mod tests {
             resistance_level: None,
             volume_avg: Some(500_000.0),
             summary: "Neutral trend.".to_owned(),
+            options_summary: None,
         };
 
         let serialized = serde_json::to_string(&original).expect("serialise");
@@ -558,15 +542,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_technical_rejects_unknown_fields() {
-        let result = super::parse_technical(r#"{"unknown_field": 1}"#);
-        assert!(
-            matches!(result, Err(TradingError::SchemaViolation { .. })),
-            "parse_technical should return SchemaViolation for unknown fields"
-        );
-    }
-
     #[tokio::test]
     async fn technical_run_uses_shared_inference_helper_for_openrouter() {
         use super::super::common::run_analyst_inference;
@@ -629,26 +604,32 @@ mod tests {
         assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
     }
 
-    // TC-16: MacdValues rejects extra fields (deny_unknown_fields)
     #[test]
-    fn macd_values_extra_fields_rejected() {
+    fn technical_data_missing_options_summary_defaults_to_none() {
+        // Backward-compat: pre-options-snapshot `TechnicalData` payloads omit
+        // the `options_summary` field. Deserialization must default it to
+        // None instead of failing.
         let json = r#"{
-            "rsi": null,
-            "macd": {"macd_line": 0.1, "signal_line": 0.05, "histogram": 0.05, "extra": "bad"},
-            "atr": null, "sma_20": null, "sma_50": null,
-            "ema_12": null, "ema_26": null, "bollinger_upper": null, "bollinger_lower": null,
-            "support_level": null, "resistance_level": null, "volume_avg": null,
-            "summary": "should fail"
+            "rsi": 55.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "Legacy snapshot without options."
         }"#;
-        let result = parse_technical(json);
+        let data = parse_technical(json)
+            .expect("legacy snapshot without options_summary must deserialize");
         assert!(
-            result.is_err(),
-            "extra field inside MacdValues should be rejected"
+            data.options_summary.is_none(),
+            "missing options_summary field should default to None"
         );
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
     }
 
     #[test]

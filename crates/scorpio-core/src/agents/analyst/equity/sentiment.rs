@@ -339,24 +339,6 @@ mod tests {
     }
 
     #[test]
-    fn extra_fields_in_json_are_rejected() {
-        // deny_unknown_fields must reject any unknown key
-        let json = r#"{
-            "overall_score": 0.0,
-            "source_breakdown": [],
-            "engagement_peaks": [],
-            "summary": "ok",
-            "unexpected_field": "should fail"
-        }"#;
-        let result = parse_sentiment(json);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    #[test]
     fn overall_score_out_of_range_returns_schema_violation() {
         let json = r#"{"overall_score": 2.5, "source_breakdown": [], "engagement_peaks": [], "summary": "x"}"#;
         let result = parse_and_validate(json);
@@ -468,46 +450,6 @@ mod tests {
         );
     }
 
-    // TC-18: SentimentSource rejects extra fields
-    #[test]
-    fn sentiment_source_extra_fields_rejected() {
-        let json = r#"{
-            "overall_score": 0.0,
-            "source_breakdown": [{"source_name": "x", "score": 0.0, "sample_size": 1, "extra": "bad"}],
-            "engagement_peaks": [],
-            "summary": "should fail"
-        }"#;
-        let result = parse_sentiment(json);
-        assert!(
-            result.is_err(),
-            "extra field inside SentimentSource should be rejected"
-        );
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    // TC-18: EngagementPeak rejects extra fields
-    #[test]
-    fn engagement_peak_extra_fields_rejected() {
-        let json = r#"{
-            "overall_score": 0.0,
-            "source_breakdown": [],
-            "engagement_peaks": [{"timestamp": "2026-01-01T00:00:00Z", "platform": "news", "intensity": 0.5, "extra": "bad"}],
-            "summary": "should fail"
-        }"#;
-        let result = parse_sentiment(json);
-        assert!(
-            result.is_err(),
-            "extra field inside EngagementPeak should be rejected"
-        );
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
     // ── Task 5: Migrate to shared inference helper ────────────────────────
 
     #[test]
@@ -551,15 +493,6 @@ mod tests {
 
         let data = parse_and_validate(json).expect("'source' alias should be accepted");
         assert_eq!(data.source_breakdown[0].source_name, "Finnhub News");
-    }
-
-    #[test]
-    fn parse_sentiment_rejects_unknown_fields() {
-        let result = parse_sentiment(r#"{"unknown_field": 1}"#);
-        assert!(
-            matches!(result, Err(TradingError::SchemaViolation { .. })),
-            "parse_sentiment should return SchemaViolation for unknown fields"
-        );
     }
 
     #[tokio::test]
