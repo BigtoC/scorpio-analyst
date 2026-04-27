@@ -18,16 +18,19 @@ use crate::{
 // ─── Helpers shared by hydration tests ───────────────────────────────────────
 
 #[cfg(test)]
+fn to_money_usd(v: f64) -> paft_money::Money {
+    use paft_money::{Currency, IsoCurrency, Money};
+    let d = rust_decimal::Decimal::try_from(v).unwrap();
+    Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
+}
+
+#[cfg(test)]
 fn make_trend_row_for_test(
     eps_avg: Option<f64>,
     revenue_avg: Option<f64>,
     num_analysts: Option<u32>,
 ) -> yfinance_rs::analysis::EarningsTrendRow {
-    use paft_money::{Currency, IsoCurrency, Money};
-    let to_money = |v: f64| {
-        let d = rust_decimal::Decimal::try_from(v).unwrap();
-        Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
-    };
+    let to_money = to_money_usd;
     let json = serde_json::json!({
         "period": "0Q",
         "growth": null,
@@ -602,7 +605,6 @@ async fn try_new_succeeds_for_baseline_pack_id() {
 
 #[tokio::test]
 async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
-    use paft_money::{Currency, IsoCurrency, Money};
     use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
 
     use crate::analysis_packs::{PackId, resolve_pack};
@@ -613,11 +615,6 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
     let mut pack = resolve_pack(PackId::Baseline);
     pack.enrichment_intent.consensus_estimates = true;
 
-    let to_money = |v: f64| {
-        let d = rust_decimal::Decimal::try_from(v).unwrap();
-        Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
-    };
-
     let trend_rows = vec![make_trend_row_for_test(
         Some(2.15),
         Some(94_200_000_000.0),
@@ -625,9 +622,9 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
     )];
 
     let price_target = PriceTarget {
-        mean: Some(to_money(215.0)),
-        high: Some(to_money(265.0)),
-        low: Some(to_money(170.0)),
+        mean: Some(to_money_usd(215.0)),
+        high: Some(to_money_usd(265.0)),
+        low: Some(to_money_usd(170.0)),
         number_of_analysts: Some(42),
     };
 
@@ -640,12 +637,13 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
         ..RecommendationSummary::default()
     };
 
-    let yfinance = crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-        trend: Some(trend_rows),
-        price_target: Some(price_target),
-        recommendation_summary: Some(recommendation_summary),
-        ..StubbedFinancialResponses::default()
-    });
+    let yfinance =
+        crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            trend: Some(trend_rows),
+            price_target: Some(price_target),
+            recommendation_summary: Some(recommendation_summary),
+            ..StubbedFinancialResponses::default()
+        });
 
     let config = crate::config::Config {
         llm: crate::config::LlmConfig {
@@ -709,10 +707,7 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
     let eps = consensus
         .eps_estimate
         .expect("eps_estimate must be present");
-    assert!(
-        (eps - 2.15).abs() < 0.01,
-        "expected eps ~2.15, got {eps}"
-    );
+    assert!((eps - 2.15).abs() < 0.01, "expected eps ~2.15, got {eps}");
     assert_eq!(consensus.analyst_count, Some(28));
 
     // Price-target extended fields.

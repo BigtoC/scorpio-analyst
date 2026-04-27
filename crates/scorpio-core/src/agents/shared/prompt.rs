@@ -356,8 +356,25 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
         };
 
         sections.push(format!(
-            "Consensus estimates (as of {}):\n  - EPS estimate: {eps}\n  - Revenue estimate: ${rev}\n  - Analyst count: {analysts}\n  - Price target mean: {pt_mean}\n  - Price target range: {pt_low} - {pt_high}\n  - Price target analyst count: {pt_analysts}\n  - Recommendations: {recs}",
-            consensus.as_of_date,
+            concat!(
+                "Consensus estimates (as of {date}):\n",
+                "  - EPS estimate: {eps}\n",
+                "  - Revenue estimate: ${rev}\n",
+                "  - Analyst count: {analysts}\n",
+                "  - Price target mean: {pt_mean}\n",
+                "  - Price target range: {pt_low} - {pt_high}\n",
+                "  - Price target analyst count: {pt_analysts}\n",
+                "  - Recommendations: {recs}",
+            ),
+            date = consensus.as_of_date,
+            eps = eps,
+            rev = rev,
+            analysts = analysts,
+            pt_mean = pt_mean,
+            pt_low = pt_low,
+            pt_high = pt_high,
+            pt_analysts = pt_analysts,
+            recs = recs,
         ));
     }
 
