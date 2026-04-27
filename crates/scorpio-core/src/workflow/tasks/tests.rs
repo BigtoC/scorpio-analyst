@@ -198,6 +198,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await
@@ -347,6 +348,7 @@ async fn analyst_sync_derives_required_inputs_from_runtime_policy() {
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await
@@ -696,6 +698,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await
@@ -809,6 +812,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await
@@ -1936,6 +1940,7 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await
@@ -2112,6 +2117,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await
@@ -2320,6 +2326,7 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await

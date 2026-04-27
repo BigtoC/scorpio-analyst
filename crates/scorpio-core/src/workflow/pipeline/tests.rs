@@ -427,6 +427,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
                 resistance_level: None,
                 volume_avg: None,
                 summary: fund.payload.summary,
+                options_summary: None,
             },
             sources: fund.sources,
             quality_flags: fund.quality_flags,

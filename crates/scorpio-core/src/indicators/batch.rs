@@ -184,6 +184,7 @@ pub fn calculate_all_indicators(candles: &[Candle]) -> Result<TechnicalData, Tra
         resistance_level: resistance,
         volume_avg: vwma_val,
         summary,
+        options_summary: None,
     })
 }
 

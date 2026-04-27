@@ -248,6 +248,7 @@ impl FinnhubClient {
                 published_at: n.datetime.to_string(),
                 relevance_score: None,
                 snippet: sanitize_news_text(&n.summary, NEWS_SNIPPET_MAX_CHARS),
+                url: None,
             })
             .collect::<Vec<_>>();
         let macro_events = derive_macro_events(&articles);
@@ -476,6 +477,7 @@ fn build_news_data(
             published_at: n.datetime.to_string(),
             relevance_score: None,
             snippet: sanitize_news_text(&n.summary, NEWS_SNIPPET_MAX_CHARS),
+            url: None,
         })
         .collect();
     let macro_events = derive_macro_events(&articles);
@@ -1271,6 +1273,7 @@ mod tests {
             published_at: "2026-03-14".to_owned(),
             relevance_score: None,
             snippet: "Federal Reserve cuts interest rates amid inflation cpi concerns".to_owned(),
+            url: None,
         }];
         let events = derive_macro_events(&articles);
         for event in &events {

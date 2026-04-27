@@ -584,6 +584,8 @@ mod tests {
                 revenue_estimate_m: Some(95_000.0),
                 analyst_count: Some(35),
                 as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
             }),
         };
 
@@ -608,6 +610,8 @@ mod tests {
                 revenue_estimate_m: None,
                 analyst_count: None,
                 as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
             }),
         };
 

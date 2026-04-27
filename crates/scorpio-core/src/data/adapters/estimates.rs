@@ -5,6 +5,7 @@
 //! yfinance-rs earnings-trend data into the adapter contract.
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::TradingError;
@@ -25,6 +26,44 @@ pub struct ConsensusEvidence {
     pub analyst_count: Option<u32>,
     /// ISO-8601 date of the estimate snapshot (`"YYYY-MM-DD"`).
     pub as_of_date: String,
+    /// Aggregated price-target distribution (mean / high / low / analyst count).
+    /// Additive field — older snapshots will deserialize with `None`.
+    #[serde(default)]
+    pub price_target: Option<PriceTargetSummary>,
+    /// Aggregated analyst recommendation distribution (strong-buy → strong-sell).
+    /// Additive field — older snapshots will deserialize with `None`.
+    #[serde(default)]
+    pub recommendations: Option<RecommendationsSummary>,
+}
+
+/// Summary statistics for analyst price targets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct PriceTargetSummary {
+    #[serde(default)]
+    pub mean: Option<f64>,
+    #[serde(default)]
+    pub high: Option<f64>,
+    #[serde(default)]
+    pub low: Option<f64>,
+    #[serde(default)]
+    pub analyst_count: Option<u32>, // mapped from upstream `number_of_analysts`
+}
+
+/// Aggregated count of analyst recommendations across the standard buckets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RecommendationsSummary {
+    #[serde(default)]
+    pub strong_buy: Option<u32>,
+    #[serde(default)]
+    pub buy: Option<u32>,
+    #[serde(default)]
+    pub hold: Option<u32>,
+    #[serde(default)]
+    pub sell: Option<u32>,
+    #[serde(default)]
+    pub strong_sell: Option<u32>,
 }
 
 /// Contract for any provider that can supply [`ConsensusEvidence`].
@@ -112,6 +151,8 @@ fn normalize_earnings_trend(
         revenue_estimate_m,
         analyst_count,
         as_of_date: as_of_date.to_owned(),
+        price_target: None,
+        recommendations: None,
     }
 }
 
@@ -149,10 +190,36 @@ mod tests {
             revenue_estimate_m: Some(65_500.0),
             analyst_count: Some(32),
             as_of_date: "2025-03-01".to_owned(),
+            price_target: None,
+            recommendations: None,
         };
         let json = serde_json::to_string(&evidence).expect("serialization");
         let recovered: ConsensusEvidence = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(evidence, recovered);
+    }
+
+    #[test]
+    fn consensus_evidence_missing_extended_fields_defaults_to_none() {
+        // Backward-compat: pre-extended-consensus snapshots lack the
+        // additive `price_target` and `recommendations` keys. Deserialization
+        // must default both to None rather than failing.
+        let json = r#"{
+            "symbol": "AAPL",
+            "eps_estimate": 2.5,
+            "revenue_estimate_m": 95000.0,
+            "analyst_count": 35,
+            "as_of_date": "2026-03-15"
+        }"#;
+        let evidence: ConsensusEvidence = serde_json::from_str(json)
+            .expect("legacy consensus payload without extended fields must deserialize");
+        assert!(
+            evidence.price_target.is_none(),
+            "missing price_target should default to None"
+        );
+        assert!(
+            evidence.recommendations.is_none(),
+            "missing recommendations should default to None"
+        );
     }
 
     #[test]
@@ -163,6 +230,8 @@ mod tests {
             revenue_estimate_m: None,
             analyst_count: None,
             as_of_date: "2025-04-01".to_owned(),
+            price_target: None,
+            recommendations: None,
         };
         let json = serde_json::to_string(&evidence).expect("serialization");
         let recovered: ConsensusEvidence = serde_json::from_str(&json).expect("deserialization");
