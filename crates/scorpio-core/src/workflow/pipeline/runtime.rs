@@ -409,9 +409,9 @@ async fn hydrate_event_news(
 /// the policy converts to `FetchFailed("timeout")`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum HydratedConsensusFetch {
-    Ok(ConsensusOutcome),
-    Err(String),
-    Timeout,
+    Success(ConsensusOutcome),
+    Failed(String),
+    TimedOut,
 }
 
 /// Fetch consensus-estimates enrichment with a timeout boundary, applying
@@ -446,7 +446,7 @@ async fn hydrate_consensus(
     // ProviderDegraded retry: if the first attempt classifies as degraded,
     // retry once immediately (no backoff — the rate limiter handles spacing).
     let resolved = match &primary {
-        HydratedConsensusFetch::Ok(ConsensusOutcome::ProviderDegraded) => {
+        HydratedConsensusFetch::Success(ConsensusOutcome::ProviderDegraded) => {
             info!(
                 symbol,
                 "consensus-estimates: provider_degraded; retrying once"
@@ -466,9 +466,9 @@ async fn single_consensus_fetch(
     timeout: std::time::Duration,
 ) -> HydratedConsensusFetch {
     match tokio::time::timeout(timeout, provider.fetch_consensus(symbol, target_date)).await {
-        Ok(Ok(outcome)) => HydratedConsensusFetch::Ok(outcome),
-        Ok(Err(e)) => HydratedConsensusFetch::Err(e.to_string()),
-        Err(_) => HydratedConsensusFetch::Timeout,
+        Ok(Ok(outcome)) => HydratedConsensusFetch::Success(outcome),
+        Ok(Err(e)) => HydratedConsensusFetch::Failed(e.to_string()),
+        Err(_) => HydratedConsensusFetch::TimedOut,
     }
 }
 
@@ -477,13 +477,13 @@ async fn single_consensus_fetch(
 /// for this cycle.
 ///
 /// Behavior:
-/// - `Ok(Data(_))` / `Ok(NoCoverage)` reset `consecutive_provider_degraded_cycles` to 0.
-/// - `Ok(ProviderDegraded)` increments the counter; if it reaches
+/// - `Success(Data(_))` / `Success(NoCoverage)` reset `consecutive_provider_degraded_cycles` to 0.
+/// - `Success(ProviderDegraded)` increments the counter; if it reaches
 ///   [`CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES`], the runtime
 ///   downgrades the status from `FetchFailed("provider_degraded")` to
 ///   `NotAvailable` and emits a warn so a stuck provider does not pin the
 ///   symbol at FetchFailed forever.
-/// - `Err(_)` and `Timeout` leave the counter untouched (they are operationally
+/// - `Failed(_)` and `TimedOut` leave the counter untouched (they are operationally
 ///   distinct from provider-degraded; the latter is a structured upstream
 ///   signal). The status reflects the failure reason.
 pub(super) fn apply_consensus_half_life_policy(
@@ -496,7 +496,7 @@ pub(super) fn apply_consensus_half_life_policy(
         .unwrap_or(0);
 
     match fetch {
-        HydratedConsensusFetch::Ok(ConsensusOutcome::Data(evidence)) => {
+        HydratedConsensusFetch::Success(ConsensusOutcome::Data(evidence)) => {
             info!(symbol, "consensus-estimates enrichment: available");
             let mut evidence = evidence.clone();
             evidence.consecutive_provider_degraded_cycles = 0;
@@ -505,7 +505,7 @@ pub(super) fn apply_consensus_half_life_policy(
                 payload: Some(evidence),
             }
         }
-        HydratedConsensusFetch::Ok(ConsensusOutcome::NoCoverage) => {
+        HydratedConsensusFetch::Success(ConsensusOutcome::NoCoverage) => {
             info!(
                 symbol,
                 "consensus-estimates enrichment: no analyst coverage"
@@ -515,7 +515,7 @@ pub(super) fn apply_consensus_half_life_policy(
                 payload: None,
             }
         }
-        HydratedConsensusFetch::Ok(ConsensusOutcome::ProviderDegraded) => {
+        HydratedConsensusFetch::Success(ConsensusOutcome::ProviderDegraded) => {
             let cycles = prior_counter.saturating_add(1);
             // Persist a counter-only stub so the next cycle can read the
             // running tally. The stub carries identity fields but no data —
@@ -554,14 +554,14 @@ pub(super) fn apply_consensus_half_life_policy(
                 }
             }
         }
-        HydratedConsensusFetch::Err(reason) => {
+        HydratedConsensusFetch::Failed(reason) => {
             info!(symbol, error = %reason, "consensus-estimates enrichment: fetch failed (fail-open)");
             EnrichmentState {
                 status: EnrichmentStatus::FetchFailed(reason.clone()),
                 payload: None,
             }
         }
-        HydratedConsensusFetch::Timeout => {
+        HydratedConsensusFetch::TimedOut => {
             info!(
                 symbol,
                 "consensus-estimates enrichment: timed out (fail-open)"
@@ -647,7 +647,7 @@ mod consensus_half_life_tests {
         // Walk through 4 hydration cycles. Each call to the policy gets the
         // prior cycle's persisted payload as input.
         let symbol = "AAPL";
-        let degraded = HydratedConsensusFetch::Ok(ConsensusOutcome::ProviderDegraded);
+        let degraded = HydratedConsensusFetch::Success(ConsensusOutcome::ProviderDegraded);
 
         // Cycle 1: prior counter 0 -> persists 1 with FetchFailed.
         let cycle1 = apply_consensus_half_life_policy(symbol, &degraded, None);
@@ -700,7 +700,7 @@ mod consensus_half_life_tests {
             ..data_evidence(symbol, 5)
         };
 
-        let no_coverage = HydratedConsensusFetch::Ok(ConsensusOutcome::NoCoverage);
+        let no_coverage = HydratedConsensusFetch::Success(ConsensusOutcome::NoCoverage);
         let next = apply_consensus_half_life_policy(symbol, &no_coverage, Some(&prior));
         assert!(matches!(next.status, EnrichmentStatus::NotAvailable));
         // NoCoverage drops payload entirely; the counter is implicitly reset
@@ -726,7 +726,7 @@ mod consensus_half_life_tests {
             consecutive_provider_degraded_cycles: 2,
         };
 
-        let data_outcome = HydratedConsensusFetch::Ok(ConsensusOutcome::Data(data_evidence(
+        let data_outcome = HydratedConsensusFetch::Success(ConsensusOutcome::Data(data_evidence(
             symbol, 99, // pretend the upstream evidence carries a non-zero counter
         )));
         let next = apply_consensus_half_life_policy(symbol, &data_outcome, Some(&prior_stub));

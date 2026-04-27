@@ -170,8 +170,7 @@ impl EstimatesProvider for YFinanceEstimatesProvider {
             trend_branch.is_error() && price_target_branch.is_error() && recs_branch.is_error();
 
         if all_errors {
-            // Surface the first error for the caller; the warns above already
-            // logged each individual failure at the branch level.
+            emit_branch_warns(&trend_branch, &price_target_branch, &recs_branch);
             let err = trend_branch
                 .into_error()
                 .or_else(|| price_target_branch.into_error())
