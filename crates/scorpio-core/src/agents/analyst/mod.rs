@@ -320,6 +320,7 @@ mod tests {
                 published_at: "2026-03-14T10:00:00Z".to_owned(),
                 relevance_score: Some(0.9),
                 snippet: "Record quarterly results.".to_owned(),
+                url: None,
             }],
             macro_events: vec![MacroEvent {
                 event: "Interest-rate policy shift".to_owned(),
@@ -349,6 +350,7 @@ mod tests {
             resistance_level: None,
             volume_avg: Some(500_000.0),
             summary: "Neutral trend.".to_owned(),
+            options_summary: None,
         }
     }
 
