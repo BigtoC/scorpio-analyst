@@ -93,7 +93,7 @@ crates/scorpio-core/src/
 ├── analysis_packs/equity/prompts/
 │   └── technical_analyst.md       (MODIFIED — append options-tool guidance paragraph)
 ├── workflow/pipeline/runtime.rs   (MODIFIED — construct YFinanceNewsProvider + YFinanceOptionsProvider; pass both news providers into prefetch)
-├── workflow/snapshot/thesis.rs    (MODIFIED — bump THESIS_MEMORY_SCHEMA_VERSION 3 → 4)
+├── workflow/snapshot/thesis.rs    (unchanged — schema version stays at 3; see "State and persistence" below)
 └── constants.rs                   (MODIFIED — add OPTIONS_NTM_STRIKE_BAND, OPTIONS_FETCH_TIMEOUT_SECS)
 
 crates/scorpio-core/examples/yfinance_live_test.rs  (MODIFIED — add sections 7–10)
@@ -378,10 +378,10 @@ UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core \
 ## State and persistence
 
 - `ConsensusEvidence` grows two new optional fields (above). No new top-level state field. The struct does **not** carry `#[serde(deny_unknown_fields)]`, so `#[serde(default)]` on each new field is sufficient for older snapshots to deserialize cleanly.
-- `TechnicalData` grows `options_summary: Option<String>`. The struct **does** carry `#[serde(deny_unknown_fields)]` (see `crates/scorpio-core/src/state/technical.rs:6`), so the new field MUST be annotated `#[serde(default)]` — `deny_unknown_fields` rejects extra keys but still permits absent ones when a default exists, which is exactly what we need for forward-compatibility on already-persisted rows.
-- No changes to `NewsData` — yfinance articles are normalized into the existing `NewsArticle` shape and append to `articles: Vec<NewsArticle>`.
+- `TechnicalData` grows `options_summary: Option<String>` with `#[serde(default)]`. Per CLAUDE.md's snapshotted-state rule, `#[serde(deny_unknown_fields)]` has been removed from all state structs reachable from `TradingState` — so additive fields deserialize cleanly on both old-reading-new and new-reading-old paths.
+- `NewsArticle` gains `url: Option<String>` with `#[serde(default)]` to support cross-provider deduplication and provenance. (The original draft said `NewsData` would stay unchanged; the implementation plan guardrails supersede this.)
 
-**Snapshot schema version** — bump `THESIS_MEMORY_SCHEMA_VERSION` in `workflow/snapshot/thesis.rs` from **3 → 4**. Per CLAUDE.md the thesis lookup skips rows whose version differs from the constant in either direction, so the bump explicitly retires any rows persisted under v3 and a binary downgrade to v3 still ignores v4 rows safely. The `#[serde(default)]` annotations are belt-and-suspenders against any v4 row that still misses a field; the version bump is the primary mechanism.
+**Snapshot schema version** — `THESIS_MEMORY_SCHEMA_VERSION` stays at **3**. All new fields are additive with `#[serde(default)]`, so no schema bump is needed. A bump would explicitly retire all v3 rows, which is disproportionate for purely additive changes. See CLAUDE.md's "TradingState schema evolution" rule: bumps are reserved for renames, removals, and backward-incompatible type changes.
 
 ## Provider construction (pipeline runtime)
 
@@ -426,10 +426,11 @@ No new user-facing config keys. Internal constants added to `constants.rs`:
 
 ## Backward compatibility
 
-- Old `ConsensusEvidence` snapshots: load with `price_target = None`, `recommendations = None` via `#[serde(default)]` on each new field. The struct has no `deny_unknown_fields` annotation.
-- Old `TechnicalData` snapshots: load with `options_summary = None`. **Required:** annotate the new field `#[serde(default)]` because `TechnicalData` carries `#[serde(deny_unknown_fields)]` — the deny attribute rejects extra keys but still permits absent ones when a default is in place.
+- Old `ConsensusEvidence` snapshots: load with `price_target = None`, `recommendations = None` via `#[serde(default)]` on each new field.
+- Old `TechnicalData` snapshots: load with `options_summary = None` via `#[serde(default)]`. The `#[serde(deny_unknown_fields)]` attribute has been removed from all snapshotted state structs per CLAUDE.md — older binaries reading newer snapshots tolerate unknown keys rather than rejecting them.
+- Old `NewsArticle` snapshots: load with `url = None` via `#[serde(default)]`.
 - Old prompt templates: unaffected — new fields render only when `Some(...)`.
-- Schema version bump (3 → 4) explicitly retires any incompatible snapshot rows on either side of the boundary.
+- Schema version stays at **3** — purely additive changes do not warrant a bump.
 - CLI report: unchanged.
 
 ## Testing strategy
@@ -479,6 +480,10 @@ Extend the existing manual smoke test (not in CI) with four new sections, preser
   - `YFinanceEstimatesProvider::fetch_consensus(SPY, today)` — ETF has no analyst coverage; assert provider returns `Ok(None)` or `Ok(Some(evidence))` with all Option fields `None`, and does not panic. WARN line, no FAIL.
 
 Existing sections 1–6 are unchanged.
+
+## Deferred decisions
+
+**Cross-analyst options routing.** Options data is Technical-Analyst-scoped for v1. The `OptionsProvider` trait lives in `data/traits/options.rs` and is consumed only by `TechnicalAnalyst`. Cross-analyst access (Sentiment Agent or Risk Agents reading the same snapshot) would require routing through `data/routing.rs` and reconciling `OptionsProvider` with the existing `DerivativesProvider` placeholder in `data/traits/derivatives.rs`. That reconciliation is a deferred decision pending a concrete written request from a Sentiment or Risk agent author — it should not be pulled forward on an unowned demand signal.
 
 ## Out of scope / deferred
 
