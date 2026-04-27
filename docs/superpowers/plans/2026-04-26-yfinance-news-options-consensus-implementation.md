@@ -1,6 +1,6 @@
 # YFinance News, Options Snapshot, and Extended Consensus Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add Yahoo company news, a Technical Analyst options snapshot tool, and extended analyst-consensus enrichment without breaking persisted snapshots, live fail-open behavior, or existing prompt/report contracts.
 
@@ -127,29 +127,29 @@
 - Modify: `crates/scorpio-core/src/agents/analyst/equity/technical.rs`
 - Modify: the exact literal-update surfaces listed above
 
-- [ ] **Step 1: Add the missing-URL regression in `crates/scorpio-core/src/agents/analyst/equity/news.rs`**
+- [x] **Step 1: Add the missing-URL regression in `crates/scorpio-core/src/agents/analyst/equity/news.rs`**
 
 Add a unit test named `news_article_missing_url_defaults_to_none` that deserializes a `NewsData` JSON object whose article omits `url` and asserts `data.articles[0].url.is_none()`.
 
-- [ ] **Step 2: Add the missing-options-summary regression in `crates/scorpio-core/src/agents/analyst/equity/technical.rs`**
+- [x] **Step 2: Add the missing-options-summary regression in `crates/scorpio-core/src/agents/analyst/equity/technical.rs`**
 
 Add a unit test named `technical_data_missing_options_summary_defaults_to_none` that deserializes a `TechnicalData` JSON object without `options_summary` and asserts the field defaults to `None`.
 
-- [ ] **Step 3: Add the missing-extended-consensus regression in `crates/scorpio-core/src/data/adapters/estimates.rs`**
+- [x] **Step 3: Add the missing-extended-consensus regression in `crates/scorpio-core/src/data/adapters/estimates.rs`**
 
 Add a unit test named `consensus_evidence_missing_extended_fields_defaults_to_none` that deserializes legacy JSON without `price_target` or `recommendations` and asserts both default to `None`.
 
-- [ ] **Step 4: Add the additive-fields-on-schema-v3 regression in `crates/scorpio-core/src/workflow/snapshot/tests/thesis_compat.rs`**
+- [x] **Step 4: Add the additive-fields-on-schema-v3 regression in `crates/scorpio-core/src/workflow/snapshot/tests/thesis_compat.rs`**
 
 Add a test named `additive_consensus_and_technical_fields_do_not_require_schema_bump` that writes a phase-5 snapshot row stamped with the current `THESIS_MEMORY_SCHEMA_VERSION`, removes the new additive keys from the stored JSON, and proves `load_prior_thesis_for_symbol()` still returns the thesis instead of skipping the row. The test enforces CLAUDE.md's "additive fields stay on v3 with `#[serde(default)]`" rule. The companion design-doc retraction lives in Task 11 Step 1.
 
-- [ ] **Step 5: Run the focused compatibility slice and confirm the red state**
+- [x] **Step 5: Run the focused compatibility slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(news_article_missing_url_defaults_to_none) | test(technical_data_missing_options_summary_defaults_to_none) | test(consensus_evidence_missing_extended_fields_defaults_to_none) | test(additive_consensus_and_technical_fields_do_not_require_schema_bump)'`
 
 Expected: FAIL because the additive fields do not exist yet.
 
-- [ ] **Step 6: Sweep `#[serde(deny_unknown_fields)]` from every snapshotted state struct**
+- [x] **Step 6: Sweep `#[serde(deny_unknown_fields)]` from every snapshotted state struct**
 
 The plan's "additive fields stay on schema 3" guarantee requires that older binaries reading newer snapshots tolerate the new keys, not reject them. Strip the attribute from EVERY occurrence in `crates/scorpio-core/src/state/`. The full list (run `grep -rn 'deny_unknown_fields' crates/scorpio-core/src/state/` to confirm) currently includes occurrences in:
 
@@ -164,11 +164,11 @@ Strip every one of them. **Also delete the existing test `news_article_extra_fie
 
 Then update CLAUDE.md (the "TradingState schema evolution" bullet list) with this exact text scoped to snapshotted state, NOT a project-wide ban: "Snapshotted state structs serialized into `phase_snapshots.trading_state_json` (anything reachable from `TradingState` via serde) must not use `#[serde(deny_unknown_fields)]` — it converts every additive field into a backward-incompatible change. This rule does NOT apply to RPC, tool-argument, or config types where typo detection is more valuable than forward-compat."
 
-- [ ] **Step 6b: Add a downgrade-compatibility regression in `crates/scorpio-core/src/workflow/snapshot/tests/thesis_compat.rs`**
+- [x] **Step 6b: Add a downgrade-compatibility regression in `crates/scorpio-core/src/workflow/snapshot/tests/thesis_compat.rs`**
 
 Add a test named `additive_fields_deserialize_when_struct_lacks_field`. Write a JSON object with extra unknown keys (`"future_field": ...`) into a phase-5 snapshot row stamped at the current `THESIS_MEMORY_SCHEMA_VERSION`, and prove the loader deserializes the row as if those keys were absent. This codifies the contract that future additive fields land safely.
 
-- [ ] **Step 7: Add the additive fields with `#[serde(default)]` and keep schema version `3`**
+- [x] **Step 7: Add the additive fields with `#[serde(default)]` and keep schema version `3`**
 
 Make these exact shape changes:
 
@@ -222,29 +222,29 @@ pub struct RecommendationsSummary {
 
 Do not touch `crates/scorpio-core/src/workflow/snapshot/thesis.rs`.
 
-- [ ] **Step 8: Update every explicit `NewsArticle` literal after the new field lands**
+- [x] **Step 8: Update every explicit `NewsArticle` literal after the new field lands**
 
 Set `url: None` or a concrete URL in each explicit constructor under `crates/scorpio-core/src/agents/analyst/equity/news.rs`, `crates/scorpio-core/src/agents/analyst/mod.rs`, `crates/scorpio-core/src/agents/fund_manager/prompt.rs`, `crates/scorpio-core/src/agents/fund_manager/tests.rs`, `crates/scorpio-core/src/agents/trader/tests.rs`, `crates/scorpio-core/src/data/finnhub.rs`, and `crates/scorpio-core/tests/state_roundtrip.rs`.
 
-- [ ] **Step 9: Update every explicit `TechnicalData` literal after the new field lands**
+- [x] **Step 9: Update every explicit `TechnicalData` literal after the new field lands**
 
 Set `options_summary: None` unless the fixture should explicitly exercise options behavior in `crates/scorpio-core/src/agents/analyst/equity/technical.rs`, `crates/scorpio-core/src/agents/analyst/mod.rs`, `crates/scorpio-core/src/agents/fund_manager/prompt.rs`, `crates/scorpio-core/src/agents/fund_manager/tests.rs`, `crates/scorpio-core/src/agents/trader/tests.rs`, `crates/scorpio-core/src/indicators/batch.rs`, `crates/scorpio-core/src/testing/prompt_render.rs`, `crates/scorpio-core/src/workflow/pipeline/tests.rs`, `crates/scorpio-core/src/workflow/tasks/test_helpers.rs`, `crates/scorpio-core/src/workflow/tasks/tests.rs`, `crates/scorpio-core/tests/state_roundtrip.rs`, `crates/scorpio-core/tests/support/workflow_observability_task_support.rs`, and `crates/scorpio-core/tests/workflow_pipeline_structure.rs`.
 
-- [ ] **Step 10: Update every explicit `ConsensusEvidence` literal and proptest generator**
+- [x] **Step 10: Update every explicit `ConsensusEvidence` literal and proptest generator**
 
 Add `price_target: None` and `recommendations: None` in `crates/scorpio-core/src/agents/fund_manager/prompt.rs`, `crates/scorpio-core/src/agents/shared/prompt.rs`, `crates/scorpio-core/src/data/adapters/estimates.rs`, `crates/scorpio-core/tests/state_roundtrip.rs`, and `crates/scorpio-reporters/src/terminal/final_report.rs`.
 
-- [ ] **Step 11: Extend the proptest generators in `crates/scorpio-core/tests/state_roundtrip.rs`**
+- [x] **Step 11: Extend the proptest generators in `crates/scorpio-core/tests/state_roundtrip.rs`**
 
 Teach `arb_news_article`, `arb_technical_data`, and `arb_consensus_evidence` about the new optional fields so the round-trip property test keeps covering the expanded persisted shape.
 
-- [ ] **Step 12: Re-run the compatibility slice plus the round-trip integration test**
+- [x] **Step 12: Re-run the compatibility slice plus the round-trip integration test**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(news_article_missing_url_defaults_to_none) | test(technical_data_missing_options_summary_defaults_to_none) | test(consensus_evidence_missing_extended_fields_defaults_to_none) | test(additive_consensus_and_technical_fields_do_not_require_schema_bump) | test(additive_fields_deserialize_when_struct_lacks_field) | binary(state_roundtrip)'`
 
 Expected: PASS.
 
-- [ ] **Step 13: Commit the additive-state foundation**
+- [x] **Step 13: Commit the additive-state foundation**
 
 Run: `git add crates/scorpio-core/src/state/news.rs crates/scorpio-core/src/state/technical.rs crates/scorpio-core/src/data/adapters/estimates.rs crates/scorpio-core/src/workflow/snapshot/tests/thesis_compat.rs crates/scorpio-core/tests/state_roundtrip.rs crates/scorpio-reporters/src/terminal/final_report.rs crates/scorpio-core/src/agents/analyst/equity/news.rs crates/scorpio-core/src/agents/analyst/equity/technical.rs crates/scorpio-core/src/agents/analyst/mod.rs crates/scorpio-core/src/agents/fund_manager/prompt.rs crates/scorpio-core/src/agents/fund_manager/tests.rs crates/scorpio-core/src/agents/trader/tests.rs crates/scorpio-core/src/indicators/batch.rs crates/scorpio-core/src/testing/prompt_render.rs crates/scorpio-core/src/workflow/pipeline/tests.rs crates/scorpio-core/src/workflow/tasks/test_helpers.rs crates/scorpio-core/src/workflow/tasks/tests.rs crates/scorpio-core/tests/support/workflow_observability_task_support.rs crates/scorpio-core/tests/workflow_pipeline_structure.rs && git commit -m "feat(core): add snapshot-safe news and technical fields"`
 
@@ -255,7 +255,7 @@ Run: `git add crates/scorpio-core/src/state/news.rs crates/scorpio-core/src/stat
 - Modify: `crates/scorpio-core/src/data/yfinance/financials.rs`
 - Modify: `crates/scorpio-core/src/data/adapters/estimates.rs`
 
-- [ ] **Step 1: Add result-preserving Yahoo wrapper tests in `crates/scorpio-core/src/data/yfinance/financials.rs`**
+- [x] **Step 1: Add result-preserving Yahoo wrapper tests in `crates/scorpio-core/src/data/yfinance/financials.rs`**
 
 Add these exact tests:
 
@@ -273,7 +273,7 @@ async fn empty_price_target_payload_returns_none() { ... }
 async fn empty_recommendations_summary_payload_returns_none() { ... }
 ```
 
-- [ ] **Step 2: Add the provider-behavior regressions in `crates/scorpio-core/src/data/adapters/estimates.rs`**
+- [x] **Step 2: Add the provider-behavior regressions in `crates/scorpio-core/src/data/adapters/estimates.rs`**
 
 Add these exact tests (names align with the `ConsensusOutcome` taxonomy from Step 6):
 
@@ -294,13 +294,13 @@ async fn fetch_consensus_returns_provider_degraded_when_price_target_errors_and_
 async fn fetch_consensus_returns_err_when_all_three_endpoints_fail() { ... }
 ```
 
-- [ ] **Step 3: Run the focused consensus slice and confirm the red state**
+- [x] **Step 3: Run the focused consensus slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(get_analyst_price_target_result_preserves_yahoo_failure_reason) | test(get_recommendations_summary_result_preserves_yahoo_failure_reason) | test(fetch_consensus_populates_price_target_and_recommendations) | test(fetch_consensus_classifies_partial_data_with_one_branch_error_as_data_with_warn) | test(fetch_consensus_returns_no_coverage_when_all_endpoints_return_no_data) | test(fetch_consensus_returns_provider_degraded_when_price_target_errors_and_others_empty) | test(fetch_consensus_returns_err_when_all_three_endpoints_fail)'`
 
 Expected: FAIL because the new wrappers and provider logic do not exist yet.
 
-- [ ] **Step 4: Extend `StubbedFinancialResponses` with consensus fixtures in `crates/scorpio-core/src/data/yfinance/ohlcv.rs`**
+- [x] **Step 4: Extend `StubbedFinancialResponses` with consensus fixtures in `crates/scorpio-core/src/data/yfinance/ohlcv.rs`**
 
 Add these exact test-only fields:
 
@@ -311,11 +311,11 @@ pub recommendation_summary: Option<yfinance_rs::analysis::RecommendationSummary>
 pub recommendation_summary_error: Option<String>,
 ```
 
-- [ ] **Step 5: Add result-preserving Yahoo wrappers in `crates/scorpio-core/src/data/yfinance/financials.rs`**
+- [x] **Step 5: Add result-preserving Yahoo wrappers in `crates/scorpio-core/src/data/yfinance/financials.rs`**
 
 Add `get_analyst_price_target_result()` and `get_recommendations_summary_result()` next to `get_earnings_trend_result()`, mirror the existing test-stub pattern, and convert all-empty upstream payloads into `Ok(None)` instead of `Some(default_struct)`.
 
-- [ ] **Step 6: Implement partial-fail-open consensus fetch in `crates/scorpio-core/src/data/adapters/estimates.rs`**
+- [x] **Step 6: Implement partial-fail-open consensus fetch in `crates/scorpio-core/src/data/adapters/estimates.rs`**
 
 Define the structured outcome enum and update `fetch_consensus` to return it (replaces the prior `Result<Option<ConsensusEvidence>, TradingError>` shape so degraded providers cannot be silently confused with no-coverage):
 
@@ -335,7 +335,7 @@ Use `tokio::join!` to fetch earnings trend, analyst price target, and recommenda
 - `Err(TradingError::...)` when all three branches errored.
 - The runtime maps `Ok(NoCoverage)` to `ConsensusStatus::NotAvailable` and `Ok(ProviderDegraded)` to `ConsensusStatus::FetchFailed` so downstream agents get the same operational signal as before but can no longer mistake one for the other.
 
-- [ ] **Step 6b: Update the runtime call site so the workspace builds at this commit**
+- [x] **Step 6b: Update the runtime call site so the workspace builds at this commit**
 
 The `EstimatesProvider::fetch_consensus` return type changes from `Result<Option<ConsensusEvidence>, TradingError>` to `Result<ConsensusOutcome, TradingError>`. The current consumer in `crates/scorpio-core/src/workflow/pipeline/runtime.rs::hydrate_consensus()` (around line 414) pattern-matches `Ok(Ok(Some(_)))` and `Ok(Ok(None))` against the old shape — this must be updated in the same commit, otherwise the workspace stops compiling. Update:
 
@@ -352,13 +352,13 @@ match tokio::time::timeout(timeout, provider.fetch_consensus(symbol, target_date
 
 Add `crates/scorpio-core/src/workflow/pipeline/runtime.rs` to the Task 2 Step 8 commit (already present in the File Map for other reasons; just ensure it's staged). Without this step, every commit between Task 2 Step 8 and Task 5 Step 6 leaves the workspace non-compiling and `cargo nextest --workspace` fails on bisect.
 
-- [ ] **Step 7: Re-run the focused consensus slice**
+- [x] **Step 7: Re-run the focused consensus slice**
 
 Run the command from Step 3.
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the extended consensus provider work**
+- [x] **Step 8: Commit the extended consensus provider work**
 
 Run: `git add crates/scorpio-core/src/data/yfinance/ohlcv.rs crates/scorpio-core/src/data/yfinance/financials.rs crates/scorpio-core/src/data/adapters/estimates.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs && git commit -m "feat(core): extend yahoo consensus enrichment with structured outcome"`
 
@@ -368,11 +368,11 @@ Run: `git add crates/scorpio-core/src/data/yfinance/ohlcv.rs crates/scorpio-core
 - Modify: `crates/scorpio-core/src/agents/shared/prompt.rs`
 - Modify: `crates/scorpio-core/src/workflow/pipeline/tests.rs`
 
-- [ ] **Step 1: Add the richer prompt-render regression in `crates/scorpio-core/src/agents/shared/prompt.rs`**
+- [x] **Step 1: Add the richer prompt-render regression in `crates/scorpio-core/src/agents/shared/prompt.rs`**
 
 Add a unit test named `build_enrichment_context_includes_price_target_and_recommendations` that asserts the rendered prompt context now includes mean/high/low target values plus the five recommendation buckets.
 
-- [ ] **Step 2: Add the runtime hydration regression in `crates/scorpio-core/src/workflow/pipeline/tests.rs`**
+- [x] **Step 2: Add the runtime hydration regression in `crates/scorpio-core/src/workflow/pipeline/tests.rs`**
 
 Add an async test named `run_analysis_cycle_hydrates_extended_consensus_enrichment` that:
 
@@ -384,13 +384,13 @@ Add an async test named `run_analysis_cycle_hydrates_extended_consensus_enrichme
 - replaces downstream graph tasks with the existing stub helpers
 - asserts `final_state.enrichment_consensus.payload` carries the new fields
 
-- [ ] **Step 3: Run the focused render/hydration slice and confirm the red state**
+- [x] **Step 3: Run the focused render/hydration slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(build_enrichment_context_includes_price_target_and_recommendations) | test(run_analysis_cycle_hydrates_extended_consensus_enrichment)'`
 
 Expected: FAIL because prompt rendering does not mention the new fields yet.
 
-- [ ] **Step 4: Update `crates/scorpio-core/src/agents/shared/prompt.rs` to render the new consensus fields**
+- [x] **Step 4: Update `crates/scorpio-core/src/agents/shared/prompt.rs` to render the new consensus fields**
 
 Keep the existing status lines, keep `N/A` for absent fields, and render raw numbers in this shape:
 
@@ -405,13 +405,13 @@ Consensus estimates (as of 2026-04-26):
   - Recommendations: strong_buy=12, buy=18, hold=10, sell=2, strong_sell=0
 ```
 
-- [ ] **Step 5: Re-run the focused render/hydration slice**
+- [x] **Step 5: Re-run the focused render/hydration slice**
 
 Run the command from Step 3.
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the prompt-render and hydration coverage**
+- [x] **Step 6: Commit the prompt-render and hydration coverage**
 
 Run: `git add crates/scorpio-core/src/agents/shared/prompt.rs crates/scorpio-core/src/workflow/pipeline/tests.rs && git commit -m "feat(core): expose richer consensus context"`
 
@@ -429,7 +429,7 @@ Run: `git add crates/scorpio-core/src/agents/shared/prompt.rs crates/scorpio-cor
 
 > **Dependency note:** Complete Chunk 1 Task 1 first. This chunk consumes the new `crates/scorpio-core/src/state/news.rs::NewsArticle.url` field added there.
 
-- [ ] **Step 1: Add the Finnhub normalization regressions in `crates/scorpio-core/src/data/finnhub.rs`**
+- [x] **Step 1: Add the Finnhub normalization regressions in `crates/scorpio-core/src/data/finnhub.rs`**
 
 Add these exact tests near the existing news helpers:
 
@@ -443,7 +443,7 @@ fn normalize_finnhub_article_formats_rfc3339_timestamp() { ... }
 
 Both tests should exercise the shared normalization path used by `build_news_data()` and `get_market_news()`.
 
-- [ ] **Step 2: Add the Yahoo news-provider regressions in `crates/scorpio-core/src/data/yfinance/news.rs` and wire the module into `crates/scorpio-core/src/data/yfinance/mod.rs`**
+- [x] **Step 2: Add the Yahoo news-provider regressions in `crates/scorpio-core/src/data/yfinance/news.rs` and wire the module into `crates/scorpio-core/src/data/yfinance/mod.rs`**
 
 Add these exact tests:
 
@@ -459,13 +459,13 @@ Assert RFC3339 timestamps, preserved URLs, `snippet == ""` for Yahoo articles, a
 
 In the same step, add `pub mod news;` to `crates/scorpio-core/src/data/yfinance/mod.rs` so the new test file is compiled before the first red-state run.
 
-- [ ] **Step 3: Run the focused news-normalization slice and confirm the red state**
+- [x] **Step 3: Run the focused news-normalization slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(normalize_finnhub_article_preserves_url) | test(normalize_finnhub_article_formats_rfc3339_timestamp) | test(fetches_and_normalizes_articles) | test(empty_feed_returns_empty_news_data)'`
 
 Expected: FAIL because the shared helper and Yahoo provider do not exist yet.
 
-- [ ] **Step 4: Extract a shared Finnhub article normalizer in `crates/scorpio-core/src/data/finnhub.rs`**
+- [x] **Step 4: Extract a shared Finnhub article normalizer in `crates/scorpio-core/src/data/finnhub.rs`**
 
 Create one small helper that both `build_news_data()` and `get_market_news()` use. It must:
 
@@ -473,7 +473,7 @@ Create one small helper that both `build_news_data()` and `get_market_news()` us
 - convert unix-second timestamps into RFC3339 strings
 - keep the existing title/snippet sanitization rules
 
-- [ ] **Step 5: Extend `StubbedFinancialResponses` and implement `YFinanceNewsProvider`**
+- [x] **Step 5: Extend `StubbedFinancialResponses` and implement `YFinanceNewsProvider`**
 
 Add these exact test-only stub fields in `crates/scorpio-core/src/data/yfinance/ohlcv.rs`:
 
@@ -490,17 +490,17 @@ Then add `crates/scorpio-core/src/data/yfinance/news.rs` with:
 
 Also update the explicit `StubbedFinancialResponses { ... }` literals in `crates/scorpio-core/src/workflow/tasks/tests.rs` to use the new fields or `..StubbedFinancialResponses::default()` so the test build stays green after the struct expands.
 
-- [ ] **Step 6: Export the Yahoo news provider surface**
+- [x] **Step 6: Export the Yahoo news provider surface**
 
 Keep the `pub mod news;` declaration from Step 2, then add any needed `pub use` exports in `crates/scorpio-core/src/data/yfinance/mod.rs` and `crates/scorpio-core/src/data/mod.rs` so runtime code, examples, and tests can import the provider without reaching into private modules.
 
-- [ ] **Step 7: Re-run the focused news-normalization slice**
+- [x] **Step 7: Re-run the focused news-normalization slice**
 
 Run the command from Step 3.
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the normalized news-provider foundation**
+- [x] **Step 8: Commit the normalized news-provider foundation**
 
 Run: `git add crates/scorpio-core/src/data/finnhub.rs crates/scorpio-core/src/data/yfinance/ohlcv.rs crates/scorpio-core/src/data/yfinance/news.rs crates/scorpio-core/src/data/yfinance/mod.rs crates/scorpio-core/src/data/mod.rs crates/scorpio-core/src/workflow/tasks/tests.rs && git commit -m "feat(core): add yahoo analyst news provider"`
 
@@ -510,7 +510,7 @@ Run: `git add crates/scorpio-core/src/data/finnhub.rs crates/scorpio-core/src/da
 - Modify: `crates/scorpio-core/src/agents/analyst/mod.rs`
 - Modify: `crates/scorpio-core/src/workflow/pipeline/runtime.rs`
 
-- [ ] **Step 1: Add the merge/dedupe regressions in `crates/scorpio-core/src/agents/analyst/mod.rs`**
+- [x] **Step 1: Add the merge/dedupe regressions in `crates/scorpio-core/src/agents/analyst/mod.rs`**
 
 Add these exact tests, including the explicit edge cases that the original "URL-then-title" rule both over- and under-merges:
 
@@ -549,13 +549,13 @@ async fn merge_sorts_articles_newest_first() { ... }
 
 The two new tests above codify intentional behavior decisions. Implement: (1) URL canonicalization (strip known shorteners like `yhoo.it`, follow `?utm_*=` query params, normalize trailing slashes) before comparison; (2) title-hash dedupe uses an exact match after Unicode-NFKC normalization, not a fuzzy/Levenshtein match — so "Apple Posts Strong Q4" and "Apple Reports Strong Q4" stay distinct.
 
-- [ ] **Step 2: Run the focused merge slice and confirm the red state**
+- [x] **Step 2: Run the focused merge slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(merge_dedupes_by_url) | test(merge_dedupes_by_headline_when_url_missing) | test(merge_dedupes_same_article_when_canonical_url_differs_via_redirect_resolution) | test(merge_preserves_multi_outlet_coverage_for_wire_republication) | test(merge_falls_back_to_single_provider_on_partial_failure) | test(prefetch_analyst_news_returns_none_when_both_prefetch_providers_fail) | test(merge_sorts_articles_newest_first)'`
 
 Expected: FAIL because the merge helper still only prefetches Finnhub.
 
-- [ ] **Step 3: Implement the cached-news merge helpers in `crates/scorpio-core/src/agents/analyst/mod.rs`**
+- [x] **Step 3: Implement the cached-news merge helpers in `crates/scorpio-core/src/agents/analyst/mod.rs`**
 
 Keep the public helper string-based and minimal:
 
@@ -577,17 +577,17 @@ Inside the helper:
 - return `None` only when both providers failed
 - preserve Finnhub `macro_events` when one side has them
 
-- [ ] **Step 4: Update the live and legacy callers to use both news providers**
+- [x] **Step 4: Update the live and legacy callers to use both news providers**
 
 In `crates/scorpio-core/src/workflow/pipeline/runtime.rs` and the legacy `run_analyst_team()` path inside `crates/scorpio-core/src/agents/analyst/mod.rs`, construct `YFinanceNewsProvider::new(yfinance.clone())` locally and pass both providers into `prefetch_analyst_news()`. Do not change `EventNewsEvidence` or the cached-news context key shape.
 
-- [ ] **Step 5: Re-run the focused merge slice**
+- [x] **Step 5: Re-run the focused merge slice**
 
 Run the command from Step 2.
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the merged cached-news path**
+- [x] **Step 6: Commit the merged cached-news path**
 
 Run: `git add crates/scorpio-core/src/agents/analyst/mod.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs && git commit -m "feat(core): merge finnhub and yahoo cached news"`
 
@@ -605,7 +605,7 @@ Run: `git add crates/scorpio-core/src/agents/analyst/mod.rs crates/scorpio-core/
 - Modify: `crates/scorpio-core/src/data/mod.rs`
 - Modify: `crates/scorpio-core/src/workflow/tasks/tests.rs`
 
-- [ ] **Step 1: Add the Yahoo options-provider regressions in `crates/scorpio-core/src/data/yfinance/options.rs` and wire the module into `crates/scorpio-core/src/data/yfinance/mod.rs`**
+- [x] **Step 1: Add the Yahoo options-provider regressions in `crates/scorpio-core/src/data/yfinance/options.rs` and wire the module into `crates/scorpio-core/src/data/yfinance/mod.rs`**
 
 Add these exact tests (names align with the `OptionsOutcome` taxonomy):
 
@@ -649,13 +649,13 @@ async fn target_date_uses_market_local_us_eastern_not_utc() { ... }
 
 In the same step, add `pub mod options;` to `crates/scorpio-core/src/data/yfinance/mod.rs` so the new module is compiled before the first red-state run.
 
-- [ ] **Step 2: Run the focused options slice and confirm the red state**
+- [x] **Step 2: Run the focused options slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(returns_snapshot_with_atm_iv_from_front_month_chain) | test(snapshot_includes_put_call_ratios_over_all_strikes) | test(snapshot_max_pain_uses_front_month_only) | test(snapshot_near_term_slice_uses_band_then_min_strikes_fallback) | test(returns_no_listed_instrument_when_expirations_empty) | test(returns_sparse_chain_when_band_and_fallback_yield_nothing) | test(returns_historical_run_when_target_date_is_not_market_local_today) | test(returns_missing_spot_when_get_latest_close_is_none) | test(returns_err_when_expiration_lookup_fails) | test(returns_err_when_option_chain_fetch_fails) | test(ignores_missing_greeks_and_skips_true_skew_metric) | test(target_date_uses_market_local_us_eastern_not_utc)'`
 
 Expected: FAIL because the contract and provider do not exist yet.
 
-- [ ] **Step 3: Create `crates/scorpio-core/src/data/traits/options.rs` with a structured outcome enum and no skew field**
+- [x] **Step 3: Create `crates/scorpio-core/src/data/traits/options.rs` with a structured outcome enum and no skew field**
 
 Define `OptionsProvider`, `OptionsOutcome`, `OptionsSnapshot`, `IvTermPoint`, and `NearTermStrike`. The provider returns the outcome enum so consumers can distinguish absence-of-data from absence-of-instrument:
 
@@ -697,7 +697,7 @@ Keep the summary grounded in the upstream data that actually exists:
 
 Do not add `skew_25d` or any other pseudo-delta metric in this slice. The Task 8 prompt edit must instruct the model to refuse directional vol calls when only `atm_iv` and term structure are available.
 
-- [ ] **Step 4: Extend `StubbedFinancialResponses` with options fixtures in `crates/scorpio-core/src/data/yfinance/ohlcv.rs`**
+- [x] **Step 4: Extend `StubbedFinancialResponses` with options fixtures in `crates/scorpio-core/src/data/yfinance/ohlcv.rs`**
 
 Add these exact test-only fields:
 
@@ -712,11 +712,11 @@ Also update the explicit `StubbedFinancialResponses { ... }` literals in `crates
 
 Also update the explicit `StubbedFinancialResponses { ... }` literal in `crates/scorpio-core/src/data/adapters/estimates.rs` the same way so the focused consensus tests still compile after the struct expands.
 
-- [ ] **Step 4b: Promote `require_equity_ticker` to `pub(crate)` in `crates/scorpio-core/src/data/provider_impls.rs`**
+- [x] **Step 4b: Promote `require_equity_ticker` to `pub(crate)` in `crates/scorpio-core/src/data/provider_impls.rs`**
 
 Change the function signature from `fn require_equity_ticker(...)` to `pub(crate) fn require_equity_ticker(...)` so `data/yfinance/options.rs` can call it without duplicating the logic. Add a one-line module comment noting the visibility was widened for cross-module reuse.
 
-- [ ] **Step 5: Implement `crates/scorpio-core/src/data/yfinance/options.rs`**
+- [x] **Step 5: Implement `crates/scorpio-core/src/data/yfinance/options.rs`**
 
 Add:
 
@@ -740,17 +740,17 @@ Add an additional test in Task 6 Step 1: `near_term_slice_returns_sparse_chain_w
 - return outcomes per the structured taxonomy: `Ok(OptionsOutcome::HistoricalRun)` if `target_date != market_local_today_eastern`, `Ok(NoListedInstrument)` if expirations are empty, `Ok(SparseChain)` if expirations exist but no usable contracts after the (expanded) band, `Ok(MissingSpot)` if `get_latest_close(...)` returns `None`, `Ok(Snapshot(_))` otherwise. Only expiration-lookup or chain-fetch errors propagate as `Err(TradingError::...)`.
 - compute front-month `atm_iv`, term structure, put/call ratios, max pain, and the near-term strike slice for the `Snapshot` arm
 
-- [ ] **Step 6: Export the options surface**
+- [x] **Step 6: Export the options surface**
 
 Keep the `pub mod options;` declaration from Step 1, then re-export the new trait from `crates/scorpio-core/src/data/traits/mod.rs` and add any needed `pub use` exports in `crates/scorpio-core/src/data/yfinance/mod.rs` and `crates/scorpio-core/src/data/mod.rs`.
 
-- [ ] **Step 7: Re-run the focused options slice**
+- [x] **Step 7: Re-run the focused options slice**
 
 Run the command from Step 2.
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the options contract and provider**
+- [x] **Step 8: Commit the options contract and provider**
 
 Run: `git add crates/scorpio-core/src/data/traits/options.rs crates/scorpio-core/src/data/traits/mod.rs crates/scorpio-core/src/data/adapters/estimates.rs crates/scorpio-core/src/data/yfinance/ohlcv.rs crates/scorpio-core/src/data/yfinance/options.rs crates/scorpio-core/src/data/yfinance/mod.rs crates/scorpio-core/src/data/mod.rs crates/scorpio-core/src/workflow/tasks/tests.rs && git commit -m "feat(core): add yahoo options snapshot provider"`
 
@@ -766,7 +766,7 @@ Run: `git add crates/scorpio-core/src/data/traits/options.rs crates/scorpio-core
 
 > **Runtime note:** This task only wires the code path and persisted output for `GetOptionsSnapshot`. The Technical Analyst does not learn to call the tool until Chunk 4 Task 8 updates `crates/scorpio-core/src/analysis_packs/equity/prompts/technical_analyst.md` and refreshes the prompt fixtures.
 
-- [ ] **Step 1: Add the Technical Analyst parser and prompt regressions in `crates/scorpio-core/src/agents/analyst/equity/technical.rs`**
+- [x] **Step 1: Add the Technical Analyst parser and prompt regressions in `crates/scorpio-core/src/agents/analyst/equity/technical.rs`**
 
 Add these exact tests:
 
@@ -786,21 +786,21 @@ fn technical_analyst_new_propagates_symbol_from_state_without_reparsing() { ... 
 
 Keep the earlier `technical_data_missing_options_summary_defaults_to_none` test from Task 1.
 
-- [ ] **Step 2: Add the stale-state regression in `crates/scorpio-core/src/workflow/pipeline/tests.rs`**
+- [x] **Step 2: Add the stale-state regression in `crates/scorpio-core/src/workflow/pipeline/tests.rs`**
 
 Add an async test named `run_analysis_cycle_clears_stale_options_summary_from_reused_state`. Seed a reused `TradingState` with a stale `options_summary`, run the stubbed pipeline, and assert the final state clears or overwrites it. If the test passes today against the existing `reset_cycle_outputs()` / `clear_equity()` path, also add a sibling test `clear_equity_resets_options_summary_unit` that explicitly proves the lifecycle invariant at the unit level so the next refactor can't silently break it. (This is the load-bearing invariant the original plan deferred; codify it instead of relying on integration coverage.)
 
-- [ ] **Step 3: Add the technical-evidence dataset regression in `crates/scorpio-core/src/workflow/tasks/tests.rs`**
+- [x] **Step 3: Add the technical-evidence dataset regression in `crates/scorpio-core/src/workflow/tasks/tests.rs`**
 
 Add a test named `technical_evidence_includes_options_snapshot_dataset_when_options_summary_present` that proves `EvidenceSource.datasets` becomes `vec!["ohlcv", "options_snapshot"]` when the technical payload contains an options summary and remains `vec!["ohlcv"]` otherwise.
 
-- [ ] **Step 4: Run the focused Technical Analyst slice and confirm the red state**
+- [x] **Step 4: Run the focused Technical Analyst slice and confirm the red state**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(parses_technical_with_options_summary) | test(technical_tool_renders_options_outcome_variant_with_reason) | test(technical_analyst_new_stays_infallible_for_canonical_equity_symbol) | test(technical_analyst_new_propagates_symbol_from_state_without_reparsing) | test(run_analysis_cycle_clears_stale_options_summary_from_reused_state) | test(clear_equity_resets_options_summary_unit) | test(technical_evidence_includes_options_snapshot_dataset_when_options_summary_present)'`
 
 Expected: FAIL because the tool is not wired and the dataset logic does not know about `options_summary` yet.
 
-- [ ] **Step 5: Bind `GetOptionsSnapshot` inside `crates/scorpio-core/src/agents/analyst/equity/technical.rs`**
+- [x] **Step 5: Bind `GetOptionsSnapshot` inside `crates/scorpio-core/src/agents/analyst/equity/technical.rs`**
 
 Keep the live graph plumbing minimal. **Make `TechnicalAnalyst::new` fallible** (`-> Result<Self, TradingError>`) so a missing/unparseable Symbol is a loud, propagated error instead of a release-mode silent no-op:
 
@@ -821,17 +821,17 @@ Make the tool/provider contract align with the structured outcome enum from Task
 
 The `reason` strings are static (not LLM-templated) and live next to the enum definition so they evolve with the variant. Leave prompt-level discoverability to Chunk 4 Task 8.
 
-- [ ] **Step 6: Update the technical evidence datasets in `crates/scorpio-core/src/workflow/tasks/analyst.rs`**
+- [x] **Step 6: Update the technical evidence datasets in `crates/scorpio-core/src/workflow/tasks/analyst.rs`**
 
 Append `"options_snapshot"` to the technical `EvidenceSource.datasets` only when `data.options_summary.is_some()`. Leave the news evidence source list and `EventNewsEvidence` path unchanged.
 
-- [ ] **Step 7: Re-run the focused Technical Analyst slice**
+- [x] **Step 7: Re-run the focused Technical Analyst slice**
 
 Run the command from Step 4.
 
 Expected: PASS.
 
-- [ ] **Step 8: Hold the Technical Analyst options wiring commit until Task 8 lands**
+- [x] **Step 8: Hold the Technical Analyst options wiring commit until Task 8 lands**
 
 Stage the changes but do NOT commit yet. The wired-but-unprompted state would silently ship a tool the model can't discover. Continue directly into Task 8 to edit the prompt + refresh fixtures, then commit Tasks 7 and 8 together via the Task 8 Step 6 commit. This intentionally collapses what was previously two commits into one to close the prompt/code drift window.
 
@@ -852,7 +852,7 @@ git add crates/scorpio-core/src/agents/analyst/equity/technical.rs \
 - Modify: `crates/scorpio-core/src/analysis_packs/equity/prompts/technical_analyst.md`
 - Modify: `crates/scorpio-core/tests/fixtures/prompt_bundle/technical_analyst.txt`
 
-- [ ] **Step 1: Edit the Technical Analyst markdown prompt for the options tool**
+- [x] **Step 1: Edit the Technical Analyst markdown prompt for the options tool**
 
 Edit `crates/scorpio-core/src/analysis_packs/equity/prompts/technical_analyst.md` so it:
 
@@ -861,27 +861,27 @@ Edit `crates/scorpio-core/src/analysis_packs/equity/prompts/technical_analyst.md
 - tells the model to omit options analysis when the options snapshot is `null` / unavailable, including historical runs where live options data is intentionally skipped
 - keeps the rest of the prompt unchanged
 
-- [ ] **Step 2: Run the prompt-bundle regression gate without fixture updates**
+- [x] **Step 2: Run the prompt-bundle regression gate without fixture updates**
 
 Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 
 Expected: FAIL because `crates/scorpio-core/src/analysis_packs/equity/prompts/technical_analyst.md` changed intentionally.
 
-- [ ] **Step 3: Regenerate the prompt fixtures with the exact blessed command**
+- [x] **Step 3: Regenerate the prompt fixtures with the exact blessed command**
 
 Run: `UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 
-- [ ] **Step 4: Enforce a precise fixture-diff scope assertion**
+- [x] **Step 4: Enforce a precise fixture-diff scope assertion**
 
 Run `git status --short crates/scorpio-core/tests/fixtures/prompt_bundle/`. Expected: exactly one modified path, `technical_analyst.txt`. If any other fixture file changed (e.g. `fundamental_analyst.txt`, `news_analyst.txt`, `sentiment_analyst.txt`, `user/*.txt`), the cascade is unintentional — Task 3's `agents/shared/prompt.rs` edits are leaking into roles they shouldn't, or rendering order changed. Stop, investigate the leak, and either fix the upstream rendering change or scope-limit the fixture regeneration. Do not commit any unintended fixture drift; the `UPDATE_FIXTURES=1` flag silently rewrites all fixtures, which is exactly the failure mode this step exists to catch.
 
-- [ ] **Step 5: Re-run the gate without `UPDATE_FIXTURES`**
+- [x] **Step 5: Re-run the gate without `UPDATE_FIXTURES`**
 
 Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 7 wiring + Task 8 prompt + fixture refresh together**
+- [x] **Step 6: Commit Task 7 wiring + Task 8 prompt + fixture refresh together**
 
 Task 7 Step 8 staged the wiring; this step adds the prompt + fixture and creates a single commit closing the prompt/code drift window. The `git add` must explicitly include the Task 7 staged files so they land in the same commit:
 
@@ -902,7 +902,7 @@ git commit -m "feat(core): add technical analyst options snapshot tool with prom
 
 > **Dependency note:** Complete Chunk 1 Task 1 first. Section 7 assumes `crates/scorpio-core/src/state/news.rs::NewsArticle.url` already exists and is populated by the Finnhub/Yahoo normalization work.
 
-- [ ] **Step 1: Add sections 7-10 to `crates/scorpio-core/examples/yfinance_live_test.rs`**
+- [x] **Step 1: Add sections 7-10 to `crates/scorpio-core/examples/yfinance_live_test.rs`**
 
 Add these exact manual smoke sections:
 
@@ -911,23 +911,23 @@ Add these exact manual smoke sections:
 - Section 9: `YFinanceOptionsProvider::fetch_snapshot(AAPL, today)` asserts `spot_price > 0`, plausible `atm_iv`, non-empty term structure, and non-empty near-term strikes.
 - Section 10: SPY degradation coverage where Yahoo news may be empty with a `WARN`, options are expected to succeed (`OptionsOutcome::Snapshot`), and consensus may legitimately return `Ok(ConsensusOutcome::NoCoverage)` (or `Ok(ConsensusOutcome::Data)` with most fields `None`) without panicking. Do NOT expect the legacy `Ok(None)` shape — that arm no longer exists after Task 2 Step 6.
 
-- [ ] **Step 2: Run the live smoke example from the dedicated worktree**
+- [x] **Step 2: Run the live smoke example from the dedicated worktree**
 
 Run: `cargo run -p scorpio-core --example yfinance_live_test`
 
 Expected: the pass/fail tracker finishes with zero FAIL lines for the accepted AAPL and SPY scenarios above.
 
-- [ ] **Step 3: Adjust only the example assertions if live upstream behavior differs in an accepted way**
+- [x] **Step 3: Adjust only the example assertions if live upstream behavior differs in an accepted way**
 
 Keep the provider code unchanged unless the example exposed a real implementation bug. Use `WARN`, not `FAIL`, for accepted sparse-yet-valid upstream behavior.
 
-- [ ] **Step 4: Re-run the live smoke example**
+- [x] **Step 4: Re-run the live smoke example**
 
 Run the command from Step 2 again.
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the live smoke coverage**
+- [x] **Step 5: Commit the live smoke coverage**
 
 Run: `git add crates/scorpio-core/examples/yfinance_live_test.rs && git commit -m "test(core): expand yahoo live smoke coverage"`
 
@@ -936,33 +936,33 @@ Run: `git add crates/scorpio-core/examples/yfinance_live_test.rs && git commit -
 **Files:**
 - No new file edits are expected in this task unless verification exposes a real bug.
 
-- [ ] **Step 1: Re-run a focused confidence slice across the new surfaces**
+- [x] **Step 1: Re-run a focused confidence slice across the new surfaces**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(build_enrichment_context_includes_price_target_and_recommendations) | test(merge_dedupes_by_url) | test(returns_snapshot_with_atm_iv_from_front_month_chain) | test(target_date_uses_market_local_us_eastern_not_utc) | test(returns_no_listed_instrument_when_expirations_empty) | test(returns_sparse_chain_when_band_and_fallback_yield_nothing) | test(run_analysis_cycle_hydrates_extended_consensus_enrichment) | test(run_analysis_cycle_clears_stale_options_summary_from_reused_state) | test(clear_equity_resets_options_summary_unit) | test(additive_fields_deserialize_when_struct_lacks_field) | test(fetch_consensus_returns_provider_degraded_when_price_target_errors_and_others_empty)'`
 
-- [ ] **Step 2: Run formatting exactly as CI does**
+- [x] **Step 2: Run formatting exactly as CI does**
 
 Run: `cargo fmt -- --check`
 
-- [ ] **Step 3: Run clippy exactly as CI does**
+- [x] **Step 3: Run clippy exactly as CI does**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`
 
-- [ ] **Step 4: Run nextest exactly as CI does**
+- [x] **Step 4: Run nextest exactly as CI does**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast --test-threads=2`
 
-- [ ] **Step 5: Inspect the final worktree state**
+- [x] **Step 5: Inspect the final worktree state**
 
 Run: `git status --short`
 
 Expected: only the intended plan-task changes remain.
 
-- [ ] **Step 6: Make one final cleanup commit only if verification required post-task fixes**
+- [x] **Step 6: Make one final cleanup commit only if verification required post-task fixes**
 
 If Steps 2-4 forced last-minute code edits, stage only those fixes and create one small follow-up commit. Otherwise leave the branch as the task-by-task commit stack created above.
 
-- [ ] **Step 7: Hand off implementation via subagents, not a single long-running shell session**
+- [x] **Step 7: Hand off implementation via subagents, not a single long-running shell session**
 
 Use `superpowers:subagent-driven-development` from the dedicated `feature/enrich-news-sources` worktree. Execute one task per fresh subagent, keep the focused test commands and commit boundaries above, and do not stop before Steps 2-4 are green.
 
@@ -976,21 +976,21 @@ Use `superpowers:subagent-driven-development` from the dedicated `feature/enrich
 
 > **Rationale.** The earlier draft of this task added a rubric-driven LLM eval with a stub keyed by prompt hash. Three review passes converged that the stub-LLM gate tests the stub, not the analyst, and that a per-fixture non-regression gate ratchets prompt evolution without measuring real signal quality. Scoping back to fixture-driven outcome smoke: deterministic, fast, no LLM, no rubric. Real-LLM quality eval is a separate decision tracked outside this plan.
 
-- [ ] **Step 1: Update the design spec to retract the stale schema-bump rule**
+- [x] **Step 1: Update the design spec to retract the stale schema-bump rule**
 
 Edit `docs/superpowers/specs/2026-04-24-yfinance-news-options-consensus-design.md` so its `THESIS_MEMORY_SCHEMA_VERSION 3 -> 4` references at lines 96, 384, and 432 either (a) are removed or (b) explicitly cross-reference CLAUDE.md's "additive fields stay on v3 with `#[serde(default)]`" rule. This converts the precedent from "plan silently overrides design spec in prose" to "design spec + CLAUDE.md + plan agree on the same rule."
 
 > **Doc-ownership note.** The design spec lives under `docs/superpowers/specs/` and may have a different author from this implementation plan. If the spec author / owner is not this plan's author, raise the retraction as a separate micro-PR for their sign-off before merging this branch — do NOT roll it silently into the Task 11 commit. Only commit the spec edit here if the implementer is also the spec author or has explicit approval.
 
-- [ ] **Step 2: Document the deferred Sentiment/Risk options-routing decision**
+- [x] **Step 2: Document the deferred Sentiment/Risk options-routing decision**
 
 Add a one-paragraph "Deferred decisions" section to `docs/superpowers/specs/2026-04-24-yfinance-news-options-consensus-design.md` stating: options data is Technical-Analyst-scoped for v1; cross-analyst access via `data/routing.rs::derivatives` (and reconciliation between the new `OptionsProvider` and the existing `DerivativesProvider` placeholder) is a deferred decision pending a concrete request from a Sentiment or Risk agent author. Note that the trigger is a written request, not an unowned demand signal.
 
-- [ ] **Step 3: Update CLAUDE.md with the snapshotted-state-only `deny_unknown_fields` rule**
+- [x] **Step 3: Update CLAUDE.md with the snapshotted-state-only `deny_unknown_fields` rule**
 
 Edit CLAUDE.md's "TradingState schema evolution" bullet list to add the rule from Task 1 Step 6. Keep the wording scoped: snapshotted state structs reachable from `TradingState` must not use `#[serde(deny_unknown_fields)]`; RPC, tool-argument, and config types are unaffected.
 
-- [ ] **Step 4: Build the outcome-smoke fixture set**
+- [x] **Step 4: Build the outcome-smoke fixture set**
 
 Create `crates/scorpio-core/tests/fixtures/options_outcomes/` with frozen `StubbedFinancialResponses` JSON per scenario:
 
@@ -1002,7 +1002,7 @@ Create `crates/scorpio-core/tests/fixtures/options_outcomes/` with frozen `Stubb
 
 These fixtures double-purpose as input data for Task 6 Step 1's outcome tests. Reuse, don't duplicate.
 
-- [ ] **Step 5: Add a deterministic outcome-smoke test in `crates/scorpio-core/tests/options_outcome_smoke.rs`**
+- [x] **Step 5: Add a deterministic outcome-smoke test in `crates/scorpio-core/tests/options_outcome_smoke.rs`**
 
 For each fixture, the test:
 
@@ -1013,13 +1013,13 @@ For each fixture, the test:
 
 This is integration-test-level coverage that the live pipeline path serializes outcomes correctly. It does NOT measure analysis quality.
 
-- [ ] **Step 6: Run the smoke**
+- [x] **Step 6: Run the smoke**
 
 Run: `cargo nextest run -p scorpio-core --test options_outcome_smoke --features test-helpers`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the smoke + CLAUDE.md edit (and the design-spec retraction only if Step 1's doc-ownership condition was met)**
+- [x] **Step 7: Commit the smoke + CLAUDE.md edit (and the design-spec retraction only if Step 1's doc-ownership condition was met)**
 
 If the design-spec retraction was raised as a separate PR per Step 1's note, omit the spec from this commit:
 
