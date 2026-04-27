@@ -15,6 +15,44 @@ use crate::{
     },
 };
 
+// ─── Helpers shared by hydration tests ───────────────────────────────────────
+
+#[cfg(test)]
+fn make_trend_row_for_test(
+    eps_avg: Option<f64>,
+    revenue_avg: Option<f64>,
+    num_analysts: Option<u32>,
+) -> yfinance_rs::analysis::EarningsTrendRow {
+    use paft_money::{Currency, IsoCurrency, Money};
+    let to_money = |v: f64| {
+        let d = rust_decimal::Decimal::try_from(v).unwrap();
+        Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
+    };
+    let json = serde_json::json!({
+        "period": "0Q",
+        "growth": null,
+        "earnings_estimate": {
+            "avg": eps_avg.map(&to_money),
+            "low": null,
+            "high": null,
+            "year_ago_eps": null,
+            "num_analysts": num_analysts,
+            "growth": null
+        },
+        "revenue_estimate": {
+            "avg": revenue_avg.map(&to_money),
+            "low": null,
+            "high": null,
+            "year_ago_revenue": null,
+            "num_analysts": null,
+            "growth": null
+        },
+        "eps_trend": { "current": null, "historical": [] },
+        "eps_revisions": { "historical": [] }
+    });
+    serde_json::from_value(json).expect("valid test EarningsTrendRow")
+}
+
 const ANALYST_PREFIX: &str = "analyst";
 const ANALYST_FUNDAMENTAL: &str = "fundamental";
 const ANALYST_SENTIMENT: &str = "sentiment";
@@ -560,4 +598,153 @@ async fn try_new_succeeds_for_baseline_pack_id() {
         pipeline.runtime_policy.as_ref().map(|p| p.pack_id),
         Some(crate::analysis_packs::PackId::Baseline)
     );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
+    use paft_money::{Currency, IsoCurrency, Money};
+    use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
+
+    use crate::analysis_packs::{PackId, resolve_pack};
+    use crate::data::StubbedFinancialResponses;
+    use crate::workflow::builder::PipelineDeps;
+
+    // Build a pack with consensus_estimates enabled.
+    let mut pack = resolve_pack(PackId::Baseline);
+    pack.enrichment_intent.consensus_estimates = true;
+
+    let to_money = |v: f64| {
+        let d = rust_decimal::Decimal::try_from(v).unwrap();
+        Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
+    };
+
+    let trend_rows = vec![make_trend_row_for_test(
+        Some(2.15),
+        Some(94_200_000_000.0),
+        Some(28),
+    )];
+
+    let price_target = PriceTarget {
+        mean: Some(to_money(215.0)),
+        high: Some(to_money(265.0)),
+        low: Some(to_money(170.0)),
+        number_of_analysts: Some(42),
+    };
+
+    let recommendation_summary = RecommendationSummary {
+        strong_buy: Some(12),
+        buy: Some(18),
+        hold: Some(10),
+        sell: Some(2),
+        strong_sell: Some(0),
+        ..RecommendationSummary::default()
+    };
+
+    let yfinance = crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+        trend: Some(trend_rows),
+        price_target: Some(price_target),
+        recommendation_summary: Some(recommendation_summary),
+        ..StubbedFinancialResponses::default()
+    });
+
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) =
+        test_snapshot_store("pipeline-hydrate-extended-consensus.db").await;
+
+    let pipeline = crate::workflow::TradingPipeline::from_pack(
+        &pack,
+        PipelineDeps {
+            config,
+            finnhub: crate::data::FinnhubClient::for_test(),
+            fred: crate::data::FredClient::for_test(),
+            yfinance,
+            snapshot_store,
+            quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+            deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+        },
+    );
+
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    // Use today's date so hydrate_consensus passes the live-date gate.
+    let target_date = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let initial_state = TradingState::new("AAPL", &target_date);
+
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must succeed with stubbed consensus enrichment");
+
+    let consensus = final_state
+        .enrichment_consensus
+        .payload
+        .as_ref()
+        .expect("enrichment_consensus.payload must be populated by hydration");
+
+    // Base fields from the trend row.
+    let eps = consensus
+        .eps_estimate
+        .expect("eps_estimate must be present");
+    assert!(
+        (eps - 2.15).abs() < 0.01,
+        "expected eps ~2.15, got {eps}"
+    );
+    assert_eq!(consensus.analyst_count, Some(28));
+
+    // Price-target extended fields.
+    let pt = consensus
+        .price_target
+        .as_ref()
+        .expect("price_target must be populated from stub");
+    assert!(
+        matches!(pt.mean, Some(m) if (m - 215.0).abs() < 0.01),
+        "price target mean must be ~215.0, got {:?}",
+        pt.mean
+    );
+    assert!(
+        matches!(pt.high, Some(h) if (h - 265.0).abs() < 0.01),
+        "price target high must be ~265.0, got {:?}",
+        pt.high
+    );
+    assert!(
+        matches!(pt.low, Some(l) if (l - 170.0).abs() < 0.01),
+        "price target low must be ~170.0, got {:?}",
+        pt.low
+    );
+    assert_eq!(pt.analyst_count, Some(42));
+
+    // Recommendation extended fields.
+    let rec = consensus
+        .recommendations
+        .as_ref()
+        .expect("recommendations must be populated from stub");
+    assert_eq!(rec.strong_buy, Some(12));
+    assert_eq!(rec.buy, Some(18));
+    assert_eq!(rec.hold, Some(10));
+    assert_eq!(rec.sell, Some(2));
+    assert_eq!(rec.strong_sell, Some(0));
 }
