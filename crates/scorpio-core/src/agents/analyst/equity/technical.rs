@@ -14,7 +14,10 @@ use crate::{
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::TECHNICAL_ANALYST_MAX_TURNS,
-    data::{GetOhlcv, OhlcvToolContext, YFinanceClient},
+    data::{
+        GetOhlcv, GetOptionsSnapshot, OhlcvToolContext, YFinanceClient, YFinanceOptionsProvider,
+    },
+    domain::Symbol,
     error::{RetryPolicy, TradingError},
     indicators::{
         CalculateAllIndicators, CalculateAtr, CalculateBollingerBands, CalculateIndicatorByName,
@@ -65,6 +68,9 @@ pub struct TechnicalAnalyst {
     system_prompt: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
+    // Stored for test assertions; not read by production code.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) typed_symbol: Symbol,
 }
 
 impl TechnicalAnalyst {
@@ -74,19 +80,29 @@ impl TechnicalAnalyst {
     /// - `handle` – pre-constructed LLM completion model handle (`QuickThinking` tier).
     /// - `yfinance` – Yahoo Finance client for OHLCV fetching.
     /// - `state` – current trading state, including any active runtime policy.
+    /// - `policy` – resolved runtime policy for the active analysis pack.
     /// - `llm_config` – LLM configuration, used for timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TradingError::SchemaViolation`] if `state.symbol` is `None`,
+    /// which indicates the symbol was not canonicalized by [`TradingState::new`].
     pub fn new(
         handle: CompletionModelHandle,
         yfinance: YFinanceClient,
         state: &TradingState,
         policy: &RuntimePolicy,
         llm_config: &LlmConfig,
-    ) -> Self {
+    ) -> Result<Self, TradingError> {
+        let typed_symbol = state.symbol.clone().ok_or_else(|| TradingError::SchemaViolation {
+            message: "TechnicalAnalyst::new called with state.symbol = None; expected canonicalized symbol from TradingState::new".to_owned(),
+        })?;
+
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
         let system_prompt =
             build_technical_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
-        Self {
+        Ok(Self {
             handle,
             yfinance,
             symbol: runtime.symbol,
@@ -94,7 +110,8 @@ impl TechnicalAnalyst {
             system_prompt,
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
-        }
+            typed_symbol,
+        })
     }
 
     /// Run the analyst: bind OHLCV + indicator tools to the LLM, prompt it, parse output.
@@ -109,6 +126,7 @@ impl TechnicalAnalyst {
         let start_date = derive_start_date(&self.target_date, OHLCV_LOOKBACK_DAYS)?;
         let ohlcv_context = OhlcvToolContext::new();
 
+        let options_provider = YFinanceOptionsProvider::new(self.yfinance.clone());
         let tools: Vec<Box<dyn ToolDyn>> = vec![
             Box::new(GetOhlcv::scoped(
                 self.yfinance.clone(),
@@ -123,6 +141,11 @@ impl TechnicalAnalyst {
             Box::new(CalculateAtr::new(ohlcv_context.clone())),
             Box::new(CalculateBollingerBands::new(ohlcv_context.clone())),
             Box::new(CalculateIndicatorByName::new(ohlcv_context)),
+            Box::new(GetOptionsSnapshot::scoped(
+                options_provider,
+                self.symbol.clone(),
+                self.target_date.clone(),
+            )),
         ];
 
         let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
@@ -690,6 +713,153 @@ mod tests {
                 "rendered prompt must contain runtime-contract phrase {phrase:?}"
             );
         }
+    }
+
+    // ── Task 7: GetOptionsSnapshot wiring ─────────────────────────────────
+
+    #[test]
+    fn parses_technical_with_options_summary() {
+        let json = r#"{
+            "rsi": 52.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "Moderate bullish trend.",
+            "options_summary": "{\"kind\":\"snapshot\",\"spot_price\":150.0,\"atm_iv\":0.25}"
+        }"#;
+        let data = parse_technical(json).expect("should parse with options_summary");
+        assert!(
+            data.options_summary.is_some(),
+            "options_summary should be Some when present in JSON"
+        );
+        assert!(
+            data.options_summary
+                .as_deref()
+                .unwrap()
+                .contains("snapshot"),
+            "options_summary should contain the snapshot kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn technical_tool_renders_options_outcome_variant_with_reason() {
+        use crate::data::yfinance::options::OptionsSnapshotArgs;
+        use crate::data::{
+            GetOptionsSnapshot, StubbedFinancialResponses, YFinanceClient, YFinanceOptionsProvider,
+        };
+
+        // Stub with a past date so HistoricalRun is returned.
+        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            ohlcv: Some(vec![]),
+            option_expirations: Some(vec![1_000_000]),
+            ..StubbedFinancialResponses::default()
+        });
+        let provider = YFinanceOptionsProvider::new(client);
+        let tool = GetOptionsSnapshot::scoped(provider, "AAPL", "2020-01-01");
+
+        let result: serde_json::Value = rig::tool::Tool::call(
+            &tool,
+            OptionsSnapshotArgs {
+                symbol: "AAPL".to_owned(),
+                target_date: "2020-01-01".to_owned(),
+            },
+        )
+        .await
+        .expect("tool call should succeed");
+
+        // The "2020-01-01" date is in the past → HistoricalRun variant.
+        assert_eq!(
+            result.get("kind").and_then(|v| v.as_str()),
+            Some("historical_run"),
+            "kind should be historical_run for a past date"
+        );
+        assert!(
+            result.get("reason").is_some(),
+            "reason must be injected for non-Snapshot variants"
+        );
+        let reason = result["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("target_date") || reason.contains("US/Eastern"),
+            "reason should mention the temporal constraint, got: {reason}"
+        );
+    }
+
+    #[test]
+    fn technical_analyst_new_stays_infallible_for_canonical_equity_symbol() {
+        use crate::analysis_packs::resolve_runtime_policy;
+
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let llm_config = crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        };
+        let state = TradingState::new("AAPL", "2026-01-01");
+        // state.symbol is set by TradingState::new for valid ticker strings
+        assert!(
+            state.symbol.is_some(),
+            "TradingState::new must populate state.symbol for a canonical equity symbol"
+        );
+
+        let handle = crate::providers::factory::CompletionModelHandle::for_test();
+        let yfinance = crate::data::YFinanceClient::default();
+
+        let result = TechnicalAnalyst::new(handle, yfinance, &state, &policy, &llm_config);
+        assert!(
+            result.is_ok(),
+            "TechnicalAnalyst::new should succeed for a canonical equity symbol, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn technical_analyst_new_propagates_symbol_from_state_without_reparsing() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        use crate::domain::{Symbol, Ticker};
+
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let llm_config = crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        };
+        let state = TradingState::new("MSFT", "2026-01-01");
+        let expected_symbol = Symbol::Equity(Ticker::parse("MSFT").unwrap());
+
+        let handle = crate::providers::factory::CompletionModelHandle::for_test();
+        let yfinance = crate::data::YFinanceClient::default();
+
+        let analyst = TechnicalAnalyst::new(handle, yfinance, &state, &policy, &llm_config)
+            .expect("test fixture must canonicalize symbol");
+
+        assert_eq!(
+            analyst.typed_symbol, expected_symbol,
+            "typed_symbol must be the Symbol from state.symbol, not re-parsed"
+        );
     }
 
     #[test]

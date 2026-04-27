@@ -2387,3 +2387,241 @@ async fn news_analyst_invalid_cached_news_fails_closed() {
         other => panic!("expected TaskExecutionFailed, got: {other:?}"),
     }
 }
+
+// ─── Task 7: options_snapshot dataset in technical evidence ───────────────────
+
+#[tokio::test]
+async fn technical_evidence_includes_options_snapshot_dataset_when_options_summary_present() {
+    // Case 1: options_summary present → datasets = ["ohlcv", "options_snapshot"]
+    {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test-options-snapshot-1.db");
+        let store = Arc::new(
+            crate::workflow::SnapshotStore::new(Some(&db_path))
+                .await
+                .expect("snapshot store creation should succeed"),
+        );
+
+        let ctx = Context::new();
+        let state = sample_state();
+        seed_state(&ctx, &state).await;
+
+        for analyst_key in [
+            common::ANALYST_FUNDAMENTAL,
+            common::ANALYST_SENTIMENT,
+            common::ANALYST_NEWS,
+            common::ANALYST_TECHNICAL,
+        ] {
+            ctx.set(
+                format!(
+                    "{}.{}.{}",
+                    common::ANALYST_PREFIX,
+                    analyst_key,
+                    common::OK_SUFFIX
+                ),
+                true,
+            )
+            .await;
+        }
+
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_FUNDAMENTAL,
+            &FundamentalData {
+                revenue_growth_pct: None,
+                pe_ratio: Some(20.0),
+                eps: None,
+                current_ratio: None,
+                debt_to_equity: None,
+                gross_margin: None,
+                net_income: None,
+                insider_transactions: vec![],
+                summary: "ok".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_SENTIMENT,
+            &SentimentData {
+                overall_score: 0.5,
+                source_breakdown: vec![],
+                engagement_peaks: vec![],
+                summary: "ok".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_NEWS,
+            &NewsData {
+                articles: vec![],
+                macro_events: vec![],
+                summary: "ok".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        // Technical data with options_summary present.
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_TECHNICAL,
+            &TechnicalData {
+                rsi: None,
+                macd: None,
+                atr: None,
+                sma_20: None,
+                sma_50: None,
+                ema_12: None,
+                ema_26: None,
+                bollinger_upper: None,
+                bollinger_lower: None,
+                support_level: None,
+                resistance_level: None,
+                volume_avg: None,
+                summary: "ok".to_owned(),
+                options_summary: Some("mock options data".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let task = AnalystSyncTask::new(store);
+        task.run(ctx.clone()).await.expect("task should succeed");
+
+        let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+        let evidence = recovered
+            .evidence_technical()
+            .expect("technical evidence must be Some");
+        let datasets = &evidence.sources[0].datasets;
+        assert!(
+            datasets.contains(&"ohlcv".to_owned()),
+            "ohlcv must always be present"
+        );
+        assert!(
+            datasets.contains(&"options_snapshot".to_owned()),
+            "options_snapshot must be in datasets when options_summary is present, got: {datasets:?}"
+        );
+    }
+
+    // Case 2: options_summary absent → datasets = ["ohlcv"]
+    {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test-options-snapshot-2.db");
+        let store = Arc::new(
+            crate::workflow::SnapshotStore::new(Some(&db_path))
+                .await
+                .expect("snapshot store creation should succeed"),
+        );
+
+        let ctx = Context::new();
+        let state = sample_state();
+        seed_state(&ctx, &state).await;
+
+        for analyst_key in [
+            common::ANALYST_FUNDAMENTAL,
+            common::ANALYST_SENTIMENT,
+            common::ANALYST_NEWS,
+            common::ANALYST_TECHNICAL,
+        ] {
+            ctx.set(
+                format!(
+                    "{}.{}.{}",
+                    common::ANALYST_PREFIX,
+                    analyst_key,
+                    common::OK_SUFFIX
+                ),
+                true,
+            )
+            .await;
+        }
+
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_FUNDAMENTAL,
+            &FundamentalData {
+                revenue_growth_pct: None,
+                pe_ratio: Some(20.0),
+                eps: None,
+                current_ratio: None,
+                debt_to_equity: None,
+                gross_margin: None,
+                net_income: None,
+                insider_transactions: vec![],
+                summary: "ok".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_SENTIMENT,
+            &SentimentData {
+                overall_score: 0.5,
+                source_breakdown: vec![],
+                engagement_peaks: vec![],
+                summary: "ok".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_NEWS,
+            &NewsData {
+                articles: vec![],
+                macro_events: vec![],
+                summary: "ok".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        // Technical data without options_summary.
+        write_prefixed_result(
+            &ctx,
+            common::ANALYST_PREFIX,
+            common::ANALYST_TECHNICAL,
+            &TechnicalData {
+                rsi: None,
+                macd: None,
+                atr: None,
+                sma_20: None,
+                sma_50: None,
+                ema_12: None,
+                ema_26: None,
+                bollinger_upper: None,
+                bollinger_lower: None,
+                support_level: None,
+                resistance_level: None,
+                volume_avg: None,
+                summary: "ok".to_owned(),
+                options_summary: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let task = AnalystSyncTask::new(store);
+        task.run(ctx.clone()).await.expect("task should succeed");
+
+        let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+        let evidence = recovered
+            .evidence_technical()
+            .expect("technical evidence must be Some");
+        let datasets = &evidence.sources[0].datasets;
+        assert_eq!(
+            datasets,
+            &vec!["ohlcv".to_owned()],
+            "datasets should only contain ohlcv when options_summary is None"
+        );
+    }
+}

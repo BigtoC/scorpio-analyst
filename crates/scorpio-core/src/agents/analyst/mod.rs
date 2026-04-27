@@ -330,9 +330,15 @@ pub async fn run_analyst_team(
     };
 
     let technical_task = {
-        let analyst =
+        let analyst_result =
             TechnicalAnalyst::new(handle.clone(), yfinance.clone(), state, policy, llm_config);
-        tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
+        tokio::spawn(async move {
+            let analyst = match analyst_result {
+                Ok(a) => a,
+                Err(e) => return Ok(Err(e)),
+            };
+            tokio::time::timeout(outer_timeout, analyst.run()).await
+        })
     };
 
     // ── Await all tasks ───────────────────────────────────────────────────

@@ -7,7 +7,7 @@ use crate::{
     error::TradingError,
     state::{
         AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TradingState,
+        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TechnicalData, TradingState,
     },
     workflow::{
         SnapshotStore, context_bridge::write_prefixed_result,
@@ -742,4 +742,133 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
     assert_eq!(rec.hold, Some(10));
     assert_eq!(rec.sell, Some(2));
     assert_eq!(rec.strong_sell, Some(0));
+}
+
+// ─── Task 7: options_summary cleared on cycle reset ───────────────────────────
+
+#[test]
+fn clear_equity_resets_options_summary_unit() {
+    let mut state = TradingState::new("AAPL", "2026-01-01");
+    state.set_technical_indicators(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stale technical summary".to_owned(),
+        options_summary: Some("stale options data".to_owned()),
+    });
+
+    assert!(
+        state.technical_indicators().is_some(),
+        "precondition: technical_indicators must be Some before clear"
+    );
+    assert!(
+        state
+            .technical_indicators()
+            .unwrap()
+            .options_summary
+            .is_some(),
+        "precondition: options_summary must be Some before clear"
+    );
+
+    state.clear_equity();
+
+    assert!(
+        state.technical_indicators().is_none(),
+        "clear_equity must clear technical_indicators (and therefore options_summary)"
+    );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) =
+        test_snapshot_store("pipeline-clears-stale-options-summary.db").await;
+    let pipeline = crate::workflow::TradingPipeline::new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-test",
+            10,
+        )),
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+    pipeline
+        .replace_task_for_test(FanOutTask::new(
+            TASKS.analyst_fan_out,
+            vec![
+                PartialAnalystChild::fundamental(),
+                PartialAnalystChild::sentiment(),
+                PartialAnalystChild::news(),
+                PartialAnalystChild::technical_missing(),
+            ],
+        ))
+        .expect("fanout replacement must succeed");
+
+    // Seed an initial state with stale options_summary in technical_indicators.
+    let mut initial_state = TradingState::new("AAPL", "2026-03-20");
+    initial_state.set_technical_indicators(TechnicalData {
+        rsi: Some(1.0),
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stale technical summary".to_owned(),
+        options_summary: Some("stale options summary from previous run".to_owned()),
+    });
+
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must succeed with one missing analyst input");
+
+    // options_summary must be cleared because reset_cycle_outputs calls clear_equity()
+    // before the cycle starts.
+    assert!(
+        final_state
+            .technical_indicators()
+            .map(|t| t.options_summary.is_none())
+            .unwrap_or(true),
+        "stale options_summary must be cleared by reset_cycle_outputs"
+    );
 }
