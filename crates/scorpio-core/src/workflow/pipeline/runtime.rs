@@ -205,6 +205,8 @@ pub(super) async fn run_analysis_cycle(
     let need_vix = initial_state.market_volatility().is_none();
     let (price_result, vix_result, news_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
+        use crate::data::YFinanceNewsProvider;
+        let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
         tokio::join!(
             async {
                 if need_price {
@@ -220,7 +222,7 @@ pub(super) async fn run_analysis_cycle(
                     None
                 }
             },
-            prefetch_analyst_news(&pipeline.finnhub, &symbol),
+            prefetch_analyst_news(&pipeline.finnhub, &yfinance_news_provider, &symbol),
         )
     };
 
