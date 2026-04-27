@@ -210,6 +210,7 @@ fn technical_data() -> TechnicalData {
         resistance_level: None,
         volume_avg: None,
         summary: "neutral technical".to_owned(),
+        options_summary: None,
     }
 }
 
