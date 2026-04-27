@@ -25,9 +25,13 @@
 //! `get_profile` returns `Profile::Fund` (or degrades without panicking).
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use scorpio_core::data::adapters::estimates::{ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider};
+use scorpio_core::data::adapters::estimates::{
+    ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
+};
 use scorpio_core::data::traits::options::OptionsOutcome;
-use scorpio_core::data::{YFinanceClient, YFinanceNewsProvider, YFinanceOptionsProvider, fetch_vix_data, get_latest_close};
+use scorpio_core::data::{
+    YFinanceClient, YFinanceNewsProvider, YFinanceOptionsProvider, fetch_vix_data, get_latest_close,
+};
 use scorpio_core::domain::Symbol;
 use yfinance_rs::profile::Profile;
 
@@ -385,7 +389,10 @@ async fn main() {
 
     // ── 7. YFinanceNewsProvider (AAPL) ───────────────────────────────────────
 
-    section(7, &format!("YFinanceNewsProvider::get_company_news ({EQUITY_SYMBOL})"));
+    section(
+        7,
+        &format!("YFinanceNewsProvider::get_company_news ({EQUITY_SYMBOL})"),
+    );
 
     let news_provider = YFinanceNewsProvider::new(&client);
     match news_provider.get_company_news(EQUITY_SYMBOL).await {
@@ -421,7 +428,10 @@ async fn main() {
                     .iter()
                     .filter(|a| a.url.as_deref().is_some_and(|u| !u.is_empty()))
                     .count();
-                r.check("at least one article has a non-empty URL", articles_with_url > 0);
+                r.check(
+                    "at least one article has a non-empty URL",
+                    articles_with_url > 0,
+                );
             }
         }
     }
@@ -435,7 +445,10 @@ async fn main() {
     );
 
     let estimates_provider = YFinanceEstimatesProvider::new(client.clone());
-    match estimates_provider.fetch_consensus(EQUITY_SYMBOL, &end).await {
+    match estimates_provider
+        .fetch_consensus(EQUITY_SYMBOL, &end)
+        .await
+    {
         Err(e) => {
             eprintln!("  FAIL  fetch_consensus returned error: {e}");
             r.fail += 1;
@@ -460,27 +473,40 @@ async fn main() {
                     + recs.hold.unwrap_or(0)
                     + recs.sell.unwrap_or(0)
                     + recs.strong_sell.unwrap_or(0);
-                r.check("recommendations have at least one non-zero bucket", total > 0);
+                r.check(
+                    "recommendations have at least one non-zero bucket",
+                    total > 0,
+                );
             } else {
                 warn("consensus Data but recommendations is None (may be temporarily unavailable)");
             }
         }
         Ok(ConsensusOutcome::NoCoverage) => {
-            warn("fetch_consensus returned NoCoverage for AAPL (unexpected but acceptable for smoke)");
+            warn(
+                "fetch_consensus returned NoCoverage for AAPL (unexpected but acceptable for smoke)",
+            );
         }
         Ok(ConsensusOutcome::ProviderDegraded) => {
-            warn("fetch_consensus returned ProviderDegraded (one endpoint temporarily unavailable)");
+            warn(
+                "fetch_consensus returned ProviderDegraded (one endpoint temporarily unavailable)",
+            );
         }
     }
     println!();
 
     // ── 9. Options snapshot (AAPL) ───────────────────────────────────────────
 
-    section(9, &format!("YFinanceOptionsProvider::fetch_snapshot ({EQUITY_SYMBOL})"));
+    section(
+        9,
+        &format!("YFinanceOptionsProvider::fetch_snapshot ({EQUITY_SYMBOL})"),
+    );
 
     let aapl_symbol = Symbol::parse(EQUITY_SYMBOL).expect("AAPL must parse as equity symbol");
     let options_provider = YFinanceOptionsProvider::new(client.clone());
-    match options_provider.fetch_snapshot_impl(&aapl_symbol, &end).await {
+    match options_provider
+        .fetch_snapshot_impl(&aapl_symbol, &end)
+        .await
+    {
         Err(e) => {
             eprintln!("  FAIL  fetch_snapshot returned error: {e}");
             r.fail += 1;
@@ -502,8 +528,14 @@ async fn main() {
                     Err(format!("atm_iv = {}", snap.atm_iv))
                 },
             );
-            r.check("iv_term_structure is non-empty", !snap.iv_term_structure.is_empty());
-            r.check("near_term_strikes is non-empty", !snap.near_term_strikes.is_empty());
+            r.check(
+                "iv_term_structure is non-empty",
+                !snap.iv_term_structure.is_empty(),
+            );
+            r.check(
+                "near_term_strikes is non-empty",
+                !snap.near_term_strikes.is_empty(),
+            );
         }
         Ok(outcome) => {
             eprintln!("  FAIL  expected Snapshot for AAPL options, got: {outcome:?}");
@@ -530,7 +562,10 @@ async fn main() {
 
     // Options: SPY has active listed options; expect a Snapshot.
     let spy_symbol = Symbol::parse(ETF_SYMBOL).expect("SPY must parse as equity symbol");
-    match options_provider.fetch_snapshot_impl(&spy_symbol, &end).await {
+    match options_provider
+        .fetch_snapshot_impl(&spy_symbol, &end)
+        .await
+    {
         Err(e) => {
             eprintln!("  FAIL  fetch_snapshot(SPY) returned error: {e}");
             r.fail += 1;
@@ -541,7 +576,10 @@ async fn main() {
                 snap.spot_price,
                 snap.near_term_strikes.len(),
             ));
-            r.check("SPY options snapshot: spot_price > 0", snap.spot_price > 0.0);
+            r.check(
+                "SPY options snapshot: spot_price > 0",
+                snap.spot_price > 0.0,
+            );
         }
         Ok(outcome) => {
             warn(&format!(
