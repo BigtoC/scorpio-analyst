@@ -86,6 +86,8 @@ pub struct StubbedFinancialResponses {
     pub price_target_error: Option<String>,
     pub recommendation_summary: Option<RecommendationSummary>,
     pub recommendation_summary_error: Option<String>,
+    pub news: Option<Vec<yfinance_rs::news::NewsArticle>>,
+    pub news_error: Option<String>,
 }
 
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.

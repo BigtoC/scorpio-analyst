@@ -11,9 +11,11 @@
 
 mod client;
 pub mod financials;
+pub mod news;
 pub mod ohlcv;
 pub mod price;
 
+pub use news::YFinanceNewsProvider;
 #[cfg(test)]
 pub use ohlcv::StubbedFinancialResponses;
 pub use ohlcv::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
