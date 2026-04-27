@@ -191,7 +191,7 @@ fn merge_news(primary: NewsData, secondary: NewsData) -> NewsData {
     NewsData {
         articles: merged,
         macro_events: primary.macro_events,
-        summary: format!("{total} articles (merged Finnhub + Yahoo)"),
+        summary: format!("{total} articles from 2 providers"),
     }
 }
 
@@ -1080,6 +1080,26 @@ mod merge_tests {
             prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::err(), "AAPL")
                 .await
                 .expect("should succeed with Finnhub-only fallback when Yahoo fails");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "single provider fallback must return available articles"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_falls_back_to_yahoo_only_when_finnhub_fails() {
+        let yf = news_data(vec![article(
+            "Apple Q4 Beat",
+            Some("https://finance.yahoo.com/aapl"),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::err(), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed with Yahoo-only fallback when Finnhub fails");
 
         assert_eq!(
             result.articles.len(),
