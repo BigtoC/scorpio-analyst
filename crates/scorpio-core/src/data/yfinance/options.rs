@@ -67,8 +67,8 @@ impl YFinanceOptionsProvider {
     ) -> Result<OptionsOutcome, TradingError> {
         let ticker = require_equity_ticker(symbol)?;
 
-        // ── Stub guard (test-only) ───────────────────────────────────────
-        #[cfg(test)]
+        // ── Stub guard (test + test-helpers) ────────────────────────────
+        #[cfg(any(test, feature = "test-helpers"))]
         if let Some(ref stub) = self.client.stubbed_financials {
             return fetch_from_stub(stub, &ticker, target_date).await;
         }
@@ -519,9 +519,9 @@ fn build_term_structure(chains: &[(i64, OptionChain)], spot: f64) -> Vec<IvTermP
         .collect()
 }
 
-// ─── Stub helper (test-only) ──────────────────────────────────────────────────
+// ─── Stub helper (test + test-helpers) ───────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 async fn fetch_from_stub(
     stub: &super::ohlcv::StubbedFinancialResponses,
     _ticker: &str,

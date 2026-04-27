@@ -17,7 +17,7 @@ pub mod options;
 pub mod price;
 
 pub use news::YFinanceNewsProvider;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 pub use ohlcv::StubbedFinancialResponses;
 pub use ohlcv::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
 pub use options::{GetOptionsSnapshot, YFinanceOptionsProvider};

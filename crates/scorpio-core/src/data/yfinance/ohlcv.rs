@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfError};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 use yfinance_rs::{
     analysis::{EarningsTrendRow, PriceTarget, RecommendationSummary},
     fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
@@ -72,7 +72,7 @@ impl Candle {
 /// Cache key: normalized (uppercase) symbol + start date + end date.
 type OhlcvCacheKey = (String, String, String);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 #[derive(Debug, Clone, Default)]
 pub struct StubbedFinancialResponses {
     pub profile: Option<Profile>,
@@ -109,7 +109,7 @@ pub struct YFinanceClient {
     /// Shared across all `Clone`s of this client; keyed by the normalized
     /// (uppercase) symbol + ISO-8601 start/end dates.
     cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-helpers"))]
     pub(super) stubbed_financials: Option<Arc<StubbedFinancialResponses>>,
 }
 
@@ -132,7 +132,7 @@ impl YFinanceClient {
         Self {
             session: YfSession::new(limiter),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-helpers"))]
             stubbed_financials: None,
         }
     }
@@ -147,12 +147,12 @@ impl YFinanceClient {
         Self {
             session: YfSession::from_config(cfg),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-helpers"))]
             stubbed_financials: None,
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
     pub fn with_stubbed_financials(responses: StubbedFinancialResponses) -> Self {
         Self {
