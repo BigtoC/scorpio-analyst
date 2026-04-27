@@ -24,8 +24,11 @@
 //! financial statement fetchers return `None`/empty gracefully and that
 //! `get_profile` returns `Profile::Fund` (or degrades without panicking).
 
-use chrono::{Duration, NaiveDate, Utc};
-use scorpio_core::data::{YFinanceClient, fetch_vix_data, get_latest_close};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use scorpio_core::data::adapters::estimates::{ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider};
+use scorpio_core::data::traits::options::OptionsOutcome;
+use scorpio_core::data::{YFinanceClient, YFinanceNewsProvider, YFinanceOptionsProvider, fetch_vix_data, get_latest_close};
+use scorpio_core::domain::Symbol;
 use yfinance_rs::profile::Profile;
 
 /// Well-known liquid equity used as the primary test subject.
@@ -378,6 +381,196 @@ async fn main() {
             None => "None (expected for ETF)".to_owned(),
         }
     ));
+    println!();
+
+    // ── 7. YFinanceNewsProvider (AAPL) ───────────────────────────────────────
+
+    section(7, &format!("YFinanceNewsProvider::get_company_news ({EQUITY_SYMBOL})"));
+
+    let news_provider = YFinanceNewsProvider::new(&client);
+    match news_provider.get_company_news(EQUITY_SYMBOL).await {
+        Err(e) => {
+            eprintln!("  FAIL  get_company_news returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(news_data) => {
+            info(&format!("{} articles returned", news_data.articles.len()));
+
+            if news_data.articles.is_empty() {
+                warn("get_company_news returned empty articles (acceptable if news window is dry)");
+            } else {
+                r.check("get_company_news returns non-empty articles", true);
+
+                let bad_timestamps: Vec<&str> = news_data
+                    .articles
+                    .iter()
+                    .filter(|a| DateTime::parse_from_rfc3339(&a.published_at).is_err())
+                    .map(|a| a.published_at.as_str())
+                    .collect();
+                r.check_result(
+                    "all article published_at are RFC3339",
+                    if bad_timestamps.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(format!("unparseable timestamps: {bad_timestamps:?}"))
+                    },
+                );
+
+                let articles_with_url = news_data
+                    .articles
+                    .iter()
+                    .filter(|a| a.url.as_deref().is_some_and(|u| !u.is_empty()))
+                    .count();
+                r.check("at least one article has a non-empty URL", articles_with_url > 0);
+            }
+        }
+    }
+    println!();
+
+    // ── 8. Extended consensus enrichment (AAPL) ──────────────────────────────
+
+    section(
+        8,
+        &format!("YFinanceEstimatesProvider::fetch_consensus ({EQUITY_SYMBOL})"),
+    );
+
+    let estimates_provider = YFinanceEstimatesProvider::new(client.clone());
+    match estimates_provider.fetch_consensus(EQUITY_SYMBOL, &end).await {
+        Err(e) => {
+            eprintln!("  FAIL  fetch_consensus returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(ConsensusOutcome::Data(ev)) => {
+            info(&format!(
+                "eps_estimate={:?}, price_target={:?}, recommendations={:?}",
+                ev.eps_estimate, ev.price_target, ev.recommendations,
+            ));
+            if let Some(pt) = &ev.price_target {
+                if let Some(mean) = pt.mean {
+                    r.check("price_target mean is positive", mean > 0.0);
+                } else {
+                    warn("price_target present but mean is None (acceptable)");
+                }
+            } else {
+                warn("consensus Data but price_target is None (may be temporarily unavailable)");
+            }
+            if let Some(recs) = &ev.recommendations {
+                let total = recs.strong_buy.unwrap_or(0)
+                    + recs.buy.unwrap_or(0)
+                    + recs.hold.unwrap_or(0)
+                    + recs.sell.unwrap_or(0)
+                    + recs.strong_sell.unwrap_or(0);
+                r.check("recommendations have at least one non-zero bucket", total > 0);
+            } else {
+                warn("consensus Data but recommendations is None (may be temporarily unavailable)");
+            }
+        }
+        Ok(ConsensusOutcome::NoCoverage) => {
+            warn("fetch_consensus returned NoCoverage for AAPL (unexpected but acceptable for smoke)");
+        }
+        Ok(ConsensusOutcome::ProviderDegraded) => {
+            warn("fetch_consensus returned ProviderDegraded (one endpoint temporarily unavailable)");
+        }
+    }
+    println!();
+
+    // ── 9. Options snapshot (AAPL) ───────────────────────────────────────────
+
+    section(9, &format!("YFinanceOptionsProvider::fetch_snapshot ({EQUITY_SYMBOL})"));
+
+    let aapl_symbol = Symbol::parse(EQUITY_SYMBOL).expect("AAPL must parse as equity symbol");
+    let options_provider = YFinanceOptionsProvider::new(client.clone());
+    match options_provider.fetch_snapshot_impl(&aapl_symbol, &end).await {
+        Err(e) => {
+            eprintln!("  FAIL  fetch_snapshot returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(OptionsOutcome::Snapshot(snap)) => {
+            info(&format!(
+                "spot={:.2}, atm_iv={:.4}, term_structure={} points, near_term_strikes={}",
+                snap.spot_price,
+                snap.atm_iv,
+                snap.iv_term_structure.len(),
+                snap.near_term_strikes.len(),
+            ));
+            r.check("spot_price > 0", snap.spot_price > 0.0);
+            r.check_result(
+                "atm_iv is plausible (0.0 < atm_iv < 5.0)",
+                if snap.atm_iv > 0.0 && snap.atm_iv < 5.0 {
+                    Ok(())
+                } else {
+                    Err(format!("atm_iv = {}", snap.atm_iv))
+                },
+            );
+            r.check("iv_term_structure is non-empty", !snap.iv_term_structure.is_empty());
+            r.check("near_term_strikes is non-empty", !snap.near_term_strikes.is_empty());
+        }
+        Ok(outcome) => {
+            eprintln!("  FAIL  expected Snapshot for AAPL options, got: {outcome:?}");
+            r.fail += 1;
+        }
+    }
+    println!();
+
+    // ── 10. SPY degradation coverage ─────────────────────────────────────────
+
+    section(10, &format!("SPY degradation coverage ({ETF_SYMBOL})"));
+
+    // Yahoo news for SPY may be empty — that is acceptable for an ETF.
+    match news_provider.get_company_news(ETF_SYMBOL).await {
+        Err(e) => warn(&format!("get_company_news(SPY) errored: {e}")),
+        Ok(d) if d.articles.is_empty() => {
+            warn("get_company_news(SPY) returned empty feed (acceptable for ETF)");
+        }
+        Ok(d) => {
+            info(&format!("SPY news: {} articles", d.articles.len()));
+        }
+    }
+    r.check("get_company_news(SPY) completes without panic", true);
+
+    // Options: SPY has active listed options; expect a Snapshot.
+    let spy_symbol = Symbol::parse(ETF_SYMBOL).expect("SPY must parse as equity symbol");
+    match options_provider.fetch_snapshot_impl(&spy_symbol, &end).await {
+        Err(e) => {
+            eprintln!("  FAIL  fetch_snapshot(SPY) returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(OptionsOutcome::Snapshot(snap)) => {
+            info(&format!(
+                "SPY options: spot={:.2}, near_term_strikes={}",
+                snap.spot_price,
+                snap.near_term_strikes.len(),
+            ));
+            r.check("SPY options snapshot: spot_price > 0", snap.spot_price > 0.0);
+        }
+        Ok(outcome) => {
+            warn(&format!(
+                "SPY options returned {outcome:?} instead of Snapshot (acceptable degradation)"
+            ));
+        }
+    }
+
+    // Consensus: SPY may legitimately return NoCoverage or Data with sparse fields.
+    let spy_estimates = YFinanceEstimatesProvider::new(client.clone());
+    match spy_estimates.fetch_consensus(ETF_SYMBOL, &end).await {
+        Err(e) => {
+            eprintln!("  FAIL  fetch_consensus(SPY) returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(ConsensusOutcome::Data(ev)) => {
+            info(&format!(
+                "SPY consensus Data: eps={:?}, price_target={:?}",
+                ev.eps_estimate, ev.price_target
+            ));
+        }
+        Ok(ConsensusOutcome::NoCoverage) => {
+            info("SPY consensus: NoCoverage (expected for ETF)");
+        }
+        Ok(ConsensusOutcome::ProviderDegraded) => {
+            warn("SPY consensus: ProviderDegraded (one endpoint temporarily unavailable)");
+        }
+    }
+    r.check("fetch_consensus(SPY) completes without panic", true);
     println!();
 
     // ── Summary ───────────────────────────────────────────────────────────────
