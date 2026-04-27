@@ -972,6 +972,8 @@ mod tests {
                 revenue_estimate_m: Some(95_000.0),
                 analyst_count: Some(35),
                 as_of_date: "2026-04-03".to_owned(),
+                price_target: None,
+                recommendations: None,
             }),
         };
 
