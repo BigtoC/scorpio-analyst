@@ -42,7 +42,7 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-helpers"))]
 pub use yfinance::StubbedFinancialResponses;
 pub use yfinance::{
     Candle, GetOhlcv, GetOptionsSnapshot, OhlcvArgs, OhlcvToolContext, YFinanceClient,
