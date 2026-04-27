@@ -58,7 +58,6 @@ impl fmt::Display for VixRegime {
 /// downstream agents — researchers, trader, risk, fund manager — see the same
 /// volatility context.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MarketVolatilityData {
     /// Most recent closing VIX value.
     pub vix_level: f64,
@@ -105,9 +104,16 @@ mod tests {
     }
 
     #[test]
-    fn deny_unknown_fields() {
+    fn unknown_fields_are_tolerated_for_forward_compat() {
+        // Snapshotted state structs (everything reachable from `TradingState`
+        // via serde) must NOT use `#[serde(deny_unknown_fields)]` because it
+        // turns every additive field into a backward-incompatible change.
+        // This test pins the contract: an extra unknown key must not block
+        // deserialization.
         let json = r#"{"vix_level":18.5,"vix_sma_20":17.2,"vix_trend":"rising","vix_regime":"normal","fetched_at":"2026-04-04","extra_field":"oops"}"#;
-        assert!(serde_json::from_str::<MarketVolatilityData>(json).is_err());
+        let parsed: MarketVolatilityData = serde_json::from_str(json)
+            .expect("snapshotted state must tolerate unknown fields for forward-compat");
+        assert_eq!(parsed.vix_level, 18.5);
     }
 
     #[test]

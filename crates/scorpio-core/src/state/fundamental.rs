@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 /// Revenue, earnings, valuation, and insider activity for the target asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct FundamentalData {
     pub revenue_growth_pct: Option<f64>,
     pub pe_ratio: Option<f64>,
@@ -34,7 +33,6 @@ pub enum TransactionType {
 
 /// A single insider buy/sell record.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct InsiderTransaction {
     pub name: String,
     pub share_change: f64,

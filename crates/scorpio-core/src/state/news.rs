@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 /// Macroeconomic news and event data for the target asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct NewsData {
     pub articles: Vec<NewsArticle>,
     pub macro_events: Vec<MacroEvent>,
@@ -12,13 +11,16 @@ pub struct NewsData {
 
 /// A single news article or headline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct NewsArticle {
     pub title: String,
     pub source: String,
     pub published_at: String,
     pub relevance_score: Option<f64>,
     pub snippet: String,
+    /// Optional source URL for the article. Additive field — older snapshots
+    /// produced before Yahoo news enrichment will deserialize with `None`.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// Whether a macro event is expected to have a positive, negative, mixed, neutral,
@@ -39,7 +41,6 @@ pub enum ImpactDirection {
 
 /// A macroeconomic event with a causal relationship to the asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MacroEvent {
     pub event: String,
     pub impact_direction: ImpactDirection,
