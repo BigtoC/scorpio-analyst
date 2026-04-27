@@ -34,7 +34,7 @@ use crate::error::TradingError;
 const OPTIONS_NTM_STRIKE_BAND_PCT: f64 = 0.05;
 const OPTIONS_NTM_MIN_STRIKES_PER_SIDE: usize = 2;
 const OPTIONS_NTM_MAX_BAND_EXPANSION_PCT: f64 = 0.20;
-const _OPTIONS_FETCH_TIMEOUT_SECS: u64 = 30;
+const OPTIONS_FETCH_TIMEOUT_SECS: u64 = 30;
 
 // ─── Provider ────────────────────────────────────────────────────────────────
 
@@ -89,7 +89,16 @@ impl YFinanceOptionsProvider {
         let yf_ticker =
             Ticker::new(self.client.session.client(), &ticker).cache_mode(CacheMode::Use);
 
-        let mut expirations = yf_ticker.options().await.map_err(map_yf_options_err)?;
+        let mut expirations = tokio::time::timeout(
+            std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
+            yf_ticker.options(),
+        )
+        .await
+        .map_err(|_| TradingError::NetworkTimeout {
+            elapsed: std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
+            message: "options expiration fetch timed out".to_owned(),
+        })?
+        .map_err(map_yf_options_err)?;
 
         if expirations.is_empty() {
             return Ok(OptionsOutcome::NoListedInstrument);
@@ -99,17 +108,21 @@ impl YFinanceOptionsProvider {
         let front_month_ts = expirations[0];
 
         // ── Front-month chain ────────────────────────────────────────────
-        let front_chain = yf_ticker
-            .option_chain(Some(front_month_ts))
-            .await
-            .map_err(map_yf_options_err)?;
+        let front_chain = tokio::time::timeout(
+            std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
+            yf_ticker.option_chain(Some(front_month_ts)),
+        )
+        .await
+        .map_err(|_| TradingError::NetworkTimeout {
+            elapsed: std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
+            message: "options chain fetch timed out".to_owned(),
+        })?
+        .map_err(map_yf_options_err)?;
 
         // ── NTM slice ────────────────────────────────────────────────────
-        let ntm = build_ntm_slice(&front_chain, spot);
-        if ntm.is_none() {
+        let Some(near_term_strikes) = build_ntm_slice(&front_chain, spot) else {
             return Ok(OptionsOutcome::SparseChain);
-        }
-        let near_term_strikes = ntm.unwrap();
+        };
 
         // ── ATM IV from front-month ──────────────────────────────────────
         let atm_iv = compute_atm_iv(&front_chain, spot);
@@ -511,7 +524,7 @@ fn build_term_structure(chains: &[(i64, OptionChain)], spot: f64) -> Vec<IvTermP
 #[cfg(test)]
 async fn fetch_from_stub(
     stub: &super::ohlcv::StubbedFinancialResponses,
-    ticker: &str,
+    _ticker: &str,
     target_date: &str,
 ) -> Result<OptionsOutcome, TradingError> {
     // Check market-local date.
@@ -574,11 +587,9 @@ async fn fetch_from_stub(
     };
 
     // NTM slice.
-    let ntm = build_ntm_slice(&front_chain, spot);
-    if ntm.is_none() {
+    let Some(near_term_strikes) = build_ntm_slice(&front_chain, spot) else {
         return Ok(OptionsOutcome::SparseChain);
-    }
-    let near_term_strikes = ntm.unwrap();
+    };
 
     let atm_iv = compute_atm_iv(&front_chain, spot);
 
@@ -612,8 +623,6 @@ async fn fetch_from_stub(
 
     let (put_call_volume_ratio, put_call_oi_ratio) = compute_pc_ratios(&all_chains);
     let iv_term_structure = build_term_structure(&all_chains, spot);
-
-    let _ = ticker; // used for symbol context, silences warning
 
     Ok(OptionsOutcome::Snapshot(OptionsSnapshot {
         spot_price: spot,
