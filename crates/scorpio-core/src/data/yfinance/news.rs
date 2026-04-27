@@ -31,6 +31,7 @@ const NEWS_YAHOO_FETCH_LIMIT: u32 = 50;
 /// Articles outside the [`NEWS_ANALYSIS_DAYS`] window are filtered out so
 /// that the resulting [`NewsData`] covers the same time horizon as the
 /// Finnhub news provider.
+#[derive(Debug)]
 pub struct YFinanceNewsProvider {
     client: YFinanceClient,
 }

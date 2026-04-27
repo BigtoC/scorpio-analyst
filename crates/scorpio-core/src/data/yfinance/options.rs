@@ -144,9 +144,14 @@ impl YFinanceOptionsProvider {
         all_chains.push((front_month_ts, front_chain));
 
         for &exp_ts in &expirations[1..] {
-            match yf_ticker.option_chain(Some(exp_ts)).await {
-                Ok(chain) => all_chains.push((exp_ts, chain)),
-                Err(_) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
+                yf_ticker.option_chain(Some(exp_ts)),
+            )
+            .await
+            {
+                Ok(Ok(chain)) => all_chains.push((exp_ts, chain)),
+                Ok(Err(_)) | Err(_) => {
                     // Skip individual expiration fetch failures — don't propagate
                 }
             }
