@@ -20,7 +20,8 @@ use crate::{
 
 // Extract the canonical ticker string from a Symbol, or fail cleanly if the
 // caller handed us a non-equity symbol.
-fn require_equity_ticker(symbol: &Symbol) -> Result<String, TradingError> {
+// Visibility widened to pub(crate) so data/yfinance/options.rs can reuse this check.
+pub(crate) fn require_equity_ticker(symbol: &Symbol) -> Result<String, TradingError> {
     match symbol {
         Symbol::Equity(t) => Ok(t.as_str().to_owned()),
         Symbol::Crypto(_) => Err(TradingError::SchemaViolation {

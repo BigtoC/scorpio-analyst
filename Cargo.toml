@@ -48,6 +48,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -86,6 +87,7 @@ proptest = "1"
 mockall = "0.13"
 pretty_assertions = "1"
 paft-money = "0.7"
+paft-domain = "0.7"
 rust_decimal = "1"
 flate2 = "1.1"
 tar = "0.4"

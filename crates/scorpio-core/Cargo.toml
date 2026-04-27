@@ -43,6 +43,7 @@ uuid.workspace = true
 
 # Date/time
 chrono.workspace = true
+chrono-tz.workspace = true
 
 # File utilities
 tempfile.workspace = true
@@ -68,6 +69,7 @@ proptest.workspace = true
 mockall.workspace = true
 pretty_assertions.workspace = true
 paft-money.workspace = true
+paft-domain.workspace = true
 rust_decimal.workspace = true
 
 [features]

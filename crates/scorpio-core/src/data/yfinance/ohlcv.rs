@@ -88,6 +88,11 @@ pub struct StubbedFinancialResponses {
     pub recommendation_summary_error: Option<String>,
     pub news: Option<Vec<yfinance_rs::news::NewsArticle>>,
     pub news_error: Option<String>,
+    pub ohlcv: Option<Vec<Candle>>,
+    pub option_expirations: Option<Vec<i64>>,
+    pub option_expirations_error: Option<String>,
+    pub option_chains: std::collections::BTreeMap<i64, yfinance_rs::ticker::OptionChain>,
+    pub option_chain_errors: std::collections::BTreeMap<i64, String>,
 }
 
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
