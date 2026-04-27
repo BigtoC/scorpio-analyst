@@ -17,7 +17,6 @@
 use chrono::Utc;
 use yfinance_rs::NewsBuilder;
 
-use super::client::YfSession;
 use super::ohlcv::YFinanceClient;
 use crate::constants::NEWS_ANALYSIS_DAYS;
 use crate::error::TradingError;
@@ -25,24 +24,26 @@ use crate::state::{NewsArticle, NewsData};
 
 // ─── YFinanceNewsProvider ────────────────────────────────────────────────────
 
+const NEWS_YAHOO_FETCH_LIMIT: u32 = 50;
+
 /// Fetches and normalizes company news from Yahoo Finance.
 ///
 /// Articles outside the [`NEWS_ANALYSIS_DAYS`] window are filtered out so
 /// that the resulting [`NewsData`] covers the same time horizon as the
 /// Finnhub news provider.
 pub struct YFinanceNewsProvider {
-    session: YfSession,
+    client: YFinanceClient,
 }
 
 impl YFinanceNewsProvider {
     /// Create a new provider from an existing [`YFinanceClient`].
     ///
-    /// The provider borrows the underlying session from the client so it
-    /// shares the same HTTP connection pool and rate limiter.
+    /// Clones the client so the provider shares the same HTTP connection
+    /// pool and rate limiter.
     #[must_use]
     pub fn new(client: &YFinanceClient) -> Self {
         Self {
-            session: client.session.clone(),
+            client: client.clone(),
         }
     }
 
@@ -55,10 +56,22 @@ impl YFinanceNewsProvider {
     /// `TradingError::SchemaViolation` on parse failures — matching the
     /// error taxonomy used by [`super::ohlcv::map_yf_err`].
     pub async fn get_company_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
-        self.session.limiter().acquire().await;
+        #[cfg(test)]
+        if let Some(stubbed) = &self.client.stubbed_financials {
+            if let Some(ref err_msg) = stubbed.news_error {
+                return Err(TradingError::NetworkTimeout {
+                    elapsed: std::time::Duration::ZERO,
+                    message: err_msg.clone(),
+                });
+            }
+            let articles = stubbed.news.clone().unwrap_or_default();
+            return Ok(build_yahoo_news_data(symbol, articles));
+        }
 
-        let raw_articles = NewsBuilder::new(self.session.client(), symbol)
-            .count(50)
+        self.client.session.limiter().acquire().await;
+
+        let raw_articles = NewsBuilder::new(self.client.session.client(), symbol)
+            .count(NEWS_YAHOO_FETCH_LIMIT)
             .fetch()
             .await
             .map_err(super::ohlcv::map_yf_err)?;
@@ -126,40 +139,9 @@ mod tests {
         }
     }
 
-    /// Return a `YFinanceNewsProvider` backed by stubbed articles.
-    ///
-    /// When `stubbed_financials.news` is `Some(articles)` the provider
-    /// calls `build_yahoo_news_data` directly on the stub data so that
-    /// tests never touch the network.
-    fn provider_with_stub(stub: StubbedFinancialResponses) -> (YFinanceClient, StubbedYahooNews) {
-        let client = YFinanceClient::with_stubbed_financials(stub.clone());
-        let news = StubbedYahooNews {
-            stub: stub.news,
-            stub_error: stub.news_error,
-            session: client.session.clone(),
-        };
-        (client, news)
-    }
-
-    /// A thin test double that bypasses the HTTP layer.
-    struct StubbedYahooNews {
-        stub: Option<Vec<yfinance_rs::news::NewsArticle>>,
-        stub_error: Option<String>,
-        #[allow(dead_code)]
-        session: YfSession,
-    }
-
-    impl StubbedYahooNews {
-        async fn get_company_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
-            if let Some(ref err_msg) = self.stub_error {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: std::time::Duration::ZERO,
-                    message: err_msg.clone(),
-                });
-            }
-            let articles = self.stub.clone().unwrap_or_default();
-            Ok(build_yahoo_news_data(symbol, articles))
-        }
+    fn provider_with_stub(stub: StubbedFinancialResponses) -> YFinanceNewsProvider {
+        let client = YFinanceClient::with_stubbed_financials(stub);
+        YFinanceNewsProvider::new(&client)
     }
 
     #[tokio::test]
@@ -173,51 +155,44 @@ mod tests {
             now,
         )];
 
-        let stub = StubbedFinancialResponses {
+        let provider = provider_with_stub(StubbedFinancialResponses {
             news: Some(articles),
             ..StubbedFinancialResponses::default()
-        };
-        let (_client, provider) = provider_with_stub(stub);
+        });
 
         let result = provider.get_company_news("AAPL").await.unwrap();
 
         assert_eq!(result.articles.len(), 1, "should return 1 article");
 
         let article = &result.articles[0];
-        // RFC3339 timestamp
         chrono::DateTime::parse_from_rfc3339(&article.published_at)
             .expect("published_at must be RFC3339");
         assert!(
             article.published_at.contains('T'),
             "RFC3339 must have 'T' separator"
         );
-        // URL preserved from upstream `link` field
         assert_eq!(
             article.url,
             Some("https://example.com/aapl-news".to_owned()),
             "url must be populated from upstream link field"
         );
-        // snippet is always empty for Yahoo articles
         assert_eq!(
             article.snippet, "",
             "snippet must be empty for Yahoo articles"
         );
-        // macro_events is always empty
         assert!(
             result.macro_events.is_empty(),
             "macro_events must be empty for Yahoo news provider"
         );
-        // source comes from publisher
         assert_eq!(article.source, "Reuters");
     }
 
     #[tokio::test]
     async fn empty_feed_returns_empty_news_data() {
-        let stub = StubbedFinancialResponses {
+        let provider = provider_with_stub(StubbedFinancialResponses {
             news: Some(vec![]),
             ..StubbedFinancialResponses::default()
-        };
-        let (_client, provider) = provider_with_stub(stub);
+        });
 
         let result = provider.get_company_news("AAPL").await.unwrap();
 
@@ -232,20 +207,16 @@ mod tests {
 
     #[tokio::test]
     async fn articles_outside_analysis_window_are_filtered_out() {
-        // Place one article well outside the 30-day window
         let old_date = Utc::now() - chrono::Duration::days(60);
         let recent_date = Utc::now() - chrono::Duration::days(5);
 
-        let articles = vec![
-            make_article("old", "Old News", None, None, old_date),
-            make_article("recent", "Recent News", None, None, recent_date),
-        ];
-
-        let stub = StubbedFinancialResponses {
-            news: Some(articles),
+        let provider = provider_with_stub(StubbedFinancialResponses {
+            news: Some(vec![
+                make_article("old", "Old News", None, None, old_date),
+                make_article("recent", "Recent News", None, None, recent_date),
+            ]),
             ..StubbedFinancialResponses::default()
-        };
-        let (_client, provider) = provider_with_stub(stub);
+        });
 
         let result = provider.get_company_news("AAPL").await.unwrap();
 

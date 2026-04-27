@@ -242,27 +242,7 @@ impl FinnhubClient {
         let articles = raw
             .into_iter()
             .take(20)
-            .map(|n| {
-                let url = {
-                    let trimmed = n.url.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_owned())
-                    }
-                };
-                let published_at = chrono::DateTime::from_timestamp(n.datetime, 0)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| n.datetime.to_string());
-                NewsArticle {
-                    title: sanitize_news_text(&n.headline, NEWS_TITLE_MAX_CHARS),
-                    source: n.source,
-                    published_at,
-                    relevance_score: None,
-                    snippet: sanitize_news_text(&n.summary, NEWS_SNIPPET_MAX_CHARS),
-                    url,
-                }
-            })
+            .map(|n| normalize_news_fields(&n.url, n.datetime, &n.headline, &n.source, &n.summary))
             .collect::<Vec<_>>();
         let macro_events = derive_macro_events(&articles);
         let article_count = articles.len();
@@ -476,32 +456,39 @@ fn sanitize_news_text(text: &str, max_chars: usize) -> String {
     buf.chars().take(max_chars).collect()
 }
 
-/// Normalize a single Finnhub company-news item into our [`NewsArticle`] shape.
-///
-/// - Trims the URL and converts empty strings to `None`.
-/// - Converts the unix-second timestamp to an RFC3339 string.
-/// - Applies `sanitize_news_text` to headline and summary.
-pub(crate) fn normalize_finnhub_article(n: &finnhub::models::news::CompanyNews) -> NewsArticle {
+/// Normalize raw URL + unix-second timestamp fields shared by both
+/// `CompanyNews` and `MarketNews` upstream types.
+pub(crate) fn normalize_news_fields(
+    url_raw: &str,
+    datetime: i64,
+    headline: &str,
+    source: &str,
+    summary: &str,
+) -> NewsArticle {
     let url = {
-        let trimmed = n.url.trim();
+        let trimmed = url_raw.trim();
         if trimmed.is_empty() {
             None
         } else {
             Some(trimmed.to_owned())
         }
     };
-    let published_at = chrono::DateTime::from_timestamp(n.datetime, 0)
+    let published_at = chrono::DateTime::from_timestamp(datetime, 0)
         .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| n.datetime.to_string());
+        .unwrap_or_else(|| datetime.to_string());
 
     NewsArticle {
-        title: sanitize_news_text(&n.headline, NEWS_TITLE_MAX_CHARS),
-        source: n.source.clone(),
+        title: sanitize_news_text(headline, NEWS_TITLE_MAX_CHARS),
+        source: source.to_owned(),
         published_at,
         relevance_score: None,
-        snippet: sanitize_news_text(&n.summary, NEWS_SNIPPET_MAX_CHARS),
+        snippet: sanitize_news_text(summary, NEWS_SNIPPET_MAX_CHARS),
         url,
     }
+}
+
+pub(crate) fn normalize_finnhub_article(n: &finnhub::models::news::CompanyNews) -> NewsArticle {
+    normalize_news_fields(&n.url, n.datetime, &n.headline, &n.source, &n.summary)
 }
 
 fn build_news_data(

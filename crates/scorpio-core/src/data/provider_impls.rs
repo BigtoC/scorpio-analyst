@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use super::{
     FinnhubClient, FredClient, YFinanceClient,
     traits::{FundamentalsProvider, MacroProvider, NewsProvider, PriceBar, PriceHistoryProvider},
+    yfinance::news::YFinanceNewsProvider,
 };
 use crate::{
     domain::Symbol,
@@ -49,6 +50,18 @@ impl NewsProvider for FinnhubClient {
     async fn fetch(&self, symbol: &Symbol) -> Result<NewsData, TradingError> {
         let ticker = require_equity_ticker(symbol)?;
         self.get_structured_news(&ticker).await
+    }
+}
+
+#[async_trait]
+impl NewsProvider for YFinanceNewsProvider {
+    fn provider_name(&self) -> &'static str {
+        "yfinance"
+    }
+
+    async fn fetch(&self, symbol: &Symbol) -> Result<NewsData, TradingError> {
+        let ticker = require_equity_ticker(symbol)?;
+        self.get_company_news(&ticker).await
     }
 }
 
