@@ -1,0 +1,11 @@
+{
+  "scenario": "missing_spot",
+  "expected_outcome": "missing_spot",
+  "description": "Empty OHLCV stub (no closing price). Expected: MissingSpot because get_latest_close returns None when no candle data is present.",
+  "setup": {
+    "spot_price": null,
+    "target_date_offset_days": 0,
+    "ohlcv": [],
+    "note": "An empty ohlcv list causes get_latest_close to return None, which the provider maps to MissingSpot."
+  }
+}
