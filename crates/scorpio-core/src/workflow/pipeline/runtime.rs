@@ -3,7 +3,7 @@ use std::sync::Arc;
 use graph_flow::{
     ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage, Session, SessionStorage,
 };
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -12,7 +12,9 @@ use crate::{
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
-        estimates::{ConsensusEvidence, EstimatesProvider, YFinanceEstimatesProvider},
+        estimates::{
+            ConsensusEvidence, ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
+        },
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
     data::{FinnhubClient, FredClient, YFinanceClient},
@@ -30,6 +32,11 @@ use crate::{
         },
     },
 };
+
+/// After this many consecutive `ProviderDegraded` outcomes, downgrade the
+/// runtime status to `NotAvailable` so a stuck consensus provider does not
+/// indefinitely register as `FetchFailed`.
+pub(super) const CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES: u32 = 3;
 
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
 
@@ -170,6 +177,10 @@ pub(super) async fn run_analysis_cycle(
     pipeline: &TradingPipeline,
     mut initial_state: TradingState,
 ) -> Result<TradingState, TradingError> {
+    // Capture the prior cycle's consensus enrichment payload BEFORE reset so
+    // the half-life counter survives reused-state runs. For fresh runs the
+    // payload is `None`, so the counter starts at 0 and reset has no effect.
+    let prior_consensus_payload = initial_state.enrichment_consensus.payload.clone();
     reset_cycle_outputs(&mut initial_state);
     initial_state.execution_id = Uuid::new_v4();
     let canonical = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
@@ -245,10 +256,20 @@ pub(super) async fn run_analysis_cycle(
         EnrichmentResult::NotAvailable
     };
 
-    let consensus_enrichment = if enrichment_intent.consensus_estimates {
-        hydrate_consensus(&pipeline.yfinance, &symbol, &date, fetch_timeout).await
+    let consensus_enrichment_state = if enrichment_intent.consensus_estimates {
+        hydrate_consensus(
+            &pipeline.yfinance,
+            &symbol,
+            &date,
+            fetch_timeout,
+            prior_consensus_payload.as_ref(),
+        )
+        .await
     } else {
-        EnrichmentResult::NotAvailable
+        EnrichmentState {
+            status: EnrichmentStatus::Disabled,
+            payload: None,
+        }
     };
 
     // Persist enrichment results on state for downstream consumers.
@@ -260,14 +281,7 @@ pub(super) async fn run_analysis_cycle(
         },
         payload: event_enrichment.into_option(),
     };
-    initial_state.enrichment_consensus = EnrichmentState {
-        status: if enrichment_intent.consensus_estimates {
-            consensus_enrichment.status()
-        } else {
-            EnrichmentStatus::Disabled
-        },
-        payload: consensus_enrichment.into_option(),
-    };
+    initial_state.enrichment_consensus = consensus_enrichment_state;
 
     let cached_news_json = news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
     let graph = Arc::clone(&pipeline.graph);
@@ -390,13 +404,26 @@ async fn hydrate_event_news(
     }
 }
 
-/// Fetch consensus-estimates enrichment with a timeout boundary.
+/// Single-shot fetch outcome surfaced to the half-life policy. Wraps the
+/// upstream `Result<ConsensusOutcome, TradingError>` plus a `Timeout` variant
+/// the policy converts to `FetchFailed("timeout")`.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum HydratedConsensusFetch {
+    Ok(ConsensusOutcome),
+    Err(String),
+    Timeout,
+}
+
+/// Fetch consensus-estimates enrichment with a timeout boundary, applying
+/// the half-life + retry policy described in the implementation plan
+/// (see `docs/superpowers/plans/2026-04-26-yfinance-news-options-consensus-implementation.md`).
 async fn hydrate_consensus(
     yfinance: &YFinanceClient,
     symbol: &str,
     target_date: &str,
     timeout: std::time::Duration,
-) -> EnrichmentResult<ConsensusEvidence> {
+    prior_payload: Option<&ConsensusEvidence>,
+) -> EnrichmentState<ConsensusEvidence> {
     if target_date
         != chrono::Utc::now()
             .date_naive()
@@ -407,29 +434,142 @@ async fn hydrate_consensus(
             symbol,
             target_date, "consensus-estimates enrichment skipped for historical target date"
         );
-        return EnrichmentResult::NotAvailable;
+        return EnrichmentState {
+            status: EnrichmentStatus::NotAvailable,
+            payload: None,
+        };
     }
 
     let provider = YFinanceEstimatesProvider::new(yfinance.clone());
+    let primary = single_consensus_fetch(&provider, symbol, target_date, timeout).await;
+
+    // ProviderDegraded retry: if the first attempt classifies as degraded,
+    // retry once immediately (no backoff — the rate limiter handles spacing).
+    let resolved = match &primary {
+        HydratedConsensusFetch::Ok(ConsensusOutcome::ProviderDegraded) => {
+            info!(
+                symbol,
+                "consensus-estimates: provider_degraded; retrying once"
+            );
+            single_consensus_fetch(&provider, symbol, target_date, timeout).await
+        }
+        _ => primary,
+    };
+
+    apply_consensus_half_life_policy(symbol, &resolved, prior_payload)
+}
+
+async fn single_consensus_fetch(
+    provider: &YFinanceEstimatesProvider,
+    symbol: &str,
+    target_date: &str,
+    timeout: std::time::Duration,
+) -> HydratedConsensusFetch {
     match tokio::time::timeout(timeout, provider.fetch_consensus(symbol, target_date)).await {
-        Ok(Ok(Some(evidence))) => {
+        Ok(Ok(outcome)) => HydratedConsensusFetch::Ok(outcome),
+        Ok(Err(e)) => HydratedConsensusFetch::Err(e.to_string()),
+        Err(_) => HydratedConsensusFetch::Timeout,
+    }
+}
+
+/// Pure half-life policy: maps the resolved fetch outcome plus the prior
+/// cycle's persisted payload into the `EnrichmentState` we want to commit
+/// for this cycle.
+///
+/// Behavior:
+/// - `Ok(Data(_))` / `Ok(NoCoverage)` reset `consecutive_provider_degraded_cycles` to 0.
+/// - `Ok(ProviderDegraded)` increments the counter; if it reaches
+///   [`CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES`], the runtime
+///   downgrades the status from `FetchFailed("provider_degraded")` to
+///   `NotAvailable` and emits a warn so a stuck provider does not pin the
+///   symbol at FetchFailed forever.
+/// - `Err(_)` and `Timeout` leave the counter untouched (they are operationally
+///   distinct from provider-degraded; the latter is a structured upstream
+///   signal). The status reflects the failure reason.
+pub(super) fn apply_consensus_half_life_policy(
+    symbol: &str,
+    fetch: &HydratedConsensusFetch,
+    prior_payload: Option<&ConsensusEvidence>,
+) -> EnrichmentState<ConsensusEvidence> {
+    let prior_counter = prior_payload
+        .map(|p| p.consecutive_provider_degraded_cycles)
+        .unwrap_or(0);
+
+    match fetch {
+        HydratedConsensusFetch::Ok(ConsensusOutcome::Data(evidence)) => {
             info!(symbol, "consensus-estimates enrichment: available");
-            EnrichmentResult::Available(evidence)
+            let mut evidence = evidence.clone();
+            evidence.consecutive_provider_degraded_cycles = 0;
+            EnrichmentState {
+                status: EnrichmentStatus::Available,
+                payload: Some(evidence),
+            }
         }
-        Ok(Ok(None)) => {
-            info!(symbol, "consensus-estimates enrichment: no data found");
-            EnrichmentResult::NotAvailable
+        HydratedConsensusFetch::Ok(ConsensusOutcome::NoCoverage) => {
+            info!(
+                symbol,
+                "consensus-estimates enrichment: no analyst coverage"
+            );
+            EnrichmentState {
+                status: EnrichmentStatus::NotAvailable,
+                payload: None,
+            }
         }
-        Ok(Err(e)) => {
-            info!(symbol, error = %e, "consensus-estimates enrichment: fetch failed (fail-open)");
-            EnrichmentResult::FetchFailed(e.to_string())
+        HydratedConsensusFetch::Ok(ConsensusOutcome::ProviderDegraded) => {
+            let cycles = prior_counter.saturating_add(1);
+            // Persist a counter-only stub so the next cycle can read the
+            // running tally. The stub carries identity fields but no data —
+            // all sub-fields are `None` per the ProviderDegraded contract.
+            let stub = ConsensusEvidence {
+                symbol: symbol.to_ascii_uppercase(),
+                eps_estimate: None,
+                revenue_estimate_m: None,
+                analyst_count: None,
+                as_of_date: chrono::Utc::now()
+                    .date_naive()
+                    .format("%Y-%m-%d")
+                    .to_string(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: cycles,
+            };
+
+            if cycles >= CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES {
+                warn!(
+                    symbol,
+                    cycles, "provider_degraded persisted; treating as no_coverage after half-life"
+                );
+                EnrichmentState {
+                    status: EnrichmentStatus::NotAvailable,
+                    payload: Some(stub),
+                }
+            } else {
+                info!(
+                    symbol,
+                    cycles, "consensus-estimates enrichment: provider degraded (fail-open)"
+                );
+                EnrichmentState {
+                    status: EnrichmentStatus::FetchFailed("provider_degraded".to_owned()),
+                    payload: Some(stub),
+                }
+            }
         }
-        Err(_) => {
+        HydratedConsensusFetch::Err(reason) => {
+            info!(symbol, error = %reason, "consensus-estimates enrichment: fetch failed (fail-open)");
+            EnrichmentState {
+                status: EnrichmentStatus::FetchFailed(reason.clone()),
+                payload: None,
+            }
+        }
+        HydratedConsensusFetch::Timeout => {
             info!(
                 symbol,
                 "consensus-estimates enrichment: timed out (fail-open)"
             );
-            EnrichmentResult::FetchFailed("enrichment fetch timed out".to_owned())
+            EnrichmentState {
+                status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
+                payload: None,
+            }
         }
     }
 }
@@ -483,4 +623,118 @@ async fn run_pipeline_loop(runner: &FlowRunner, session_id: &str) -> Result<(), 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod consensus_half_life_tests {
+    use super::*;
+
+    fn data_evidence(symbol: &str, counter: u32) -> ConsensusEvidence {
+        ConsensusEvidence {
+            symbol: symbol.to_owned(),
+            eps_estimate: Some(2.5),
+            revenue_estimate_m: Some(100.0),
+            analyst_count: Some(10),
+            as_of_date: "2026-04-27".to_owned(),
+            price_target: None,
+            recommendations: None,
+            consecutive_provider_degraded_cycles: counter,
+        }
+    }
+
+    #[test]
+    fn provider_degraded_downgrades_to_not_available_after_half_life() {
+        // Walk through 4 hydration cycles. Each call to the policy gets the
+        // prior cycle's persisted payload as input.
+        let symbol = "AAPL";
+        let degraded = HydratedConsensusFetch::Ok(ConsensusOutcome::ProviderDegraded);
+
+        // Cycle 1: prior counter 0 -> persists 1 with FetchFailed.
+        let cycle1 = apply_consensus_half_life_policy(symbol, &degraded, None);
+        assert!(
+            matches!(cycle1.status, EnrichmentStatus::FetchFailed(ref reason) if reason == "provider_degraded"),
+            "cycle 1 should be FetchFailed(provider_degraded), got {:?}",
+            cycle1.status
+        );
+        let stub1 = cycle1.payload.expect("cycle 1 must persist a counter stub");
+        assert_eq!(stub1.consecutive_provider_degraded_cycles, 1);
+        assert!(stub1.eps_estimate.is_none());
+
+        // Cycle 2: prior counter 1 -> persists 2 with FetchFailed.
+        let cycle2 = apply_consensus_half_life_policy(symbol, &degraded, Some(&stub1));
+        assert!(
+            matches!(cycle2.status, EnrichmentStatus::FetchFailed(ref reason) if reason == "provider_degraded"),
+            "cycle 2 should be FetchFailed(provider_degraded), got {:?}",
+            cycle2.status
+        );
+        let stub2 = cycle2.payload.expect("cycle 2 must persist a counter stub");
+        assert_eq!(stub2.consecutive_provider_degraded_cycles, 2);
+
+        // Cycle 3: prior counter 2 -> persists 3, downgrades to NotAvailable.
+        let cycle3 = apply_consensus_half_life_policy(symbol, &degraded, Some(&stub2));
+        assert!(
+            matches!(cycle3.status, EnrichmentStatus::NotAvailable),
+            "cycle 3 should hit half-life and downgrade to NotAvailable, got {:?}",
+            cycle3.status
+        );
+        let stub3 = cycle3.payload.expect("cycle 3 must persist a counter stub");
+        assert_eq!(stub3.consecutive_provider_degraded_cycles, 3);
+
+        // Cycle 4: prior counter 3 -> still degraded -> persists 4, still NotAvailable.
+        let cycle4 = apply_consensus_half_life_policy(symbol, &degraded, Some(&stub3));
+        assert!(
+            matches!(cycle4.status, EnrichmentStatus::NotAvailable),
+            "cycle 4 should remain NotAvailable, got {:?}",
+            cycle4.status
+        );
+        let stub4 = cycle4.payload.expect("cycle 4 must persist a counter stub");
+        assert_eq!(stub4.consecutive_provider_degraded_cycles, 4);
+    }
+
+    #[test]
+    fn no_coverage_resets_counter_to_zero() {
+        let symbol = "AAPL";
+        // Pre-condition: a prior payload with a non-zero counter.
+        let prior = ConsensusEvidence {
+            consecutive_provider_degraded_cycles: 5,
+            ..data_evidence(symbol, 5)
+        };
+
+        let no_coverage = HydratedConsensusFetch::Ok(ConsensusOutcome::NoCoverage);
+        let next = apply_consensus_half_life_policy(symbol, &no_coverage, Some(&prior));
+        assert!(matches!(next.status, EnrichmentStatus::NotAvailable));
+        // NoCoverage drops payload entirely; the counter is implicitly reset
+        // because subsequent cycles see `None` (counter = 0).
+        assert!(
+            next.payload.is_none(),
+            "NoCoverage should not carry a payload"
+        );
+    }
+
+    #[test]
+    fn data_outcome_resets_counter_to_zero() {
+        let symbol = "AAPL";
+        // Prior cycle was degraded with counter 2.
+        let prior_stub = ConsensusEvidence {
+            symbol: symbol.to_owned(),
+            eps_estimate: None,
+            revenue_estimate_m: None,
+            analyst_count: None,
+            as_of_date: "2026-04-26".to_owned(),
+            price_target: None,
+            recommendations: None,
+            consecutive_provider_degraded_cycles: 2,
+        };
+
+        let data_outcome = HydratedConsensusFetch::Ok(ConsensusOutcome::Data(data_evidence(
+            symbol, 99, // pretend the upstream evidence carries a non-zero counter
+        )));
+        let next = apply_consensus_half_life_policy(symbol, &data_outcome, Some(&prior_stub));
+        assert!(matches!(next.status, EnrichmentStatus::Available));
+        let payload = next.payload.expect("Data should carry a payload");
+        assert_eq!(
+            payload.consecutive_provider_degraded_cycles, 0,
+            "Data outcome must reset counter regardless of upstream value"
+        );
+    }
 }

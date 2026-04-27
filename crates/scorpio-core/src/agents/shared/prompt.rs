@@ -586,6 +586,7 @@ mod tests {
                 as_of_date: "2026-01-15".to_owned(),
                 price_target: None,
                 recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 
@@ -612,6 +613,7 @@ mod tests {
                 as_of_date: "2026-01-15".to_owned(),
                 price_target: None,
                 recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 

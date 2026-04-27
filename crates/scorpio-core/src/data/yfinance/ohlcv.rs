@@ -22,7 +22,7 @@ use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfError};
 #[cfg(test)]
 use yfinance_rs::{
-    analysis::EarningsTrendRow,
+    analysis::{EarningsTrendRow, PriceTarget, RecommendationSummary},
     fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
     profile::Profile,
 };
@@ -82,6 +82,10 @@ pub struct StubbedFinancialResponses {
     pub shares: Option<Vec<ShareCount>>,
     pub trend: Option<Vec<EarningsTrendRow>>,
     pub trend_error: Option<String>,
+    pub price_target: Option<PriceTarget>,
+    pub price_target_error: Option<String>,
+    pub recommendation_summary: Option<RecommendationSummary>,
+    pub recommendation_summary_error: Option<String>,
 }
 
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.

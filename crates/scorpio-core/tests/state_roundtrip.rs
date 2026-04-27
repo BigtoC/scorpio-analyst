@@ -84,6 +84,7 @@ fn arb_consensus_evidence() -> impl Strategy<Value = ConsensusEvidence> {
         "2024-0[1-9]-[0-2][0-9]",
         proptest::option::of(arb_price_target_summary()),
         proptest::option::of(arb_recommendations_summary()),
+        0u32..10u32,
     )
         .prop_map(
             |(
@@ -94,6 +95,7 @@ fn arb_consensus_evidence() -> impl Strategy<Value = ConsensusEvidence> {
                 as_of_date,
                 price_target,
                 recommendations,
+                consecutive_provider_degraded_cycles,
             )| ConsensusEvidence {
                 symbol,
                 eps_estimate,
@@ -102,6 +104,7 @@ fn arb_consensus_evidence() -> impl Strategy<Value = ConsensusEvidence> {
                 as_of_date,
                 price_target,
                 recommendations,
+                consecutive_provider_degraded_cycles,
             },
         )
 }

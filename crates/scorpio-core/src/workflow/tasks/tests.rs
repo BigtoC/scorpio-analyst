@@ -2132,6 +2132,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             shares: Some(quarterly_shares()),
             trend: Some(earnings_trend_rows_with_forward_eps()),
             trend_error: None,
+            ..crate::data::StubbedFinancialResponses::default()
         },
     );
     let task = AnalystSyncTask::with_yfinance(store, yfinance, Duration::from_millis(50));
@@ -2341,6 +2342,7 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
             shares: Some(quarterly_shares()),
             trend: Some(earnings_trend_rows_with_forward_eps()),
             trend_error: None,
+            ..crate::data::StubbedFinancialResponses::default()
         },
     );
     let task = AnalystSyncTask::with_yfinance(store, yfinance, Duration::from_millis(50));

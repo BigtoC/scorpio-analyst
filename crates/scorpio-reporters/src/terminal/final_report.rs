@@ -974,6 +974,7 @@ mod tests {
                 as_of_date: "2026-04-03".to_owned(),
                 price_target: None,
                 recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 
