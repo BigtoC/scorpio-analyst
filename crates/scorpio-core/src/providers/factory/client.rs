@@ -4,7 +4,7 @@
 //! - [`create_completion_model`] — construct a handle from tier + config.
 //! - [`preflight_copilot_if_configured`] — validate configured Copilot providers before the pipeline starts.
 
-use rig::providers::{anthropic, gemini, openai, openrouter};
+use rig::providers::{anthropic, deepseek, gemini, openai, openrouter};
 use secrecy::ExposeSecret;
 use std::path::Path;
 use tracing::info;
@@ -95,6 +95,8 @@ pub(crate) enum ProviderClient {
     Copilot(CopilotProviderClient),
     /// OpenRouter API aggregator (300+ models, including free-tier).
     OpenRouter(openrouter::Client),
+    /// DeepSeek API (deepseek-chat, deepseek-reasoner).
+    DeepSeek(deepseek::Client),
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -257,6 +259,26 @@ fn create_provider_client_for(
             };
             Ok(ProviderClient::OpenRouter(client))
         }
+        ProviderId::DeepSeek => {
+            let key = settings
+                .api_key
+                .as_ref()
+                .ok_or_else(|| missing_key_error(provider))?;
+            let client = match base_url {
+                Some(url) => deepseek::Client::builder()
+                    .api_key(key.expose_secret())
+                    .base_url(url)
+                    .build()
+                    .map_err(|e| {
+                        config_error(&format!(
+                            "failed to create DeepSeek client with base_url \"{url}\": {e}"
+                        ))
+                    })?,
+                None => deepseek::Client::new(key.expose_secret())
+                    .map_err(|e| config_error(&format!("failed to create DeepSeek client: {e}")))?,
+            };
+            Ok(ProviderClient::DeepSeek(client))
+        }
     }
 }
 
@@ -271,8 +293,9 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
         "gemini" => Ok(ProviderId::Gemini),
         "copilot" => Ok(ProviderId::Copilot),
         "openrouter" => Ok(ProviderId::OpenRouter),
+        "deepseek" => Ok(ProviderId::DeepSeek),
         unknown => Err(config_error(&format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter)"
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter, deepseek)"
         ))),
     }
 }
@@ -507,6 +530,17 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
+        }
+    }
+
+    fn providers_config_with_deepseek() -> ProvidersConfig {
+        ProvidersConfig {
+            deepseek: ProviderSettings {
+                api_key: Some(SecretString::from("test-deepseek-key")),
+                base_url: None,
+                rpm: 60,
+            },
+            ..ProvidersConfig::default()
         }
     }
 
@@ -1026,5 +1060,110 @@ mod tests {
     #[test]
     fn copilot_path_embedded_double_dot_segment_rejected() {
         assert!(validate_copilot_cli_path("/usr/local/bin/copilot..bak").is_err());
+    }
+
+    // ── DeepSeek provider tests ──────────────────────────────────────────────
+
+    #[test]
+    fn validate_provider_id_deepseek_returns_deepseek() {
+        let result = validate_provider_id("deepseek");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), ProviderId::DeepSeek);
+    }
+
+    #[test]
+    fn factory_missing_deepseek_key_returns_config_error() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "deepseek".to_owned();
+        cfg.quick_thinking_model = "deepseek-chat".to_owned();
+        let result = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &ProvidersConfig::default(),
+            &ProviderRateLimiters::default(),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("SCORPIO_DEEPSEEK_API_KEY"),
+            "expected env var hint in: {msg}"
+        );
+    }
+
+    #[test]
+    fn factory_creates_deepseek_client() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "deepseek".to_owned();
+        cfg.quick_thinking_model = "deepseek-chat".to_owned();
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &providers_config_with_deepseek(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
+        assert_eq!(handle.provider_name(), "deepseek");
+        assert_eq!(handle.model_id(), "deepseek-chat");
+        assert!(matches!(handle.client, ProviderClient::DeepSeek(_)));
+    }
+
+    #[test]
+    fn create_completion_model_attaches_deepseek_rate_limiter() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "deepseek".to_owned();
+        cfg.quick_thinking_model = "deepseek-chat".to_owned();
+        let providers = ProvidersConfig {
+            deepseek: ProviderSettings {
+                api_key: Some(SecretString::from("test-deepseek-key")),
+                base_url: None,
+                rpm: 75,
+            },
+            ..ProvidersConfig::default()
+        };
+        let limiters = ProviderRateLimiters::from_config(&providers);
+        let handle =
+            create_completion_model(ModelTier::QuickThinking, &cfg, &providers, &limiters).unwrap();
+        assert_eq!(handle.rate_limiter().map(|l| l.label()), Some("deepseek"));
+    }
+
+    #[test]
+    fn factory_creates_deepseek_client_with_base_url_override() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "deepseek".to_owned();
+        cfg.quick_thinking_model = "deepseek-chat".to_owned();
+        let providers = ProvidersConfig {
+            deepseek: ProviderSettings {
+                api_key: Some(SecretString::from("test-deepseek-key")),
+                base_url: Some("https://deepseek.example.com/v1".to_owned()),
+                rpm: 60,
+            },
+            ..ProvidersConfig::default()
+        };
+        let handle = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &providers,
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
+        assert_eq!(handle.provider_name(), "deepseek");
+        assert!(matches!(handle.client, ProviderClient::DeepSeek(_)));
+    }
+
+    #[test]
+    fn factory_creates_deepseek_client_for_deep_thinking_tier() {
+        let mut cfg = sample_llm_config();
+        cfg.deep_thinking_provider = "deepseek".to_owned();
+        cfg.deep_thinking_model = "deepseek-reasoner".to_owned();
+        let handle = create_completion_model(
+            ModelTier::DeepThinking,
+            &cfg,
+            &providers_config_with_deepseek(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap();
+        assert_eq!(handle.provider_name(), "deepseek");
+        assert_eq!(handle.model_id(), "deepseek-reasoner");
+        assert!(matches!(handle.client, ProviderClient::DeepSeek(_)));
     }
 }

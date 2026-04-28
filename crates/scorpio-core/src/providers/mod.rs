@@ -47,6 +47,8 @@ pub enum ProviderId {
     Copilot,
     /// OpenRouter API aggregator (300+ models, including free-tier).
     OpenRouter,
+    /// DeepSeek API (deepseek-chat, deepseek-reasoner).
+    DeepSeek,
 }
 
 impl ProviderId {
@@ -57,6 +59,7 @@ impl ProviderId {
             Self::Gemini => "gemini",
             Self::Copilot => "copilot",
             Self::OpenRouter => "openrouter",
+            Self::DeepSeek => "deepseek",
         }
     }
 
@@ -67,6 +70,7 @@ impl ProviderId {
             Self::Gemini => "SCORPIO_GEMINI_API_KEY",
             Self::Copilot => "(no API key required — install the Copilot CLI and authenticate)",
             Self::OpenRouter => "SCORPIO_OPENROUTER_API_KEY",
+            Self::DeepSeek => "SCORPIO_DEEPSEEK_API_KEY",
         }
     }
 }
@@ -198,5 +202,15 @@ mod tests {
         let tier = ModelTier::DeepThinking;
         let copy = tier;
         assert_eq!(tier, copy);
+    }
+
+    #[test]
+    fn provider_id_deepseek_exposes_strings_and_missing_key_hint() {
+        assert_eq!(ProviderId::DeepSeek.as_str(), "deepseek");
+        assert_eq!(ProviderId::DeepSeek.to_string(), "deepseek");
+        assert_eq!(
+            ProviderId::DeepSeek.missing_key_hint(),
+            "SCORPIO_DEEPSEEK_API_KEY"
+        );
     }
 }

@@ -725,6 +725,7 @@ mod tests {
                         output_tokens: 5,
                         total_tokens: 15,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 )),
             ],
@@ -813,6 +814,7 @@ mod tests {
                         output_tokens: 5,
                         total_tokens: 15,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 )),
             ],
@@ -863,6 +865,7 @@ mod tests {
                         output_tokens: 5,
                         total_tokens: 15,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 )),
             ],
@@ -896,6 +899,7 @@ mod tests {
                     output_tokens: 3,
                     total_tokens: 10,
                     cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
             ))],
             vec![],
@@ -1032,6 +1036,7 @@ mod tests {
                 output_tokens: 8,
                 total_tokens: 20,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
         ));
 
@@ -1073,6 +1078,7 @@ mod tests {
                 output_tokens: 1,
                 total_tokens: 2,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
         ));
 

@@ -364,6 +364,7 @@ mod tests {
             output_tokens: 0,
             total_tokens: 200,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result = agent_token_usage_from_completion("Agent", "o3", usage, Instant::now(), 0);
         assert!(result.token_counts_available);
@@ -377,6 +378,7 @@ mod tests {
             output_tokens: 0,
             total_tokens: 0,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result = agent_token_usage_from_completion("Agent", "o3", usage, Instant::now(), 0);
         assert!(!result.token_counts_available);
@@ -541,6 +543,7 @@ mod tests {
             output_tokens: 75,
             total_tokens: 225,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Bullish Researcher", "o3", usage, Instant::now(), 0);

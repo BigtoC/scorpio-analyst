@@ -268,6 +268,7 @@ mod tests {
             output_tokens: 15,
             total_tokens: 25,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
 
         let (message, token_usage) = build_debate_result(
@@ -301,6 +302,7 @@ mod tests {
                         output_tokens: 4,
                         total_tokens: 14,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 )),
                 MockChatOutcome::Ok(mock_prompt_response(
@@ -310,6 +312,7 @@ mod tests {
                         output_tokens: 6,
                         total_tokens: 18,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 )),
             ],
@@ -342,6 +345,7 @@ mod tests {
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
             ))],
         );

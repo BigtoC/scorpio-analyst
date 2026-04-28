@@ -520,6 +520,11 @@ fn build_prompt_text(request: &CompletionRequest) -> String {
                     parts.push(format!("[Assistant]\n{texts}"));
                 }
             }
+            Message::System { content } => {
+                if !content.is_empty() {
+                    parts.push(format!("[System]\n{content}"));
+                }
+            }
         }
     }
 

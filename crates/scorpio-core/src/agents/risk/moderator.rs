@@ -280,6 +280,7 @@ mod tests {
             output_tokens: total / 2,
             total_tokens: total,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         }
     }
 
@@ -390,6 +391,7 @@ mod tests {
                 output_tokens: 10,
                 total_tokens: 30,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
             started_at,
             0,

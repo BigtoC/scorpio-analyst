@@ -116,7 +116,7 @@ The core requirement for the LLM connector is the ability to seamlessly abstract
 programming interfaces (e.g., OpenAI, Anthropic, local instances via Ollama), manage conversation history, and
 enforce strict tool-calling schemas.
 
-#### Selected Provider: `rig-core` (v0.31.0)
+#### Selected Provider: `rig-core` (v0.35.0)
 
 As directed by project requirements, the framework will utilize `rig-core` (the primary crate name on crates.io) as the
 foundational LLM provider connector. `rig` represents a modular, composable, and unopinionated approach to building
@@ -142,13 +142,13 @@ primary advantage is its ability to manage cyclic execution (such as the debate 
 shared, immutable state object across all nodes. To replicate this in Rust, the framework requires a stateful execution
 engine.
 
-#### Selected Orchestrator: `graph-flow` (v0.4.0)
+#### Selected Orchestrator: `graph-flow` (v0.5.1)
 
 `graph-flow` is a high-performance, type-safe framework explicitly designed to bring LangGraph-inspired stateful
 execution to the Rust ecosystem. It treats the primary workflow as a directed graph, where each execution node
 implements an asynchronous `Task` trait. The framework features a centralized `Context` object that provides thread-safe
 state sharing across the workflow, allowing data aggregated by the Analyst Team to persist through the debate and
-execution phases. Enable the optional `"rig"` feature flag (`graph-flow = { version = "0.2", features = ["rig"] }`) for
+execution phases. Enable the optional `"rig"` feature flag (`graph-flow = { version = "0.5.1", features = ["rig"] }`) for
 seamless integration with `rig-core` agents.
 
 Crucially, `graph-flow` supports conditional routing and cyclical control flow through its `NextAction` enum, enabling
@@ -593,8 +593,8 @@ Each persona within the TradingAgents framework requires specific LLM backbone r
 engineering, and distinct tool access. Following the original paper's architecture, all agents must operate using the *
 *ReAct (Reasoning and Acting)** prompting framework, synergizing step-by-step reasoning with tool execution before
 emitting their final structured schemas. The implementation will utilize a multi-provider factory pattern via `rig` to
-ensure seamless task routing across a diverse suite of models, including OpenAI, Anthropic, Google Gemini, and a custom
-GitHub Copilot integration, and other more LLM providers.
+ensure seamless task routing across a diverse suite of models, including OpenAI, Anthropic, Google Gemini,
+OpenRouter, DeepSeek, and a custom GitHub Copilot integration.
 
 ### Dual-Tier Cognitive Routing
 
@@ -697,20 +697,28 @@ The Technical Analyst identifies actionable entry and exit signals based entirel
 * **Tool Bindings**: Exposes `yfinance-rs` OHLCV retrieval and `kand` indicator calculation as callable tools bound
   to the `rig` agent. The LLM calls `get_ohlcv` at inference time to fetch historical candles, then calls
   `calculate_all_indicators` (or individual indicator tools such as `calculate_rsi`, `calculate_macd`,
-  `calculate_atr`, `calculate_bollinger_bands`) on those candles. A `get_options_snapshot` tool — wrapping
-  `YFinanceOptionsProvider` behind the `OptionsProvider` trait — returns a compact `OptionsSnapshot` with ATM IV, IV
-  term structure, put/call volume and OI ratios, max pain strike, 25-delta skew, and a near-the-money strike slice
-  (nearest expiration, strikes within ±5% of spot). The tool returns an error "no listed options for {symbol}" when
-  the ticker has no options chain, and the analyst is prompted to omit options analysis in that case without retrying.
-  Rust does not pre-fetch or pre-compute anything before the agent is invoked.
+  `calculate_atr`, `calculate_bollinger_bands`) on those candles. Before the LLM turn, `TechnicalAnalyst::run()`
+  performs one scoped options prefetch via `YFinanceOptionsProvider`, storing the result in a write-once
+  `OptionsToolContext`. A `get_options_snapshot` tool — wrapping `YFinanceOptionsProvider` behind the `OptionsProvider`
+  trait and returning a compact `OptionsSnapshot` with ATM IV, IV term structure, put/call volume and OI ratios, max
+  pain strike, 25-delta skew, and a near-the-money strike slice (nearest expiration, strikes within ±5% of spot) — is
+  bound only when the prefetch succeeded; the tool reads from the pre-fetched context rather than making a second live
+  call. On prefetch failure the tool is omitted and the prompt is rendered with a variant that omits all
+  options-tool guidance and explicitly states the live options provider was unavailable for this run.
 * **Execution Logic**: The LLM calls the OHLCV, indicator, and options tools during its reasoning pass, then
   interprets the `f64` statistical outputs — RSI overbought/oversold conditions (>70 / <30), MACD signal-line
   crossovers, ATR historical volatility, Bollinger Band support/resistance boundaries, and implied-volatility regime
-  plus positioning skew from the options snapshot — producing a definitive structured summary. The options summary is
-  persisted in the optional `TechnicalData.options_summary` field. The LLM does not perform the mathematical
-  calculations; it invokes the tools and interprets the results. This MVP interpretation path is designed for
-  traditional long-term investing workflows; crypto-native interpretation concerns such as logarithmic scaling, 24/7
-  market structure, and MVRV-style on-chain metrics are intentionally deferred beyond the MVP.
+  plus positioning skew from the options snapshot — producing a `TechnicalAnalystResponse` (the LLM output contract).
+  After inference, `TechnicalAnalyst::run()` applies a merge step to construct the persisted `TechnicalData`:
+  `options_context: Option<TechnicalOptionsContext>` is set from the pre-fetched result, carrying either the live
+  `OptionsOutcome` or an explicit `FetchFailed { reason }` record; `options_summary` (the model-authored interpretation)
+  is cleared if `options_context` does not carry a live snapshot, preventing hallucinated options analysis from reaching
+  downstream agents. The `options_context` field flows to researchers, trader, risk managers, and fund manager via the
+  serialized `technical_report`, providing Rust-owned structured options evidence alongside the model-authored
+  `options_summary`. The LLM does not perform the mathematical calculations; it invokes the tools and interprets the
+  results. This MVP interpretation path is designed for traditional long-term investing workflows; crypto-native
+  interpretation concerns such as logarithmic scaling, 24/7 market structure, and MVRV-style on-chain metrics are
+  intentionally deferred beyond the MVP.
 * **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis

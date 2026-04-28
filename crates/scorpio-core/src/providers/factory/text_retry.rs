@@ -128,6 +128,7 @@ mod tests {
             output_tokens: 0,
             total_tokens: 0,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         }
     }
 
@@ -147,6 +148,7 @@ mod tests {
             output_tokens: 3,
             total_tokens: 8,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let (agent, _ctrl) =
             mock_llm_agent_with_provider(ProviderId::OpenAI, "test-model", vec![], vec![]);
@@ -188,6 +190,7 @@ mod tests {
                 output_tokens: 1,
                 total_tokens: 3,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
         ));
 

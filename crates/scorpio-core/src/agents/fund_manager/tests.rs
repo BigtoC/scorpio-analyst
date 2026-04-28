@@ -211,6 +211,7 @@ fn nonzero_usage() -> Usage {
         output_tokens: 45,
         total_tokens: 165,
         cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
     }
 }
 
@@ -220,6 +221,7 @@ fn zero_usage() -> Usage {
         output_tokens: 0,
         total_tokens: 0,
         cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
     }
 }
 

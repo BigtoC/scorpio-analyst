@@ -160,6 +160,7 @@ SCORPIO_OPENAI_API_KEY=sk-your-key-here
 SCORPIO_ANTHROPIC_API_KEY=sk-ant-your-key-here
 SCORPIO_GEMINI_API_KEY=your-gemini-key-here
 SCORPIO_OPENROUTER_API_KEY=your-openrouter-key-here
+SCORPIO_DEEPSEEK_API_KEY=your-deepseek-key-here
 
 # Financial data APIs
 SCORPIO_FINNHUB_API_KEY=your-finnhub-key-here
@@ -178,7 +179,7 @@ cargo run -p scorpio-cli -- setup
 
 The repo-root `config.toml` is deprecated and is not read at runtime. If you prefer a non-interactive flow, set the `SCORPIO__LLM__QUICK_THINKING_PROVIDER`, `SCORPIO__LLM__DEEP_THINKING_PROVIDER`, `SCORPIO__LLM__QUICK_THINKING_MODEL`, and `SCORPIO__LLM__DEEP_THINKING_MODEL` environment variables directly instead.
 
-> **Note:** GitHub Copilot does not yet support tool calling — use OpenAI, Anthropic, or Gemini for the `quick_thinking_provider`. See [Known Limitations](#known-limitations) for details.
+> **Note:** GitHub Copilot does not yet support tool calling — use OpenAI, Anthropic, Gemini, OpenRouter, or DeepSeek for the `quick_thinking_provider`. See [Known Limitations](#known-limitations) for details.
 
 ### 3. Run
 
@@ -234,7 +235,7 @@ The current Copilot provider communicates over ACP (Agent Client Protocol) via a
 
 The fix requires routing analyst tools through a per-session MCP helper server, splitting the Copilot monolith into focused modules, and adding a worker pool to eliminate the shared-subprocess bottleneck. The full implementation plan is at [`docs/superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md`](docs/superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md).
 
-Until that work is complete, use OpenAI, Anthropic, or Gemini as the `quick_thinking_provider` for Phase 1 analysts.
+Until that work is complete, use OpenAI, Anthropic, Gemini, OpenRouter, or DeepSeek as the `quick_thinking_provider` for Phase 1 analysts.
 
 ## Spec Driven Development Workflow Shortcuts
 

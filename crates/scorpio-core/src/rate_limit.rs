@@ -139,6 +139,7 @@ impl ProviderRateLimiters {
             (ProviderId::Gemini, cfg.gemini.rpm, "gemini"),
             (ProviderId::Copilot, cfg.copilot.rpm, "copilot"),
             (ProviderId::OpenRouter, cfg.openrouter.rpm, "openrouter"),
+            (ProviderId::DeepSeek, cfg.deepseek.rpm, "deepseek"),
         ];
 
         for (provider, rpm, label) in provider_rpms {
@@ -200,6 +201,7 @@ mod tests {
                 ProviderId::Gemini => cfg.gemini.rpm = rpm,
                 ProviderId::Copilot => cfg.copilot.rpm = rpm,
                 ProviderId::OpenRouter => cfg.openrouter.rpm = rpm,
+                ProviderId::DeepSeek => cfg.deepseek.rpm = rpm,
             }
         }
         cfg
@@ -228,6 +230,11 @@ mod tests {
                 ..Default::default()
             },
             openrouter: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            deepseek: ProviderSettings {
                 base_url: None,
                 rpm: 0,
                 ..Default::default()
@@ -365,5 +372,25 @@ mod tests {
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
         assert!(limiter.is_none(), "rps=0 should disable the limiter");
+    }
+
+    // ── DeepSeek rate limiter tests ──────────────────────────────────────────
+
+    #[test]
+    fn provider_rate_limiters_construction_includes_deepseek() {
+        let cfg = providers_config_with(&[(ProviderId::DeepSeek, 75)]);
+        let registry = ProviderRateLimiters::from_config(&cfg);
+        assert!(registry.get(ProviderId::DeepSeek).is_some());
+        assert_eq!(
+            registry.get(ProviderId::DeepSeek).map(|l| l.label()),
+            Some("deepseek")
+        );
+    }
+
+    #[test]
+    fn provider_rate_limiters_zero_rpm_disables_deepseek() {
+        let cfg = providers_config_with(&[(ProviderId::DeepSeek, 0)]);
+        let registry = ProviderRateLimiters::from_config(&cfg);
+        assert!(registry.get(ProviderId::DeepSeek).is_none());
     }
 }

@@ -43,6 +43,7 @@ type OpenAIModel = rig::providers::openai::responses_api::ResponsesCompletionMod
 type AnthropicModel = rig::providers::anthropic::completion::CompletionModel;
 type GeminiModel = rig::providers::gemini::completion::CompletionModel;
 type OpenRouterModel = rig::providers::openrouter::completion::CompletionModel;
+type DeepSeekModel = rig::providers::deepseek::CompletionModel;
 
 macro_rules! dispatch_llm_agent {
     ($inner:expr, |$agent:ident| $body:expr, mock = |$mock:ident| $mock_body:expr) => {
@@ -52,6 +53,7 @@ macro_rules! dispatch_llm_agent {
             LlmAgentInner::Gemini($agent) => $body,
             LlmAgentInner::Copilot($agent) => $body,
             LlmAgentInner::OpenRouter($agent) => $body,
+            LlmAgentInner::DeepSeek($agent) => $body,
             #[cfg(test)]
             LlmAgentInner::Mock($mock) => $mock_body,
         }
@@ -78,6 +80,8 @@ enum LlmAgentInner {
     Copilot(rig::agent::Agent<CopilotCompletionModel>),
     /// Agent backed by OpenRouter API aggregator.
     OpenRouter(rig::agent::Agent<OpenRouterModel>),
+    /// Agent backed by DeepSeek API.
+    DeepSeek(rig::agent::Agent<DeepSeekModel>),
     #[cfg(test)]
     Mock(MockLlmAgent),
 }
@@ -399,6 +403,7 @@ impl LlmAgent {
     ///
     /// The `chat_history` is updated in place: the new user message and the assistant
     /// response are appended so callers can pass the same `Vec<Message>` across rounds.
+    #[allow(clippy::ptr_arg)]
     pub async fn chat_details(
         &self,
         prompt: &str,
@@ -406,16 +411,34 @@ impl LlmAgent {
     ) -> Result<PromptResponse, PromptError> {
         use rig::agent::PromptRequest;
 
-        dispatch_llm_agent!(
+        let response = dispatch_llm_agent!(
             &self.inner,
             |agent| {
                 PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history)
+                    .with_history(chat_history.clone())
                     .extended_details()
                     .await
             },
             mock = |agent| agent.chat_details(prompt, chat_history).await
-        )
+        )?;
+
+        append_response_messages(chat_history, &response);
+        Ok(response)
+    }
+}
+
+/// Append the delta messages from a [`PromptResponse`] to `chat_history`.
+///
+/// Real providers (OpenAI, Anthropic, etc.) return the round's messages
+/// (user prompt + assistant reply) in `response.messages`. This helper extends
+/// `chat_history` with those messages so multi-turn callers accumulate context
+/// correctly.
+///
+/// The mock path sets `response.messages = None` and updates history directly inside
+/// `MockLlmAgent::chat_details`, so this function is a no-op for mocks.
+fn append_response_messages(chat_history: &mut Vec<Message>, response: &PromptResponse) {
+    if let Some(messages) = &response.messages {
+        chat_history.extend(messages.clone());
     }
 }
 
@@ -447,6 +470,7 @@ impl MockLlmAgent {
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 ))
             })
@@ -479,6 +503,7 @@ impl MockLlmAgent {
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
             )),
         }
@@ -487,7 +512,7 @@ impl MockLlmAgent {
     async fn chat_details(
         &self,
         prompt: &str,
-        chat_history: &mut Vec<Message>,
+        chat_history: &mut [Message],
     ) -> Result<PromptResponse, PromptError> {
         self.observed_prompts
             .lock()
@@ -515,21 +540,35 @@ impl MockLlmAgent {
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 ))
             });
 
-        chat_history.push(Message::User {
-            content: OneOrMany::one(UserContent::text(prompt)),
-        });
+        let round_messages = || {
+            vec![
+                Message::User {
+                    content: OneOrMany::one(UserContent::text(prompt)),
+                },
+                Message::Assistant {
+                    content: OneOrMany::one(AssistantContent::text("")),
+                    id: None,
+                },
+            ]
+        };
 
         match outcome {
             MockChatOutcome::Ok(response) => {
-                chat_history.push(Message::Assistant {
-                    content: OneOrMany::one(AssistantContent::text(response.output.clone())),
-                    id: None,
-                });
-                Ok(response)
+                if response.messages.is_some() {
+                    Ok(response)
+                } else {
+                    let mut messages = round_messages();
+                    messages[1] = Message::Assistant {
+                        content: OneOrMany::one(AssistantContent::text(response.output.clone())),
+                        id: None,
+                    };
+                    Ok(response.with_messages(messages))
+                }
             }
             MockChatOutcome::PartialUserThenErr(err) => Err(err),
         }
@@ -665,6 +704,11 @@ fn build_agent_inner(
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
             make_agent!(base, OpenRouter)
+        }
+        ProviderClient::DeepSeek(c) => {
+            use rig::prelude::CompletionClient;
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(base, DeepSeek)
         }
     }
 }
@@ -870,6 +914,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_agent_creates_deepseek_agent() {
+        use crate::config::{ProviderSettings, ProvidersConfig};
+        use secrecy::SecretString;
+
+        let providers = ProvidersConfig {
+            deepseek: ProviderSettings {
+                api_key: Some(SecretString::from("test-deepseek-key")),
+                base_url: None,
+                rpm: 60,
+            },
+            ..ProvidersConfig::default()
+        };
+
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "deepseek".to_owned();
+        cfg.quick_thinking_model = "deepseek-chat".to_owned();
+
+        let handle = super::super::client::create_completion_model(
+            crate::providers::ModelTier::QuickThinking,
+            &cfg,
+            &providers,
+            &crate::rate_limit::ProviderRateLimiters::default(),
+        )
+        .unwrap();
+
+        let agent = build_agent(&handle, "You are a test agent.");
+        assert_eq!(agent.provider_name(), "deepseek");
+        assert!(matches!(&agent.inner, LlmAgentInner::DeepSeek(_)));
+    }
+
+    #[tokio::test]
     async fn build_agent_creates_openrouter_deep_thinking_agent() {
         let mut cfg = sample_llm_config();
         cfg.deep_thinking_provider = "openrouter".to_owned();
@@ -954,6 +1029,148 @@ mod tests {
         assert_eq!(agent.rate_limiter().map(|l| l.label()), Some("openrouter"));
     }
 
+    // ── append_response_messages (TDD – Task A) ──────────────────────────────
+
+    #[test]
+    fn append_response_messages_appends_new_messages_to_existing_history() {
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let mut history: Vec<Message> = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("prior")),
+        }];
+        let response = PromptResponse::new(
+            "ok",
+            Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: 0,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        )
+        .with_messages(vec![
+            Message::User {
+                content: OneOrMany::one(UserContent::text("next")),
+            },
+            Message::Assistant {
+                content: OneOrMany::one(AssistantContent::text("done")),
+                id: None,
+            },
+        ]);
+
+        append_response_messages(&mut history, &response);
+
+        assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn append_response_messages_is_noop_when_provider_returns_no_messages() {
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let mut history: Vec<Message> = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("prior")),
+        }];
+        let response = PromptResponse::new(
+            "ok",
+            Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                total_tokens: 0,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        );
+
+        append_response_messages(&mut history, &response);
+
+        assert_eq!(history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn chat_details_appends_provider_messages_to_existing_history() {
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![MockChatOutcome::Ok(
+                PromptResponse::new(
+                    "done",
+                    Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )
+                .with_messages(vec![
+                    Message::User {
+                        content: OneOrMany::one(UserContent::text("next")),
+                    },
+                    Message::Assistant {
+                        content: OneOrMany::one(AssistantContent::text("done")),
+                        id: None,
+                    },
+                ]),
+            )],
+        );
+
+        let mut history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("prior")),
+        }];
+
+        let response = agent.chat_details("next", &mut history).await.unwrap();
+
+        assert_eq!(response.output, "done");
+        assert_eq!(history.len(), 3);
+        assert!(matches!(&history[1], Message::User { .. }));
+        assert!(matches!(&history[2], Message::Assistant { .. }));
+    }
+
+    #[tokio::test]
+    async fn chat_details_does_not_double_append_mock_history_when_messages_are_present() {
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![MockChatOutcome::Ok(
+                PromptResponse::new(
+                    "done",
+                    Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )
+                .with_messages(vec![
+                    Message::User {
+                        content: OneOrMany::one(UserContent::text("next")),
+                    },
+                    Message::Assistant {
+                        content: OneOrMany::one(AssistantContent::text("done")),
+                        id: None,
+                    },
+                ]),
+            )],
+        );
+
+        let mut history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("prior")),
+        }];
+
+        agent.chat_details("next", &mut history).await.unwrap();
+
+        assert_eq!(history.len(), 3);
+    }
+
     #[tokio::test]
     async fn mock_agent_supports_typed_prompt_details_for_retry_tests() {
         let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
@@ -972,6 +1189,7 @@ mod tests {
                 output_tokens: 2,
                 total_tokens: 6,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
         ));
 

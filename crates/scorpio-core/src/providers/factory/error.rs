@@ -48,7 +48,7 @@ pub(super) fn map_structured_output_error_with_context(
             message: format!("provider={provider} model={model_id}: model returned empty response"),
         },
         StructuredOutputError::PromptError(e) => {
-            map_prompt_error_with_context(provider, model_id, e)
+            map_prompt_error_with_context(provider, model_id, *e)
         }
     }
 }
@@ -255,7 +255,7 @@ mod tests {
         let inner = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "inner".to_owned(),
         ));
-        let err = StructuredOutputError::PromptError(inner);
+        let err = StructuredOutputError::PromptError(Box::new(inner));
         let mapped = map_structured_output_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::Rig(_)));
     }
