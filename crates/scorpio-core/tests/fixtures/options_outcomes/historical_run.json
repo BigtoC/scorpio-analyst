@@ -1,0 +1,10 @@
+{
+  "scenario": "historical_run",
+  "expected_outcome": "historical_run",
+  "description": "target_date set 30 days before market-local US/Eastern today. Expected: HistoricalRun because live options are only available for today's session.",
+  "setup": {
+    "spot_price": 150.0,
+    "target_date_offset_days": -30,
+    "note": "The provider compares target_date against market-local US/Eastern today. A past date triggers HistoricalRun before any network call is made."
+  }
+}

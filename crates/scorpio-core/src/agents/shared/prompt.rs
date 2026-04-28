@@ -305,7 +305,11 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
     };
     sections.push(format!("Consensus estimates status: {consensus_status}"));
 
-    if let Some(ref consensus) = state.enrichment_consensus.payload {
+    if matches!(
+        state.enrichment_consensus.status,
+        EnrichmentStatus::Available
+    ) && let Some(ref consensus) = state.enrichment_consensus.payload
+    {
         let eps = consensus
             .eps_estimate
             .map(|v| format!("{v:.2}"))
@@ -318,9 +322,63 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
             .analyst_count
             .map(|v| v.to_string())
             .unwrap_or_else(|| "N/A".to_owned());
+
+        let pt_mean = consensus
+            .price_target
+            .as_ref()
+            .and_then(|pt| pt.mean)
+            .map(|v| format!("${v:.2}"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let pt_low = consensus
+            .price_target
+            .as_ref()
+            .and_then(|pt| pt.low)
+            .map(|v| format!("${v:.2}"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let pt_high = consensus
+            .price_target
+            .as_ref()
+            .and_then(|pt| pt.high)
+            .map(|v| format!("${v:.2}"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let pt_analysts = consensus
+            .price_target
+            .as_ref()
+            .and_then(|pt| pt.analyst_count)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "N/A".to_owned());
+
+        let recs = if let Some(ref r) = consensus.recommendations {
+            let sb = r.strong_buy.unwrap_or(0);
+            let b = r.buy.unwrap_or(0);
+            let h = r.hold.unwrap_or(0);
+            let s = r.sell.unwrap_or(0);
+            let ss = r.strong_sell.unwrap_or(0);
+            format!("strong_buy={sb}, buy={b}, hold={h}, sell={s}, strong_sell={ss}")
+        } else {
+            "N/A".to_owned()
+        };
+
         sections.push(format!(
-            "Consensus estimates (as of {}):\n  - EPS estimate: {eps}\n  - Revenue estimate: ${rev}\n  - Analyst count: {analysts}",
-            consensus.as_of_date,
+            concat!(
+                "Consensus estimates (as of {date}):\n",
+                "  - EPS estimate: {eps}\n",
+                "  - Revenue estimate: ${rev}\n",
+                "  - Analyst count: {analysts}\n",
+                "  - Price target mean: {pt_mean}\n",
+                "  - Price target range: {pt_low} - {pt_high}\n",
+                "  - Price target analyst count: {pt_analysts}\n",
+                "  - Recommendations: {recs}",
+            ),
+            date = consensus.as_of_date,
+            eps = eps,
+            rev = rev,
+            analysts = analysts,
+            pt_mean = pt_mean,
+            pt_low = pt_low,
+            pt_high = pt_high,
+            pt_analysts = pt_analysts,
+            recs = recs,
         ));
     }
 
@@ -584,6 +642,9 @@ mod tests {
                 revenue_estimate_m: Some(95_000.0),
                 analyst_count: Some(35),
                 as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 
@@ -608,12 +669,152 @@ mod tests {
                 revenue_estimate_m: None,
                 analyst_count: None,
                 as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 
         let ctx = build_enrichment_context(&state);
         assert!(ctx.contains("EPS estimate: N/A"));
         assert!(ctx.contains("Revenue estimate: $N/A"));
+    }
+
+    #[test]
+    fn build_enrichment_context_includes_price_target_and_recommendations() {
+        use crate::data::adapters::estimates::{
+            ConsensusEvidence, PriceTargetSummary, RecommendationsSummary,
+        };
+
+        let mut state = empty_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: Some(2.15),
+                revenue_estimate_m: Some(94_200.0),
+                analyst_count: Some(28),
+                as_of_date: "2026-04-26".to_owned(),
+                price_target: Some(PriceTargetSummary {
+                    mean: Some(215.0),
+                    high: Some(265.0),
+                    low: Some(170.0),
+                    analyst_count: Some(42),
+                }),
+                recommendations: Some(RecommendationsSummary {
+                    strong_buy: Some(12),
+                    buy: Some(18),
+                    hold: Some(10),
+                    sell: Some(2),
+                    strong_sell: Some(0),
+                }),
+                consecutive_provider_degraded_cycles: 0,
+            }),
+        };
+
+        let ctx = build_enrichment_context(&state);
+        assert!(
+            ctx.contains("Price target mean: $215.00"),
+            "must include mean price target: {ctx}"
+        );
+        assert!(
+            ctx.contains("Price target range: $170.00 - $265.00"),
+            "must include price target range: {ctx}"
+        );
+        assert!(
+            ctx.contains("Price target analyst count: 42"),
+            "must include price target analyst count: {ctx}"
+        );
+        assert!(
+            ctx.contains("strong_buy=12"),
+            "must include strong_buy recommendation bucket: {ctx}"
+        );
+        assert!(
+            ctx.contains("buy=18"),
+            "must include buy recommendation bucket: {ctx}"
+        );
+        assert!(
+            ctx.contains("hold=10"),
+            "must include hold recommendation bucket: {ctx}"
+        );
+        assert!(
+            ctx.contains("sell=2"),
+            "must include sell recommendation bucket: {ctx}"
+        );
+        assert!(
+            ctx.contains("strong_sell=0"),
+            "must include strong_sell recommendation bucket: {ctx}"
+        );
+        // Existing base fields must still be present.
+        assert!(ctx.contains("EPS estimate: 2.15"), "EPS estimate: {ctx}");
+        assert!(
+            ctx.contains("Revenue estimate: $94200M"),
+            "revenue estimate: {ctx}"
+        );
+        assert!(ctx.contains("Analyst count: 28"), "analyst count: {ctx}");
+    }
+
+    #[test]
+    fn build_enrichment_context_omits_consensus_payload_details_when_status_is_not_available() {
+        use crate::data::adapters::estimates::ConsensusEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::FetchFailed("provider_degraded".to_owned()),
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: Some(2.50),
+                revenue_estimate_m: Some(95_000.0),
+                analyst_count: Some(35),
+                as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 2,
+            }),
+        };
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Consensus estimates status: fetch_failed"));
+        assert!(ctx.contains("provider_degraded"));
+        assert!(
+            !ctx.contains("Consensus estimates (as of"),
+            "non-available consensus payload must not render as live analyst data: {ctx}"
+        );
+        assert!(
+            !ctx.contains("EPS estimate:"),
+            "non-available consensus payload must not expose detail lines: {ctx}"
+        );
+    }
+
+    #[test]
+    fn build_enrichment_context_omits_stubbed_consensus_details_after_half_life_downgrade() {
+        use crate::data::adapters::estimates::ConsensusEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::NotAvailable,
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: None,
+                revenue_estimate_m: None,
+                analyst_count: None,
+                as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 3,
+            }),
+        };
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Consensus estimates status: not_available"));
+        assert!(
+            !ctx.contains("Consensus estimates (as of"),
+            "half-life downgrade stub must not render as live analyst data: {ctx}"
+        );
+        assert!(
+            !ctx.contains("EPS estimate:"),
+            "half-life downgrade stub must not expose detail lines: {ctx}"
+        );
     }
 
     // ── Pack context tests ──────────────────────────────────────────────

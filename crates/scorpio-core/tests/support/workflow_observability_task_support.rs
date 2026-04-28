@@ -107,6 +107,7 @@ async fn seed_all_analysts_ok(ctx: &Context, state: &TradingState) {
             resistance_level: None,
             volume_avg: None,
             summary: "ok".to_owned(),
+            options_summary: None,
         },
     )
     .await

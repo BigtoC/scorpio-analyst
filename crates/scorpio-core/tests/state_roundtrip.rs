@@ -2,7 +2,9 @@
 
 use proptest::prelude::*;
 use scorpio_core::data::adapters::{
-    EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
+    EnrichmentStatus,
+    estimates::{ConsensusEvidence, PriceTargetSummary, RecommendationsSummary},
+    events::EventNewsEvidence,
 };
 use scorpio_core::state::*;
 
@@ -39,6 +41,40 @@ fn arb_event_news_evidence() -> impl Strategy<Value = EventNewsEvidence> {
         })
 }
 
+fn arb_price_target_summary() -> impl Strategy<Value = PriceTargetSummary> {
+    (
+        arb_opt_f64(),
+        arb_opt_f64(),
+        arb_opt_f64(),
+        proptest::option::of(0u32..200u32),
+    )
+        .prop_map(|(mean, high, low, analyst_count)| PriceTargetSummary {
+            mean,
+            high,
+            low,
+            analyst_count,
+        })
+}
+
+fn arb_recommendations_summary() -> impl Strategy<Value = RecommendationsSummary> {
+    (
+        proptest::option::of(0u32..50u32),
+        proptest::option::of(0u32..50u32),
+        proptest::option::of(0u32..50u32),
+        proptest::option::of(0u32..50u32),
+        proptest::option::of(0u32..50u32),
+    )
+        .prop_map(
+            |(strong_buy, buy, hold, sell, strong_sell)| RecommendationsSummary {
+                strong_buy,
+                buy,
+                hold,
+                sell,
+                strong_sell,
+            },
+        )
+}
+
 fn arb_consensus_evidence() -> impl Strategy<Value = ConsensusEvidence> {
     (
         "[A-Z]{1,5}",
@@ -46,16 +82,29 @@ fn arb_consensus_evidence() -> impl Strategy<Value = ConsensusEvidence> {
         arb_opt_f64(),
         proptest::option::of(0u32..100u32),
         "2024-0[1-9]-[0-2][0-9]",
+        proptest::option::of(arb_price_target_summary()),
+        proptest::option::of(arb_recommendations_summary()),
+        0u32..10u32,
     )
         .prop_map(
-            |(symbol, eps_estimate, revenue_estimate_m, analyst_count, as_of_date)| {
-                ConsensusEvidence {
-                    symbol,
-                    eps_estimate,
-                    revenue_estimate_m,
-                    analyst_count,
-                    as_of_date,
-                }
+            |(
+                symbol,
+                eps_estimate,
+                revenue_estimate_m,
+                analyst_count,
+                as_of_date,
+                price_target,
+                recommendations,
+                consecutive_provider_degraded_cycles,
+            )| ConsensusEvidence {
+                symbol,
+                eps_estimate,
+                revenue_estimate_m,
+                analyst_count,
+                as_of_date,
+                price_target,
+                recommendations,
+                consecutive_provider_degraded_cycles,
             },
         )
 }
@@ -160,7 +209,13 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
         arb_opt_f64(),
         arb_opt_f64(),
         arb_opt_f64(),
-        (arb_opt_f64(), arb_opt_f64(), arb_opt_f64(), "[a-z ]{0,30}"),
+        (
+            arb_opt_f64(),
+            arb_opt_f64(),
+            arb_opt_f64(),
+            "[a-z ]{0,30}",
+            proptest::option::of("[A-Za-z0-9 :;./%-]{0,80}"),
+        ),
     )
         .prop_map(
             |(
@@ -173,7 +228,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
                 ema_26,
                 bollinger_upper,
                 bollinger_lower,
-                (support_level, resistance_level, volume_avg, summary),
+                (support_level, resistance_level, volume_avg, summary, options_summary),
             )| {
                 TechnicalData {
                     rsi,
@@ -189,6 +244,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
                     resistance_level,
                     volume_avg,
                     summary,
+                    options_summary,
                 }
             },
         )
@@ -241,14 +297,16 @@ fn arb_news_article() -> impl Strategy<Value = NewsArticle> {
         "2024-0[1-9]-[0-2][0-9]",
         arb_opt_f64(),
         "[a-z ]{0,40}",
+        proptest::option::of("https://[a-z]{3,10}\\.example\\.com/[a-z0-9-]{1,20}"),
     )
         .prop_map(
-            |(title, source, published_at, relevance_score, snippet)| NewsArticle {
+            |(title, source, published_at, relevance_score, snippet, url)| NewsArticle {
                 title,
                 source,
                 published_at,
                 relevance_score,
                 snippet,
+                url,
             },
         )
 }

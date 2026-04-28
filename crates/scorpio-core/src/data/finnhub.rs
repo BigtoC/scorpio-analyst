@@ -242,13 +242,7 @@ impl FinnhubClient {
         let articles = raw
             .into_iter()
             .take(20)
-            .map(|n| NewsArticle {
-                title: sanitize_news_text(&n.headline, NEWS_TITLE_MAX_CHARS),
-                source: n.source,
-                published_at: n.datetime.to_string(),
-                relevance_score: None,
-                snippet: sanitize_news_text(&n.summary, NEWS_SNIPPET_MAX_CHARS),
-            })
+            .map(|n| normalize_news_fields(&n.url, n.datetime, &n.headline, &n.source, &n.summary))
             .collect::<Vec<_>>();
         let macro_events = derive_macro_events(&articles);
         let article_count = articles.len();
@@ -462,6 +456,41 @@ fn sanitize_news_text(text: &str, max_chars: usize) -> String {
     buf.chars().take(max_chars).collect()
 }
 
+/// Normalize raw URL + unix-second timestamp fields shared by both
+/// `CompanyNews` and `MarketNews` upstream types.
+pub(crate) fn normalize_news_fields(
+    url_raw: &str,
+    datetime: i64,
+    headline: &str,
+    source: &str,
+    summary: &str,
+) -> NewsArticle {
+    let url = {
+        let trimmed = url_raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    };
+    let published_at = chrono::DateTime::from_timestamp(datetime, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| datetime.to_string());
+
+    NewsArticle {
+        title: sanitize_news_text(headline, NEWS_TITLE_MAX_CHARS),
+        source: source.to_owned(),
+        published_at,
+        relevance_score: None,
+        snippet: sanitize_news_text(summary, NEWS_SNIPPET_MAX_CHARS),
+        url,
+    }
+}
+
+pub(crate) fn normalize_finnhub_article(n: &finnhub::models::news::CompanyNews) -> NewsArticle {
+    normalize_news_fields(&n.url, n.datetime, &n.headline, &n.source, &n.summary)
+}
+
 fn build_news_data(
     symbol: &str,
     raw_news: Vec<finnhub::models::news::CompanyNews>,
@@ -470,13 +499,7 @@ fn build_news_data(
 ) -> NewsData {
     let articles: Vec<NewsArticle> = raw_news
         .into_iter()
-        .map(|n| NewsArticle {
-            title: sanitize_news_text(&n.headline, NEWS_TITLE_MAX_CHARS),
-            source: n.source,
-            published_at: n.datetime.to_string(),
-            relevance_score: None,
-            snippet: sanitize_news_text(&n.summary, NEWS_SNIPPET_MAX_CHARS),
-        })
+        .map(|n| normalize_finnhub_article(&n))
         .collect();
     let macro_events = derive_macro_events(&articles);
     let macro_count = macro_events.len();
@@ -1271,6 +1294,7 @@ mod tests {
             published_at: "2026-03-14".to_owned(),
             relevance_score: None,
             snippet: "Federal Reserve cuts interest rates amid inflation cpi concerns".to_owned(),
+            url: None,
         }];
         let events = derive_macro_events(&articles);
         for event in &events {
@@ -1281,6 +1305,48 @@ mod tests {
                 event.event
             );
         }
+    }
+
+    // ── normalize_finnhub_article ─────────────────────────────────────────
+
+    fn sample_company_news(url: &str, datetime: i64) -> finnhub::models::news::CompanyNews {
+        finnhub::models::news::CompanyNews {
+            category: "company".to_owned(),
+            datetime,
+            headline: "AAPL headline".to_owned(),
+            id: 42,
+            image: String::new(),
+            related: "AAPL".to_owned(),
+            source: "Reuters".to_owned(),
+            summary: "Short summary.".to_owned(),
+            url: url.to_owned(),
+        }
+    }
+
+    #[test]
+    fn normalize_finnhub_article_preserves_url() {
+        let raw = sample_company_news("https://example.com/news/1", 1_705_276_800);
+        let article = normalize_finnhub_article(&raw);
+        assert_eq!(
+            article.url,
+            Some("https://example.com/news/1".to_owned()),
+            "non-empty URL must be preserved"
+        );
+    }
+
+    #[test]
+    fn normalize_finnhub_article_formats_rfc3339_timestamp() {
+        // 2024-01-15 00:00:00 UTC as unix seconds
+        let raw = sample_company_news("https://example.com/news/1", 1_705_276_800);
+        let article = normalize_finnhub_article(&raw);
+        // Verify it parses as a valid RFC3339 datetime
+        chrono::DateTime::parse_from_rfc3339(&article.published_at)
+            .expect("published_at must be a valid RFC3339 string");
+        assert!(
+            article.published_at.contains('T'),
+            "RFC3339 must contain 'T' separator; got: {}",
+            article.published_at
+        );
     }
 
     // ── symbol case-insensitive scope ────────────────────────────────────

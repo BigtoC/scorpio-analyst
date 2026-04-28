@@ -324,22 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn extra_fields_in_json_are_rejected() {
-        let json = r#"{
-            "articles": [],
-            "macro_events": [],
-            "summary": "ok",
-            "unexpected_field": "should fail"
-        }"#;
-        let result = parse_news(json);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    #[test]
     fn confidence_out_of_range_returns_schema_violation() {
         let json = r#"{
             "articles": [],
@@ -408,6 +392,7 @@ mod tests {
                 published_at: "2026-03-10T12:00:00Z".to_owned(),
                 relevance_score: Some(0.9),
                 snippet: "A significant development occurred.".to_owned(),
+                url: None,
             }],
             macro_events: vec![MacroEvent {
                 event: "Fed rate decision".to_owned(),
@@ -480,30 +465,30 @@ mod tests {
         );
     }
 
-    // TC-17: NewsArticle rejects extra fields (deny_unknown_fields)
     #[test]
-    fn news_article_extra_fields_rejected() {
+    fn news_article_missing_url_defaults_to_none() {
+        // Backward-compat: pre-Yahoo-news snapshots omit the `url` field on
+        // NewsArticle. Deserialization must default it to None instead of
+        // failing.
         let json = r#"{
             "articles": [
                 {
-                    "title": "Test", "source": "Reuters",
+                    "title": "Test",
+                    "source": "Reuters",
                     "published_at": "2026-03-14T00:00:00Z",
-                    "relevance_score": null, "snippet": "ok",
-                    "unexpected_field": "should fail"
+                    "relevance_score": null,
+                    "snippet": "ok"
                 }
             ],
             "macro_events": [],
-            "summary": "Should fail."
+            "summary": "Legacy snapshot lacks url."
         }"#;
-        let result = parse_news(json);
+        let data = parse_news(json).expect("legacy snapshot without url must deserialize");
+        assert_eq!(data.articles.len(), 1);
         assert!(
-            result.is_err(),
-            "extra field inside NewsArticle should be rejected"
+            data.articles[0].url.is_none(),
+            "missing url field should default to None"
         );
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
     }
 
     // ── Task 4: Migrate to shared inference helper ────────────────────────
@@ -543,15 +528,6 @@ mod tests {
         assert!(
             prompt.contains("no markdown fences"),
             "baseline news prompt must contain 'no markdown fences'"
-        );
-    }
-
-    #[test]
-    fn parse_news_rejects_unknown_fields() {
-        let result = parse_news(r#"{"unknown_field": 1}"#);
-        assert!(
-            matches!(result, Err(TradingError::SchemaViolation { .. })),
-            "parse_news should return SchemaViolation for unknown fields"
         );
     }
 

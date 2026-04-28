@@ -1,0 +1,11 @@
+{
+  "scenario": "no_listed",
+  "expected_outcome": "no_listed_instrument",
+  "description": "Empty expirations list. Expected: NoListedInstrument because the symbol has no option chain on Yahoo.",
+  "setup": {
+    "spot_price": 150.0,
+    "target_date_offset_days": 0,
+    "option_expirations": [],
+    "note": "An empty expirations list is the definitive signal that no options are listed for this instrument."
+  }
+}

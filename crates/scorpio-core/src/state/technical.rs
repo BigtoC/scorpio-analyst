@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 /// Pre-calculated technical indicators derived from OHLCV data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct TechnicalData {
     pub rsi: Option<f64>,
     pub macd: Option<MacdValues>,
@@ -18,11 +17,15 @@ pub struct TechnicalData {
     pub resistance_level: Option<f64>,
     pub volume_avg: Option<f64>,
     pub summary: String,
+    /// Optional snapshot of the equity options chain (IV, put/call ratio,
+    /// expiry distribution). Additive field — older snapshots produced
+    /// before the Yahoo options integration will deserialize with `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options_summary: Option<String>,
 }
 
 /// MACD indicator components.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MacdValues {
     pub macd_line: f64,
     pub signal_line: f64,

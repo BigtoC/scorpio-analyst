@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use super::{
     FinnhubClient, FredClient, YFinanceClient,
     traits::{FundamentalsProvider, MacroProvider, NewsProvider, PriceBar, PriceHistoryProvider},
+    yfinance::news::YFinanceNewsProvider,
 };
 use crate::{
     domain::Symbol,
@@ -19,7 +20,8 @@ use crate::{
 
 // Extract the canonical ticker string from a Symbol, or fail cleanly if the
 // caller handed us a non-equity symbol.
-fn require_equity_ticker(symbol: &Symbol) -> Result<String, TradingError> {
+// Visibility widened to pub(crate) so data/yfinance/options.rs can reuse this check.
+pub(crate) fn require_equity_ticker(symbol: &Symbol) -> Result<String, TradingError> {
     match symbol {
         Symbol::Equity(t) => Ok(t.as_str().to_owned()),
         Symbol::Crypto(_) => Err(TradingError::SchemaViolation {
@@ -49,6 +51,18 @@ impl NewsProvider for FinnhubClient {
     async fn fetch(&self, symbol: &Symbol) -> Result<NewsData, TradingError> {
         let ticker = require_equity_ticker(symbol)?;
         self.get_structured_news(&ticker).await
+    }
+}
+
+#[async_trait]
+impl NewsProvider for YFinanceNewsProvider {
+    fn provider_name(&self) -> &'static str {
+        "yfinance"
+    }
+
+    async fn fetch(&self, symbol: &Symbol) -> Result<NewsData, TradingError> {
+        let ticker = require_equity_ticker(symbol)?;
+        self.get_company_news(&ticker).await
     }
 }
 

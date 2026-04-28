@@ -7,13 +7,54 @@ use crate::{
     error::TradingError,
     state::{
         AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TradingState,
+        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TechnicalData, TradingState,
     },
     workflow::{
         SnapshotStore, context_bridge::write_prefixed_result,
         tasks::test_helpers::replace_with_stubs,
     },
 };
+
+// ─── Helpers shared by hydration tests ───────────────────────────────────────
+
+#[cfg(test)]
+fn to_money_usd(v: f64) -> paft_money::Money {
+    use paft_money::{Currency, IsoCurrency, Money};
+    let d = rust_decimal::Decimal::try_from(v).unwrap();
+    Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
+}
+
+#[cfg(test)]
+fn make_trend_row_for_test(
+    eps_avg: Option<f64>,
+    revenue_avg: Option<f64>,
+    num_analysts: Option<u32>,
+) -> yfinance_rs::analysis::EarningsTrendRow {
+    let to_money = to_money_usd;
+    let json = serde_json::json!({
+        "period": "0Q",
+        "growth": null,
+        "earnings_estimate": {
+            "avg": eps_avg.map(&to_money),
+            "low": null,
+            "high": null,
+            "year_ago_eps": null,
+            "num_analysts": num_analysts,
+            "growth": null
+        },
+        "revenue_estimate": {
+            "avg": revenue_avg.map(&to_money),
+            "low": null,
+            "high": null,
+            "year_ago_revenue": null,
+            "num_analysts": null,
+            "growth": null
+        },
+        "eps_trend": { "current": null, "historical": [] },
+        "eps_revisions": { "historical": [] }
+    });
+    serde_json::from_value(json).expect("valid test EarningsTrendRow")
+}
 
 const ANALYST_PREFIX: &str = "analyst";
 const ANALYST_FUNDAMENTAL: &str = "fundamental";
@@ -427,6 +468,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
                 resistance_level: None,
                 volume_avg: None,
                 summary: fund.payload.summary,
+                options_summary: None,
             },
             sources: fund.sources,
             quality_flags: fund.quality_flags,
@@ -558,5 +600,476 @@ async fn try_new_succeeds_for_baseline_pack_id() {
     assert_eq!(
         pipeline.runtime_policy.as_ref().map(|p| p.pack_id),
         Some(crate::analysis_packs::PackId::Baseline)
+    );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
+    use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
+
+    use crate::analysis_packs::{PackId, resolve_pack};
+    use crate::data::StubbedFinancialResponses;
+    use crate::workflow::builder::PipelineDeps;
+
+    // Build a pack with consensus_estimates enabled.
+    let mut pack = resolve_pack(PackId::Baseline);
+    pack.enrichment_intent.consensus_estimates = true;
+
+    let trend_rows = vec![make_trend_row_for_test(
+        Some(2.15),
+        Some(94_200_000_000.0),
+        Some(28),
+    )];
+
+    let price_target = PriceTarget {
+        mean: Some(to_money_usd(215.0)),
+        high: Some(to_money_usd(265.0)),
+        low: Some(to_money_usd(170.0)),
+        number_of_analysts: Some(42),
+    };
+
+    let recommendation_summary = RecommendationSummary {
+        strong_buy: Some(12),
+        buy: Some(18),
+        hold: Some(10),
+        sell: Some(2),
+        strong_sell: Some(0),
+        ..RecommendationSummary::default()
+    };
+
+    let yfinance =
+        crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            trend: Some(trend_rows),
+            price_target: Some(price_target),
+            recommendation_summary: Some(recommendation_summary),
+            ..StubbedFinancialResponses::default()
+        });
+
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) =
+        test_snapshot_store("pipeline-hydrate-extended-consensus.db").await;
+
+    let pipeline = crate::workflow::TradingPipeline::from_pack(
+        &pack,
+        PipelineDeps {
+            config,
+            finnhub: crate::data::FinnhubClient::for_test(),
+            fred: crate::data::FredClient::for_test(),
+            yfinance,
+            snapshot_store,
+            quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+            deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+        },
+    );
+
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    // Use today's date so hydrate_consensus passes the live-date gate.
+    let target_date = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let initial_state = TradingState::new("AAPL", &target_date);
+
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must succeed with stubbed consensus enrichment");
+
+    let consensus = final_state
+        .enrichment_consensus
+        .payload
+        .as_ref()
+        .expect("enrichment_consensus.payload must be populated by hydration");
+
+    // Base fields from the trend row.
+    let eps = consensus
+        .eps_estimate
+        .expect("eps_estimate must be present");
+    assert!((eps - 2.15).abs() < 0.01, "expected eps ~2.15, got {eps}");
+    assert_eq!(consensus.analyst_count, Some(28));
+
+    // Price-target extended fields.
+    let pt = consensus
+        .price_target
+        .as_ref()
+        .expect("price_target must be populated from stub");
+    assert!(
+        matches!(pt.mean, Some(m) if (m - 215.0).abs() < 0.01),
+        "price target mean must be ~215.0, got {:?}",
+        pt.mean
+    );
+    assert!(
+        matches!(pt.high, Some(h) if (h - 265.0).abs() < 0.01),
+        "price target high must be ~265.0, got {:?}",
+        pt.high
+    );
+    assert!(
+        matches!(pt.low, Some(l) if (l - 170.0).abs() < 0.01),
+        "price target low must be ~170.0, got {:?}",
+        pt.low
+    );
+    assert_eq!(pt.analyst_count, Some(42));
+
+    // Recommendation extended fields.
+    let rec = consensus
+        .recommendations
+        .as_ref()
+        .expect("recommendations must be populated from stub");
+    assert_eq!(rec.strong_buy, Some(12));
+    assert_eq!(rec.buy, Some(18));
+    assert_eq!(rec.hold, Some(10));
+    assert_eq!(rec.sell, Some(2));
+    assert_eq!(rec.strong_sell, Some(0));
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_store() {
+    use crate::analysis_packs::{PackId, resolve_pack};
+    use crate::data::StubbedFinancialResponses;
+    use crate::workflow::builder::PipelineDeps;
+
+    let mut pack = resolve_pack(PackId::Baseline);
+    pack.enrichment_intent.consensus_estimates = true;
+
+    let yfinance =
+        crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            trend: None,
+            price_target_error: Some("price target down".to_owned()),
+            recommendation_summary: None,
+            ..StubbedFinancialResponses::default()
+        });
+
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) =
+        test_snapshot_store("pipeline-consensus-rehydrate-from-snapshot.db").await;
+
+    let pipeline = crate::workflow::TradingPipeline::from_pack(
+        &pack,
+        PipelineDeps {
+            config,
+            finnhub: crate::data::FinnhubClient::for_test(),
+            fred: crate::data::FredClient::for_test(),
+            yfinance,
+            snapshot_store,
+            quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+            deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+        },
+    );
+
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    let target_date = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let first_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", &target_date))
+        .await
+        .expect("first degraded cycle must succeed fail-open");
+    assert!(
+        matches!(first_state.enrichment_consensus.status, crate::data::adapters::EnrichmentStatus::FetchFailed(ref reason) if reason == "provider_degraded"),
+        "first cycle must classify as provider_degraded, got {:?}",
+        first_state.enrichment_consensus.status
+    );
+    let first_payload = first_state
+        .enrichment_consensus
+        .payload
+        .as_ref()
+        .expect("first degraded cycle must persist a counter stub");
+    assert_eq!(
+        first_payload.consecutive_provider_degraded_cycles, 1,
+        "first degraded cycle must persist counter=1"
+    );
+
+    let second_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", &target_date))
+        .await
+        .expect("fresh run must succeed fail-open");
+    let second_payload = second_state
+        .enrichment_consensus
+        .payload
+        .as_ref()
+        .expect("fresh degraded cycle must persist a counter stub");
+
+    assert_eq!(
+        second_payload.consecutive_provider_degraded_cycles, 2,
+        "fresh run must reload the prior phase-1 consensus payload instead of resetting the degraded counter"
+    );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbols() {
+    use crate::analysis_packs::{PackId, resolve_pack};
+    use crate::data::StubbedFinancialResponses;
+    use crate::workflow::builder::PipelineDeps;
+
+    let mut pack = resolve_pack(PackId::Baseline);
+    pack.enrichment_intent.consensus_estimates = true;
+
+    let yfinance =
+        crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            trend: None,
+            price_target_error: Some("price target down".to_owned()),
+            recommendation_summary: None,
+            ..StubbedFinancialResponses::default()
+        });
+
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) =
+        test_snapshot_store("pipeline-consensus-symbol-isolation.db").await;
+
+    let pipeline = crate::workflow::TradingPipeline::from_pack(
+        &pack,
+        PipelineDeps {
+            config,
+            finnhub: crate::data::FinnhubClient::for_test(),
+            fred: crate::data::FredClient::for_test(),
+            yfinance,
+            snapshot_store,
+            quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+            deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+        },
+    );
+
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    let target_date = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let first_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", &target_date))
+        .await
+        .expect("first degraded cycle must succeed fail-open");
+    let first_payload = first_state
+        .enrichment_consensus
+        .payload
+        .as_ref()
+        .expect("first degraded cycle must persist a counter stub");
+    assert_eq!(
+        first_payload.symbol, "AAPL",
+        "precondition: first run must persist the original symbol"
+    );
+    assert_eq!(
+        first_payload.consecutive_provider_degraded_cycles, 1,
+        "precondition: first degraded cycle must persist counter=1"
+    );
+
+    let mut reused_state = first_state;
+    reused_state.asset_symbol = "MSFT".to_owned();
+    reused_state.symbol = None;
+
+    let second_state = pipeline
+        .run_analysis_cycle(reused_state)
+        .await
+        .expect("second degraded cycle must also succeed fail-open");
+    let second_payload = second_state
+        .enrichment_consensus
+        .payload
+        .as_ref()
+        .expect("second degraded cycle must persist a counter stub");
+
+    assert_eq!(
+        second_payload.symbol, "MSFT",
+        "reused state must not carry the prior symbol's consensus payload into the new run"
+    );
+    assert_eq!(
+        second_payload.consecutive_provider_degraded_cycles, 1,
+        "reused state for a different symbol must not inherit the prior symbol's degraded-cycle counter"
+    );
+}
+
+// ─── Task 7: options_summary cleared on cycle reset ───────────────────────────
+
+#[test]
+fn clear_equity_resets_options_summary_unit() {
+    let mut state = TradingState::new("AAPL", "2026-01-01");
+    state.set_technical_indicators(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stale technical summary".to_owned(),
+        options_summary: Some("stale options data".to_owned()),
+    });
+
+    assert!(
+        state.technical_indicators().is_some(),
+        "precondition: technical_indicators must be Some before clear"
+    );
+    assert!(
+        state
+            .technical_indicators()
+            .unwrap()
+            .options_summary
+            .is_some(),
+        "precondition: options_summary must be Some before clear"
+    );
+
+    state.clear_equity();
+
+    assert!(
+        state.technical_indicators().is_none(),
+        "clear_equity must clear technical_indicators (and therefore options_summary)"
+    );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) =
+        test_snapshot_store("pipeline-clears-stale-options-summary.db").await;
+    let pipeline = crate::workflow::TradingPipeline::new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-test",
+            10,
+        )),
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+    pipeline
+        .replace_task_for_test(FanOutTask::new(
+            TASKS.analyst_fan_out,
+            vec![
+                PartialAnalystChild::fundamental(),
+                PartialAnalystChild::sentiment(),
+                PartialAnalystChild::news(),
+                PartialAnalystChild::technical_missing(),
+            ],
+        ))
+        .expect("fanout replacement must succeed");
+
+    // Seed an initial state with stale options_summary in technical_indicators.
+    let mut initial_state = TradingState::new("AAPL", "2026-03-20");
+    initial_state.set_technical_indicators(TechnicalData {
+        rsi: Some(1.0),
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stale technical summary".to_owned(),
+        options_summary: Some("stale options summary from previous run".to_owned()),
+    });
+
+    let final_state = pipeline
+        .run_analysis_cycle(initial_state)
+        .await
+        .expect("pipeline must succeed with one missing analyst input");
+
+    // options_summary must be cleared because reset_cycle_outputs calls clear_equity()
+    // before the cycle starts.
+    assert!(
+        final_state
+            .technical_indicators()
+            .map(|t| t.options_summary.is_none())
+            .unwrap_or(true),
+        "stale options_summary must be cleared by reset_cycle_outputs"
     );
 }

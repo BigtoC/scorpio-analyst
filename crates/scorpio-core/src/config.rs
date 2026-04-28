@@ -126,7 +126,7 @@ fn default_risk_rounds() -> u32 {
     2
 }
 fn default_agent_timeout() -> u64 {
-    300
+    600
 }
 fn default_valuation_fetch_timeout() -> u64 {
     30

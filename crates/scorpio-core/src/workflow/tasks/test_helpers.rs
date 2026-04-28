@@ -225,6 +225,7 @@ impl graph_flow::Task for StubAnalystChild {
                     resistance_level: None,
                     volume_avg: None,
                     summary: "stub: neutral technical".to_owned(),
+                    options_summary: None,
                 };
                 write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_TECHNICAL, &data)
                     .await

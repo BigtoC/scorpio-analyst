@@ -1,0 +1,14 @@
+{
+  "scenario": "aapl_snapshot",
+  "expected_outcome": "snapshot",
+  "description": "AAPL-shaped chain with spot=$150 and seven strikes centred on ATM. Expected: Snapshot with non-empty near_term_strikes and plausible atm_iv.",
+  "setup": {
+    "spot_price": 150.0,
+    "target_date_offset_days": 0,
+    "front_expiry_ts": 1893024000,
+    "strikes": [142.5, 145.0, 147.5, 150.0, 152.5, 155.0, 157.5],
+    "atm_call_iv": 0.30,
+    "atm_put_iv": 0.28,
+    "note": "All strikes inside ±5% NTM band (142.5–157.5). Both ratios and term structure are computed from this single expiry."
+  }
+}

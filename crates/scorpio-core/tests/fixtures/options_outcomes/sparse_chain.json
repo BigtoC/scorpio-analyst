@@ -1,0 +1,11 @@
+{
+  "scenario": "sparse_chain",
+  "expected_outcome": "sparse_chain",
+  "description": "Strikes at $0.50, $1.00, $5.00 with spot $1.50. The OTM fallback expansion is capped at $1.80 (+20% of spot) and finds nothing above spot, so the provider cannot build a valid NTM slice. Expected: SparseChain.",
+  "setup": {
+    "spot_price": 1.50,
+    "target_date_offset_days": 0,
+    "strikes": [0.50, 1.00, 5.00],
+    "note": "Only $0.50 and $1.00 qualify on the put side (within -20% = $1.20). The call side has $5.00 which is +233% of spot, well past the ±20% cap. After capped expansion, the call side has zero qualifying strikes, so SparseChain is returned."
+  }
+}

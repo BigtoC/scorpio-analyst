@@ -408,7 +408,11 @@ fn write_enrichment_summary(out: &mut String, state: &TradingState) {
         );
     }
 
-    if let Some(ref c) = state.enrichment_consensus.payload {
+    if matches!(
+        state.enrichment_consensus.status,
+        EnrichmentStatus::Available
+    ) && let Some(ref c) = state.enrichment_consensus.payload
+    {
         let eps = c
             .eps_estimate
             .map(|v| format!("{v:.2}"))
@@ -972,6 +976,9 @@ mod tests {
                 revenue_estimate_m: Some(95_000.0),
                 analyst_count: Some(35),
                 as_of_date: "2026-04-03".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 
@@ -979,6 +986,39 @@ mod tests {
         assert!(report.contains("Enrichment Data"));
         assert!(report.contains("Consensus estimates status: fetch_failed"));
         assert!(report.contains("Yahoo Finance timed out"));
+        assert!(
+            !report.contains("Consensus Estimates:"),
+            "failed consensus payload must not render as live detail in the final report: {report}"
+        );
+    }
+
+    #[test]
+    fn format_final_report_omits_consensus_detail_after_half_life_downgrade() {
+        use scorpio_core::data::adapters::{EnrichmentStatus, estimates::ConsensusEvidence};
+        use scorpio_core::state::EnrichmentState;
+
+        let mut state = minimal_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::NotAvailable,
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: None,
+                revenue_estimate_m: None,
+                analyst_count: None,
+                as_of_date: "2026-04-03".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 3,
+            }),
+        };
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Enrichment Data"));
+        assert!(report.contains("Consensus estimates status: not_available"));
+        assert!(
+            !report.contains("Consensus Estimates:"),
+            "half-life downgrade stub must not render as live detail in the final report: {report}"
+        );
     }
 
     #[test]

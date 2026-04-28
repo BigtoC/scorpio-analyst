@@ -349,6 +349,7 @@ mod tests {
             resistance_level: Some(187.5),
             volume_avg: Some(65_000_000.0),
             summary: "Momentum constructive.".to_owned(),
+            options_summary: None,
         });
         state.set_market_sentiment(SentimentData {
             overall_score: 0.34,
@@ -367,6 +368,7 @@ mod tests {
                 published_at: "2026-03-14T12:00:00Z".to_owned(),
                 relevance_score: Some(0.9),
                 snippet: "Demand resilience offsets macro concerns.".to_owned(),
+                url: None,
             }],
             macro_events: vec![MacroEvent {
                 event: "Fed holds rates".to_owned(),
@@ -507,6 +509,9 @@ mod tests {
                 revenue_estimate_m: Some(95_000.0),
                 analyst_count: Some(35),
                 as_of_date: "2026-03-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 0,
             }),
         };
 

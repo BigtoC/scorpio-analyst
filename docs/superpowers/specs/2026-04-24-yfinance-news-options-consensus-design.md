@@ -1,6 +1,6 @@
 # Design — yfinance news, options snapshot, and extended consensus evidence
 
-**Date:** 2026-04-24
+**Date:** 2026-04-24 (revised 2026-04-26 to reflect the prompt-bundle centralization refactor)
 **Author:** brainstorming session with BigtoC
 **Status:** Draft — pending implementation plan
 
@@ -31,14 +31,14 @@ The design uses a **mixed integration pattern** — streams (3) and (4) are pre-
 
 ## Design choices (decided during brainstorming)
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| Integration pattern | Mixed — enrichment for consensus, orchestration merge for news, analyst tool for options | Each pattern matches the data's shape and consumers |
-| News strategy | Supplement (yfinance + Finnhub, deduped and merged) | More coverage; low merge cost |
-| Options shape | Summary metrics + near-the-money slice (nearest expiration, ±5% of spot) | Covers vol-regime + event-aware strikes without prompt bloat |
-| Consensus fields | Standard (mean/median/high/low price target, analyst count, recommendation counts by bucket) | Balanced detail; count breakdown preserves consensus dispersion |
-| Abstraction level | Pragmatic — `OptionsProvider` trait; extend `EstimatesProvider`; news-merge inline | Trait where multiple future vendors are likely; orchestration where not |
-| Rollout | Single integrated plan | Pieces are loosely coupled; trait seams insulate each |
+| Decision            | Choice                                                                                       | Rationale                                                               |
+|---------------------|----------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| Integration pattern | Mixed — enrichment for consensus, orchestration merge for news, analyst tool for options     | Each pattern matches the data's shape and consumers                     |
+| News strategy       | Supplement (yfinance + Finnhub, deduped and merged)                                          | More coverage; low merge cost                                           |
+| Options shape       | Summary metrics + near-the-money slice (nearest expiration, ±5% of spot)                     | Covers vol-regime + event-aware strikes without prompt bloat            |
+| Consensus fields    | Standard (mean/median/high/low price target, analyst count, recommendation counts by bucket) | Balanced detail; count breakdown preserves consensus dispersion         |
+| Abstraction level   | Pragmatic — `OptionsProvider` trait; extend `EstimatesProvider`; news-merge inline           | Trait where multiple future vendors are likely; orchestration where not |
+| Rollout             | Single integrated plan                                                                       | Pieces are loosely coupled; trait seams insulate each                   |
 
 ## Architecture
 
@@ -56,9 +56,9 @@ Three integration points, three shapes, all living in the equity pack.
                                      ▼
 ┌────────────────────────── Phase 1: Analyst fan-out ───────────────────────────────┐
 │                                                                                   │
-│  prefetch_analyst_news (agents/analyst/equity/mod.rs)                             │
-│    ├─▶ FinnhubNewsProvider     ──┐                                                │
-│    └─▶ YFinanceNewsProvider    ──┴──▶ merge + dedupe ──▶ Arc<NewsData>            │
+│  prefetch_analyst_news (agents/analyst/mod.rs)                                    │
+│    ├─▶ FinnhubClient as NewsProvider  ──┐                                         │
+│    └─▶ YFinanceNewsProvider           ──┴──▶ merge + dedupe ──▶ Arc<NewsData>     │
 │                                         │                                         │
 │                                         ├─▶ NewsAnalyst (shared)                  │
 │                                         └─▶ SentimentAnalyst (shared)             │
@@ -86,16 +86,20 @@ crates/scorpio-core/src/
 │       └── mod.rs                 (MODIFIED — export new modules)
 ├── data/adapters/estimates.rs     (MODIFIED — extend ConsensusEvidence; extend provider fetch)
 ├── state/technical.rs             (MODIFIED — TechnicalData gains options_summary: Option<String>)
+├── agents/analyst/mod.rs          (MODIFIED — prefetch_analyst_news refactored to take Arc<dyn NewsProvider>s)
 ├── agents/analyst/equity/
-│   ├── mod.rs                     (MODIFIED — prefetch_analyst_news fetches from both providers)
-│   └── technical.rs               (MODIFIED — bind GetOptionsSnapshot; update system prompt)
+│   └── technical.rs               (MODIFIED — bind GetOptionsSnapshot; no Rust-side prompt edits)
 ├── agents/shared/prompt.rs        (MODIFIED — render extended ConsensusEvidence fields)
-├── workflow/pipeline/runtime.rs   (MODIFIED — construct YFinanceNewsProvider + YFinanceOptionsProvider)
-├── workflow/snapshot/thesis.rs    (MODIFIED — bump THESIS_MEMORY_SCHEMA_VERSION)
+├── analysis_packs/equity/prompts/
+│   └── technical_analyst.md       (MODIFIED — append options-tool guidance paragraph)
+├── workflow/pipeline/runtime.rs   (MODIFIED — construct YFinanceNewsProvider + YFinanceOptionsProvider; pass both news providers into prefetch)
+├── workflow/snapshot/thesis.rs    (unchanged — schema version stays at 3; see "State and persistence" below)
 └── constants.rs                   (MODIFIED — add OPTIONS_NTM_STRIKE_BAND, OPTIONS_FETCH_TIMEOUT_SECS)
 
 crates/scorpio-core/examples/yfinance_live_test.rs  (MODIFIED — add sections 7–10)
 ```
+
+> Note: `prefetch_analyst_news` currently lives in `agents/analyst/mod.rs` (not `equity/mod.rs`) and takes `&FinnhubClient` directly. This design refactors it to accept two `Arc<dyn NewsProvider>` handles so the merge can stay agnostic of the concrete clients. `FinnhubClient` already implements `NewsProvider` via `data/provider_impls.rs`, so no `FinnhubNewsProvider` wrapper is needed — see "Component: News supplementation" below.
 
 ## Component: ConsensusEvidence extension
 
@@ -167,7 +171,19 @@ pub struct RecommendationsSummary {
 
 ## Component: News supplementation
 
-New provider + inline merge in the existing orchestrator. No `MergedNewsProvider` wrapper.
+New `YFinanceNewsProvider` + a small refactor of `prefetch_analyst_news` to consume the existing `NewsProvider` trait so the merge stays agnostic of the concrete client. No `MergedNewsProvider` wrapper, no `FinnhubNewsProvider` wrapper — `FinnhubClient` already implements `NewsProvider` in `data/provider_impls.rs`.
+
+### Pre-existing shape (what we're refactoring)
+
+Today the prefetch lives at `agents/analyst/mod.rs::prefetch_analyst_news` and takes the concrete client:
+
+```rust
+pub async fn prefetch_analyst_news(finnhub: &FinnhubClient, symbol: &str) -> Option<Arc<NewsData>> {
+    match finnhub.get_structured_news(symbol).await { ... }
+}
+```
+
+The pipeline calls it as `prefetch_analyst_news(&pipeline.finnhub, &symbol)` from `workflow/pipeline/runtime.rs`. This refactor replaces the concrete `FinnhubClient` parameter with two `Arc<dyn NewsProvider>` handles so we can fan the merge out symmetrically.
 
 ### YFinanceNewsProvider
 
@@ -196,14 +212,22 @@ impl NewsProvider for YFinanceNewsProvider {
 ### Orchestrator change
 
 ```rust
-// crates/scorpio-core/src/agents/analyst/equity/mod.rs — prefetch_analyst_news
+// crates/scorpio-core/src/agents/analyst/mod.rs — prefetch_analyst_news (NEW SIGNATURE)
 
-let (finnhub_result, yfinance_result) = tokio::join!(
-    finnhub_provider.fetch(&symbol),
-    yfinance_provider.fetch(&symbol),
-);
-let news = merge_news(finnhub_result, yfinance_result);
+pub async fn prefetch_analyst_news(
+    finnhub_news: &Arc<dyn NewsProvider>,
+    yfinance_news: &Arc<dyn NewsProvider>,
+    symbol: &Symbol,
+) -> Option<Arc<NewsData>> {
+    let (finnhub_result, yfinance_result) = tokio::join!(
+        finnhub_news.fetch(symbol),
+        yfinance_news.fetch(symbol),
+    );
+    Some(Arc::new(merge_news(finnhub_result, yfinance_result)))
+}
 ```
+
+Pipeline call site updates accordingly: `workflow/pipeline/runtime.rs` constructs both providers (see "Provider construction" below) and passes them in. The single `Option<Arc<NewsData>>` return is preserved so downstream `GetCachedNews` / `GetNews` selection in `sentiment.rs` and `news.rs` is untouched.
 
 ### merge_news helper
 
@@ -338,35 +362,43 @@ let tools = vec![
 ];
 ```
 
-**Prompt addition** in the Technical Analyst system prompt:
+**Prompt addition** is appended to `crates/scorpio-core/src/analysis_packs/equity/prompts/technical_analyst.md` — the equity pack's role markdown is the single source of truth for analyst system prompts after the prompt-bundle centralization refactor. No Rust-side prompt edit is needed; the load-time `analyst_runtime_contract.md` injection in `analysis_packs/equity/baseline.rs::baseline_prompt_bundle` continues to apply automatically.
 
 > If `get_options_snapshot` returns data, incorporate implied-volatility regime (via `atm_iv` and `iv_term_structure`) and positioning skew (put/call ratios, 25-delta skew) into your technical read. The `near_term_strikes` slice is useful when earnings or material events are within the window. If the tool errors with "no listed options", omit options analysis without retrying.
+
+The golden-byte regression gate at `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` will need to be regenerated once the markdown is updated:
+
+```bash
+UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core \
+    --test prompt_bundle_regression_gate --features test-helpers
+```
 
 **`TechnicalData` state extension** — new optional field `options_summary: Option<String>` so the analyst's own options interpretation persists in state alongside the RSI/MACD/ATR summary. Optional to preserve backward compat for tickers without options.
 
 ## State and persistence
 
-- `ConsensusEvidence` grows two new optional fields (above). No new top-level state field.
-- `TechnicalData` grows `options_summary: Option<String>`. Existing accessor `state.technical_data()` unchanged.
-- No changes to `NewsData` — yfinance articles are normalized into the existing `NewsArticle` shape and append to `articles: Vec<NewsArticle>`.
+- `ConsensusEvidence` grows two new optional fields (above). No new top-level state field. The struct does **not** carry `#[serde(deny_unknown_fields)]`, so `#[serde(default)]` on each new field is sufficient for older snapshots to deserialize cleanly.
+- `TechnicalData` grows `options_summary: Option<String>` with `#[serde(default)]`. Per CLAUDE.md's snapshotted-state rule, `#[serde(deny_unknown_fields)]` has been removed from all state structs reachable from `TradingState` — so additive fields deserialize cleanly on both old-reading-new and new-reading-old paths.
+- `NewsArticle` gains `url: Option<String>` with `#[serde(default)]` to support cross-provider deduplication and provenance. (The original draft said `NewsData` would stay unchanged; the implementation plan guardrails supersede this.)
 
-**Snapshot schema version** — bump `THESIS_MEMORY_SCHEMA_VERSION` in `workflow/snapshot/thesis.rs` once. Old snapshots with the smaller structs will skip-and-warn during thesis lookup via the existing mechanism.
+**Snapshot schema version** — `THESIS_MEMORY_SCHEMA_VERSION` stays at **3**. All new fields are additive with `#[serde(default)]`, so no schema bump is needed. A bump would explicitly retire all v3 rows, which is disproportionate for purely additive changes. See CLAUDE.md's "TradingState schema evolution" rule: bumps are reserved for renames, removals, and backward-incompatible type changes.
 
 ## Provider construction (pipeline runtime)
 
 ```rust
 // crates/scorpio-core/src/workflow/pipeline/runtime.rs
 
-// Existing
-let finnhub_news = Arc::new(FinnhubNewsProvider::new(finnhub_client.clone()));
-let estimates_provider = Arc::new(YFinanceEstimatesProvider::new(yf_client.clone()));
+// Existing — FinnhubClient already implements NewsProvider directly
+// (see data/provider_impls.rs); we just up-cast to the trait object.
+let finnhub_news: Arc<dyn NewsProvider> = Arc::new(pipeline.finnhub.clone());
+let estimates_provider = Arc::new(YFinanceEstimatesProvider::new(pipeline.yfinance.clone()));
 
 // NEW
-let yfinance_news = Arc::new(YFinanceNewsProvider::new(yf_client.clone()));
-let options_provider = Arc::new(YFinanceOptionsProvider::new(yf_client.clone()));
+let yfinance_news: Arc<dyn NewsProvider> = Arc::new(YFinanceNewsProvider::new(pipeline.yfinance.clone()));
+let options_provider = Arc::new(YFinanceOptionsProvider::new(pipeline.yfinance.clone()));
 ```
 
-News providers are passed into `run_analyst_team` for the prefetch. Options provider is passed into TechnicalAnalyst tool construction.
+Both `Arc<dyn NewsProvider>` handles are threaded through `run_analyst_team` to the refactored `prefetch_analyst_news`. The options provider is threaded through the same path and bound into the TechnicalAnalyst tool list.
 
 ## Configuration
 
@@ -377,14 +409,14 @@ No new user-facing config keys. Internal constants added to `constants.rs`:
 
 ## Error handling matrix
 
-| Stream | Scope | Failure mode | Behavior |
-|---|---|---|---|
-| Extended consensus fetch | Pipeline startup | Earnings trend fails | Existing — log warn, `enrichment_consensus` marked unavailable. Pipeline continues. |
-| Extended consensus fetch | Pipeline startup | Price target or recs fails, earnings OK | NEW — field-granular fail-open. Log warn per failed field, populate `price_target=None` or `recommendations=None`. |
-| yfinance news | Phase 1 prefetch | yfinance fails, Finnhub OK | `merge_news` returns Finnhub feed alone. Log warn with provider name. |
-| yfinance news | Phase 1 prefetch | Both providers fail | Return empty `NewsData`. Analysts see existing "news unavailable" marker. Pipeline continues. |
-| Options snapshot | TechnicalAnalyst turn | Ticker has no listed options | Provider returns `Ok(None)`; tool returns error "no listed options for {symbol}". LLM omits options analysis per prompt, no retry. |
-| Options snapshot | TechnicalAnalyst turn | Network/parse failure | Tool returns error; existing `RetryPolicy` applies (max 3 retries, exponential backoff). If still failing, LLM continues without options data; `options_summary=None`. |
+| Stream                   | Scope                 | Failure mode                            | Behavior                                                                                                                                                               |
+|--------------------------|-----------------------|-----------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Extended consensus fetch | Pipeline startup      | Earnings trend fails                    | Existing — log warn, `enrichment_consensus` marked unavailable. Pipeline continues.                                                                                    |
+| Extended consensus fetch | Pipeline startup      | Price target or recs fails, earnings OK | NEW — field-granular fail-open. Log warn per failed field, populate `price_target=None` or `recommendations=None`.                                                     |
+| yfinance news            | Phase 1 prefetch      | yfinance fails, Finnhub OK              | `merge_news` returns Finnhub feed alone. Log warn with provider name.                                                                                                  |
+| yfinance news            | Phase 1 prefetch      | Both providers fail                     | Return empty `NewsData`. Analysts see existing "news unavailable" marker. Pipeline continues.                                                                          |
+| Options snapshot         | TechnicalAnalyst turn | Ticker has no listed options            | Provider returns `Ok(None)`; tool returns error "no listed options for {symbol}". LLM omits options analysis per prompt, no retry.                                     |
+| Options snapshot         | TechnicalAnalyst turn | Network/parse failure                   | Tool returns error; existing `RetryPolicy` applies (max 3 retries, exponential backoff). If still failing, LLM continues without options data; `options_summary=None`. |
 
 **Timeout wiring:**
 
@@ -394,10 +426,11 @@ No new user-facing config keys. Internal constants added to `constants.rs`:
 
 ## Backward compatibility
 
-- Old `ConsensusEvidence` snapshots: load with `price_target = None`, `recommendations = None` via `#[serde(default)]`.
-- Old `TechnicalData` snapshots: load with `options_summary = None`.
+- Old `ConsensusEvidence` snapshots: load with `price_target = None`, `recommendations = None` via `#[serde(default)]` on each new field.
+- Old `TechnicalData` snapshots: load with `options_summary = None` via `#[serde(default)]`. The `#[serde(deny_unknown_fields)]` attribute has been removed from all snapshotted state structs per CLAUDE.md — older binaries reading newer snapshots tolerate unknown keys rather than rejecting them.
+- Old `NewsArticle` snapshots: load with `url = None` via `#[serde(default)]`.
 - Old prompt templates: unaffected — new fields render only when `Some(...)`.
-- Schema version bump explicitly retires any incompatible snapshot rows.
+- Schema version stays at **3** — purely additive changes do not warrant a bump.
 - CLI report: unchanged.
 
 ## Testing strategy
@@ -421,12 +454,13 @@ No new user-facing config keys. Internal constants added to `constants.rs`:
 - `returns_partial_when_recommendations_fails` — partial failure, eps+revenue still populated, recs=None.
 - `returns_ok_none_when_all_three_fail`.
 
-**`agents/analyst/equity/mod.rs` (new merge helper)**
+**`agents/analyst/mod.rs` (new merge helper, alongside the refactored `prefetch_analyst_news`)**
 - `merge_dedupes_by_url`
 - `merge_dedupes_by_headline_when_url_missing`
 - `merge_falls_back_to_single_provider_on_partial_failure`
 - `merge_returns_empty_when_both_fail`
 - `merge_caps_at_news_max_articles`
+- `prefetch_analyst_news_returns_arc_when_either_provider_succeeds` — exercises the new `Arc<dyn NewsProvider>` signature using stub providers.
 
 ### Integration tests (`crates/scorpio-core/tests/`)
 
@@ -446,6 +480,10 @@ Extend the existing manual smoke test (not in CI) with four new sections, preser
   - `YFinanceEstimatesProvider::fetch_consensus(SPY, today)` — ETF has no analyst coverage; assert provider returns `Ok(None)` or `Ok(Some(evidence))` with all Option fields `None`, and does not panic. WARN line, no FAIL.
 
 Existing sections 1–6 are unchanged.
+
+## Deferred decisions
+
+**Cross-analyst options routing.** Options data is Technical-Analyst-scoped for v1. The `OptionsProvider` trait lives in `data/traits/options.rs` and is consumed only by `TechnicalAnalyst`. Cross-analyst access (Sentiment Agent or Risk Agents reading the same snapshot) would require routing through `data/routing.rs` and reconciling `OptionsProvider` with the existing `DerivativesProvider` placeholder in `data/traits/derivatives.rs`. That reconciliation is a deferred decision pending a concrete written request from a Sentiment or Risk agent author — it should not be pulled forward on an unowned demand signal.
 
 ## Out of scope / deferred
 

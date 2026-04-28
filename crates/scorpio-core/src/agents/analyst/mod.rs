@@ -29,6 +29,7 @@ pub use equity::{FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAna
 pub use registry::AnalystRegistry;
 pub use traits::{Analyst, AnalystId, DataNeed};
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,26 +37,270 @@ use tracing::warn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, FredClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, YFinanceClient, YFinanceNewsProvider, traits::NewsProvider},
+    domain::{Symbol, Ticker},
     error::{RetryPolicy, TradingError, check_analyst_degradation},
     providers::factory::CompletionModelHandle,
     state::{
-        AgentTokenUsage, AnalystStateHandles, FundamentalData, NewsData, SentimentData,
-        TechnicalData, TradingState,
+        AgentTokenUsage, AnalystStateHandles, FundamentalData, NewsArticle, NewsData,
+        SentimentData, TechnicalData, TradingState,
     },
 };
 
-/// Pre-fetch news data from Finnhub for the given `symbol`.
+/// Maximum number of articles kept after merging Finnhub and Yahoo news.
+const NEWS_PREFETCH_MAX_ARTICLES: usize = 20;
+
+// ─── URL canonicalization ─────────────────────────────────────────────────────
+
+/// Known URL shortener hosts — treated as "no URL" for dedup purposes so they
+/// fall back to title-hash deduplication instead of matching the full canonical
+/// URL from the other provider.
+const SHORTENER_HOSTS: &[&str] = &[
+    "yhoo.it",
+    "bit.ly",
+    "t.co",
+    "tinyurl.com",
+    "ow.ly",
+    "goo.gl",
+];
+
+/// Canonicalize a URL for deduplication.
 ///
-/// Returns `Some(Arc<NewsData>)` on success so both `SentimentAnalyst` and
-/// `NewsAnalyst` can share the same data without a duplicate API call.
-/// On failure a warning is emitted and `None` is returned — callers fall back
-/// to live tool calls.
-pub async fn prefetch_analyst_news(finnhub: &FinnhubClient, symbol: &str) -> Option<Arc<NewsData>> {
-    match finnhub.get_structured_news(symbol).await {
-        Ok(data) => Some(Arc::new(data)),
+/// Returns `None` when the URL belongs to a known shortener with no embedded
+/// target URL (so callers fall back to title-hash dedup) or when the input is
+/// empty/whitespace. Otherwise, returns a normalized form: scheme+host+path in
+/// lowercase, trailing slashes stripped, and `?utm_*` query parameters removed.
+fn canonical_url(url: &str) -> Option<String> {
+    fn percent_decode(input: &str) -> Option<String> {
+        fn hex_value(byte: u8) -> Option<u8> {
+            match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                b'A'..=b'F' => Some(byte - b'A' + 10),
+                _ => None,
+            }
+        }
+
+        let bytes = input.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'%' if i + 2 < bytes.len() => {
+                    let hi = hex_value(bytes[i + 1])?;
+                    let lo = hex_value(bytes[i + 2])?;
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                }
+                b'+' => {
+                    out.push(b' ');
+                    i += 1;
+                }
+                byte => {
+                    out.push(byte);
+                    i += 1;
+                }
+            }
+        }
+
+        String::from_utf8(out).ok()
+    }
+
+    fn embedded_shortener_target(query: &str) -> Option<String> {
+        for pair in query.split('&') {
+            let (key, value) = pair.split_once('=')?;
+            if !matches!(key.to_ascii_lowercase().as_str(), "url" | "u" | "target") {
+                continue;
+            }
+            let decoded = percent_decode(value)?;
+            if decoded.trim().is_empty() {
+                continue;
+            }
+            return canonical_url(&decoded);
+        }
+        None
+    }
+
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    // Strip the scheme to reach the host+path portion.
+    let without_scheme = if let Some(rest) = url.strip_prefix("https://") {
+        rest
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        rest
+    } else {
+        url
+    };
+
+    // Split off query string.
+    let (path_part, query_part) = match without_scheme.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (without_scheme, None),
+    };
+
+    // Extract just the host (up to the first `/`).
+    let host_end = path_part.find('/').unwrap_or(path_part.len());
+    let host = &path_part[..host_end];
+
+    // Deterministically canonicalize known shorteners when the wrapped target
+    // URL is available in the query string; otherwise fall back to title dedupe.
+    let host_lower = host.to_ascii_lowercase();
+    if SHORTENER_HOSTS.iter().any(|&s| host_lower == s) {
+        return query_part.and_then(embedded_shortener_target);
+    }
+
+    // Strip trailing slash from path.
+    let path_normalized = path_part.trim_end_matches('/');
+
+    // Rebuild the URL, keeping only non-utm query parameters.
+    let canon = if let Some(query) = query_part {
+        let filtered: Vec<&str> = query
+            .split('&')
+            .filter(|p| !p.to_lowercase().starts_with("utm_"))
+            .collect();
+        if filtered.is_empty() {
+            path_normalized.to_lowercase()
+        } else {
+            format!("{}?{}", path_normalized.to_lowercase(), filtered.join("&"))
+        }
+    } else {
+        path_normalized.to_lowercase()
+    };
+
+    if canon.is_empty() { None } else { Some(canon) }
+}
+
+fn sort_and_cap_news(mut news: NewsData) -> NewsData {
+    news.articles
+        .sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+    news.articles.truncate(NEWS_PREFETCH_MAX_ARTICLES);
+    news
+}
+
+/// Normalize a title for exact-match deduplication.
+///
+/// Uses `to_lowercase()` as a practical substitute for Unicode NFKC
+/// normalization (the `unicode_normalization` crate is not a workspace dep).
+/// The match is exact after normalization — near-identical titles from wire
+/// republication are intentionally preserved as distinct articles.
+fn canonical_title(title: &str) -> String {
+    title.trim().to_lowercase()
+}
+
+// ─── News merge ──────────────────────────────────────────────────────────────
+
+/// Merge two [`NewsData`] collections, deduplicating articles and sorting the
+/// result newest-first.
+///
+/// Deduplication strategy:
+/// 1. URL-first: if both articles have a canonical URL (after shortener
+///    filtering), deduplicate on that.
+/// 2. Title-fallback: when at least one side is missing a canonical URL,
+///    deduplicate on the exact normalized title.
+///
+/// `macro_events` are preserved from `primary` (Finnhub); Yahoo's events are
+/// always empty so this is a no-op in practice but the field is correct if the
+/// source order ever changes.
+fn merge_news(primary: NewsData, secondary: NewsData) -> NewsData {
+    let mut seen_urls: HashSet<String> = HashSet::new();
+    let mut seen_titles: HashSet<String> = HashSet::new();
+    let mut seen_titles_without_url: HashSet<String> = HashSet::new();
+    let mut merged: Vec<NewsArticle> = Vec::new();
+
+    // Helper closure: returns `true` if the article is a duplicate.
+    let mut is_duplicate = |article: &NewsArticle| -> bool {
+        let title_key = canonical_title(&article.title);
+        let url_key = article.url.as_deref().and_then(canonical_url);
+        if let Some(ref key) = url_key {
+            if seen_titles_without_url.contains(&title_key) {
+                return true;
+            }
+            if !seen_urls.insert(key.clone()) {
+                return true;
+            }
+            // Even if the URL is new, still track the title so a title-only
+            // duplicate from the other provider doesn't sneak in.
+            seen_titles.insert(title_key);
+            return false;
+        }
+        // No usable canonical URL — fall back to title dedup.
+        if !seen_titles.insert(title_key.clone()) {
+            return true;
+        }
+        seen_titles_without_url.insert(title_key);
+        false
+    };
+
+    for article in primary.articles {
+        if !is_duplicate(&article) {
+            merged.push(article);
+        }
+    }
+    for article in secondary.articles {
+        if !is_duplicate(&article) {
+            merged.push(article);
+        }
+    }
+
+    // Sort newest-first on RFC3339 strings (lexicographic ordering works for
+    // RFC3339 when UTC offsets are consistent, which our normalizers guarantee).
+    merged.sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+    merged.truncate(NEWS_PREFETCH_MAX_ARTICLES);
+
+    // Use the primary summary as the base, appending a count note.
+    let total = merged.len();
+    NewsData {
+        articles: merged,
+        macro_events: primary.macro_events,
+        summary: format!("{total} articles from 2 providers"),
+    }
+}
+
+/// Pre-fetch news from both Finnhub and Yahoo Finance, merge, and deduplicate.
+///
+/// Returns `Some(Arc<NewsData>)` on success (at least one provider succeeded).
+/// Returns `None` only when **both** providers failed — callers fall back to
+/// live `GetNews` tool calls in that case.
+pub async fn prefetch_analyst_news(
+    finnhub_news: &impl NewsProvider,
+    yfinance_news: &impl NewsProvider,
+    symbol: &str,
+) -> Option<Arc<NewsData>> {
+    // Resolve the string symbol once to the typed Symbol so both providers use
+    // the same canonical form.
+    let typed_symbol = match Ticker::parse(symbol) {
+        Ok(ticker) => Symbol::Equity(ticker),
         Err(err) => {
-            warn!(error = %err, "news pre-fetch failed; analysts will use live tool calls");
+            warn!(error = %err, symbol, "news pre-fetch: symbol parse failed");
+            return None;
+        }
+    };
+
+    let (finnhub_result, yahoo_result) = tokio::join!(
+        finnhub_news.fetch(&typed_symbol),
+        yfinance_news.fetch(&typed_symbol),
+    );
+
+    match (finnhub_result, yahoo_result) {
+        (Ok(fh), Ok(yf)) => Some(Arc::new(merge_news(fh, yf))),
+        (Ok(fh), Err(yf_err)) => {
+            warn!(error = %yf_err, symbol, "yahoo news pre-fetch failed; using finnhub only");
+            Some(Arc::new(sort_and_cap_news(fh)))
+        }
+        (Err(fh_err), Ok(yf)) => {
+            warn!(error = %fh_err, symbol, "finnhub news pre-fetch failed; using yahoo only");
+            Some(Arc::new(sort_and_cap_news(yf)))
+        }
+        (Err(fh_err), Err(yf_err)) => {
+            warn!(
+                finnhub_error = %fh_err,
+                yahoo_error = %yf_err,
+                symbol,
+                "both news pre-fetches failed; analysts will use live tool calls"
+            );
             None
         }
     }
@@ -112,7 +357,8 @@ pub async fn run_analyst_team(
     //
     // This eliminates the duplicate Finnhub `get_news` call (P1).  If the
     // pre-fetch fails the analysts fall back to their live `GetNews` tool.
-    let cached_news = prefetch_analyst_news(finnhub, &symbol).await;
+    let yfinance_news_provider = YFinanceNewsProvider::new(yfinance);
+    let cached_news = prefetch_analyst_news(finnhub, &yfinance_news_provider, &symbol).await;
 
     // ── Spawn all four analysts concurrently ─────────────────────────────
 
@@ -148,9 +394,15 @@ pub async fn run_analyst_team(
     };
 
     let technical_task = {
-        let analyst =
+        let analyst_result =
             TechnicalAnalyst::new(handle.clone(), yfinance.clone(), state, policy, llm_config);
-        tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
+        tokio::spawn(async move {
+            let analyst = match analyst_result {
+                Ok(a) => a,
+                Err(e) => return Ok(Err(e)),
+            };
+            tokio::time::timeout(outer_timeout, analyst.run()).await
+        })
     };
 
     // ── Await all tasks ───────────────────────────────────────────────────
@@ -320,6 +572,7 @@ mod tests {
                 published_at: "2026-03-14T10:00:00Z".to_owned(),
                 relevance_score: Some(0.9),
                 snippet: "Record quarterly results.".to_owned(),
+                url: None,
             }],
             macro_events: vec![MacroEvent {
                 event: "Interest-rate policy shift".to_owned(),
@@ -349,6 +602,7 @@ mod tests {
             resistance_level: None,
             volume_avg: Some(500_000.0),
             summary: "Neutral trend.".to_owned(),
+            options_summary: None,
         }
     }
 
@@ -654,5 +908,480 @@ mod tests {
             matches!(err, TradingError::AnalystError { .. }),
             "four failures must abort with AnalystError"
         );
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Merge / dedupe tests (Task 5)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod merge_tests {
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::{
+        domain::Symbol,
+        error::TradingError,
+        state::{ImpactDirection, MacroEvent, NewsArticle, NewsData},
+    };
+
+    // ── Stub NewsProvider ────────────────────────────────────────────────
+
+    struct StubNewsProvider {
+        data: Option<NewsData>,
+        should_fail: bool,
+    }
+
+    impl StubNewsProvider {
+        fn ok(data: NewsData) -> Self {
+            Self {
+                data: Some(data),
+                should_fail: false,
+            }
+        }
+
+        fn err() -> Self {
+            Self {
+                data: None,
+                should_fail: true,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl NewsProvider for StubNewsProvider {
+        fn provider_name(&self) -> &'static str {
+            "stub"
+        }
+
+        async fn fetch(&self, _symbol: &Symbol) -> Result<NewsData, TradingError> {
+            if self.should_fail {
+                Err(TradingError::NetworkTimeout {
+                    elapsed: Duration::ZERO,
+                    message: "stubbed failure".to_owned(),
+                })
+            } else {
+                Ok(self
+                    .data
+                    .clone()
+                    .expect("StubNewsProvider::ok must have data"))
+            }
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    fn article(title: &str, url: Option<&str>, published_at: &str) -> NewsArticle {
+        NewsArticle {
+            title: title.to_owned(),
+            source: "TestSource".to_owned(),
+            published_at: published_at.to_owned(),
+            relevance_score: None,
+            snippet: String::new(),
+            url: url.map(str::to_owned),
+        }
+    }
+
+    fn news_data(articles: Vec<NewsArticle>) -> NewsData {
+        NewsData {
+            articles,
+            macro_events: vec![],
+            summary: "test".to_owned(),
+        }
+    }
+
+    fn news_data_with_events(articles: Vec<NewsArticle>, events: Vec<MacroEvent>) -> NewsData {
+        NewsData {
+            articles,
+            macro_events: events,
+            summary: "test".to_owned(),
+        }
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn merge_dedupes_by_url() {
+        // Finnhub and Yahoo return the same article identified by the same URL.
+        let shared_url = "https://example.com/article/aapl-q4";
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some(shared_url),
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some(shared_url),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed when both providers succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "duplicate URL must be deduped to a single article"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_dedupes_by_headline_when_url_missing() {
+        // Both providers return the same article but with no URL; dedup on title.
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            None,
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            None,
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "duplicate title (no URL) must be deduped to a single article"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_dedupes_same_article_when_canonical_url_differs_via_redirect_resolution() {
+        // Finnhub stores the canonical publisher URL.
+        // Yahoo stores a yhoo.it shortener for the same article.
+        // The shortener is treated as "no URL" → falls back to title-hash dedup.
+        let canonical = "https://reuters.com/technology/apple-q4-2026";
+        let shortener = "https://yhoo.it/abc123";
+
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some(canonical),
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some(shortener),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        // The yhoo.it shortener must be treated as missing URL, so dedup falls
+        // back to title-hash. Same title => single article.
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "same article via shortener+canonical must be deduped; analyst must not see fake two-source signal"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_dedupes_shortener_target_url_even_when_titles_do_not_exactly_match() {
+        let canonical = "https://reuters.com/technology/apple-q4-2026";
+        let wrapped = "https://yhoo.it/abc123?url=https%3A%2F%2Freuters.com%2Ftechnology%2Fapple-q4-2026&utm_source=yahoo";
+
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some(canonical),
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4 on Reuters",
+            Some(wrapped),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "known shortener URLs with an embedded canonical target must dedupe by canonical URL even when the titles are not an exact match"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_dedupes_by_title_when_only_one_provider_has_canonical_url() {
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            None,
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some("https://reuters.com/technology/apple-q4-2026"),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "when either side lacks a canonical URL, merge must fall back to title dedupe"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_preserves_multi_outlet_coverage_for_wire_republication() {
+        // Same AP wire copy republished by 5 outlets. Each has a distinct URL
+        // and a slightly different title (NOT byte-identical). The merge must
+        // NOT collapse these — broad coverage is itself a signal.
+        let fh = news_data(vec![
+            article(
+                "Apple Q4 Results Beat Estimates",
+                Some("https://reuters.com/aapl-q4"),
+                "2026-03-14T10:00:00Z",
+            ),
+            article(
+                "Apple Fourth Quarter Results Beat Wall Street Estimates",
+                Some("https://bloomberg.com/aapl-q4"),
+                "2026-03-14T10:01:00Z",
+            ),
+            article(
+                "Apple Reports Q4 Earnings Beat",
+                Some("https://cnbc.com/aapl-q4"),
+                "2026-03-14T10:02:00Z",
+            ),
+        ]);
+        let yf = news_data(vec![
+            article(
+                "Apple Q4 Profit Exceeds Analyst Forecasts",
+                Some("https://wsj.com/aapl-q4"),
+                "2026-03-14T10:03:00Z",
+            ),
+            article(
+                "Apple Beats Q4 Earnings Expectations",
+                Some("https://ft.com/aapl-q4"),
+                "2026-03-14T10:04:00Z",
+            ),
+        ]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        // All 5 articles have distinct URLs and near-but-not-identical titles.
+        // Title-hash dedup uses exact match after lowercasing, so none of these
+        // should be collapsed.
+        assert_eq!(
+            result.articles.len(),
+            5,
+            "5 distinct republications must all survive — broad coverage is decision-relevant"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_falls_back_to_single_provider_on_partial_failure() {
+        let fh = news_data(vec![article(
+            "Apple Q4 Beat",
+            Some("https://reuters.com/aapl"),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        // Yahoo fails.
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::err(), "AAPL")
+                .await
+                .expect("should succeed with Finnhub-only fallback when Yahoo fails");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "single provider fallback must return available articles"
+        );
+    }
+
+    #[tokio::test]
+    async fn single_provider_fallback_applies_article_cap() {
+        let articles: Vec<NewsArticle> = (0..(NEWS_PREFETCH_MAX_ARTICLES + 5))
+            .map(|idx| {
+                article(
+                    &format!("Article {idx}"),
+                    Some(&format!("https://reuters.com/article-{idx}")),
+                    &format!("2026-03-14T10:00:{idx:02}Z"),
+                )
+            })
+            .collect();
+        let fh = news_data(articles);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::err(), "AAPL")
+                .await
+                .expect("single-provider fallback should still succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            NEWS_PREFETCH_MAX_ARTICLES,
+            "single-provider fallback must still respect the cached-news article cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_falls_back_to_yahoo_only_when_finnhub_fails() {
+        let yf = news_data(vec![article(
+            "Apple Q4 Beat",
+            Some("https://finance.yahoo.com/aapl"),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::err(), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed with Yahoo-only fallback when Finnhub fails");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "single provider fallback must return available articles"
+        );
+    }
+
+    #[tokio::test]
+    async fn prefetch_analyst_news_returns_none_when_both_prefetch_providers_fail() {
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::err(), &StubNewsProvider::err(), "AAPL").await;
+
+        assert!(
+            result.is_none(),
+            "must return None when both providers fail so live tool fallback activates"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_sorts_articles_newest_first() {
+        let fh = news_data(vec![
+            article("Oldest Article", None, "2026-03-14T08:00:00Z"),
+            article("Middle Article", None, "2026-03-14T10:00:00Z"),
+        ]);
+        let yf = news_data(vec![article(
+            "Newest Article",
+            None,
+            "2026-03-14T12:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(result.articles.len(), 3);
+        // Verify newest-first ordering.
+        assert_eq!(
+            result.articles[0].title, "Newest Article",
+            "first article should be the newest"
+        );
+        assert_eq!(
+            result.articles[1].title, "Middle Article",
+            "second article should be the middle one"
+        );
+        assert_eq!(
+            result.articles[2].title, "Oldest Article",
+            "last article should be the oldest"
+        );
+    }
+
+    // ── canonical_url unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn canonical_url_strips_utm_params() {
+        let url = "https://example.com/article?utm_source=twitter&utm_medium=social&real=1";
+        let canon = canonical_url(url).expect("should canonicalize");
+        assert!(
+            !canon.contains("utm_"),
+            "UTM params must be stripped; got: {canon}"
+        );
+        assert!(
+            canon.contains("real=1"),
+            "non-utm params must be preserved; got: {canon}"
+        );
+    }
+
+    #[test]
+    fn canonical_url_rejects_shortener_host() {
+        assert!(
+            canonical_url("https://yhoo.it/abc123").is_none(),
+            "yhoo.it shortener must return None"
+        );
+        assert!(
+            canonical_url("https://bit.ly/abc").is_none(),
+            "bit.ly shortener must return None"
+        );
+    }
+
+    #[test]
+    fn canonical_url_extracts_nested_target_from_known_shortener_query() {
+        let wrapped = "https://yhoo.it/abc123?url=https%3A%2F%2Freuters.com%2Ftechnology%2Fapple-q4-2026&utm_source=yahoo";
+        let canon = canonical_url(wrapped)
+            .expect("shortener with embedded target URL should canonicalize deterministically");
+
+        assert_eq!(
+            canon, "reuters.com/technology/apple-q4-2026",
+            "known shorteners should canonicalize to the embedded target URL when it is available"
+        );
+    }
+
+    #[test]
+    fn canonical_url_strips_trailing_slash() {
+        let with_slash = canonical_url("https://example.com/article/").unwrap();
+        let without_slash = canonical_url("https://example.com/article").unwrap();
+        assert_eq!(
+            with_slash, without_slash,
+            "trailing slash must be normalized away"
+        );
+    }
+
+    #[test]
+    fn canonical_url_lowercases() {
+        let mixed = canonical_url("https://Example.COM/Article").unwrap();
+        let lower = canonical_url("https://example.com/article").unwrap();
+        assert_eq!(mixed, lower, "URL must be lowercased for comparison");
+    }
+
+    // ── macro_events preservation ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn merge_preserves_finnhub_macro_events() {
+        let event = MacroEvent {
+            event: "Fed rate cut".to_owned(),
+            impact_direction: ImpactDirection::Positive,
+            confidence: 0.8,
+        };
+        let fh = news_data_with_events(
+            vec![article("Article A", None, "2026-03-14T10:00:00Z")],
+            vec![event.clone()],
+        );
+        let yf = news_data(vec![article("Article B", None, "2026-03-14T09:00:00Z")]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(
+            result.macro_events.len(),
+            1,
+            "finnhub macro events must be preserved"
+        );
+        assert_eq!(result.macro_events[0].event, "Fed rate cut");
     }
 }

@@ -112,6 +112,7 @@ fn populated_state() -> TradingState {
         resistance_level: Some(187.5),
         volume_avg: Some(65_000_000.0),
         summary: "Momentum remains constructive but not overbought.".to_owned(),
+        options_summary: None,
     });
     state.set_market_sentiment(SentimentData {
         overall_score: 0.34,
@@ -130,6 +131,7 @@ fn populated_state() -> TradingState {
             published_at: "2026-03-14T12:00:00Z".to_owned(),
             relevance_score: Some(0.9),
             snippet: "Demand resilience offsets macro concerns.".to_owned(),
+            url: None,
         }],
         macro_events: vec![MacroEvent {
             event: "Fed holds rates".to_owned(),

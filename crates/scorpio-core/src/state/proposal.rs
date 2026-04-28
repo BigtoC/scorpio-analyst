@@ -5,7 +5,6 @@ use super::derived::ScenarioValuation;
 
 /// The action direction for a trade proposal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub enum TradeAction {
     Buy,
     Sell,

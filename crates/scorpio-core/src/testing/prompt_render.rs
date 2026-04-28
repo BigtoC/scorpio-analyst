@@ -472,6 +472,7 @@ fn sample_technical_data() -> TechnicalData {
         resistance_level: Some(184.5),
         volume_avg: Some(72_000_000.0),
         summary: "Trend is constructive with price holding above key moving averages.".to_owned(),
+        options_summary: None,
     }
 }
 

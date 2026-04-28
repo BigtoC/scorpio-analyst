@@ -461,7 +461,12 @@ impl Task for TechnicalAnalystTask {
             &state,
             policy,
             &self.llm_config,
-        );
+        )
+        .map_err(|e| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "TechnicalAnalystTask: failed to construct analyst: {e}"
+            ))
+        })?;
 
         match analyst.run().await {
             Ok((data, usage)) => {
@@ -815,10 +820,14 @@ impl Task for AnalystSyncTask {
                 ANALYST_TECHNICAL,
                 |state, data| state.set_technical_indicators(data),
                 |state, data| {
+                    let mut datasets = vec!["ohlcv".to_owned()];
+                    if data.options_summary.is_some() {
+                        datasets.push("options_snapshot".to_owned());
+                    }
                     state.set_evidence_technical(EvidenceRecord {
                         kind: EvidenceKind::Technical,
                         payload: data,
-                        sources: vec![stage1_source(PROVIDER_YFINANCE, vec!["ohlcv".to_owned()])],
+                        sources: vec![stage1_source(PROVIDER_YFINANCE, datasets)],
                         quality_flags: vec![],
                     });
                 },
