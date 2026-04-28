@@ -42,5 +42,6 @@ Instructions:
 6. Keep `summary` short and useful for the Trader and risk agents.
 7. Return exactly one JSON object required by `TechnicalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 8. If `get_options_snapshot` returns a live snapshot (`"kind": "snapshot"`), serialize the full tool output as a JSON string and place it in `options_summary`. Do not interpret it or summarize it — store the raw JSON string. If the tool is unavailable or returns any non-snapshot kind, omit `options_summary` from your output.
+9. The options snapshot omits skew. Do not make directional vol or skew-based claims from `atm_iv`, put/call ratios, or the near-term strike slice alone; if skew context is required, say it is unavailable.
 
 Do not include any trade recommendation, target price, or final transaction proposal.
