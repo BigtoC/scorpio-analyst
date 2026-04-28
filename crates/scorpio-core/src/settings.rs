@@ -68,6 +68,9 @@ pub struct PartialConfig {
     /// OpenRouter API key.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub openrouter_api_key: Option<String>,
+    /// DeepSeek API key.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deepseek_api_key: Option<String>,
     /// Quick-thinking LLM provider name (used by analyst agents).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub quick_thinking_provider: Option<String>,
@@ -99,6 +102,7 @@ impl std::fmt::Debug for PartialConfig {
             .field("anthropic_api_key", &redact(&self.anthropic_api_key))
             .field("gemini_api_key", &redact(&self.gemini_api_key))
             .field("openrouter_api_key", &redact(&self.openrouter_api_key))
+            .field("deepseek_api_key", &redact(&self.deepseek_api_key))
             .field("quick_thinking_provider", &self.quick_thinking_provider)
             .field("quick_thinking_model", &self.quick_thinking_model)
             .field("deep_thinking_provider", &self.deep_thinking_provider)
@@ -233,6 +237,7 @@ mod tests {
             anthropic_api_key: Some("sk-ant".into()),
             gemini_api_key: Some("AIza_gem".into()),
             openrouter_api_key: Some("or-key".into()),
+            deepseek_api_key: Some("deepseek-key".into()),
             quick_thinking_provider: Some("openai".into()),
             quick_thinking_model: Some("gpt-4o-mini".into()),
             deep_thinking_provider: Some("anthropic".into()),
@@ -427,6 +432,30 @@ mod tests {
             0o600,
             "config file should be owner-read/write only (0o600)"
         );
+    }
+
+    // ── DeepSeek key tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn roundtrip_full_config_preserves_deepseek_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = full_partial_config();
+        save_user_config_at(&original, &path).expect("save should succeed");
+        let loaded = load_user_config_at(&path).expect("load should succeed");
+        assert_eq!(loaded.deepseek_api_key.as_deref(), Some("deepseek-key"));
+        assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn debug_redacts_deepseek_api_key() {
+        let cfg = PartialConfig {
+            deepseek_api_key: Some("sk-deepseek-secret".into()),
+            ..Default::default()
+        };
+        let output = format!("{cfg:?}");
+        assert!(!output.contains("sk-deepseek-secret"));
+        assert!(output.contains("[REDACTED]"));
     }
 
     // ── Debug redaction ───────────────────────────────────────────────────────

@@ -347,6 +347,7 @@ mod tests {
             output_tokens: 18,
             total_tokens: 48,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
 
         let (summary, token_usage) = build_moderator_result(
@@ -376,6 +377,7 @@ mod tests {
                     output_tokens: 10,
                     total_tokens: 30,
                     cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
             ))],
             vec![],
@@ -423,6 +425,7 @@ mod tests {
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
             ))],
             vec![],

@@ -112,9 +112,9 @@ where
     let raw = String::deserialize(deserializer)?;
     let canonical = raw.trim().to_ascii_lowercase();
     match canonical.as_str() {
-        "openai" | "anthropic" | "gemini" | "copilot" | "openrouter" => Ok(canonical),
+        "openai" | "anthropic" | "gemini" | "copilot" | "openrouter" | "deepseek" => Ok(canonical),
         unknown => Err(serde::de::Error::custom(format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter)"
+            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter, deepseek)"
         ))),
     }
 }
@@ -206,6 +206,8 @@ pub struct ProvidersConfig {
     pub copilot: ProviderSettings,
     #[serde(default = "default_openrouter_settings")]
     pub openrouter: ProviderSettings,
+    #[serde(default = "default_deepseek_settings")]
+    pub deepseek: ProviderSettings,
 }
 
 fn default_openai_settings() -> ProviderSettings {
@@ -236,6 +238,13 @@ fn default_openrouter_settings() -> ProviderSettings {
         rpm: 20,
     }
 }
+fn default_deepseek_settings() -> ProviderSettings {
+    ProviderSettings {
+        api_key: None,
+        base_url: None,
+        rpm: 60,
+    }
+}
 
 impl ProvidersConfig {
     /// Look up the settings for a given [`ProviderId`](crate::providers::ProviderId).
@@ -247,6 +256,7 @@ impl ProvidersConfig {
             ProviderId::Gemini => &self.gemini,
             ProviderId::Copilot => &self.copilot,
             ProviderId::OpenRouter => &self.openrouter,
+            ProviderId::DeepSeek => &self.deepseek,
         }
     }
 
@@ -422,6 +432,9 @@ impl Config {
         if let Some(k) = &partial.openrouter_api_key {
             cfg.providers.openrouter.api_key = Some(SecretString::from(k.clone()));
         }
+        if let Some(k) = &partial.deepseek_api_key {
+            cfg.providers.deepseek.api_key = Some(SecretString::from(k.clone()));
+        }
         if let Some(k) = &partial.finnhub_api_key {
             cfg.api.finnhub_api_key = Some(SecretString::from(k.clone()));
         }
@@ -465,6 +478,11 @@ impl Config {
             "openrouter"
         );
         inject_env_override!(
+            cfg.providers.deepseek.api_key,
+            "SCORPIO_DEEPSEEK_API_KEY",
+            "deepseek"
+        );
+        inject_env_override!(
             cfg.api.finnhub_api_key,
             "SCORPIO_FINNHUB_API_KEY",
             "finnhub"
@@ -501,6 +519,7 @@ impl Config {
         cfg.providers.gemini.api_key = secret_from_env("SCORPIO_GEMINI_API_KEY");
         cfg.api.finnhub_api_key = secret_from_env("SCORPIO_FINNHUB_API_KEY");
         cfg.providers.openrouter.api_key = secret_from_env("SCORPIO_OPENROUTER_API_KEY");
+        cfg.providers.deepseek.api_key = secret_from_env("SCORPIO_DEEPSEEK_API_KEY");
         cfg.api.fred_api_key = secret_from_env("SCORPIO_FRED_API_KEY");
 
         cfg.validate()?;
@@ -517,7 +536,8 @@ impl Config {
         if !self.has_any_llm_key() {
             tracing::warn!(
                 "no LLM provider API key found — set SCORPIO_OPENAI_API_KEY, \
-                 SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, or SCORPIO_OPENROUTER_API_KEY"
+                 SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, SCORPIO_OPENROUTER_API_KEY, \
+                 or SCORPIO_DEEPSEEK_API_KEY"
             );
         }
 
@@ -573,6 +593,7 @@ impl Config {
             || self.providers.anthropic.api_key.is_some()
             || self.providers.gemini.api_key.is_some()
             || self.providers.openrouter.api_key.is_some()
+            || self.providers.deepseek.api_key.is_some()
     }
 }
 
@@ -1361,4 +1382,102 @@ deep_thinking_model = "o3"
     #[test]
     #[ignore = "relocated to cli::analyze tests in Unit 6"]
     fn validate_accepts_lowercase_symbol() {}
+
+    // ── DeepSeek provider tests ───────────────────────────────────────────
+
+    #[test]
+    fn deserialize_provider_name_accepts_deepseek() {
+        let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
+            serde::de::value::Error,
+        >::new("deepseek"));
+        assert_eq!(result.unwrap(), "deepseek");
+    }
+
+    #[test]
+    fn deserialize_provider_name_unknown_lists_deepseek() {
+        let err = deserialize_provider_name(serde::de::value::StrDeserializer::<
+            serde::de::value::Error,
+        >::new("badprovider"))
+        .unwrap_err();
+        assert!(err.to_string().contains("deepseek"));
+    }
+
+    #[test]
+    fn load_from_reads_deepseek_api_key_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        unsafe {
+            std::env::set_var("SCORPIO_DEEPSEEK_API_KEY", "test-deepseek-key-from-env");
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO_DEEPSEEK_API_KEY");
+        }
+        let cfg = result.expect("config should load with deepseek key from env");
+        assert_eq!(
+            cfg.providers
+                .deepseek
+                .api_key
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+            Some("test-deepseek-key-from-env")
+        );
+    }
+
+    #[test]
+    fn has_any_llm_key_counts_deepseek_key() {
+        let mut cfg = sample_config_with_api(ApiConfig::default());
+        cfg.providers.deepseek.api_key = Some(SecretString::from("test-deepseek-key"));
+        assert!(cfg.has_any_llm_key());
+    }
+
+    #[test]
+    fn env_override_supports_deepseek_rate_limit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        unsafe {
+            std::env::set_var("SCORPIO__PROVIDERS__DEEPSEEK__RPM", "45");
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__PROVIDERS__DEEPSEEK__RPM");
+        }
+        let cfg = result.expect("config should load with deepseek rpm override");
+        assert_eq!(cfg.providers.deepseek.rpm, 45);
+    }
+
+    #[test]
+    fn load_from_user_path_reads_deepseek_api_key_from_partial_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = crate::settings::PartialConfig {
+            deepseek_api_key: Some("deepseek-file-key".into()),
+            quick_thinking_provider: Some("deepseek".into()),
+            quick_thinking_model: Some("deepseek-chat".into()),
+            deep_thinking_provider: Some("deepseek".into()),
+            deep_thinking_model: Some("deepseek-reasoner".into()),
+            ..Default::default()
+        };
+        crate::settings::save_user_config_at(&partial, &path).expect("save partial config");
+        let cfg = Config::load_from_user_path(&path).expect("load from user path");
+        assert_eq!(
+            cfg.providers
+                .deepseek
+                .api_key
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+            Some("deepseek-file-key")
+        );
+    }
+
+    #[test]
+    fn config_without_providers_deepseek_still_deserializes() {
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let cfg =
+            Config::load_from(&path).expect("config should load without [providers.deepseek]");
+        // When no [providers] section is present, serde calls ProvidersConfig::default()
+        // which uses ProviderSettings::default() (rpm: 0), not default_deepseek_settings().
+        assert_eq!(cfg.providers.deepseek.rpm, 0);
+        assert!(cfg.providers.deepseek.api_key.is_none());
+    }
 }

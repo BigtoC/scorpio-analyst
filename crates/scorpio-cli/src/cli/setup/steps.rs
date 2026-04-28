@@ -24,6 +24,7 @@ pub const WIZARD_PROVIDERS: &[ProviderId] = &[
     ProviderId::Anthropic,
     ProviderId::Gemini,
     ProviderId::OpenRouter,
+    ProviderId::DeepSeek,
 ];
 
 // ── Step 1: Finnhub API key ───────────────────────────────────────────────────
@@ -367,6 +368,7 @@ fn provider_key(partial: &PartialConfig, provider: ProviderId) -> Option<&str> {
         ProviderId::Anthropic => partial.anthropic_api_key.as_deref(),
         ProviderId::Gemini => partial.gemini_api_key.as_deref(),
         ProviderId::OpenRouter => partial.openrouter_api_key.as_deref(),
+        ProviderId::DeepSeek => partial.deepseek_api_key.as_deref(),
         ProviderId::Copilot => None,
     }
 }
@@ -377,6 +379,7 @@ fn set_provider_key(partial: &mut PartialConfig, provider: ProviderId, value: Op
         ProviderId::Anthropic => partial.anthropic_api_key = value,
         ProviderId::Gemini => partial.gemini_api_key = value,
         ProviderId::OpenRouter => partial.openrouter_api_key = value,
+        ProviderId::DeepSeek => partial.deepseek_api_key = value,
         ProviderId::Copilot => {}
     }
 }
@@ -579,6 +582,7 @@ mod tests {
             anthropic_api_key: Some("a".into()),
             gemini_api_key: Some("g".into()),
             openrouter_api_key: Some("r".into()),
+            deepseek_api_key: Some("d".into()),
             ..Default::default()
         };
         assert_eq!(providers_with_keys(&p), WIZARD_PROVIDERS.to_vec());

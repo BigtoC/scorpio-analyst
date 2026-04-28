@@ -43,6 +43,7 @@ type OpenAIModel = rig::providers::openai::responses_api::ResponsesCompletionMod
 type AnthropicModel = rig::providers::anthropic::completion::CompletionModel;
 type GeminiModel = rig::providers::gemini::completion::CompletionModel;
 type OpenRouterModel = rig::providers::openrouter::completion::CompletionModel;
+type DeepSeekModel = rig::providers::deepseek::CompletionModel;
 
 macro_rules! dispatch_llm_agent {
     ($inner:expr, |$agent:ident| $body:expr, mock = |$mock:ident| $mock_body:expr) => {
@@ -52,6 +53,7 @@ macro_rules! dispatch_llm_agent {
             LlmAgentInner::Gemini($agent) => $body,
             LlmAgentInner::Copilot($agent) => $body,
             LlmAgentInner::OpenRouter($agent) => $body,
+            LlmAgentInner::DeepSeek($agent) => $body,
             #[cfg(test)]
             LlmAgentInner::Mock($mock) => $mock_body,
         }
@@ -78,6 +80,8 @@ enum LlmAgentInner {
     Copilot(rig::agent::Agent<CopilotCompletionModel>),
     /// Agent backed by OpenRouter API aggregator.
     OpenRouter(rig::agent::Agent<OpenRouterModel>),
+    /// Agent backed by DeepSeek API.
+    DeepSeek(rig::agent::Agent<DeepSeekModel>),
     #[cfg(test)]
     Mock(MockLlmAgent),
 }
@@ -399,6 +403,7 @@ impl LlmAgent {
     ///
     /// The `chat_history` is updated in place: the new user message and the assistant
     /// response are appended so callers can pass the same `Vec<Message>` across rounds.
+    #[allow(clippy::ptr_arg)]
     pub async fn chat_details(
         &self,
         prompt: &str,
@@ -410,7 +415,7 @@ impl LlmAgent {
             &self.inner,
             |agent| {
                 PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history)
+                    .with_history(chat_history.iter().cloned())
                     .extended_details()
                     .await
             },
@@ -447,6 +452,7 @@ impl MockLlmAgent {
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 ))
             })
@@ -479,6 +485,7 @@ impl MockLlmAgent {
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 },
             )),
         }
@@ -515,6 +522,7 @@ impl MockLlmAgent {
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     },
                 ))
             });
@@ -665,6 +673,11 @@ fn build_agent_inner(
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
             make_agent!(base, OpenRouter)
+        }
+        ProviderClient::DeepSeek(c) => {
+            use rig::prelude::CompletionClient;
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(base, DeepSeek)
         }
     }
 }
@@ -972,6 +985,7 @@ mod tests {
                 output_tokens: 2,
                 total_tokens: 6,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
         ));
 

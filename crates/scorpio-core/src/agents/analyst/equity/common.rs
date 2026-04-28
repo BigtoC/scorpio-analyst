@@ -264,6 +264,7 @@ mod tests {
             output_tokens: total / 2,
             total_tokens: total,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         }
     }
 
@@ -413,6 +414,7 @@ mod tests {
                 output_tokens: 13,
                 total_tokens: 24,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
         ));
 
@@ -601,6 +603,7 @@ mod tests {
             output_tokens: 0,
             total_tokens: 150,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
@@ -619,6 +622,7 @@ mod tests {
             output_tokens: 0,
             total_tokens: 0,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
@@ -637,6 +641,7 @@ mod tests {
             output_tokens: 0,
             total_tokens: 0,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
@@ -654,6 +659,7 @@ mod tests {
             output_tokens: 50,
             total_tokens: 150,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("MyAgent", "my-model", usage, Instant::now(), 0);

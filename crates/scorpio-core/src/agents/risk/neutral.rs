@@ -270,6 +270,7 @@ mod tests {
             output_tokens: total / 2,
             total_tokens: total,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
         }
     }
 
@@ -346,6 +347,7 @@ mod tests {
                 output_tokens: 1,
                 total_tokens: 2,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
             Instant::now(),
             0,
@@ -364,6 +366,7 @@ mod tests {
                 output_tokens: 1,
                 total_tokens: 2,
                 cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             },
             Instant::now(),
             0,
