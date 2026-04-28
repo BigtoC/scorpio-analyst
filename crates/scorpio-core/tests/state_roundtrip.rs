@@ -6,7 +6,7 @@ use scorpio_core::data::adapters::{
     estimates::{ConsensusEvidence, PriceTargetSummary, RecommendationsSummary},
     events::EventNewsEvidence,
 };
-use scorpio_core::data::traits::options::OptionsOutcome;
+use scorpio_core::data::traits::options::{OptionsOutcome, OptionsSnapshot};
 use scorpio_core::state::*;
 
 fn arb_enrichment_status() -> impl Strategy<Value = EnrichmentStatus> {
@@ -214,6 +214,18 @@ fn arb_technical_options_context() -> impl Strategy<Value = Option<TechnicalOpti
         })),
         Just(Some(TechnicalOptionsContext::Available {
             outcome: OptionsOutcome::MissingSpot,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(OptionsSnapshot {
+                spot_price: 180.0,
+                atm_iv: 0.28,
+                iv_term_structure: vec![],
+                put_call_volume_ratio: 1.1,
+                put_call_oi_ratio: 1.0,
+                max_pain_strike: 180.0,
+                near_term_expiration: "2026-01-17".to_owned(),
+                near_term_strikes: vec![],
+            }),
         })),
     ]
 }

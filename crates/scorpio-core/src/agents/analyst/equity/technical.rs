@@ -9,6 +9,9 @@ use std::time::Instant;
 
 use rig::tool::ToolDyn;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     analysis_packs::RuntimePolicy,
@@ -24,13 +27,106 @@ use crate::{
         CalculateMacd, CalculateRsi,
     },
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, TechnicalData, TradingState},
+    state::{AgentTokenUsage, MacdValues, TechnicalData, TradingState, TechnicalOptionsContext},
 };
 
 use super::common::{
     analyst_runtime_config, render_analyst_system_prompt, run_analyst_inference,
     validate_summary_content,
 };
+
+// ─── LLM response type ────────────────────────────────────────────────────────
+
+/// Intermediate type that models the raw JSON the LLM writes for the Technical
+/// Analyst phase.
+///
+/// This is **not** the persisted type — it contains only the fields the model
+/// can meaningfully fill in. `options_context` is intentionally absent: it is a
+/// Rust-side artifact produced by prefetching, not model output. After parsing,
+/// [`assemble_technical_data`] merges this response with the prefetched
+/// `options_context` to produce the final [`TechnicalData`] that gets written to
+/// `TradingState`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+struct TechnicalAnalystResponse {
+    rsi: Option<f64>,
+    macd: Option<MacdValues>,
+    atr: Option<f64>,
+    sma_20: Option<f64>,
+    sma_50: Option<f64>,
+    ema_12: Option<f64>,
+    ema_26: Option<f64>,
+    bollinger_upper: Option<f64>,
+    bollinger_lower: Option<f64>,
+    support_level: Option<f64>,
+    resistance_level: Option<f64>,
+    volume_avg: Option<f64>,
+    summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    options_summary: Option<String>,
+}
+
+/// Parse a JSON string (LLM output) into [`TechnicalAnalystResponse`], mapping
+/// errors to [`TradingError::SchemaViolation`].
+///
+/// Validates that `macd` is an object (or null), never a scalar — the same
+/// guard previously applied when parsing directly into [`TechnicalData`].
+fn parse_technical_response(
+    json_str: &str,
+) -> Result<TechnicalAnalystResponse, TradingError> {
+    let value: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
+            message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+        })?;
+
+    if value.get("macd").is_some_and(|macd| macd.is_number()) {
+        return Err(TradingError::SchemaViolation {
+            message: "TechnicalAnalyst: failed to parse LLM output: field `macd` must be an object with `macd_line`, `signal_line`, and `histogram`, or null".to_owned(),
+        });
+    }
+
+    serde_json::from_value(value).map_err(|e| TradingError::SchemaViolation {
+        message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+    })
+}
+
+/// Merge a parsed LLM response with the Rust-owned `options_context` into the
+/// final [`TechnicalData`] that gets written to state.
+///
+/// `options_summary` is only preserved when `options_context` is
+/// `Some(TechnicalOptionsContext::Available { outcome: OptionsOutcome::Snapshot(_) })`.
+/// In all other cases (no context, fetch failed, historical run, etc.) it is
+/// cleared because the LLM had no valid snapshot to summarize.
+fn assemble_technical_data(
+    response: TechnicalAnalystResponse,
+    options_context: Option<TechnicalOptionsContext>,
+) -> TechnicalData {
+    use crate::data::traits::options::OptionsOutcome;
+
+    let keep_options_summary = matches!(
+        options_context,
+        Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(_),
+        })
+    );
+
+    TechnicalData {
+        rsi: response.rsi,
+        macd: response.macd,
+        atr: response.atr,
+        sma_20: response.sma_20,
+        sma_50: response.sma_50,
+        ema_12: response.ema_12,
+        ema_26: response.ema_26,
+        bollinger_upper: response.bollinger_upper,
+        bollinger_lower: response.bollinger_lower,
+        support_level: response.support_level,
+        resistance_level: response.resistance_level,
+        volume_avg: response.volume_avg,
+        summary: response.summary,
+        options_summary: keep_options_summary.then_some(response.options_summary).flatten(),
+        options_context,
+    }
+}
 
 /// Build the rendered system prompt for the Technical Analyst.
 ///
@@ -175,18 +271,22 @@ impl TechnicalAnalyst {
             outcome.rate_limit_wait_ms,
         );
 
-        Ok((outcome.output, usage))
+        // `options_context` is a Rust-side artifact — not model output. In this
+        // task it is always `None`; Task 4 will prefetch it and pass it in.
+        let technical_data = assemble_technical_data(outcome.output, None);
+
+        Ok((technical_data, usage))
     }
 }
 
-fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
-    if data.summary.trim().is_empty() {
+fn validate_technical(response: &TechnicalAnalystResponse) -> Result<(), TradingError> {
+    if response.summary.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "TechnicalAnalyst: summary must not be empty".to_owned(),
         });
     }
-    validate_summary_content("TechnicalAnalyst", &data.summary)?;
-    if let Some(rsi) = data.rsi
+    validate_summary_content("TechnicalAnalyst", &response.summary)?;
+    if let Some(rsi) = response.rsi
         && !(0.0..=100.0).contains(&rsi)
     {
         return Err(TradingError::SchemaViolation {
@@ -196,25 +296,13 @@ fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
     Ok(())
 }
 
-/// Deserialize a JSON string into [`TechnicalData`], mapping errors to
+/// Deserialize a JSON string into [`TechnicalAnalystResponse`], mapping errors to
 /// [`TradingError::SchemaViolation`].
 ///
-/// Exposed for use as the `parse` hook in `run_analyst_inference`.
-pub(crate) fn parse_technical(json_str: &str) -> Result<TechnicalData, TradingError> {
-    let value: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
-            message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-        })?;
-
-    if value.get("macd").is_some_and(|macd| macd.is_number()) {
-        return Err(TradingError::SchemaViolation {
-            message: "TechnicalAnalyst: failed to parse LLM output: field `macd` must be an object with `macd_line`, `signal_line`, and `histogram`, or null".to_owned(),
-        });
-    }
-
-    serde_json::from_value(value).map_err(|e| TradingError::SchemaViolation {
-        message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-    })
+/// Used as the `parse` hook in `run_analyst_inference`. Also used by tests that
+/// exercise the structural parsing layer.
+fn parse_technical(json_str: &str) -> Result<TechnicalAnalystResponse, TradingError> {
+    parse_technical_response(json_str)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -246,8 +334,43 @@ mod tests {
     /// Parse and validate a JSON string — combines `parse_technical` + `validate_technical`
     /// for test convenience. Tests that need only structural parsing can call `parse_technical`
     /// directly; tests that also exercise the semantic validation layer call this helper.
-    fn parse_and_validate(json: &str) -> Result<TechnicalData, TradingError> {
-        parse_technical(json).and_then(|data| validate_technical(&data).map(|()| data))
+    fn parse_and_validate(json: &str) -> Result<TechnicalAnalystResponse, TradingError> {
+        parse_technical(json).and_then(|resp| validate_technical(&resp).map(|()| resp))
+    }
+
+    // ── Task 2 test helpers ───────────────────────────────────────────────────
+
+    fn sample_technical_response_with_options_summary() -> TechnicalAnalystResponse {
+        TechnicalAnalystResponse {
+            rsi: Some(52.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "Moderate bullish trend.".to_owned(),
+            options_summary: Some("Near-term IV remains elevated into earnings.".to_owned()),
+        }
+    }
+
+    fn sample_options_snapshot() -> crate::data::traits::options::OptionsSnapshot {
+        use crate::data::traits::options::OptionsSnapshot;
+        OptionsSnapshot {
+            spot_price: 150.0,
+            atm_iv: 0.25,
+            iv_term_structure: vec![],
+            put_call_volume_ratio: 0.8,
+            put_call_oi_ratio: 0.9,
+            max_pain_strike: 150.0,
+            near_term_expiration: "2026-05-16".to_owned(),
+            near_term_strikes: vec![],
+        }
     }
 
     // ── Task 4.4: Correct TechnicalData extraction ────────────────────────
@@ -622,7 +745,7 @@ mod tests {
             },
         ));
 
-        let outcome = run_analyst_inference::<TechnicalData, _, _>(
+        let outcome = run_analyst_inference::<TechnicalAnalystResponse, _, _>(
             &agent,
             "analyse AAPL technical",
             std::time::Duration::from_millis(100),
@@ -955,5 +1078,58 @@ mod tests {
             ),
             "runtime-policy prompt bundle should drive the technical prompt body: {prompt}"
         );
+    }
+
+    // ── Task 2: TechnicalAnalystResponse split ────────────────────────────────
+
+    #[test]
+    fn parse_technical_response_accepts_options_summary_without_options_context() {
+        let json = r#"{
+            "rsi": 52.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "Moderate bullish trend.",
+            "options_summary": "Near-term IV remains elevated into earnings."
+        }"#;
+
+        let data = parse_technical_response(json).expect("response should parse");
+        assert_eq!(data.options_summary.as_deref(), Some("Near-term IV remains elevated into earnings."));
+    }
+
+    #[test]
+    fn assemble_technical_data_keeps_options_summary_for_live_snapshot() {
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(sample_options_snapshot()),
+            }),
+        );
+        assert!(data.options_summary.is_some());
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_for_non_snapshot_outcome() {
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::HistoricalRun,
+            }),
+        );
+        assert!(data.options_summary.is_none());
     }
 }
