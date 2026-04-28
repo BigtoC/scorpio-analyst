@@ -38,6 +38,9 @@ use crate::{
 /// indefinitely register as `FetchFailed`.
 pub(super) const CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES: u32 = 3;
 
+/// Staleness window for reusing prior consensus bookkeeping from phase-1 snapshots.
+const CONSENSUS_MEMORY_MAX_AGE_DAYS: i64 = 30;
+
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
 
 pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
@@ -200,6 +203,33 @@ pub(super) async fn run_analysis_cycle(
     let date = initial_state.target_date.clone();
     let execution_id = initial_state.execution_id.to_string();
     info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle started");
+
+    let prior_consensus_payload = match prior_consensus_payload {
+        Some(payload) if payload.symbol.eq_ignore_ascii_case(&symbol) => Some(payload),
+        Some(payload) => {
+            info!(
+                current_symbol = %symbol,
+                prior_symbol = %payload.symbol,
+                "discarding in-memory consensus payload for a different symbol"
+            );
+            load_prior_consensus_payload(&pipeline.snapshot_store, &symbol).await
+        }
+        None => match pipeline
+            .snapshot_store
+            .load_prior_consensus_for_symbol(&symbol, CONSENSUS_MEMORY_MAX_AGE_DAYS)
+            .await
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                warn!(
+                    symbol = %symbol,
+                    error = %error,
+                    "prior consensus lookup failed; continuing without half-life history"
+                );
+                None
+            }
+        },
+    };
 
     let need_price = initial_state.current_price.is_none();
     let need_vix = initial_state.market_volatility().is_none();
@@ -370,6 +400,26 @@ pub(super) async fn run_analysis_cycle(
 
     info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle complete");
     Ok(final_state)
+}
+
+async fn load_prior_consensus_payload(
+    snapshot_store: &SnapshotStore,
+    symbol: &str,
+) -> Option<ConsensusEvidence> {
+    match snapshot_store
+        .load_prior_consensus_for_symbol(symbol, CONSENSUS_MEMORY_MAX_AGE_DAYS)
+        .await
+    {
+        Ok(payload) => payload,
+        Err(error) => {
+            warn!(
+                symbol = %symbol,
+                error = %error,
+                "prior consensus lookup failed; continuing without half-life history"
+            );
+            None
+        }
+    }
 }
 
 // ─── Enrichment hydration helpers ────────────────────────────────────────────
@@ -560,7 +610,7 @@ pub(super) fn apply_consensus_half_life_policy(
             info!(symbol, error = %reason, "consensus-estimates enrichment: fetch failed (fail-open)");
             EnrichmentState {
                 status: EnrichmentStatus::FetchFailed(reason.clone()),
-                payload: None,
+                payload: prior_payload.cloned(),
             }
         }
         HydratedConsensusFetch::TimedOut => {
@@ -570,7 +620,7 @@ pub(super) fn apply_consensus_half_life_policy(
             );
             EnrichmentState {
                 status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
-                payload: None,
+                payload: prior_payload.cloned(),
             }
         }
     }
@@ -737,6 +787,52 @@ mod consensus_half_life_tests {
         assert_eq!(
             payload.consecutive_provider_degraded_cycles, 0,
             "Data outcome must reset counter regardless of upstream value"
+        );
+    }
+
+    #[test]
+    fn failed_fetch_preserves_prior_payload_for_future_half_life_cycles() {
+        let symbol = "AAPL";
+        let prior = data_evidence(symbol, 2);
+
+        let next = apply_consensus_half_life_policy(
+            symbol,
+            &HydratedConsensusFetch::Failed("price target down".to_owned()),
+            Some(&prior),
+        );
+
+        assert!(
+            matches!(next.status, EnrichmentStatus::FetchFailed(ref reason) if reason == "price target down"),
+            "failed fetch must surface the operational failure reason, got {:?}",
+            next.status
+        );
+        assert_eq!(
+            next.payload.as_ref(),
+            Some(&prior),
+            "failed fetch must preserve the prior payload so the degraded counter does not reset"
+        );
+    }
+
+    #[test]
+    fn timeout_preserves_prior_payload_for_future_half_life_cycles() {
+        let symbol = "AAPL";
+        let prior = data_evidence(symbol, 2);
+
+        let next = apply_consensus_half_life_policy(
+            symbol,
+            &HydratedConsensusFetch::TimedOut,
+            Some(&prior),
+        );
+
+        assert!(
+            matches!(next.status, EnrichmentStatus::FetchFailed(ref reason) if reason == "timeout"),
+            "timed-out fetch must surface timeout status, got {:?}",
+            next.status
+        );
+        assert_eq!(
+            next.payload.as_ref(),
+            Some(&prior),
+            "timeout must preserve the prior payload so the degraded counter does not reset"
         );
     }
 }

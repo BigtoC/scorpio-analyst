@@ -305,7 +305,11 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
     };
     sections.push(format!("Consensus estimates status: {consensus_status}"));
 
-    if let Some(ref consensus) = state.enrichment_consensus.payload {
+    if matches!(
+        state.enrichment_consensus.status,
+        EnrichmentStatus::Available
+    ) && let Some(ref consensus) = state.enrichment_consensus.payload
+    {
         let eps = consensus
             .eps_estimate
             .map(|v| format!("{v:.2}"))
@@ -748,6 +752,69 @@ mod tests {
             "revenue estimate: {ctx}"
         );
         assert!(ctx.contains("Analyst count: 28"), "analyst count: {ctx}");
+    }
+
+    #[test]
+    fn build_enrichment_context_omits_consensus_payload_details_when_status_is_not_available() {
+        use crate::data::adapters::estimates::ConsensusEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::FetchFailed("provider_degraded".to_owned()),
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: Some(2.50),
+                revenue_estimate_m: Some(95_000.0),
+                analyst_count: Some(35),
+                as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 2,
+            }),
+        };
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Consensus estimates status: fetch_failed"));
+        assert!(ctx.contains("provider_degraded"));
+        assert!(
+            !ctx.contains("Consensus estimates (as of"),
+            "non-available consensus payload must not render as live analyst data: {ctx}"
+        );
+        assert!(
+            !ctx.contains("EPS estimate:"),
+            "non-available consensus payload must not expose detail lines: {ctx}"
+        );
+    }
+
+    #[test]
+    fn build_enrichment_context_omits_stubbed_consensus_details_after_half_life_downgrade() {
+        use crate::data::adapters::estimates::ConsensusEvidence;
+
+        let mut state = empty_state();
+        state.enrichment_consensus = EnrichmentState {
+            status: EnrichmentStatus::NotAvailable,
+            payload: Some(ConsensusEvidence {
+                symbol: "AAPL".to_owned(),
+                eps_estimate: None,
+                revenue_estimate_m: None,
+                analyst_count: None,
+                as_of_date: "2026-01-15".to_owned(),
+                price_target: None,
+                recommendations: None,
+                consecutive_provider_degraded_cycles: 3,
+            }),
+        };
+
+        let ctx = build_enrichment_context(&state);
+        assert!(ctx.contains("Consensus estimates status: not_available"));
+        assert!(
+            !ctx.contains("Consensus estimates (as of"),
+            "half-life downgrade stub must not render as live analyst data: {ctx}"
+        );
+        assert!(
+            !ctx.contains("EPS estimate:"),
+            "half-life downgrade stub must not expose detail lines: {ctx}"
+        );
     }
 
     // ── Pack context tests ──────────────────────────────────────────────
