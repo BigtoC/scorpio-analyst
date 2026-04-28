@@ -74,7 +74,7 @@ graph-flow = { version = "0.5.1", features = ["rig"] }
 async-trait = "0.1"
 
 # Phase snapshot persistence
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
 
 # Self-update and release verification
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate", "rustls"] }
