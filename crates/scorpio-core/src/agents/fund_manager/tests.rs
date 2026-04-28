@@ -131,6 +131,7 @@ fn populated_state() -> TradingState {
         volume_avg: Some(65_000_000.0),
         summary: "Momentum constructive.".to_owned(),
         options_summary: None,
+        options_context: None,
     });
     state.set_market_sentiment(SentimentData {
         overall_score: 0.34,

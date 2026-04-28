@@ -199,6 +199,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -349,6 +350,7 @@ async fn analyst_sync_derives_required_inputs_from_runtime_policy() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -699,6 +701,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -813,6 +816,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -1941,6 +1945,7 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -2118,6 +2123,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -2328,6 +2334,7 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -2487,6 +2494,7 @@ async fn technical_evidence_includes_options_snapshot_dataset_when_options_summa
                 volume_avg: None,
                 summary: "ok".to_owned(),
                 options_summary: Some("mock options data".to_owned()),
+                options_context: None,
             },
         )
         .await
@@ -2605,6 +2613,7 @@ async fn technical_evidence_includes_options_snapshot_dataset_when_options_summa
                 volume_avg: None,
                 summary: "ok".to_owned(),
                 options_summary: None,
+                options_context: None,
             },
         )
         .await

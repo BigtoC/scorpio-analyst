@@ -477,6 +477,7 @@ mod tests {
             volume_avg: Some(500_000.0),
             summary: "Neutral trend.".to_owned(),
             options_summary: None,
+            options_context: None,
         };
 
         let serialized = serde_json::to_string(&original).expect("serialise");
@@ -669,6 +670,30 @@ mod tests {
             data.options_summary.is_none(),
             "missing options_summary field should default to None"
         );
+    }
+
+    #[test]
+    fn technical_data_missing_options_context_defaults_to_none() {
+        let json = r#"{
+            "rsi": 55.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "legacy technical payload",
+            "options_summary": null
+        }"#;
+
+        let data: TechnicalData =
+            serde_json::from_str(json).expect("legacy payload should deserialize");
+        assert!(data.options_context.is_none());
     }
 
     #[test]

@@ -359,6 +359,61 @@ async fn additive_fields_deserialize_when_struct_lacks_field() {
     );
 }
 
+#[tokio::test]
+async fn additive_options_context_field_does_not_require_schema_bump() {
+    // Forward-compat regression: writing a phase-5 snapshot at the *current*
+    // active schema version, then stripping the `options_context` key from the
+    // stored JSON (simulating a snapshot produced before this field existed),
+    // must NOT cause the loader to skip the row. The field rides the existing
+    // schema version because it is additive `Option<_>` with `#[serde(default)]`.
+    let store = in_memory_store().await;
+    let mut state = TradingState::new("AAPL", "2026-04-29");
+    state.current_thesis = Some(sample_thesis());
+
+    store
+        .save_snapshot(
+            &state.execution_id.to_string(),
+            SnapshotPhase::FundManager,
+            &state,
+            None,
+        )
+        .await
+        .expect("save should succeed");
+
+    let row: (String,) = sqlx::query_as(
+        "SELECT trading_state_json FROM phase_snapshots WHERE execution_id = ? AND phase_number = 5",
+    )
+    .bind(state.execution_id.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .expect("fetch saved snapshot");
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&row.0).expect("saved JSON must be valid");
+    strip_keys_recursively(&mut value, &["options_context"]);
+    let stripped = serde_json::to_string(&value).expect("re-serialize stripped payload");
+
+    sqlx::query(
+        "UPDATE phase_snapshots SET trading_state_json = ? WHERE execution_id = ? AND phase_number = 5",
+    )
+    .bind(&stripped)
+    .bind(state.execution_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("stripped-payload update should succeed");
+
+    let result = store
+        .load_prior_thesis_for_symbol("AAPL", 30)
+        .await
+        .expect("query should succeed");
+
+    assert_eq!(
+        result.as_ref().map(|t| t.action.as_str()),
+        Some("Buy"),
+        "additive options_context field removed from stored JSON must not block thesis lookup"
+    );
+}
+
 /// Recursively delete every occurrence of `keys` from `value`, walking both
 /// objects and arrays. Used by the additive-fields backward-compat tests to
 /// simulate snapshots produced before a new optional field existed.

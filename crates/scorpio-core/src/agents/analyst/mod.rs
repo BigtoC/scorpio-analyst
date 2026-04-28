@@ -603,6 +603,7 @@ mod tests {
             volume_avg: Some(500_000.0),
             summary: "Neutral trend.".to_owned(),
             options_summary: None,
+            options_context: None,
         }
     }
 

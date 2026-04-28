@@ -6,6 +6,7 @@ use scorpio_core::data::adapters::{
     estimates::{ConsensusEvidence, PriceTargetSummary, RecommendationsSummary},
     events::EventNewsEvidence,
 };
+use scorpio_core::data::traits::options::OptionsOutcome;
 use scorpio_core::state::*;
 
 fn arb_enrichment_status() -> impl Strategy<Value = EnrichmentStatus> {
@@ -198,6 +199,25 @@ fn arb_macd_values() -> impl Strategy<Value = MacdValues> {
     })
 }
 
+fn arb_technical_options_context() -> impl Strategy<Value = Option<TechnicalOptionsContext>> {
+    prop_oneof![
+        Just(None),
+        "[a-z ]{0,40}".prop_map(|reason| Some(TechnicalOptionsContext::FetchFailed { reason })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::HistoricalRun,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::NoListedInstrument,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::SparseChain,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::MissingSpot,
+        })),
+    ]
+}
+
 fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
     (
         arb_opt_f64(),
@@ -215,6 +235,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
             arb_opt_f64(),
             "[a-z ]{0,30}",
             proptest::option::of("[A-Za-z0-9 :;./%-]{0,80}"),
+            arb_technical_options_context(),
         ),
     )
         .prop_map(
@@ -228,7 +249,14 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
                 ema_26,
                 bollinger_upper,
                 bollinger_lower,
-                (support_level, resistance_level, volume_avg, summary, options_summary),
+                (
+                    support_level,
+                    resistance_level,
+                    volume_avg,
+                    summary,
+                    options_summary,
+                    options_context,
+                ),
             )| {
                 TechnicalData {
                     rsi,
@@ -245,6 +273,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
                     volume_avg,
                     summary,
                     options_summary,
+                    options_context,
                 }
             },
         )
