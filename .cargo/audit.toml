@@ -1,0 +1,9 @@
+[advisories]
+ignore = [
+  # sqlx 0.8.6 still records sqlx-mysql/rsa in Cargo.lock through optional backend
+  # entries, but the active resolver for this workspace does not enable the mysql
+  # feature path. Verified with
+  # `cargo tree -e features -i sqlx-mysql@0.8.6 --workspace --target all --all-features`
+  # returning no active path.
+  "RUSTSEC-2023-0071",
+]
