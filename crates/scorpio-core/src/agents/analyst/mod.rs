@@ -66,11 +66,61 @@ const SHORTENER_HOSTS: &[&str] = &[
 
 /// Canonicalize a URL for deduplication.
 ///
-/// Returns `None` when the URL belongs to a known shortener (so callers fall
-/// back to title-hash dedup) or when the input is empty/whitespace. Otherwise
-/// returns a normalized form: scheme+host+path in lowercase, trailing slashes
-/// stripped, and `?utm_*` query parameters removed.
+/// Returns `None` when the URL belongs to a known shortener with no embedded
+/// target URL (so callers fall back to title-hash dedup) or when the input is
+/// empty/whitespace. Otherwise, returns a normalized form: scheme+host+path in
+/// lowercase, trailing slashes stripped, and `?utm_*` query parameters removed.
 fn canonical_url(url: &str) -> Option<String> {
+    fn percent_decode(input: &str) -> Option<String> {
+        fn hex_value(byte: u8) -> Option<u8> {
+            match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                b'A'..=b'F' => Some(byte - b'A' + 10),
+                _ => None,
+            }
+        }
+
+        let bytes = input.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'%' if i + 2 < bytes.len() => {
+                    let hi = hex_value(bytes[i + 1])?;
+                    let lo = hex_value(bytes[i + 2])?;
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                }
+                b'+' => {
+                    out.push(b' ');
+                    i += 1;
+                }
+                byte => {
+                    out.push(byte);
+                    i += 1;
+                }
+            }
+        }
+
+        String::from_utf8(out).ok()
+    }
+
+    fn embedded_shortener_target(query: &str) -> Option<String> {
+        for pair in query.split('&') {
+            let (key, value) = pair.split_once('=')?;
+            if !matches!(key.to_ascii_lowercase().as_str(), "url" | "u" | "target") {
+                continue;
+            }
+            let decoded = percent_decode(value)?;
+            if decoded.trim().is_empty() {
+                continue;
+            }
+            return canonical_url(&decoded);
+        }
+        None
+    }
+
     let url = url.trim();
     if url.is_empty() {
         return None;
@@ -85,23 +135,22 @@ fn canonical_url(url: &str) -> Option<String> {
         url
     };
 
-    // Extract just the host (up to the first `/` or `?`).
-    let host_end = without_scheme
-        .find(['/', '?'])
-        .unwrap_or(without_scheme.len());
-    let host = &without_scheme[..host_end];
-
-    // Reject known shorteners.
-    let host_lower = host.to_lowercase();
-    if SHORTENER_HOSTS.iter().any(|&s| host_lower == s) {
-        return None;
-    }
-
     // Split off query string.
     let (path_part, query_part) = match without_scheme.split_once('?') {
         Some((p, q)) => (p, Some(q)),
         None => (without_scheme, None),
     };
+
+    // Extract just the host (up to the first `/`).
+    let host_end = path_part.find('/').unwrap_or(path_part.len());
+    let host = &path_part[..host_end];
+
+    // Deterministically canonicalize known shorteners when the wrapped target
+    // URL is available in the query string; otherwise fall back to title dedupe.
+    let host_lower = host.to_ascii_lowercase();
+    if SHORTENER_HOSTS.iter().any(|&s| host_lower == s) {
+        return query_part.and_then(embedded_shortener_target);
+    }
 
     // Strip trailing slash from path.
     let path_normalized = path_part.trim_end_matches('/');
@@ -122,6 +171,13 @@ fn canonical_url(url: &str) -> Option<String> {
     };
 
     if canon.is_empty() { None } else { Some(canon) }
+}
+
+fn sort_and_cap_news(mut news: NewsData) -> NewsData {
+    news.articles
+        .sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+    news.articles.truncate(NEWS_PREFETCH_MAX_ARTICLES);
+    news
 }
 
 /// Normalize a title for exact-match deduplication.
@@ -151,23 +207,31 @@ fn canonical_title(title: &str) -> String {
 fn merge_news(primary: NewsData, secondary: NewsData) -> NewsData {
     let mut seen_urls: HashSet<String> = HashSet::new();
     let mut seen_titles: HashSet<String> = HashSet::new();
+    let mut seen_titles_without_url: HashSet<String> = HashSet::new();
     let mut merged: Vec<NewsArticle> = Vec::new();
 
     // Helper closure: returns `true` if the article is a duplicate.
     let mut is_duplicate = |article: &NewsArticle| -> bool {
+        let title_key = canonical_title(&article.title);
         let url_key = article.url.as_deref().and_then(canonical_url);
         if let Some(ref key) = url_key {
+            if seen_titles_without_url.contains(&title_key) {
+                return true;
+            }
             if !seen_urls.insert(key.clone()) {
                 return true;
             }
             // Even if the URL is new, still track the title so a title-only
             // duplicate from the other provider doesn't sneak in.
-            seen_titles.insert(canonical_title(&article.title));
+            seen_titles.insert(title_key);
             return false;
         }
         // No usable canonical URL — fall back to title dedup.
-        let title_key = canonical_title(&article.title);
-        !seen_titles.insert(title_key)
+        if !seen_titles.insert(title_key.clone()) {
+            return true;
+        }
+        seen_titles_without_url.insert(title_key);
+        false
     };
 
     for article in primary.articles {
@@ -224,11 +288,11 @@ pub async fn prefetch_analyst_news(
         (Ok(fh), Ok(yf)) => Some(Arc::new(merge_news(fh, yf))),
         (Ok(fh), Err(yf_err)) => {
             warn!(error = %yf_err, symbol, "yahoo news pre-fetch failed; using finnhub only");
-            Some(Arc::new(fh))
+            Some(Arc::new(sort_and_cap_news(fh)))
         }
         (Err(fh_err), Ok(yf)) => {
             warn!(error = %fh_err, symbol, "finnhub news pre-fetch failed; using yahoo only");
-            Some(Arc::new(yf))
+            Some(Arc::new(sort_and_cap_news(yf)))
         }
         (Err(fh_err), Err(yf_err)) => {
             warn!(
@@ -1024,6 +1088,59 @@ mod merge_tests {
     }
 
     #[tokio::test]
+    async fn merge_dedupes_shortener_target_url_even_when_titles_do_not_exactly_match() {
+        let canonical = "https://reuters.com/technology/apple-q4-2026";
+        let wrapped = "https://yhoo.it/abc123?url=https%3A%2F%2Freuters.com%2Ftechnology%2Fapple-q4-2026&utm_source=yahoo";
+
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some(canonical),
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4 on Reuters",
+            Some(wrapped),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "known shortener URLs with an embedded canonical target must dedupe by canonical URL even when the titles are not an exact match"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_dedupes_by_title_when_only_one_provider_has_canonical_url() {
+        let fh = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            None,
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Apple Posts Strong Q4",
+            Some("https://reuters.com/technology/apple-q4-2026"),
+            "2026-03-14T10:00:00Z",
+        )]);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
+                .await
+                .expect("should succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            1,
+            "when either side lacks a canonical URL, merge must fall back to title dedupe"
+        );
+    }
+
+    #[tokio::test]
     async fn merge_preserves_multi_outlet_coverage_for_wire_republication() {
         // Same AP wire copy republished by 5 outlets. Each has a distinct URL
         // and a slightly different title (NOT byte-identical). The merge must
@@ -1091,6 +1208,31 @@ mod merge_tests {
             result.articles.len(),
             1,
             "single provider fallback must return available articles"
+        );
+    }
+
+    #[tokio::test]
+    async fn single_provider_fallback_applies_article_cap() {
+        let articles: Vec<NewsArticle> = (0..(NEWS_PREFETCH_MAX_ARTICLES + 5))
+            .map(|idx| {
+                article(
+                    &format!("Article {idx}"),
+                    Some(&format!("https://reuters.com/article-{idx}")),
+                    &format!("2026-03-14T10:00:{idx:02}Z"),
+                )
+            })
+            .collect();
+        let fh = news_data(articles);
+
+        let result =
+            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::err(), "AAPL")
+                .await
+                .expect("single-provider fallback should still succeed");
+
+        assert_eq!(
+            result.articles.len(),
+            NEWS_PREFETCH_MAX_ARTICLES,
+            "single-provider fallback must still respect the cached-news article cap"
         );
     }
 
@@ -1183,6 +1325,18 @@ mod merge_tests {
         assert!(
             canonical_url("https://bit.ly/abc").is_none(),
             "bit.ly shortener must return None"
+        );
+    }
+
+    #[test]
+    fn canonical_url_extracts_nested_target_from_known_shortener_query() {
+        let wrapped = "https://yhoo.it/abc123?url=https%3A%2F%2Freuters.com%2Ftechnology%2Fapple-q4-2026&utm_source=yahoo";
+        let canon = canonical_url(wrapped)
+            .expect("shortener with embedded target URL should canonicalize deterministically");
+
+        assert_eq!(
+            canon, "reuters.com/technology/apple-q4-2026",
+            "known shorteners should canonicalize to the embedded target URL when it is available"
         );
     }
 
