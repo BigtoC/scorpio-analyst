@@ -194,7 +194,7 @@ impl std::fmt::Debug for ProviderSettings {
 /// Nested per-provider configuration: `[providers.<name>]` in config.toml.
 ///
 /// Each field is optional; omitting a provider section entirely uses its defaults.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProvidersConfig {
     #[serde(default = "default_openai_settings")]
     pub openai: ProviderSettings,
@@ -208,6 +208,19 @@ pub struct ProvidersConfig {
     pub openrouter: ProviderSettings,
     #[serde(default = "default_deepseek_settings")]
     pub deepseek: ProviderSettings,
+}
+
+impl Default for ProvidersConfig {
+    fn default() -> Self {
+        Self {
+            openai: default_openai_settings(),
+            anthropic: default_anthropic_settings(),
+            gemini: default_gemini_settings(),
+            copilot: ProviderSettings::default(),
+            openrouter: default_openrouter_settings(),
+            deepseek: default_deepseek_settings(),
+        }
+    }
 }
 
 fn default_openai_settings() -> ProviderSettings {
@@ -1475,9 +1488,7 @@ deep_thinking_model = "o3"
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg =
             Config::load_from(&path).expect("config should load without [providers.deepseek]");
-        // When no [providers] section is present, serde calls ProvidersConfig::default()
-        // which uses ProviderSettings::default() (rpm: 0), not default_deepseek_settings().
-        assert_eq!(cfg.providers.deepseek.rpm, 0);
+        assert_eq!(cfg.providers.deepseek.rpm, default_deepseek_settings().rpm);
         assert!(cfg.providers.deepseek.api_key.is_none());
     }
 }

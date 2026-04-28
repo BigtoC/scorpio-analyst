@@ -512,7 +512,7 @@ impl MockLlmAgent {
     async fn chat_details(
         &self,
         prompt: &str,
-        chat_history: &mut Vec<Message>,
+        chat_history: &mut [Message],
     ) -> Result<PromptResponse, PromptError> {
         self.observed_prompts
             .lock()
@@ -545,17 +545,30 @@ impl MockLlmAgent {
                 ))
             });
 
-        chat_history.push(Message::User {
-            content: OneOrMany::one(UserContent::text(prompt)),
-        });
+        let round_messages = || {
+            vec![
+                Message::User {
+                    content: OneOrMany::one(UserContent::text(prompt)),
+                },
+                Message::Assistant {
+                    content: OneOrMany::one(AssistantContent::text("")),
+                    id: None,
+                },
+            ]
+        };
 
         match outcome {
             MockChatOutcome::Ok(response) => {
-                chat_history.push(Message::Assistant {
-                    content: OneOrMany::one(AssistantContent::text(response.output.clone())),
-                    id: None,
-                });
-                Ok(response)
+                if response.messages.is_some() {
+                    Ok(response)
+                } else {
+                    let mut messages = round_messages();
+                    messages[1] = Message::Assistant {
+                        content: OneOrMany::one(AssistantContent::text(response.output.clone())),
+                        id: None,
+                    };
+                    Ok(response.with_messages(messages))
+                }
             }
             MockChatOutcome::PartialUserThenErr(err) => Err(err),
         }
@@ -1073,6 +1086,89 @@ mod tests {
         append_response_messages(&mut history, &response);
 
         assert_eq!(history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn chat_details_appends_provider_messages_to_existing_history() {
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![MockChatOutcome::Ok(
+                PromptResponse::new(
+                    "done",
+                    Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )
+                .with_messages(vec![
+                    Message::User {
+                        content: OneOrMany::one(UserContent::text("next")),
+                    },
+                    Message::Assistant {
+                        content: OneOrMany::one(AssistantContent::text("done")),
+                        id: None,
+                    },
+                ]),
+            )],
+        );
+
+        let mut history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("prior")),
+        }];
+
+        let response = agent.chat_details("next", &mut history).await.unwrap();
+
+        assert_eq!(response.output, "done");
+        assert_eq!(history.len(), 3);
+        assert!(matches!(&history[1], Message::User { .. }));
+        assert!(matches!(&history[2], Message::Assistant { .. }));
+    }
+
+    #[tokio::test]
+    async fn chat_details_does_not_double_append_mock_history_when_messages_are_present() {
+        use rig::agent::PromptResponse;
+        use rig::completion::Usage;
+
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![],
+            vec![MockChatOutcome::Ok(
+                PromptResponse::new(
+                    "done",
+                    Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )
+                .with_messages(vec![
+                    Message::User {
+                        content: OneOrMany::one(UserContent::text("next")),
+                    },
+                    Message::Assistant {
+                        content: OneOrMany::one(AssistantContent::text("done")),
+                        id: None,
+                    },
+                ]),
+            )],
+        );
+
+        let mut history = vec![Message::User {
+            content: OneOrMany::one(UserContent::text("prior")),
+        }];
+
+        agent.chat_details("next", &mut history).await.unwrap();
+
+        assert_eq!(history.len(), 3);
     }
 
     #[tokio::test]
