@@ -29,6 +29,8 @@ pub struct AgentTokenUsage {
     /// `false` means the agent ran (and failed or the provider did not report counts)
     /// — callers should not treat the numeric fields as reliable in that case.
     pub token_counts_available: bool,
+    /// Input-side tokens, including provider-managed cache read/write tokens when
+    /// the provider reports them separately.
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
