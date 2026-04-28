@@ -10,35 +10,37 @@
 
 ---
 
-**Worktree:** Create and execute from a fresh dedicated worktree/branch such as `feature/shared-options-evidence`. Confirm with `git worktree list` first. Do not implement this on the current `feature/upgrade-rig-to-0.35.0` branch.
+**Worktree:** Create and execute from a fresh dedicated worktree/branch such as `feature/shared-options-evidence`. Confirm with `git worktree list` first. Do not implement this on the current `feature/use-options-data` branch.
 
 ## Guardrails
 
 ### Scope and ownership
 
-- Keep options under the existing technical seam. Do **not** add a new top-level `TradingState` branch and do **not** route this work through `data/routing.rs::derivatives` or `data/traits/derivatives.rs`.
+- Keep options under the existing technical seam. Do **not** add a new top-level `TradingState` branch and do **not** route this work through a new `data/routing.rs` module or any new file under `data/traits/`. Keep the change inside `data/yfinance/options.rs` and `state/technical.rs`.
 - Keep the single-source-of-truth guarantee: one options fetch per technical run, no post-inference second fetch.
 - Keep runtime ownership in `TechnicalAnalyst::run()`. If `OptionsToolContext` must move out of `technical.rs` to avoid a `data -> agents` dependency, keep it crate-private and local to this flow; do **not** broaden it into a generally re-exported abstraction.
-- Keep `FetchFailed { reason: String }` only. Do **not** add a failure-code enum in this slice.
+- Keep `FetchFailed { reason: String }` only. Do **not** add a failure-code enum in this slice. Truncate `reason` to at most 256 characters inside `prepare_options_runtime` (after `sanitize_error_summary`) so provider HTTP/JSON errors cannot bloat every downstream prompt or persist multi-KB strings in snapshots. Define a `const MAX_OPTIONS_FETCH_REASON_CHARS: usize = 256` constant and add a unit test for the truncation behavior.
 
 ### Snapshot and compatibility
 
 - `TechnicalData.options_context` is additive. Keep `THESIS_MEMORY_SCHEMA_VERSION` unchanged.
-- `TechnicalData.options_summary` changes meaning from "raw copied tool JSON" to "technical-desk interpretation". The approved spec explicitly tolerates old blobs as-is; do **not** add legacy suppression logic or a helper layer in this slice.
+- `TechnicalData.options_summary` changes meaning from "raw copied tool JSON" to "technical-desk interpretation". The approved spec explicitly tolerates old blobs as-is; do **not** add legacy suppression logic or a helper layer in this slice. Note: this semantic change is safe only because the Task 1 Step 1 audit confirms no consumer parses `options_summary` as JSON. If the audit finds a JSON-parsing consumer, stop and bump `THESIS_MEMORY_SCHEMA_VERSION` before proceeding.
 - Before shipping, audit all `options_summary` readers to confirm no consumer parses it as JSON.
+- **Future `OptionsOutcome` evolution:** `TechnicalOptionsContext::Available { outcome: OptionsOutcome }` embeds the tagged enum directly. Adding a new `OptionsOutcome` variant in a future PR is a backward-incompatible snapshot change (Rust serde unknown-tag deserialization fails). Any future variant addition **must** bump `THESIS_MEMORY_SCHEMA_VERSION`. Add a comment in `state/technical.rs` beside `TechnicalOptionsContext` calling this out so future contributors don't miss it.
 
 ### Prompt and tool behavior
 
-- Keep the existing per-role `technical_report` seam, but implement the spec's compact projection at each role-local serializer seam. Do **not** introduce a new shared prompt-serialization helper in this slice unless duplication becomes unavoidable during implementation.
+- Keep the existing per-role `technical_report` seam, but implement the spec's compact projection at each role-local serializer seam. A shared crate-private helper (e.g. `fn compact_technical_report(data: &TechnicalData) -> serde_json::Value` in `agents/shared/prompt.rs` or a new `agents/shared/technical_projection.rs`) is **permitted and preferred** when its only consumers are the four downstream serializer seams — having four identical in-line projections guarantees drift when `OptionsSnapshot` fields change. Do **not** make it a public API and do **not** use it outside these four seams.
 - `GetOptionsSnapshot` must preserve its current JSON contract when it is bound: same `kind` discriminant behavior, same injected `reason` field on non-`Snapshot` outcomes.
 - When the options prefetch fails, omit the tool for that run and condition the Technical Analyst prompt so it does not mention or expect `get_options_snapshot`.
-- Authoritative rule for this slice: only live `Snapshot` outcomes may persist a non-`None` `options_summary`. For successful non-snapshot outcomes, the model may reason about explicit absence during the turn, but the persisted `options_summary` must be cleared before storage.
+- Authoritative rule for this slice: only live `Snapshot` outcomes may persist a non-`None` `options_summary`. For successful non-snapshot outcomes (including `HistoricalRun`), the model may reason about explicit absence during the turn, but the persisted `options_summary` must be cleared before storage. This rule applies whether or not the model emitted an `options_summary` in its response — the merge helper clears it unconditionally for any non-Snapshot outcome.
+- When `assemble_technical_data` drops a non-empty model-produced `options_summary` (because the outcome is non-Snapshot), emit `tracing::warn!` with `symbol`, `outcome_kind`, and `reason = "cleared_non_snapshot"` so the audit trail is visible. Add a test that this event fires. This prevents silent data loss from obscuring what the technical analyst actually produced.
 
 ### Evidence and provenance
 
 - Keep one Yahoo `EvidenceSource` for technical evidence.
-- Keep `EvidenceSource.fetched_at` on the existing cycle-level merge-time semantics from `AnalystSyncTask`; do **not** invent per-tool timestamp transport.
-- Switch technical datasets from `options_snapshot`/`options_summary` proxying to `options_context` presence.
+- Keep `EvidenceSource.fetched_at` on the existing cycle-level merge-time semantics from `AnalystSyncTask`; do **not** invent per-tool timestamp transport. Acknowledge that the options prefetch now happens inside `TechnicalAnalyst::run()` (before inference) while OHLCV is fetched during inference via tool calls — these are temporally decoupled. The single `fetched_at` is a coarse cycle anchor, not a per-dataset wall-clock; document this explicitly in a comment beside the `EvidenceSource` construction in `analyst.rs`.
+- Switch technical datasets from `options_snapshot`/`options_summary` proxying to `options_context` **availability** (not mere presence). Only push the `options_context` dataset label when options data was actually available — i.e., when `options_context = Some(Available { .. })`. A `FetchFailed` context does not constitute available data, so the dataset label must not appear in that case.
 
 ### Verification
 
@@ -73,14 +75,14 @@
 | Modify | `crates/scorpio-core/src/testing/prompt_render.rs` | Update `sample_technical_data()` so prompt fixtures exercise `options_context` |
 | Modify | `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` | Add variant-name guard and regenerate affected fixtures |
 | Modify | `crates/scorpio-core/tests/options_outcome_smoke.rs` | Keep smoke coverage on the serialized `get_options_snapshot` JSON contract after replay wiring |
+| Add | `crates/scorpio-core/src/agents/shared/technical_projection.rs` (or inline in `agents/shared/prompt.rs`) | Crate-private `compact_technical_report` helper consumed by the four downstream serializer seams |
 | Modify | `crates/scorpio-core/src/agents/researcher/common.rs` | Add tests proving researcher analyst context includes serialized `options_context` |
 | Modify | `crates/scorpio-core/src/agents/risk/common.rs` | Add tests proving risk analyst context includes serialized `options_context` |
 | Modify | `crates/scorpio-core/src/agents/trader/prompt.rs` | Project compact `technical_report.options_context` for trader prompts and keep tests aligned |
-| Modify | `crates/scorpio-core/src/agents/fund_manager/prompt.rs` | Project compact technical data for fund-manager prompt user context |
+| Modify | `crates/scorpio-core/src/agents/fund_manager/prompt.rs` | Project compact technical data for fund-manager prompts (Task 5) and update all `TechnicalData` test literals in this file to include `options_context: None` (Task 1) |
 | Modify | `crates/scorpio-core/src/agents/analyst/mod.rs` | Update `TechnicalData` literals to include `options_context: None` |
 | Modify | `crates/scorpio-core/src/agents/trader/tests.rs` | Update `TechnicalData` literals to include `options_context: None` |
 | Modify | `crates/scorpio-core/src/agents/fund_manager/tests.rs` | Update `TechnicalData` literals to include `options_context: None` |
-| Modify | `crates/scorpio-core/src/agents/fund_manager/prompt.rs` | Update `TechnicalData` test literals to include `options_context: None` |
 | Modify | `crates/scorpio-core/src/indicators/batch.rs` | Update `TechnicalData` literal to include `options_context: None` |
 | Modify | `crates/scorpio-core/src/workflow/tasks/test_helpers.rs` | Update `TechnicalData` literal to include `options_context: None` |
 | Modify | `crates/scorpio-core/tests/workflow_pipeline_structure.rs` | Update `TechnicalData` literal to include `options_context: None` |
@@ -106,8 +108,10 @@
 - Before the Task 1 green slice, confirm you did not miss a constructor:
 
 ```bash
-rg -n "options_summary:" crates/scorpio-core crates/scorpio-cli crates/scorpio-reporters
+rg -n "options_summary:" crates/scorpio-core crates/scorpio-cli
 ```
+
+(`crates/scorpio-reporters` does not exist; search only the two active workspace crates.)
 
 ## Chunk 1: State Surface And Single-Fetch Runtime Contract
 
@@ -126,7 +130,7 @@ rg -n "options_summary:" crates/scorpio-core crates/scorpio-cli crates/scorpio-r
 Run:
 
 ```bash
-rg -n "options_summary" crates/scorpio-core crates/scorpio-cli crates/scorpio-reporters
+rg -n "options_summary" crates/scorpio-core crates/scorpio-cli
 ```
 
 Expected: plain presence checks, serialization, reporting display, or test fixtures only. Record the audited hits, especially any CLI/reporting, snapshot, or thesis-memory readers. If any reader parses `options_summary` as JSON or depends on its old raw-tool-output format, stop and amend this plan before implementing further steps.
@@ -185,8 +189,10 @@ In `crates/scorpio-core/src/workflow/snapshot/tests/thesis_compat.rs`, add:
 ```rust
 #[tokio::test]
 async fn additive_options_context_field_does_not_require_schema_bump() {
-    // Write a current-version snapshot row, strip `options_context` from stored JSON,
-    // and prove the loader still returns the thesis.
+    // Mirror the existing `additive_consensus_and_technical_fields_do_not_require_schema_bump`
+    // pattern in this file: seed a phase-5 snapshot at the current schema version via
+    // `save_snapshot`, fetch the row, run `strip_keys_recursively(&mut value, &["options_context"])`,
+    // write it back via `UPDATE`, and assert `load_prior_thesis_for_symbol` still returns the thesis.
 }
 ```
 
@@ -228,7 +234,7 @@ pub struct TechnicalData {
 }
 ```
 
-Keep the new field additive-only. Do not touch `THESIS_MEMORY_SCHEMA_VERSION`.
+Keep the new field additive-only. (See Guardrails / Snapshot and compatibility — `THESIS_MEMORY_SCHEMA_VERSION` remains the single source of truth and stays unchanged for this slice.)
 
 - [ ] **Step 5: Update every `TechnicalData` constructor and generator**
 
@@ -380,6 +386,8 @@ fn assemble_technical_data(
 }
 ```
 
+**Data flow boundary:** `TechnicalAnalystResponse` carries only LLM-parsed fields (all indicators + `summary` + optional `options_summary`). It has no `options_context` field. The `options_context: Option<TechnicalOptionsContext>` argument to `assemble_technical_data` comes from the prefetch result produced by `prepare_options_runtime` in Task 4 — not from the model's response. Never parse `options_context` out of the LLM output.
+
 Move the current parse/validate logic to `TechnicalAnalystResponse`, not `TechnicalData`.
 
 - [ ] **Step 4: Keep the existing MACD validation behavior intact**
@@ -447,6 +455,26 @@ async fn get_options_snapshot_replays_prefetched_historical_run_with_reason() {
     assert_eq!(result["kind"], "historical_run");
     assert!(result.get("reason").is_some());
 }
+
+#[tokio::test]
+async fn get_options_snapshot_replay_is_idempotent_across_multiple_calls() {
+    // The LLM may invoke get_options_snapshot more than once in a run.
+    // load() must be multi-read (not consuming): calling Tool::call() twice must both succeed
+    // and return identical output.
+    let ctx = OptionsToolContext::new();
+    ctx.store(OptionsOutcome::Snapshot(sample_snapshot())).await.unwrap();
+
+    let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
+    let result1 = rig::tool::Tool::call(&tool, OptionsSnapshotArgs {
+        symbol: "AAPL".to_owned(),
+        target_date: today_eastern(),
+    }).await.expect("first call should succeed");
+    let result2 = rig::tool::Tool::call(&tool, OptionsSnapshotArgs {
+        symbol: "AAPL".to_owned(),
+        target_date: today_eastern(),
+    }).await.expect("second call should succeed");
+    assert_eq!(result1, result2, "replay must be idempotent");
+}
 ```
 
 - [ ] **Step 2: Run the focused red slice**
@@ -488,9 +516,11 @@ fn serialize_options_outcome_for_tool(outcome: &OptionsOutcome) -> Result<serde_
 
 Mirror `OhlcvToolContext` semantics: write once, cheap `Arc` clone on read, and a schema-violation error when the context is empty.
 
+**Implementation note:** `OhlcvToolContext` and `OptionsToolContext` are structurally identical (`Arc<RwLock<Option<Arc<T>>>>`). If a crate-private `pub(crate) struct OnceContext<T>` is trivial to extract in `data/yfinance/mod.rs` (type-aliasing both as `type OhlcvToolContext = OnceContext<Vec<Candle>>` and `type OptionsToolContext = OnceContext<OptionsOutcome>`), prefer that over two separate implementations. Skip this if the generic requires more than ~20 extra lines; don't over-engineer.
+
 - [ ] **Step 4: Update `GetOptionsSnapshot` to prefer context replay**
 
-Add an optional `context: Option<OptionsToolContext>` field and a new constructor:
+Add an optional `context: Option<OptionsToolContext>` field marked `#[serde(skip)]` (identical to how the existing `provider` field is annotated — `Arc<RwLock<…>>` is not serializable and must be excluded from derived `Serialize`/`Deserialize`), and a new constructor:
 
 ```rust
 pub fn scoped_prefetched(
@@ -500,7 +530,12 @@ pub fn scoped_prefetched(
 ) -> Self
 ```
 
-Keep the existing provider-backed constructor intact for direct/live use. In `call()`, check `context` first, fall back to `provider.fetch_snapshot()` only when no prefetched context is present, and route both paths through `serialize_options_outcome_for_tool()`.
+Keep the existing provider-backed constructor intact for direct/live use. In `call()`, use this exact precedence (see also the contract in Task 4 Step 1):
+1. If `self.context` is `Some(ctx)`: call `ctx.load()?`; a `load()` failure (empty context — context present but `store()` was never called) is `TradingError::SchemaViolation`. Route through `serialize_options_outcome_for_tool()`.
+2. Else if `self.provider` is `Some(p)`: fetch live via `p.fetch_snapshot()`. Route through `serialize_options_outcome_for_tool()`.
+3. Else (both None): return `TradingError::Config` — identical to today's behavior.
+
+Both paths 1 and 2 route through `serialize_options_outcome_for_tool()`. Do not duplicate the reason-injection logic.
 
 - [ ] **Step 5: Preserve the current serialized tool contract in the existing smoke test**
 
@@ -554,14 +589,38 @@ git commit -m "feat(core): replay prefetched options outcomes in technical tools
 
 - [ ] **Step 1: Extract a small test seam before writing runtime regressions**
 
-Because `TechnicalAnalyst::run()` currently constructs a real tool-enabled agent and there is no existing way to feed it a mocked successful LLM response, first extract a small helper in `technical.rs` that owns:
+Because `TechnicalAnalyst::run()` currently constructs a real tool-enabled agent and there is no existing way to feed it a mocked successful LLM response, first extract a small helper in `technical.rs` named `prepare_options_runtime` that owns:
 
 - prefetch outcome classification (`Available` vs `FetchFailed`)
 - tool-availability decision
 - concrete `GetOptionsSnapshot::scoped_prefetched(...)` construction when applicable
 - sanitized `FetchFailed.reason`
 
-Keep the helper local to this module and have `run()` call it.
+Use this exact name so the test names in Step 2 line up with the function under test. Keep the helper local to this module and have `run()` call it.
+
+Define the return struct before writing the helper:
+
+```rust
+struct PreparedOptionsRuntime {
+    /// The context to persist into TechnicalData.
+    options_context: Option<TechnicalOptionsContext>,
+    /// Whether to bind the tool and include options guidance in the prompt.
+    options_tool_available: bool,
+    /// The prefetched tool to add to the agent's tool list; None when unavailable.
+    tool: Option<GetOptionsSnapshot>,
+}
+
+fn prepare_options_runtime(
+    prefetched: Result<OptionsOutcome, TradingError>,
+    symbol: &str,
+    target_date: &str,
+) -> PreparedOptionsRuntime { ... }
+```
+
+The `tool` field is consumed back into the `Vec<Box<dyn ToolDyn>>` builder in `run()`. In `call()` of `GetOptionsSnapshot`, replay rules:
+- If `self.context` is `Some(ctx)`: call `ctx.load()?` and route through `serialize_options_outcome_for_tool()`. A failed `load()` (empty context) is a `TradingError::SchemaViolation`.
+- Else if `self.provider` is `Some(p)`: fetch live.
+- Else: return `TradingError::Config` (existing behavior, unchanged).
 
 - [ ] **Step 2: Add the failing prompt-conditioning and helper-level runtime regressions**
 
@@ -580,7 +639,24 @@ fn build_technical_system_prompt_omits_options_guidance_when_tool_unavailable() 
     let policy = resolve_runtime_policy("baseline").unwrap();
     let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, false);
     assert!(!prompt.contains("call once with the same symbol and date"));
-    assert!(prompt.contains("live options provider was unavailable"));
+    // Use neutral phrasing — the exact text must not embed infrastructure details
+    // that could leak into the model's output summary (e.g. "live options provider was unavailable").
+    // Assert the prompt tells the model to skip options instead:
+    assert!(prompt.contains("Skip options") || prompt.contains("options provider unavailable") || prompt.contains("not available for this run"));
+    assert!(!prompt.contains("get_options_snapshot"));
+}
+
+#[test]
+fn build_technical_system_prompt_includes_options_guidance_for_historical_run() {
+    // HistoricalRun is a successful prefetch result that keeps the tool-available path.
+    // The prompt for tool-available renders the tool section regardless of outcome kind —
+    // what matters here is that tool_available == true and the prompt mentions get_options_snapshot.
+    let policy = resolve_runtime_policy("baseline").unwrap();
+    let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
+    assert!(prompt.contains("get_options_snapshot"));
+    // Also assert the prompt does NOT contain the unavailable-provider message,
+    // which would misrepresent the run state to the model.
+    assert!(!prompt.contains("not available for this run"));
 }
 
 #[tokio::test]
@@ -614,10 +690,15 @@ Expected: FAIL because the helper seam does not exist yet, successful non-snapsh
 
 - [ ] **Step 4: Make the technical prompt conditional on tool availability**
 
-Because the current implementation renders `system_prompt` in `TechnicalAnalyst::new()`, but tool availability is only known after the prefetch inside `run()`, make this refactor explicit before wiring behavior:
+Because the current implementation renders `system_prompt` in `TechnicalAnalyst::new()`, but tool availability is only known after the prefetch inside `run()`, use the following approach:
 
-- either store `RuntimePolicy` on `TechnicalAnalyst` and render the system prompt inside `run()` after prefetch
-- or replace the stored `system_prompt: String` field with enough prompt inputs to render on demand in `run()`
+**Use approach: store `RuntimePolicy` on `TechnicalAnalyst`; remove `system_prompt: String`; render inside `run()` after prefetch.**
+
+Concretely:
+- Replace the `system_prompt: String` field with `policy: RuntimePolicy` (owned, not a reference, to avoid lifetime entanglement).
+- Remove the `build_technical_system_prompt` call from `new()`.
+- At the top of `run()`, after `prepare_options_runtime(...)` resolves, call `build_technical_system_prompt(&self.symbol, &self.target_date, &self.policy, prepared.options_tool_available)`.
+- The compile impact is entirely within `technical.rs`. No other files need changes for this specific refactor step.
 
 Do not guess tool availability in `new()`.
 
@@ -639,6 +720,12 @@ pub(crate) fn build_technical_system_prompt(
     render_analyst_system_prompt(...).replace("{options_tool_note}", tool_note)
 }
 ```
+
+Adding the fourth `options_tool_available: bool` parameter breaks every existing call site of this function. Update all of them in the same compilation unit so the focused red slice in Step 3 can run:
+
+- `crates/scorpio-core/src/agents/analyst/equity/technical.rs` — internal call inside `TechnicalAnalyst::new()` (or its replacement in `run()`).
+- `crates/scorpio-core/src/agents/analyst/equity/technical.rs` — existing tests `technical_rendered_prompt_includes_evidence_discipline_rules` and `technical_rendered_prompt_prefers_runtime_policy_prompt_bundle` that hard-code the 3-arg form.
+- `crates/scorpio-core/src/testing/prompt_render.rs` — call inside `sample_technical_data()` / fixture rendering. Pass `true` here so the existing prompt fixtures continue rendering the tool-available variant deterministically. Add this file to Task 4's `git add` list in Step 9.
 
 - [ ] **Step 5: Use the helper seam to prefetch once, bind tools conditionally, and assemble persisted `TechnicalData`**
 
@@ -683,6 +770,8 @@ git status --short crates/scorpio-core/tests/fixtures/prompt_bundle/
 
 Expected: only `crates/scorpio-core/tests/fixtures/prompt_bundle/technical_analyst.txt` changed in this step. If any downstream fixture changed already, stop and inspect prompt drift before proceeding.
 
+**Important:** Do NOT update `sample_technical_data()` in `testing/prompt_render.rs` yet — that fixture update happens in Task 6 Step 4. Making that change now would cause all downstream fixtures to also change at this point, violating the scoped-diff expectation above.
+
 - [ ] **Step 8: Re-run the focused green slice and prompt gate**
 
 Run:
@@ -714,6 +803,8 @@ git commit -m "feat(core): prefetch and persist technical options context"
 - Modify: `crates/scorpio-core/src/agents/trader/prompt.rs`
 - Modify: `crates/scorpio-core/src/agents/fund_manager/prompt.rs`
 
+**Untrusted content boundary for the trader:** Researcher/risk inject `technical_report` into the user prompt and wrap it with `UNTRUSTED_CONTEXT_NOTICE`. The trader injects `technical_report` into the *system prompt*. After this task, the projected `technical_report` will include `options_summary` — model-produced text. Before adding the compact projection to the trader's system prompt, check whether `trader/prompt.rs` applies `sanitize_prompt_context` to this field (or moves it to the user-prompt side). If the current pattern does not sanitize, apply the same `sanitize_prompt_context` function used elsewhere to `options_summary` before it enters the trader system prompt. Add a regression asserting that adversarial text in `options_summary` is not reproduced verbatim in the trader system prompt.
+
 - [ ] **Step 1: Add the failing projection regressions at each downstream seam**
 
 Use a technical fixture whose `options_context` contains a non-empty `near_term_strikes` array so the tests can detect accidental full-shape serialization.
@@ -743,9 +834,12 @@ At each serializer seam, keep the existing `technical_report` injection path but
 - `options_summary`
 - `options_context.status`
 - `options_context.outcome.kind`
-- snapshot-only fields directly useful to downstream reasoning: `atm_iv`, `put_call_volume_ratio`, `put_call_oi_ratio`, `max_pain_strike`, `near_term_expiration`, and a small strike-interest summary derived from `near_term_strikes`
+- snapshot-only fields directly useful to downstream reasoning: `atm_iv`, `put_call_volume_ratio`, `put_call_oi_ratio`, `max_pain_strike`, `near_term_expiration`
+- a compact strike-interest summary derived from `near_term_strikes`: **the highest open-interest strike and its OI value only** (e.g. `{ strike: 180.0, oi: 12500 }`). Do not include the full array.
 
 Do not include the raw `near_term_strikes` array in downstream prompts. Keep the full `OptionsOutcome` only in persisted `TechnicalData` and in the Technical Analyst tool/runtime path.
+
+Implement this projection as a shared crate-private free function (see Guardrails / Prompt and tool behavior) rather than copying the logic at each seam. Add the shared helper file to the `git add` list in Step 5.
 
 - [ ] **Step 4: Re-run the focused green slice**
 
@@ -807,15 +901,39 @@ In `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`, add:
 
 ```rust
 #[test]
-fn options_outcome_variants_are_named_in_all_branching_prompts() {
-    let required_tokens = [
+fn branching_prompts_reference_options_context_field_path() {
+    // Every branching role must tell the agent to inspect the field path used for branching
+    // and to treat options_summary as supplemental, not authoritative.
+    for role in [
+        Role::BullishResearcher,
+        Role::BearishResearcher,
+        Role::DebateModerator,
+        Role::Trader,
+        Role::AggressiveRisk,
+        Role::ConservativeRisk,
+        Role::NeutralRisk,
+        Role::RiskModerator,
+    ] {
+        let rendered = render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
+        assert!(rendered.contains("options_context"), "{role:?} prompt must reference options_context");
+        assert!(rendered.contains("outcome.kind"), "{role:?} prompt must tell the agent to branch on outcome.kind");
+        assert!(rendered.contains("supplemental") || rendered.contains("not authority"),
+            "{role:?} prompt must treat options_summary as supplemental");
+    }
+}
+
+#[test]
+fn branching_prompts_name_all_outcome_kind_values() {
+    // The five real OptionsOutcome serde discriminants (outcome.kind values):
+    let outcome_kind_tokens = [
         "snapshot",
         "no_listed_instrument",
         "sparse_chain",
         "historical_run",
         "missing_spot",
-        "fetch_failed",
     ];
+    // The TechnicalOptionsContext status discriminant (separate from outcome.kind):
+    let status_tokens = ["fetch_failed", "available"];
 
     for role in [
         Role::BullishResearcher,
@@ -828,22 +946,24 @@ fn options_outcome_variants_are_named_in_all_branching_prompts() {
         Role::RiskModerator,
     ] {
         let rendered = render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
-        for token in required_tokens {
-            assert!(rendered.contains(token), "{role:?} prompt must mention {token}");
+        for token in outcome_kind_tokens {
+            assert!(rendered.contains(token), "{role:?} prompt must mention outcome.kind value {token}");
+        }
+        for token in status_tokens {
+            assert!(rendered.contains(token), "{role:?} prompt must mention status value {token}");
         }
     }
 }
 ```
 
-Keep `FundManager` out of this exhaustive-variant guard unless the prompt is intentionally changed to branch on `outcome.kind`. The approved spec only requires passive acknowledgement there.
-Strengthen this regression beyond token presence where practical: for the branching roles, also assert the prompt tells the agent to inspect `technical_report.options_context.outcome.kind` and to treat `options_summary` as supplemental rather than authoritative.
+Keep `FundManager` out of both exhaustive guards. The two tests are intentionally split: `branching_prompts_reference_options_context_field_path` asserts structural guidance, while `branching_prompts_name_all_outcome_kind_values` asserts coverage of each discriminant namespace separately (`outcome.kind` vs `status`). This separation makes it clear that `fetch_failed` belongs to the `status` namespace and is not an `OptionsOutcome` variant.
 
 - [ ] **Step 2: Run the focused red slice**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features --locked -E 'test(researcher_analyst_context_includes_options_context) | test(risk_analyst_context_includes_options_context) | test(options_outcome_variants_are_named_in_all_branching_prompts)'
+cargo nextest run -p scorpio-core --all-features --locked -E 'test(researcher_analyst_context_includes_options_context) | test(risk_analyst_context_includes_options_context) | test(branching_prompts_reference_options_context_field_path) | test(branching_prompts_name_all_outcome_kind_values)'
 ```
 
 Expected: FAIL because downstream prompt markdown and fixture guard do not yet mention the options variants.
@@ -927,7 +1047,7 @@ If any other fixture changes, inspect the prompt-render surface before committin
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features --locked -E 'test(researcher_analyst_context_includes_options_context) | test(risk_analyst_context_includes_options_context) | test(options_outcome_variants_are_named_in_all_branching_prompts)'
+cargo nextest run -p scorpio-core --all-features --locked -E 'test(researcher_analyst_context_includes_options_context) | test(risk_analyst_context_includes_options_context) | test(branching_prompts_reference_options_context_field_path) | test(branching_prompts_name_all_outcome_kind_values)'
 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers
 ```
 
@@ -967,13 +1087,15 @@ In `crates/scorpio-core/src/workflow/tasks/tests.rs`, replace the existing optio
 
 ```rust
 #[tokio::test]
-async fn technical_evidence_includes_options_context_dataset_when_options_context_present() {
-    // Case 1: options_context present -> datasets = ["ohlcv", "options_context"]
-    // Case 2: options_context absent  -> datasets = ["ohlcv"]
+async fn technical_evidence_includes_options_context_dataset_when_options_available() {
+    // Case 1: Available { outcome: HistoricalRun } -> datasets = ["ohlcv", "options_context"]
+    // Case 2: Available { outcome: Snapshot(_) }   -> datasets = ["ohlcv", "options_context"]
+    // Case 3: FetchFailed { reason }               -> datasets = ["ohlcv"]  (not "options_context")
+    // Case 4: options_context = None               -> datasets = ["ohlcv"]
 }
 ```
 
-Populate `TechnicalData.options_context` with a real `TechnicalOptionsContext::Available { outcome: OptionsOutcome::HistoricalRun }` or `Snapshot(_)` value. Do not use `options_summary` as the gate.
+Test all four cases. The dataset label `options_context` must only appear when the context is `Some(Available { .. })`. Do not use `options_summary` as the gate. Rename the test from `_when_options_context_present` to `_when_options_available` to reflect the `Available` gate.
 
 - [ ] **Step 2: Run the focused red slice**
 
@@ -991,12 +1113,12 @@ In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, change the technical sou
 
 ```rust
 let mut datasets = vec!["ohlcv".to_owned()];
-if data.options_context.is_some() {
+if matches!(data.options_context, Some(TechnicalOptionsContext::Available { .. })) {
     datasets.push("options_context".to_owned());
 }
 ```
 
-Keep a single Yahoo `EvidenceSource` and keep `fetched_at` on its current merge-time semantics.
+Gate on `Available` specifically — `FetchFailed` must not push a dataset label that implies usable data. Keep a single Yahoo `EvidenceSource` and keep `fetched_at` on its current merge-time semantics. Add a comment in this file noting that `fetched_at` is a coarse cycle anchor: the options prefetch and OHLCV tool calls are temporally decoupled within the technical run.
 
 - [ ] **Step 4: Re-run the focused green slice**
 
@@ -1024,7 +1146,19 @@ git commit -m "feat(core): track options context in technical evidence"
 
 - [ ] **Step 1: Add the failing pipeline regressions**
 
-Before writing the pipeline assertions, add a small test-only seam to `crates/scorpio-core/src/workflow/tasks/test_helpers.rs` so the stubbed technical analyst child can accept caller-supplied `TechnicalData` instead of always using the baked-in neutral fixture.
+Before writing the pipeline assertions, add a small test-only seam to `crates/scorpio-core/src/workflow/tasks/test_helpers.rs`:
+
+```rust
+/// Installs a stubbed technical analyst child that will return `data` when the pipeline runs.
+/// Use in tests that need specific `options_context` values — the default neutral fixture has
+/// `options_context: None` and won't exercise the new paths.
+#[cfg(test)]
+pub fn install_technical_child_with(state: &mut WorkflowState, data: TechnicalData) {
+    // Mirror the existing install_technical_child helper but accept caller-supplied TechnicalData.
+}
+```
+
+Then use `install_technical_child_with` in the pipeline tests below to seed the desired `TechnicalData`.
 
 In `crates/scorpio-core/src/workflow/pipeline/tests.rs`, add:
 
