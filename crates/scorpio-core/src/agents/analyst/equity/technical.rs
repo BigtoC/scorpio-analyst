@@ -307,6 +307,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_prompt_warns_that_options_snapshot_omits_skew() {
+        let prompt = baseline_technical_prompt();
+        let prompt_lower = prompt.to_lowercase();
+
+        assert!(
+            prompt_lower.contains("skew"),
+            "baseline technical prompt must mention the missing skew context: {prompt}"
+        );
+        assert!(
+            prompt_lower.contains("directional vol"),
+            "baseline technical prompt must forbid directional vol calls without skew context: {prompt}"
+        );
+    }
+
     // ── Task 4.6: Partial results with insufficient OHLCV data ───────────
 
     #[test]
@@ -826,6 +841,39 @@ mod tests {
             "TechnicalAnalyst::new should succeed for a canonical equity symbol, got: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn technical_analyst_new_rejects_missing_typed_symbol() {
+        use crate::analysis_packs::resolve_runtime_policy;
+
+        let policy =
+            resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
+        let llm_config = crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        };
+        let mut state = TradingState::new("AAPL", "2026-01-01");
+        state.symbol = None;
+
+        let handle = crate::providers::factory::CompletionModelHandle::for_test();
+        let yfinance = crate::data::YFinanceClient::default();
+
+        match TechnicalAnalyst::new(handle, yfinance, &state, &policy, &llm_config) {
+            Ok(_) => panic!("missing typed symbol must be rejected"),
+            Err(TradingError::SchemaViolation { message }) => {
+                assert!(message.contains("state.symbol = None"));
+            }
+            Err(other) => panic!("expected SchemaViolation, got: {other:?}"),
+        }
     }
 
     #[test]
