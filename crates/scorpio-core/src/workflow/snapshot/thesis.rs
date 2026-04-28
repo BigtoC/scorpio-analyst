@@ -123,4 +123,78 @@ impl SnapshotStore {
 
         Ok(None)
     }
+
+    /// Load the most recent prior consensus-enrichment payload for a canonical symbol.
+    ///
+    /// Queries phase-1 snapshots for `symbol` that are no older than `max_age_days`
+    /// and returns the newest compatible `enrichment_consensus.payload`, if any.
+    ///
+    /// Rows from unsupported schema versions are skipped. Rows that fail full
+    /// `TradingState` deserialization are also skipped so stale snapshots never
+    /// block a new run.
+    pub async fn load_prior_consensus_for_symbol(
+        &self,
+        symbol: &str,
+        max_age_days: i64,
+    ) -> Result<Option<crate::data::adapters::estimates::ConsensusEvidence>, TradingError> {
+        let cutoff = (Utc::now() - chrono::Duration::days(max_age_days)).to_rfc3339();
+
+        let rows: Vec<(Option<i64>, String)> = sqlx::query_as(
+            "SELECT schema_version, trading_state_json
+             FROM phase_snapshots
+             WHERE phase_number = 1 AND created_at >= ?
+               AND (
+                    symbol = ?
+                    OR (
+                        symbol IS NULL
+                        AND json_extract(trading_state_json, '$.asset_symbol') = ?
+                    )
+               )
+             ORDER BY created_at DESC",
+        )
+        .bind(&cutoff)
+        .bind(symbol)
+        .bind(symbol)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("failed to query prior consensus snapshots for symbol={symbol}"))
+        .map_err(TradingError::Storage)?;
+
+        for (schema_version, state_json) in rows {
+            let schema_version = schema_version.unwrap_or(0);
+            if schema_version != THESIS_MEMORY_SCHEMA_VERSION {
+                debug!(
+                    symbol,
+                    schema_version,
+                    active = THESIS_MEMORY_SCHEMA_VERSION,
+                    "prior-consensus snapshot schema version mismatch; skipping"
+                );
+                continue;
+            }
+
+            let state: TradingState = match serde_json::from_str(&state_json) {
+                Ok(s) => s,
+                Err(_err) => {
+                    warn!(
+                        symbol,
+                        schema_version,
+                        error.kind = "deserialize",
+                        "prior-consensus snapshot failed to deserialize (schema evolution); skipping"
+                    );
+                    continue;
+                }
+            };
+
+            if let Some(consensus) = state.enrichment_consensus.payload {
+                return Ok(Some(consensus));
+            }
+
+            debug!(
+                symbol,
+                schema_version, "prior phase-1 snapshot has no consensus payload; skipping"
+            );
+        }
+
+        Ok(None)
+    }
 }
