@@ -280,6 +280,7 @@ pub(super) fn validate_step3_result(partial: &PartialConfig) -> Result<(), &'sta
         && partial.anthropic_api_key.is_none()
         && partial.gemini_api_key.is_none()
         && partial.openrouter_api_key.is_none()
+        && partial.deepseek_api_key.is_none()
     {
         Err("At least one LLM provider is required.")
     } else {
@@ -586,6 +587,44 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(providers_with_keys(&p), WIZARD_PROVIDERS.to_vec());
+    }
+
+    // ── DeepSeek provider tests (Task C) ─────────────────────────────────────
+
+    #[test]
+    fn validate_step3_result_deepseek_key_returns_ok() {
+        let p = PartialConfig {
+            deepseek_api_key: Some("sk-deepseek".into()),
+            ..Default::default()
+        };
+        assert!(validate_step3_result(&p).is_ok());
+    }
+
+    #[test]
+    fn provider_key_and_set_provider_key_handle_deepseek() {
+        let mut partial = PartialConfig::default();
+        set_provider_key(
+            &mut partial,
+            ProviderId::DeepSeek,
+            Some("sk-deepseek".into()),
+        );
+        assert_eq!(
+            provider_key(&partial, ProviderId::DeepSeek),
+            Some("sk-deepseek")
+        );
+    }
+
+    #[test]
+    fn providers_with_keys_includes_deepseek_in_declaration_order() {
+        let p = PartialConfig {
+            openai_api_key: Some("o".into()),
+            deepseek_api_key: Some("d".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            providers_with_keys(&p),
+            vec![ProviderId::OpenAI, ProviderId::DeepSeek]
+        );
     }
 
     #[test]
