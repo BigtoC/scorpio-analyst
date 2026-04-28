@@ -1,4 +1,6 @@
 use super::{in_memory_store, sample_thesis};
+use crate::data::adapters::{EnrichmentStatus, estimates::ConsensusEvidence};
+use crate::state::EnrichmentState;
 use crate::state::TradingState;
 use crate::workflow::snapshot::SnapshotPhase;
 
@@ -399,4 +401,66 @@ async fn save_snapshot_persists_symbol_column() {
     .expect("count query should succeed");
 
     assert_eq!(count.0, 1, "one phase-5 snapshot for MSFT should exist");
+}
+
+#[tokio::test]
+async fn load_prior_consensus_returns_latest_phase_one_payload_for_symbol() {
+    let store = in_memory_store().await;
+
+    let mut stale = TradingState::new("AAPL", "2026-04-26");
+    stale.enrichment_consensus = EnrichmentState {
+        status: EnrichmentStatus::FetchFailed("provider_degraded".to_owned()),
+        payload: Some(ConsensusEvidence {
+            symbol: "AAPL".to_owned(),
+            eps_estimate: None,
+            revenue_estimate_m: None,
+            analyst_count: None,
+            as_of_date: "2026-04-26".to_owned(),
+            price_target: None,
+            recommendations: None,
+            consecutive_provider_degraded_cycles: 1,
+        }),
+    };
+    store
+        .save_snapshot(
+            &stale.execution_id.to_string(),
+            SnapshotPhase::AnalystTeam,
+            &stale,
+            None,
+        )
+        .await
+        .expect("save stale analyst-team snapshot");
+
+    let mut fresh = TradingState::new("AAPL", "2026-04-27");
+    fresh.enrichment_consensus = EnrichmentState {
+        status: EnrichmentStatus::FetchFailed("provider_degraded".to_owned()),
+        payload: Some(ConsensusEvidence {
+            symbol: "AAPL".to_owned(),
+            eps_estimate: None,
+            revenue_estimate_m: None,
+            analyst_count: None,
+            as_of_date: "2026-04-27".to_owned(),
+            price_target: None,
+            recommendations: None,
+            consecutive_provider_degraded_cycles: 2,
+        }),
+    };
+    store
+        .save_snapshot(
+            &fresh.execution_id.to_string(),
+            SnapshotPhase::AnalystTeam,
+            &fresh,
+            None,
+        )
+        .await
+        .expect("save fresh analyst-team snapshot");
+
+    let loaded = store
+        .load_prior_consensus_for_symbol("AAPL", 30)
+        .await
+        .expect("query should succeed")
+        .expect("latest phase-1 consensus payload should be found");
+
+    assert_eq!(loaded.as_of_date, "2026-04-27");
+    assert_eq!(loaded.consecutive_provider_degraded_cycles, 2);
 }
