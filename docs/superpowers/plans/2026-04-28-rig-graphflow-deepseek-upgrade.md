@@ -19,7 +19,7 @@
 - Do not add an OpenAI-compat alias layer for DeepSeek. The provider must stay explicitly named `deepseek` everywhere Scorpio exposes provider identity.
 - Do not add DeepSeek model defaults or recommendations in the setup wizard. Model IDs stay manual text input.
 - Keep `LlmAgent::{chat, chat_details}` as Scorpio's stable internal interface even if the `rig-core` implementation changes underneath.
-- If the focused `graph-flow` smoke slice passes immediately after the version bump, do not edit workflow/graph code just to “touch” the dependency.
+- If the focused `graph-flow` smoke slice passes immediately after the version bump, do not edit workflow/graph code just to "touch" the dependency.
 - In `crates/scorpio-core/src/config.rs` and `crates/scorpio-core/src/providers/factory/client.rs`, keep the new DeepSeek-specific tests and helper functions grouped in clearly labeled local sections or nested `#[cfg(test)]` modules so these already-large files do not become harder to navigate.
 - Final verification must use the repo-standard sequence: `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace --all-features --locked --no-fail-fast`.
 
@@ -41,20 +41,9 @@
 | Modify           | `.env.example`                                            | Document `SCORPIO_DEEPSEEK_API_KEY`                                                                               |
 | Modify           | `README.md`                                               | Document DeepSeek as a supported provider in the public setup path                                                |
 
-## Chunk 0: Local Prerequisite
-
-### Task 0: Confirm `protoc` is available before any cargo build step
-
-**Files:**
-- None
-
-- [ ] **Step 1: Verify the protobuf compiler is installed**
-
-Run: `protoc --version`
-
-Expected: prints a version string. If the command is missing, install it with `brew install protobuf` on macOS (or the platform-equivalent setup from `AGENTS.md`) before continuing.
-
 ## Chunk 1: Dependency Pins and Core DeepSeek Plumbing
+
+**Prerequisite:** Confirm `protoc --version` prints a version string before running any `cargo build` step. If missing, install with `brew install protobuf` on macOS (or your platform equivalent).
 
 ### Task 1: Upgrade dependencies and add native DeepSeek provider support
 
@@ -169,66 +158,17 @@ fn load_from_user_path_reads_deepseek_api_key_from_partial_config() {
 }
 
 #[test]
-fn missing_llm_key_warning_mentions_deepseek() {
-    assert!(missing_llm_key_warning().contains("SCORPIO_DEEPSEEK_API_KEY"));
-}
-
-#[test]
 fn config_without_providers_deepseek_still_deserializes() {
     let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
     let cfg = Config::load_from(&path).expect("config should load without [providers.deepseek]");
     assert_eq!(cfg.providers.deepseek.rpm, default_deepseek_settings().rpm);
     assert!(cfg.providers.deepseek.api_key.is_none());
 }
-
-#[test]
-fn load_from_user_path_env_deepseek_api_key_overrides_partial_config() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let partial = crate::settings::PartialConfig {
-        deepseek_api_key: Some("deepseek-file-key".into()),
-        ..Default::default()
-    };
-
-    crate::settings::save_user_config_at(&partial, &path).expect("save partial config");
-    unsafe {
-        std::env::set_var("SCORPIO_DEEPSEEK_API_KEY", "deepseek-env-key");
-    }
-    let result = Config::load_from_user_path(&path);
-    unsafe {
-        std::env::remove_var("SCORPIO_DEEPSEEK_API_KEY");
-    }
-    let cfg = result.expect("env key should override persisted partial config key");
-
-    assert_eq!(
-        cfg.providers
-            .deepseek
-            .api_key
-            .as_ref()
-            .map(ExposeSecret::expose_secret),
-        Some("deepseek-env-key")
-    );
-}
-
-#[test]
-fn env_override_deepseek_rpm_wins_over_file_value() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let toml = format!("{MINIMAL_CONFIG_TOML}\n\n[providers.deepseek]\nrpm = 12\n");
-    let (_dir, path) = write_config(&toml);
-    unsafe {
-        std::env::set_var("SCORPIO__PROVIDERS__DEEPSEEK__RPM", "45");
-    }
-    let result = Config::load_from(&path);
-    unsafe {
-        std::env::remove_var("SCORPIO__PROVIDERS__DEEPSEEK__RPM");
-    }
-    let cfg = result.expect("env rpm should override file-backed deepseek rpm");
-    assert_eq!(cfg.providers.deepseek.rpm, 45);
-}
 ```
 
 - [ ] **Step 2: Write failing persisted-settings, rate-limit, and factory tests**
+
+The factory tests below reference a `providers_config_with_deepseek()` helper. That helper is added to `client.rs` test helpers in Step 8 of this task; it follows the same shape as the existing `providers_config_with_openai`, `providers_config_with_anthropic`, `providers_config_with_gemini`, and `providers_config_with_openrouter` helpers.
 
 Add these tests before production changes:
 
@@ -373,35 +313,6 @@ fn factory_creates_deepseek_client_with_base_url_override() {
 }
 
 #[test]
-fn factory_invalid_deepseek_base_url_returns_config_error() {
-    let mut cfg = sample_llm_config();
-    cfg.quick_thinking_provider = "deepseek".to_owned();
-    cfg.quick_thinking_model = "deepseek-chat".to_owned();
-
-    let providers = ProvidersConfig {
-        deepseek: ProviderSettings {
-            api_key: Some(SecretString::from("test-deepseek-key")),
-            base_url: Some("://invalid-url".to_owned()),
-            rpm: 60,
-        },
-        ..ProvidersConfig::default()
-    };
-
-    let result = create_completion_model(
-        ModelTier::QuickThinking,
-        &cfg,
-        &providers,
-        &ProviderRateLimiters::default(),
-    );
-
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("failed to create DeepSeek client with base_url"));
-}
-
-#[test]
 fn factory_creates_deepseek_client_for_deep_thinking_tier() {
     let mut cfg = sample_llm_config();
     cfg.deep_thinking_provider = "deepseek".to_owned();
@@ -435,13 +346,31 @@ Run: `cargo update -p rig-core --precise 0.35.0 && cargo update -p graph-flow --
 
 Expected: `Cargo.lock` changes and no command-level errors.
 
-- [ ] **Step 4: Run the focused red-state slice**
+- [ ] **Step 4: Audit transitive dependency changes**
 
-Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(provider_id_deepseek_exposes_strings_and_missing_key_hint) | test(deserialize_provider_name_accepts_deepseek) | test(deserialize_provider_name_unknown_lists_deepseek) | test(load_from_reads_deepseek_api_key_from_env) | test(has_any_llm_key_counts_deepseek_key) | test(env_override_supports_deepseek_rate_limit) | test(load_from_user_path_reads_deepseek_api_key_from_partial_config) | test(missing_llm_key_warning_mentions_deepseek) | test(config_without_providers_deepseek_still_deserializes) | test(load_from_user_path_env_deepseek_api_key_overrides_partial_config) | test(env_override_deepseek_rpm_wins_over_file_value) | test(roundtrip_full_config_preserves_deepseek_api_key) | test(debug_redacts_deepseek_api_key) | test(provider_rate_limiters_construction_includes_deepseek) | test(provider_rate_limiters_zero_rpm_disables_deepseek) | test(validate_provider_id_deepseek_returns_deepseek) | test(factory_missing_deepseek_key_returns_config_error) | test(factory_creates_deepseek_client) | test(create_completion_model_attaches_deepseek_rate_limiter) | test(factory_creates_deepseek_client_with_base_url_override) | test(factory_invalid_deepseek_base_url_returns_config_error) | test(factory_creates_deepseek_client_for_deep_thinking_tier)'`
+Run: `git diff Cargo.lock | grep '+name =' | sort -u`
+
+Review the output. Confirm only expected packages changed (rig-core, graph-flow, and their direct transitive deps). If unexpected new crates appear, investigate before proceeding.
+
+- [ ] **Step 5: Scan for rig-core 0.35.0 callsite breakage**
+
+Run: `cargo check -p scorpio-core --all-features 2>&1 | grep 'error\[' | head -20`
+
+Record every broken callsite. Confirm the breaks match the expected `with_history` signature change in `crates/scorpio-core/src/providers/factory/agent.rs`. Any breaks outside `agent.rs` are unexpected and must be investigated before writing tests.
+
+- [ ] **Step 6: Run the graph-flow structure smoke after the version bump**
+
+Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(pipeline_build_graph_produces_graph_without_panic) | test(pipeline_graph_topology_has_correct_start_and_all_nodes)'`
+
+Expected: PASS. These tests live in `crates/scorpio-core/tests/workflow_pipeline_structure.rs`. If they fail, fix only the directly affected `graph-flow` integration points before continuing. Do not widen the workflow diff beyond what the patch upgrade requires.
+
+- [ ] **Step 7: Run the focused red-state slice**
+
+Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(provider_id_deepseek_exposes_strings_and_missing_key_hint) | test(deserialize_provider_name_accepts_deepseek) | test(deserialize_provider_name_unknown_lists_deepseek) | test(load_from_reads_deepseek_api_key_from_env) | test(has_any_llm_key_counts_deepseek_key) | test(env_override_supports_deepseek_rate_limit) | test(load_from_user_path_reads_deepseek_api_key_from_partial_config) | test(config_without_providers_deepseek_still_deserializes) | test(roundtrip_full_config_preserves_deepseek_api_key) | test(debug_redacts_deepseek_api_key) | test(provider_rate_limiters_construction_includes_deepseek) | test(provider_rate_limiters_zero_rpm_disables_deepseek) | test(validate_provider_id_deepseek_returns_deepseek) | test(factory_missing_deepseek_key_returns_config_error) | test(factory_creates_deepseek_client) | test(create_completion_model_attaches_deepseek_rate_limiter) | test(factory_creates_deepseek_client_with_base_url_override) | test(factory_creates_deepseek_client_for_deep_thinking_tier)'`
 
 Expected: FAIL with missing `DeepSeek` symbols, non-exhaustive `match` arms, missing config fields, or the known `rig-core 0.35.0` compile break in `crates/scorpio-core/src/providers/factory/agent.rs`.
 
-- [ ] **Step 5: Implement the minimal DeepSeek plumbing across the core seams**
+- [ ] **Step 8: Implement the minimal DeepSeek plumbing across the core seams**
 
 Make these exact shape changes:
 
@@ -494,7 +423,7 @@ Implementation details to apply in code, not as comments:
 - Add `#[serde(default = "default_deepseek_settings")]` on `ProvidersConfig.deepseek` so configs without `[providers.deepseek]` keep deserializing.
 - Extend `ProvidersConfig::settings_for(...)`, `base_url_for(...)`, and `rpm_for(...)` to return the DeepSeek settings branch.
 - Inject `partial.deepseek_api_key` and `SCORPIO_DEEPSEEK_API_KEY` into `cfg.providers.deepseek.api_key`.
-- Extract the missing-LLM-key warning into a small production helper or constant, e.g. `missing_llm_key_warning() -> &'static str`, then extend both that helper and `has_any_llm_key()` to count DeepSeek.
+- Extend the inline `tracing::warn!` string in the missing-LLM-key path and `has_any_llm_key()` to count DeepSeek. Do not extract a helper function — extend both in place.
 - Extend `ProviderRateLimiters::from_config()` and its test helpers with `ProviderId::DeepSeek`.
 - Add `providers_config_with_deepseek()` in `client.rs` test helpers.
 - Extend `validate_provider_id(...)` so `"deepseek"` resolves to `ProviderId::DeepSeek`.
@@ -518,15 +447,25 @@ ProviderId::DeepSeek => {
 }
 ```
 
-- [ ] **Step 6: Run a compile-expectation checkpoint after the plumbing lands**
+- [ ] **Step 9: Run a compile-expectation checkpoint after the plumbing lands**
 
-Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(provider_id_deepseek_exposes_strings_and_missing_key_hint) | test(deserialize_provider_name_accepts_deepseek) | test(deserialize_provider_name_unknown_lists_deepseek) | test(load_from_reads_deepseek_api_key_from_env) | test(has_any_llm_key_counts_deepseek_key) | test(env_override_supports_deepseek_rate_limit) | test(load_from_user_path_reads_deepseek_api_key_from_partial_config) | test(missing_llm_key_warning_mentions_deepseek) | test(config_without_providers_deepseek_still_deserializes) | test(load_from_user_path_env_deepseek_api_key_overrides_partial_config) | test(env_override_deepseek_rpm_wins_over_file_value) | test(roundtrip_full_config_preserves_deepseek_api_key) | test(debug_redacts_deepseek_api_key) | test(provider_rate_limiters_construction_includes_deepseek) | test(provider_rate_limiters_zero_rpm_disables_deepseek) | test(validate_provider_id_deepseek_returns_deepseek) | test(factory_missing_deepseek_key_returns_config_error) | test(factory_creates_deepseek_client) | test(create_completion_model_attaches_deepseek_rate_limiter) | test(factory_creates_deepseek_client_with_base_url_override) | test(factory_invalid_deepseek_base_url_returns_config_error) | test(factory_creates_deepseek_client_for_deep_thinking_tier)'`
+Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(provider_id_deepseek_exposes_strings_and_missing_key_hint) | test(deserialize_provider_name_accepts_deepseek) | test(deserialize_provider_name_unknown_lists_deepseek) | test(load_from_reads_deepseek_api_key_from_env) | test(has_any_llm_key_counts_deepseek_key) | test(env_override_supports_deepseek_rate_limit) | test(load_from_user_path_reads_deepseek_api_key_from_partial_config) | test(config_without_providers_deepseek_still_deserializes) | test(roundtrip_full_config_preserves_deepseek_api_key) | test(debug_redacts_deepseek_api_key) | test(provider_rate_limiters_construction_includes_deepseek) | test(provider_rate_limiters_zero_rpm_disables_deepseek) | test(validate_provider_id_deepseek_returns_deepseek) | test(factory_missing_deepseek_key_returns_config_error) | test(factory_creates_deepseek_client) | test(create_completion_model_attaches_deepseek_rate_limiter) | test(factory_creates_deepseek_client_with_base_url_override) | test(factory_creates_deepseek_client_for_deep_thinking_tier)'`
 
-Expected: still may FAIL on the known `rig-core 0.35.0` wrapper compile break in `crates/scorpio-core/src/providers/factory/agent.rs`. If it fails only there, stop and continue with Chunk 2. If it fails in the files touched by Chunk 1, fix those Chunk 1 regressions before moving on. If the `graph-flow 0.5.1` bump also exposes compile failures in directly affected workflow call sites, fix only those compatibility points and do not broaden the workflow diff beyond what the targeted smoke slices justify.
+Expected: still may FAIL on the known `rig-core 0.35.0` wrapper compile break in `crates/scorpio-core/src/providers/factory/agent.rs`. If it fails only there, stop and continue with Chunk 2. If it fails in the files touched by Chunk 1, fix those Chunk 1 regressions before moving on.
 
-- [ ] **Step 7: Carry the dependency/provider slice forward uncommitted into Chunk 2**
+- [ ] **Step 10: Commit the dependency pins**
 
-Expected: do not commit yet. The first commit for this migration happens only after Chunk 2 restores a green state and `cargo check --workspace --all-targets --locked` passes.
+Run: `git add Cargo.toml Cargo.lock && git commit -m "chore(deps): bump rig-core to 0.35.0 and graph-flow to 0.5.1"`
+
+Expected: one green commit containing only the version pin changes.
+
+- [ ] **Step 11: Commit the DeepSeek provider plumbing**
+
+Run: `git add crates/scorpio-core/src/providers/mod.rs crates/scorpio-core/src/config.rs crates/scorpio-core/src/settings.rs crates/scorpio-core/src/rate_limit.rs crates/scorpio-core/src/providers/factory/client.rs && git commit -m "feat(core): add deepseek provider across config, settings, rate-limit, and factory"`
+
+If Step 6 required direct `graph-flow` compatibility fixes, stage those exact touched `crates/scorpio-core/src/workflow/` files in the same commit.
+
+Expected: one green commit containing the DeepSeek provider/runtime wiring and any direct `graph-flow` compatibility fixes.
 
 ## Chunk 2: Agent Wrapper Migration for `rig-core 0.35.0`
 
@@ -689,13 +628,15 @@ pub async fn chat_details(
 }
 ```
 
-3. Keep `ProviderId::DeepSeek` on `run_analyst_inference(...)`'s native typed-output path. Do not add an OpenRouter-style text fallback or a Gemini-specific schema-violation fallback for DeepSeek unless the new regression proves that Scorpio needs one.
+Rationale: `rig-core 0.35.0` changed `PromptRequest::with_history`'s signature from accepting `&mut Vec<Message>` to `IntoIterator<Item: Into<Message>>`, so we pass `chat_history.clone()` (a consuming iterator over a clone, leaving the original intact) and then extend the vector ourselves with `response.messages` (the provider-returned delta for this round).
 
-Rationale: upstream `rig-core 0.35.0` returns `PromptResponse::with_messages(new_messages)`, so `append_response_messages(...)` should append the provider delta rather than rebuild the full transcript.
+3. Keep `ProviderId::DeepSeek` on `run_analyst_inference(...)`'s native typed-output path. Do not add an OpenRouter-style text fallback or a Gemini-specific schema-violation fallback for DeepSeek unless the new regression proves that Scorpio needs one.
 
 Do **not** rewrite `LlmAgent::chat(...)` if the direct immutable `agent.chat(prompt, chat_history).await` path still compiles under `rig-core 0.35.0`. Keep the smaller correct change.
 
 - [ ] **Step 4: Re-run the focused agent slice plus one retry regression**
+
+`chat_with_retry_details_retries_and_truncates_partial_history` is a pre-existing test in `crates/scorpio-core/src/providers/factory/retry.rs`; it is included here to verify that the wrapper migration does not break retry semantics, not as a new test introduced by Chunk 2.
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(build_agent_creates_deepseek_agent) | test(append_response_messages_appends_new_messages_to_existing_history) | test(append_response_messages_is_noop_when_provider_returns_no_messages) | test(run_analyst_inference_uses_typed_path_for_deepseek) | test(chat_with_retry_details_retries_and_truncates_partial_history)'`
 
@@ -703,42 +644,38 @@ Expected: PASS.
 
 - [ ] **Step 5: Re-run the full focused DeepSeek slice after the wrapper fix**
 
-Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(provider_id_deepseek_exposes_strings_and_missing_key_hint) | test(deserialize_provider_name_accepts_deepseek) | test(deserialize_provider_name_unknown_lists_deepseek) | test(load_from_reads_deepseek_api_key_from_env) | test(has_any_llm_key_counts_deepseek_key) | test(env_override_supports_deepseek_rate_limit) | test(load_from_user_path_reads_deepseek_api_key_from_partial_config) | test(missing_llm_key_warning_mentions_deepseek) | test(config_without_providers_deepseek_still_deserializes) | test(load_from_user_path_env_deepseek_api_key_overrides_partial_config) | test(env_override_deepseek_rpm_wins_over_file_value) | test(roundtrip_full_config_preserves_deepseek_api_key) | test(debug_redacts_deepseek_api_key) | test(provider_rate_limiters_construction_includes_deepseek) | test(provider_rate_limiters_zero_rpm_disables_deepseek) | test(validate_provider_id_deepseek_returns_deepseek) | test(factory_missing_deepseek_key_returns_config_error) | test(factory_creates_deepseek_client) | test(create_completion_model_attaches_deepseek_rate_limiter) | test(factory_creates_deepseek_client_with_base_url_override) | test(factory_invalid_deepseek_base_url_returns_config_error) | test(factory_creates_deepseek_client_for_deep_thinking_tier) | test(build_agent_creates_deepseek_agent) | test(append_response_messages_appends_new_messages_to_existing_history) | test(append_response_messages_is_noop_when_provider_returns_no_messages) | test(run_analyst_inference_uses_typed_path_for_deepseek) | test(chat_with_retry_details_retries_and_truncates_partial_history)'`
+Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(provider_id_deepseek_exposes_strings_and_missing_key_hint) | test(deserialize_provider_name_accepts_deepseek) | test(deserialize_provider_name_unknown_lists_deepseek) | test(load_from_reads_deepseek_api_key_from_env) | test(has_any_llm_key_counts_deepseek_key) | test(env_override_supports_deepseek_rate_limit) | test(load_from_user_path_reads_deepseek_api_key_from_partial_config) | test(config_without_providers_deepseek_still_deserializes) | test(roundtrip_full_config_preserves_deepseek_api_key) | test(debug_redacts_deepseek_api_key) | test(provider_rate_limiters_construction_includes_deepseek) | test(provider_rate_limiters_zero_rpm_disables_deepseek) | test(validate_provider_id_deepseek_returns_deepseek) | test(factory_missing_deepseek_key_returns_config_error) | test(factory_creates_deepseek_client) | test(create_completion_model_attaches_deepseek_rate_limiter) | test(factory_creates_deepseek_client_with_base_url_override) | test(factory_creates_deepseek_client_for_deep_thinking_tier) | test(build_agent_creates_deepseek_agent) | test(append_response_messages_appends_new_messages_to_existing_history) | test(append_response_messages_is_noop_when_provider_returns_no_messages) | test(run_analyst_inference_uses_typed_path_for_deepseek) | test(chat_with_retry_details_retries_and_truncates_partial_history)'`
 
 Expected: PASS.
 
-- [ ] **Step 6: Run the deferred `graph-flow` smoke slice after the wrapper compile fix**
-
-Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(pipeline_build_graph_produces_graph_without_panic) | test(pipeline_graph_topology_has_correct_start_and_all_nodes)'`
-
-Expected: PASS. If it fails, fix only the directly affected `graph-flow` integration points; do not broaden the workflow diff beyond what the patch upgrade requires.
-
-- [ ] **Step 7: Run one execution-path `graph-flow` smoke after the structure smoke**
+- [ ] **Step 6: Run the execution-path graph-flow smoke after the wrapper fix**
 
 Run: `cargo nextest run -p scorpio-core --all-features --locked -E 'test(run_analysis_cycle_success_path_populates_all_phases)'`
 
-Expected: PASS. If it fails, fix only the directly affected `graph-flow` runtime integration points under `crates/scorpio-core/src/workflow/` and the corresponding targeted tests.
+This test lives in `crates/scorpio-core/tests/workflow_pipeline_e2e.rs`. Expected: PASS. If it fails, fix only the directly affected `graph-flow` runtime integration points under `crates/scorpio-core/src/workflow/` and the corresponding targeted tests.
 
-- [ ] **Step 8: Run a workspace-wide compile gate before the first commit**
+- [ ] **Step 7: Run a workspace-wide compile gate before the final commit**
 
 Run: `cargo check --workspace --all-targets --locked`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit the green dependency/provider/wrapper slice**
+- [ ] **Step 8: Commit the agent wrapper and analyst path**
 
-Run: `git add Cargo.toml Cargo.lock crates/scorpio-core/src/providers/mod.rs crates/scorpio-core/src/config.rs crates/scorpio-core/src/settings.rs crates/scorpio-core/src/rate_limit.rs crates/scorpio-core/src/providers/factory/client.rs crates/scorpio-core/src/providers/factory/agent.rs crates/scorpio-core/src/agents/analyst/equity/common.rs && git commit -m "feat(core): add deepseek provider and upgrade runtime deps"`
+Run: `git add crates/scorpio-core/src/providers/factory/agent.rs crates/scorpio-core/src/agents/analyst/equity/common.rs && git commit -m "feat(core): migrate chat-history wrapper for rig-core 0.35.0 and add deepseek analyst path"`
 
-If Steps 6-7 required direct `graph-flow` compatibility fixes, stage those exact touched `crates/scorpio-core/src/workflow/` files in the same commit.
+If Steps 6 required direct `graph-flow` compatibility fixes, stage those exact touched `crates/scorpio-core/src/workflow/` files in the same commit.
 
-Expected: one green commit containing the dependency pins, DeepSeek provider/runtime wiring, DeepSeek analyst-path coverage, the `rig-core` wrapper migration, and any direct `graph-flow` compatibility fixes proven by the smoke slices.
+Expected: one green commit containing the `rig-core` wrapper migration, DeepSeek analyst-path coverage, and any direct `graph-flow` execution-path compatibility fixes proven by Step 6.
 
 ## Chunk 3: Setup, Docs, and Final Verification
 
-### Task 3: Surface DeepSeek in the setup wizard
+### Task 3: Surface DeepSeek in the setup wizard and public docs
 
 **Files:**
 - Modify: `crates/scorpio-cli/src/cli/setup/steps.rs`
+- Modify: `.env.example`
+- Modify: `README.md`
 
 - [ ] **Step 1: Write the failing setup-wizard tests**
 
@@ -811,19 +748,7 @@ Run: `cargo nextest run -p scorpio-cli --all-features --locked -E 'test(validate
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the wizard support**
-
-Run: `git add crates/scorpio-cli/src/cli/setup/steps.rs && git commit -m "feat(cli): add deepseek to setup wizard"`
-
-Expected: one green commit that surfaces DeepSeek in the interactive setup flow.
-
-### Task 4: Update public docs and examples
-
-**Files:**
-- Modify: `.env.example`
-- Modify: `README.md`
-
-- [ ] **Step 1: Update `.env.example` with the new provider key**
+- [ ] **Step 5: Update `.env.example` with the new provider key**
 
 Add this exact line under the existing LLM provider keys:
 
@@ -831,27 +756,27 @@ Add this exact line under the existing LLM provider keys:
 SCORPIO_DEEPSEEK_API_KEY=
 ```
 
-- [ ] **Step 2: Update the public README provider lists and setup note**
+- [ ] **Step 6: Update the public README provider lists and setup note**
 
 Make these exact documentation edits:
 
 - Add `SCORPIO_DEEPSEEK_API_KEY=your-deepseek-key-here` to the env block in the setup section.
 - Update any provider lists that currently enumerate `OpenAI`, `Anthropic`, `Gemini`, and `OpenRouter` so they also mention `DeepSeek` where that list is describing supported LLM providers.
-- Update the Copilot quick-thinking note so it reads as a positive supported-provider list that includes DeepSeek, e.g. “use OpenAI, Anthropic, Gemini, or DeepSeek for the `quick_thinking_provider`”.
+- Update the Copilot quick-thinking note so it reads as a positive supported-provider list that includes DeepSeek, e.g. "use OpenAI, Anthropic, Gemini, or DeepSeek for the `quick_thinking_provider`".
 
-- [ ] **Step 3: Verify the docs mention DeepSeek in both public entry points**
+- [ ] **Step 7: Verify the docs mention DeepSeek in both public entry points**
 
 Run: `rg -n "SCORPIO_DEEPSEEK_API_KEY|DeepSeek|deepseek" README.md .env.example`
 
-Expected: matches in both files, with no stale “OpenAI, Anthropic, or Gemini” quick-thinking list left behind.
+Expected: matches in both files, with no stale "OpenAI, Anthropic, or Gemini" quick-thinking list left behind.
 
-- [ ] **Step 4: Commit the docs updates**
+- [ ] **Step 8: Commit wizard support and docs together**
 
-Run: `git add README.md .env.example && git commit -m "docs(setup): document deepseek provider support"`
+Run: `git add crates/scorpio-cli/src/cli/setup/steps.rs README.md .env.example && git commit -m "feat(cli): add deepseek to setup wizard and docs"`
 
-Expected: one docs-only commit.
+Expected: one green commit that surfaces DeepSeek in the interactive setup flow and public documentation.
 
-### Task 5: Run the repo verification gate
+### Task 4: Run the repo verification gate
 
 **Files:**
 - Modify: only files required to fix any verification failures from the earlier tasks
@@ -874,13 +799,19 @@ Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 4: If verification fixes were needed, commit them separately**
+- [ ] **Step 4: Run the security audit**
+
+Run: `cargo audit`
+
+If `cargo audit` is not installed, run `cargo install cargo-audit --locked` first. Expected: no vulnerabilities in the newly-added transitive dependency closure. Investigate any findings before marking the upgrade complete.
+
+- [ ] **Step 5: If verification fixes were needed, commit them separately**
 
 Run: `git add <exact files fixed during verification> && git commit -m "fix(core): address deepseek upgrade verification issues"`
 
-Expected: skip this step if Steps 1-3 are already green with no follow-up edits.
+Expected: skip this step if Steps 1-4 are already green with no follow-up edits.
 
-- [ ] **Step 5: Confirm the worktree is clean**
+- [ ] **Step 6: Confirm the worktree is clean**
 
 Run: `git status --short`
 
