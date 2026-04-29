@@ -7,10 +7,8 @@ use std::time::Duration;
 
 use crate::{
     agents::shared::{
-        agent_token_usage_from_completion, analysis_emphasis_for_prompt,
-        build_data_quality_context, build_enrichment_context, build_evidence_context,
-        build_pack_context, build_thesis_memory_context, compact_technical_report,
-        sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+        agent_token_usage_from_completion, analysis_emphasis_for_prompt, sanitize_date_for_prompt,
+        sanitize_prompt_context, sanitize_symbol_for_prompt,
     },
     config::LlmConfig,
     constants::MAX_DEBATE_CHARS,
@@ -95,37 +93,8 @@ pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingErr
 
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
 pub(super) fn build_analyst_context(state: &TradingState) -> String {
-    let fundamental_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.fundamental_metrics()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let technical_report = state
-        .technical_indicators()
-        .map(compact_technical_report)
-        .unwrap_or_else(|| "null".to_owned());
-    let sentiment_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_sentiment()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let news_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.macro_news()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let vix_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_volatility()).unwrap_or_else(|_| "null".to_owned()),
-    );
-
-    let evidence_section = build_evidence_context(state);
-    let data_quality_section = build_data_quality_context(state);
-    let enrichment_section = build_enrichment_context(state);
-    let pack_section = build_pack_context(state);
-    let pack_context = if pack_section.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{pack_section}")
-    };
-
-    format!(
-        "{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n- Past learnings: {}\n\n{evidence_section}\n\n{data_quality_section}\n\n{enrichment_section}{pack_context}",
-        build_thesis_memory_context(state),
-    )
+    let body = crate::agents::shared::build_analyst_context_body(state);
+    format!("{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n{body}")
 }
 
 /// Format a slice of debate messages as readable prompt context.
@@ -779,6 +748,43 @@ mod tests {
         assert!(
             !context.contains("options_context"),
             "options_context must be absent for legacy data: {context}"
+        );
+    }
+
+    #[test]
+    fn researcher_analyst_context_handles_fetch_failed() {
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let mut state = TradingState::new("AAPL", "2026-01-15");
+        state.set_technical_indicators(TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "OK".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "connection refused".to_owned(),
+            }),
+        });
+
+        let context = build_analyst_context(&state);
+
+        assert!(
+            context.contains("fetch_failed"),
+            "fetch_failed status must appear in researcher context: {context}"
+        );
+        assert!(
+            context.contains("options_context"),
+            "options_context must appear for FetchFailed: {context}"
         );
     }
 }
