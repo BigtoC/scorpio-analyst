@@ -11,7 +11,6 @@
 ---
 
 **Spec:** `docs/superpowers/specs/2026-04-29-setup-model-selection-design.md`
-**Worktree:** Execute from `feature/ehance-model-selection`. Confirm with `git worktree list` before starting.
 
 ## Guardrails
 
