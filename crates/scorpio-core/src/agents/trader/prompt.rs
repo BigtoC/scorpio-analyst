@@ -279,10 +279,10 @@ mod tests {
             system.contains("old raw json blob"),
             "legacy options_summary must pass through: {system}"
         );
-        // No options_context key since it's None
+        // No "options_context" JSON key in the serialized technical blob since it's None
         assert!(
-            !system.contains("options_context"),
-            "options_context must be absent for legacy data: {system}"
+            !system.contains(r#""options_context""#),
+            "options_context JSON key must be absent from compact report for legacy data: {system}"
         );
     }
 }
