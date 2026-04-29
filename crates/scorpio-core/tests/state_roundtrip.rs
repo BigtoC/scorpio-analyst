@@ -803,12 +803,21 @@ where
     );
 }
 
-proptest! {
-    #[test]
-    fn trading_state_json_roundtrip(state in arb_trading_state()) {
-        assert_json_idempotent(&state);
-    }
+#[test]
+fn trading_state_json_roundtrip() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            proptest!(|(state in arb_trading_state())| {
+                assert_json_idempotent(&state);
+            });
+        })
+        .expect("failed to spawn thread with larger stack")
+        .join()
+        .expect("test thread panicked");
+}
 
+proptest! {
     #[test]
     fn token_usage_tracker_json_roundtrip(tracker in arb_token_usage_tracker()) {
         assert_json_idempotent(&tracker);
