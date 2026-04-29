@@ -685,4 +685,26 @@ mod tests {
             "options_context must be absent for legacy data: {user_prompt}"
         );
     }
+
+    #[test]
+    fn fund_manager_prompt_names_non_snapshot_options_outcomes_as_unavailable() {
+        let prompt = baseline_fund_manager_prompt();
+
+        for token in [
+            "historical_run",
+            "sparse_chain",
+            "no_listed_instrument",
+            "missing_spot",
+        ] {
+            assert!(
+                prompt.contains(token),
+                "fund manager prompt must mention non-snapshot outcome {token}: {prompt}"
+            );
+        }
+
+        assert!(
+            prompt.contains("outcome.kind"),
+            "fund manager prompt must tell the model to inspect options_context.outcome.kind: {prompt}"
+        );
+    }
 }
