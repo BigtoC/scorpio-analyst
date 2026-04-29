@@ -20,6 +20,5 @@ pub use news::YFinanceNewsProvider;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use ohlcv::StubbedFinancialResponses;
 pub use ohlcv::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
-pub(crate) use options::OptionsToolContext;
 pub use options::{GetOptionsSnapshot, YFinanceOptionsProvider};
 pub use price::{fetch_vix_data, get_latest_close};

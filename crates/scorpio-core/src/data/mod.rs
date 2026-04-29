@@ -42,7 +42,6 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
-pub(crate) use yfinance::OptionsToolContext;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use yfinance::StubbedFinancialResponses;
 pub use yfinance::{
