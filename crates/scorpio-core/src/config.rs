@@ -101,7 +101,7 @@ pub struct LlmConfig {
 
 /// Validate and normalize an LLM provider name during deserialization.
 ///
-/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, `"copilot"`, and `"openrouter"`
+/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, `"openrouter"`, and `"deepseek"`
 /// (case-insensitive, leading/trailing whitespace ignored). Returns a lower-case
 /// canonical form. Unknown values produce a `serde` deserialization error at
 /// config-load time, before any provider client is constructed.
@@ -112,12 +112,18 @@ where
     let raw = String::deserialize(deserializer)?;
     let canonical = raw.trim().to_ascii_lowercase();
     match canonical.as_str() {
-        "openai" | "anthropic" | "gemini" | "copilot" | "openrouter" | "deepseek" => Ok(canonical),
-        unknown => Err(serde::de::Error::custom(format!(
-            "unknown LLM provider: \"{unknown}\" (supported: openai, anthropic, gemini, copilot, openrouter, deepseek)"
+        "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek" => Ok(canonical),
+        _unknown => Err(serde::de::Error::custom(format!(
+            "unknown LLM provider: \"{_unknown}\" (supported: openai, anthropic, gemini, openrouter, deepseek)"
         ))),
     }
 }
+
+/// Marker string embedded in the deserialization error for `"copilot"`.
+///
+/// Used by [`Config::load_from_user_path`] to detect stale copilot routing
+/// and surface a friendly recovery message instead of a raw serde error.
+pub(crate) const STALE_COPILOT_PROVIDER_MARKER: &str = "copilot";
 
 fn default_debate_rounds() -> u32 {
     3
@@ -202,8 +208,6 @@ pub struct ProvidersConfig {
     pub anthropic: ProviderSettings,
     #[serde(default = "default_gemini_settings")]
     pub gemini: ProviderSettings,
-    #[serde(default)]
-    pub copilot: ProviderSettings,
     #[serde(default = "default_openrouter_settings")]
     pub openrouter: ProviderSettings,
     #[serde(default = "default_deepseek_settings")]
@@ -216,7 +220,6 @@ impl Default for ProvidersConfig {
             openai: default_openai_settings(),
             anthropic: default_anthropic_settings(),
             gemini: default_gemini_settings(),
-            copilot: ProviderSettings::default(),
             openrouter: default_openrouter_settings(),
             deepseek: default_deepseek_settings(),
         }
@@ -267,7 +270,6 @@ impl ProvidersConfig {
             ProviderId::OpenAI => &self.openai,
             ProviderId::Anthropic => &self.anthropic,
             ProviderId::Gemini => &self.gemini,
-            ProviderId::Copilot => &self.copilot,
             ProviderId::OpenRouter => &self.openrouter,
             ProviderId::DeepSeek => &self.deepseek,
         }
@@ -401,7 +403,23 @@ impl Config {
     ///
     /// Loads flat `PartialConfig` from disk, then delegates to
     /// [`Config::load_effective_runtime`] for the shared env/file/default merge.
+    ///
+    /// If the saved config still routes to the removed Copilot provider, a friendly
+    /// error message guides the user to run `scorpio setup`.
     pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Self> {
+        match Self::load_from_user_path_inner(path) {
+            Ok(cfg) => Ok(cfg),
+            Err(err) if format!("{err:#}").contains(STALE_COPILOT_PROVIDER_MARKER) => {
+                Err(anyhow::anyhow!(
+                    "Your saved configuration still routes to the Copilot provider, which has been removed. \
+                     Run `scorpio setup` to update routing to a supported provider."
+                ))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn load_from_user_path_inner(path: impl AsRef<Path>) -> Result<Self> {
         use crate::settings::{PartialConfig, load_user_config_at};
 
         let partial: PartialConfig = load_user_config_at(path)?;
@@ -799,7 +817,7 @@ deep_thinking_model = "o3"
 
     #[test]
     fn deserialize_provider_name_accepts_valid() {
-        for name in &["openai", "anthropic", "gemini", "copilot", "openrouter"] {
+        for name in &["openai", "anthropic", "gemini", "openrouter"] {
             let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
                 serde::de::value::Error,
             >::new(name));
@@ -1376,6 +1394,63 @@ deep_thinking_model = "o3"
         assert!(
             parsed.get("storage").is_none(),
             "model content must not escape into unrelated config sections"
+        );
+    }
+
+    // ── Copilot provider removal tests ──────────────────────────────────
+
+    #[test]
+    fn deserialize_provider_name_rejects_copilot() {
+        let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
+            serde::de::value::Error,
+        >::new("copilot"));
+        let err = result.expect_err("copilot should no longer be accepted");
+        let msg = err.to_string();
+        assert!(msg.contains("copilot"));
+        assert!(msg.contains("openrouter"));
+        assert!(msg.contains("deepseek"));
+        assert!(!msg.contains("copilot, openrouter"));
+    }
+
+    #[test]
+    fn load_from_rejects_copilot_provider_name() {
+        let (_dir, path) = write_config(
+            r#"
+[llm]
+quick_thinking_provider = "copilot"
+deep_thinking_provider = "openai"
+quick_thinking_model = "claude-haiku"
+deep_thinking_model = "o3"
+"#,
+        );
+        let err = Config::load_from(&path).expect_err("runtime config should reject copilot");
+        assert!(
+            err.chain().any(|c| c.to_string().contains("copilot")),
+            "error chain should mention copilot: {err:#}"
+        );
+    }
+
+    #[test]
+    fn load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(
+            r#"
+quick_thinking_provider = "copilot"
+deep_thinking_provider = "openai"
+quick_thinking_model = "claude-haiku"
+deep_thinking_model = "o3"
+"#,
+        );
+        let err = Config::load_from_user_path(&path)
+            .expect_err("a config that still routes to copilot should fail to load at runtime");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Copilot") || msg.contains("copilot"),
+            "expected friendly Copilot reference; got: {msg}"
+        );
+        assert!(
+            msg.contains("scorpio setup"),
+            "expected guidance to run setup; got: {msg}"
         );
     }
 

@@ -26,11 +26,7 @@ use rig::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::{
-    error::TradingError,
-    providers::{ProviderId, copilot::CopilotCompletionModel},
-    rate_limit::SharedRateLimiter,
-};
+use crate::{error::TradingError, providers::ProviderId, rate_limit::SharedRateLimiter};
 
 use super::client::{CompletionModelHandle, ProviderClient};
 use super::error::map_structured_output_error_with_context;
@@ -51,7 +47,6 @@ macro_rules! dispatch_llm_agent {
             LlmAgentInner::OpenAI($agent) => $body,
             LlmAgentInner::Anthropic($agent) => $body,
             LlmAgentInner::Gemini($agent) => $body,
-            LlmAgentInner::Copilot($agent) => $body,
             LlmAgentInner::OpenRouter($agent) => $body,
             LlmAgentInner::DeepSeek($agent) => $body,
             #[cfg(test)]
@@ -76,8 +71,6 @@ enum LlmAgentInner {
     Anthropic(rig::agent::Agent<AnthropicModel>),
     /// Agent backed by Google Gemini API.
     Gemini(rig::agent::Agent<GeminiModel>),
-    /// Agent backed by GitHub Copilot via ACP.
-    Copilot(rig::agent::Agent<CopilotCompletionModel>),
     /// Agent backed by OpenRouter API aggregator.
     OpenRouter(rig::agent::Agent<OpenRouterModel>),
     /// Agent backed by DeepSeek API.
@@ -694,11 +687,6 @@ fn build_agent_inner(
             use rig::prelude::CompletionClient;
             let base = c.agent(handle.model_id()).preamble(system_prompt);
             make_agent!(base, Gemini)
-        }
-        ProviderClient::Copilot(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, Copilot)
         }
         ProviderClient::OpenRouter(c) => {
             use rig::prelude::CompletionClient;

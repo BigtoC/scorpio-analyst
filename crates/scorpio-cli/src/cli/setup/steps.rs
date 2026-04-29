@@ -370,7 +370,6 @@ fn provider_key(partial: &PartialConfig, provider: ProviderId) -> Option<&str> {
         ProviderId::Gemini => partial.gemini_api_key.as_deref(),
         ProviderId::OpenRouter => partial.openrouter_api_key.as_deref(),
         ProviderId::DeepSeek => partial.deepseek_api_key.as_deref(),
-        ProviderId::Copilot => None,
     }
 }
 
@@ -381,27 +380,7 @@ fn set_provider_key(partial: &mut PartialConfig, provider: ProviderId, value: Op
         ProviderId::Gemini => partial.gemini_api_key = value,
         ProviderId::OpenRouter => partial.openrouter_api_key = value,
         ProviderId::DeepSeek => partial.deepseek_api_key = value,
-        ProviderId::Copilot => {}
     }
-}
-
-fn preflight_analysis_runtime_for_setup_with_runtime(
-    cfg: &scorpio_core::config::Config,
-    rate_limiters: &scorpio_core::rate_limit::ProviderRateLimiters,
-    runtime: &tokio::runtime::Runtime,
-) -> anyhow::Result<()> {
-    cfg.is_analysis_ready()
-        .context("effective runtime config is not ready for analysis")?;
-
-    runtime
-        .block_on(
-            scorpio_core::providers::factory::preflight_copilot_if_configured(
-                &cfg.llm,
-                &cfg.providers,
-                rate_limiters,
-            ),
-        )
-        .map_err(|e| anyhow::anyhow!("failed to preflight configured Copilot provider: {e}"))
 }
 
 fn check_selected_model_tiers<I, Check>(tiers: I, mut check: Check) -> anyhow::Result<()>
@@ -423,7 +402,8 @@ fn run_single_health_check(cfg: &scorpio_core::config::Config) -> anyhow::Result
         .build()
         .context("failed to build runtime for health check")?;
 
-    preflight_analysis_runtime_for_setup_with_runtime(cfg, &rate_limiters, &runtime)?;
+    cfg.is_analysis_ready()
+        .context("effective runtime config is not ready for analysis")?;
 
     check_selected_model_tiers(
         [ModelTier::QuickThinking, ModelTier::DeepThinking],
@@ -714,45 +694,6 @@ mod tests {
             err.to_string().contains("quick-thinking provider")
                 || err.to_string().contains("not ready for analysis"),
             "analysis-readiness failure should be surfaced before probe: {err}"
-        );
-    }
-
-    #[test]
-    fn run_single_health_check_rejects_copilot_provider_that_fails_preflight() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let copilot_path = std::env::current_exe().expect("current test binary path");
-        let saved_copilot_path = std::env::var_os("SCORPIO_COPILOT_CLI_PATH");
-
-        unsafe {
-            std::env::set_var("SCORPIO_COPILOT_CLI_PATH", &copilot_path);
-        }
-
-        let partial = PartialConfig {
-            finnhub_api_key: Some("fh-test".into()),
-            fred_api_key: Some("fred-test".into()),
-            openai_api_key: Some("sk-openai".into()),
-            quick_thinking_provider: Some("copilot".into()),
-            quick_thinking_model: Some("o3".into()),
-            deep_thinking_provider: Some("openai".into()),
-            deep_thinking_model: Some("gpt-4o-mini".into()),
-            ..Default::default()
-        };
-
-        let cfg = scorpio_core::config::Config::load_effective_runtime(partial.clone())
-            .expect("merged config should load");
-        let err = run_single_health_check(&cfg)
-            .expect_err("copilot preflight mismatch should fail before the probe");
-
-        unsafe {
-            match saved_copilot_path {
-                Some(ref value) => std::env::set_var("SCORPIO_COPILOT_CLI_PATH", value),
-                None => std::env::remove_var("SCORPIO_COPILOT_CLI_PATH"),
-            }
-        }
-
-        assert!(
-            err.to_string().to_ascii_lowercase().contains("copilot"),
-            "copilot preflight failure should be surfaced: {err:#}"
         );
     }
 
