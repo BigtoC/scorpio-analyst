@@ -98,6 +98,7 @@ fn parse_technical_response(json_str: &str) -> Result<TechnicalAnalystResponse, 
 fn assemble_technical_data(
     response: TechnicalAnalystResponse,
     options_context: Option<TechnicalOptionsContext>,
+    symbol: &str,
 ) -> TechnicalData {
     use crate::data::traits::options::OptionsOutcome;
 
@@ -122,6 +123,7 @@ fn assemble_technical_data(
 
     if !keep_options_summary && response.options_summary.is_some() {
         tracing::warn!(
+            symbol = %symbol,
             outcome_kind = %outcome_kind_str,
             reason = "cleared_non_snapshot",
             "options_summary cleared before persistence"
@@ -337,8 +339,7 @@ impl TechnicalAnalyst {
             .fetch_snapshot(&self.typed_symbol, &self.target_date)
             .await;
 
-        let prepared =
-            prepare_options_runtime(prefetched, &self.symbol, &self.target_date);
+        let prepared = prepare_options_runtime(prefetched, &self.symbol, &self.target_date);
 
         let system_prompt = build_technical_system_prompt(
             &self.symbol,
@@ -394,7 +395,8 @@ impl TechnicalAnalyst {
             outcome.rate_limit_wait_ms,
         );
 
-        let technical_data = assemble_technical_data(outcome.output, prepared.options_context);
+        let technical_data =
+            assemble_technical_data(outcome.output, prepared.options_context, &self.symbol);
 
         Ok((technical_data, usage))
     }
@@ -1231,6 +1233,7 @@ mod tests {
             Some(TechnicalOptionsContext::Available {
                 outcome: OptionsOutcome::Snapshot(sample_options_snapshot()),
             }),
+            "TEST",
         );
         assert!(data.options_summary.is_some());
     }
@@ -1245,6 +1248,7 @@ mod tests {
             Some(TechnicalOptionsContext::Available {
                 outcome: OptionsOutcome::HistoricalRun,
             }),
+            "TEST",
         );
         assert!(data.options_summary.is_none());
     }
@@ -1321,11 +1325,8 @@ mod tests {
     #[test]
     fn prepare_options_runtime_keeps_tool_available_for_historical_run() {
         use crate::data::traits::options::OptionsOutcome;
-        let prepared = prepare_options_runtime(
-            Ok(OptionsOutcome::HistoricalRun),
-            "AAPL",
-            "2026-01-01",
-        );
+        let prepared =
+            prepare_options_runtime(Ok(OptionsOutcome::HistoricalRun), "AAPL", "2026-01-01");
         assert!(prepared.options_tool_available);
         assert!(prepared.tool.is_some());
         assert!(
@@ -1349,6 +1350,7 @@ mod tests {
             Some(TechnicalOptionsContext::Available {
                 outcome: OptionsOutcome::HistoricalRun,
             }),
+            "TEST",
         );
         assert!(
             data.options_summary.is_none(),
@@ -1369,12 +1371,65 @@ mod tests {
         );
         if let Some(TechnicalOptionsContext::FetchFailed { reason }) = prepared.options_context {
             assert!(
-                reason.len() <= 256,
-                "reason must be truncated to at most 256 chars, got {} chars",
+                reason.chars().count() <= MAX_OPTIONS_FETCH_REASON_CHARS,
+                "reason must be truncated to at most {} chars, got {} chars",
+                MAX_OPTIONS_FETCH_REASON_CHARS,
+                reason.chars().count()
+            );
+        } else {
+            panic!("expected FetchFailed context");
+        }
+    }
+
+    #[test]
+    fn prepare_options_runtime_truncates_fetch_failed_reason_unicode() {
+        // 'é' is 2 bytes but 1 Unicode scalar — verify truncation is on chars, not bytes.
+        let long_unicode = "é".repeat(300);
+        let prepared = prepare_options_runtime(
+            Err(TradingError::NetworkTimeout {
+                message: long_unicode,
+                elapsed: std::time::Duration::ZERO,
+            }),
+            "AAPL",
+            "2026-01-01",
+        );
+        if let Some(TechnicalOptionsContext::FetchFailed { reason }) = prepared.options_context {
+            assert!(
+                reason.chars().count() <= MAX_OPTIONS_FETCH_REASON_CHARS,
+                "reason must be truncated to at most {} Unicode scalars, got {} scalars ({} bytes)",
+                MAX_OPTIONS_FETCH_REASON_CHARS,
+                reason.chars().count(),
                 reason.len()
             );
         } else {
             panic!("expected FetchFailed context");
         }
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_and_returns_none_for_non_snapshot() {
+        // Behavioral assertion: when options_context is not a live Snapshot,
+        // assemble_technical_data must clear options_summary. This proves the
+        // warn branch was taken (the only code path that produces None from a
+        // Some(options_summary) input).
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        assert!(
+            response.options_summary.is_some(),
+            "test setup: response must have options_summary set"
+        );
+
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::SparseChain,
+            }),
+            "AAPL",
+        );
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared (and warn emitted) when outcome is SparseChain"
+        );
     }
 }
