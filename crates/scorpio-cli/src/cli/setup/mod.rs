@@ -1,3 +1,4 @@
+pub mod model_selection;
 pub mod steps;
 
 use std::path::{Path, PathBuf};
@@ -145,7 +146,7 @@ pub fn run() -> anyhow::Result<()> {
     step!(step1_finnhub_api_key(&mut partial));
     step!(step2_fred_api_key(&mut partial));
     step!(step3_llm_provider_keys(&mut partial));
-    step!(step4_provider_routing(&mut partial));
+    step!(step4_provider_routing(&config_path, &mut partial));
 
     // Step 5: health check — manages its own confirm prompt.
     let should_save = match step5_health_check(&partial) {

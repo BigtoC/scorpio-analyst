@@ -154,61 +154,12 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
 // ── Step 4: Provider routing ──────────────────────────────────────────────────
 
 /// Prompt for quick/deep provider routing using only providers that have saved keys.
-pub fn step4_provider_routing(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
+pub fn step4_provider_routing(
+    config_path: &std::path::Path,
+    partial: &mut PartialConfig,
+) -> Result<(), inquire::InquireError> {
     let eligible = providers_with_keys(partial);
-
-    // Quick-thinking provider
-    let qt_default_idx = partial
-        .quick_thinking_provider
-        .as_deref()
-        .and_then(|name| eligible.iter().position(|p| p.as_str() == name))
-        .unwrap_or(0);
-
-    let qt_provider = inquire::Select::new(
-        "Quick-thinking provider (used by analyst agents):",
-        eligible.clone(),
-    )
-    .with_starting_cursor(qt_default_idx)
-    .prompt()?;
-
-    let qt_model = inquire::Text::new("Quick-thinking model:")
-        .with_initial_value(partial.quick_thinking_model.as_deref().unwrap_or(""))
-        .with_validator(|s: &str| {
-            if s.trim().is_empty() {
-                Ok(Validation::Invalid("Model name must not be empty".into()))
-            } else {
-                Ok(Validation::Valid)
-            }
-        })
-        .prompt()?;
-
-    // Deep-thinking provider
-    let dt_default_idx = partial
-        .deep_thinking_provider
-        .as_deref()
-        .and_then(|name| eligible.iter().position(|p| p.as_str() == name))
-        .unwrap_or(0);
-
-    let dt_provider = inquire::Select::new(
-        "Deep-thinking provider (used by researcher, trader, and risk agents):",
-        eligible,
-    )
-    .with_starting_cursor(dt_default_idx)
-    .prompt()?;
-
-    let dt_model = inquire::Text::new("Deep-thinking model:")
-        .with_initial_value(partial.deep_thinking_model.as_deref().unwrap_or(""))
-        .with_validator(|s: &str| {
-            if s.trim().is_empty() {
-                Ok(Validation::Invalid("Model name must not be empty".into()))
-            } else {
-                Ok(Validation::Valid)
-            }
-        })
-        .prompt()?;
-
-    apply_provider_routing(partial, (qt_provider, qt_model), (dt_provider, dt_model));
-    Ok(())
+    super::model_selection::prompt_provider_routing(partial, eligible, config_path)
 }
 
 // ── Step 5: LLM health check ──────────────────────────────────────────────────
