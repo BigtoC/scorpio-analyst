@@ -82,13 +82,13 @@ fn listed_model_options(models: &[String], saved_model: Option<&str>) -> Vec<Mod
 }
 
 fn prompt_mode_for_provider(
-    _provider: ProviderId,
+    provider: ProviderId,
     outcome: &ModelDiscoveryOutcome,
     saved_provider: Option<&str>,
     saved_model: Option<&str>,
 ) -> ModelPromptMode {
     let provider_matches =
-        saved_provider.is_some_and(|sp| sp.eq_ignore_ascii_case(_provider.as_str()));
+        saved_provider.is_some_and(|sp| sp.eq_ignore_ascii_case(provider.as_str()));
     let effective_saved_model = if provider_matches { saved_model } else { None };
 
     match outcome {
@@ -110,11 +110,11 @@ fn prompt_mode_for_provider(
         }
         ModelDiscoveryOutcome::ManualOnly { reason } => ModelPromptMode::Manual {
             note: Some(reason.clone()),
-            initial_value: manual_initial_value(_provider, saved_provider, saved_model),
+            initial_value: manual_initial_value(provider, saved_provider, saved_model),
         },
         ModelDiscoveryOutcome::Unavailable { reason } => ModelPromptMode::Manual {
             note: Some(reason.clone()),
-            initial_value: manual_initial_value(_provider, saved_provider, saved_model),
+            initial_value: manual_initial_value(provider, saved_provider, saved_model),
         },
     }
 }
