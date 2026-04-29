@@ -626,6 +626,46 @@ impl Config {
             || self.providers.openrouter.api_key.is_some()
             || self.providers.deepseek.api_key.is_some()
     }
+
+    /// Load only `[providers.*]` settings from a user config file path, ignoring
+    /// the `[llm]` routing section entirely.
+    ///
+    /// This is the setup-safe recovery path: it preserves file-backed provider
+    /// overrides (base_url, rpm) plus env overrides and current wizard secrets,
+    /// but it does **not** attempt to validate or reuse the current `[llm]`
+    /// routing values. A stale `quick_thinking_provider = "copilot"` in the
+    /// saved file will not cause a deserialization error here.
+    pub fn load_effective_providers_config_from_user_path(
+        path: impl AsRef<Path>,
+        partial: &crate::settings::PartialConfig,
+    ) -> Result<ProvidersConfig> {
+        #[derive(Debug, Default, Deserialize)]
+        struct ProvidersOnly {
+            #[serde(default)]
+            providers: ProvidersConfig,
+        }
+
+        let _ = dotenvy::dotenv();
+
+        let settings = config::Config::builder()
+            .add_source(config::File::from(path.as_ref()).required(false))
+            .add_source(
+                config::Environment::with_prefix("SCORPIO")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()
+            .context("failed to build provider-only configuration")?;
+
+        let mut wrapper: ProvidersOnly = settings
+            .try_deserialize()
+            .context("failed to deserialize provider-only configuration")?;
+
+        apply_partial_provider_secrets(&mut wrapper.providers, partial);
+        apply_provider_secret_env_overrides(&mut wrapper.providers);
+
+        Ok(wrapper.providers)
+    }
 }
 
 /// Synthesise a nested TOML string from the non-secret fields of a `PartialConfig`.
@@ -672,6 +712,72 @@ fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) 
 
 fn secret_from_env(key: &str) -> Option<SecretString> {
     std::env::var(key).ok().map(SecretString::from)
+}
+
+fn apply_partial_provider_secrets(
+    providers: &mut ProvidersConfig,
+    partial: &crate::settings::PartialConfig,
+) {
+    if let Some(k) = &partial.openai_api_key {
+        providers.openai.api_key = Some(SecretString::from(k.clone()));
+    }
+    if let Some(k) = &partial.anthropic_api_key {
+        providers.anthropic.api_key = Some(SecretString::from(k.clone()));
+    }
+    if let Some(k) = &partial.gemini_api_key {
+        providers.gemini.api_key = Some(SecretString::from(k.clone()));
+    }
+    if let Some(k) = &partial.openrouter_api_key {
+        providers.openrouter.api_key = Some(SecretString::from(k.clone()));
+    }
+    if let Some(k) = &partial.deepseek_api_key {
+        providers.deepseek.api_key = Some(SecretString::from(k.clone()));
+    }
+}
+
+fn apply_provider_secret_env_overrides(providers: &mut ProvidersConfig) {
+    inject_provider_env_override(
+        &mut providers.openai.api_key,
+        "SCORPIO_OPENAI_API_KEY",
+        "openai",
+    );
+    inject_provider_env_override(
+        &mut providers.anthropic.api_key,
+        "SCORPIO_ANTHROPIC_API_KEY",
+        "anthropic",
+    );
+    inject_provider_env_override(
+        &mut providers.gemini.api_key,
+        "SCORPIO_GEMINI_API_KEY",
+        "gemini",
+    );
+    inject_provider_env_override(
+        &mut providers.openrouter.api_key,
+        "SCORPIO_OPENROUTER_API_KEY",
+        "openrouter",
+    );
+    inject_provider_env_override(
+        &mut providers.deepseek.api_key,
+        "SCORPIO_DEEPSEEK_API_KEY",
+        "deepseek",
+    );
+}
+
+fn inject_provider_env_override(
+    field: &mut Option<SecretString>,
+    env_var: &str,
+    provider_name: &str,
+) {
+    if let Some(key) = secret_from_env(env_var) {
+        if field.is_some() {
+            tracing::warn!(
+                provider = provider_name,
+                env_var,
+                "env var overrides user config file secret"
+            );
+        }
+        *field = Some(key);
+    }
 }
 
 #[cfg(test)]
@@ -1565,5 +1671,85 @@ deep_thinking_model = "o3"
             Config::load_from(&path).expect("config should load without [providers.deepseek]");
         assert_eq!(cfg.providers.deepseek.rpm, default_deepseek_settings().rpm);
         assert!(cfg.providers.deepseek.api_key.is_none());
+    }
+
+    #[test]
+    fn load_effective_providers_config_from_user_path_preserves_file_provider_overrides_while_ignoring_stale_copilot_routing()
+     {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(
+            r#"
+[llm]
+quick_thinking_provider = "copilot"
+deep_thinking_provider = "openai"
+quick_thinking_model = "claude-haiku"
+deep_thinking_model = "o3"
+
+[providers.deepseek]
+base_url = "https://deepseek.example.com/v1"
+rpm = 45
+"#,
+        );
+        let partial = crate::settings::PartialConfig {
+            openai_api_key: Some("sk-openai".into()),
+            ..Default::default()
+        };
+
+        // Pre-set the env var so dotenvy::dotenv() (called inside the helper)
+        // won't overwrite it with the .env file value.
+        let saved_openai_key = std::env::var("SCORPIO_OPENAI_API_KEY").ok();
+        unsafe {
+            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-openai");
+        }
+
+        let providers = Config::load_effective_providers_config_from_user_path(&path, &partial)
+            .expect("provider settings should load without validating stale routing");
+
+        // Restore env so other tests are not affected.
+        unsafe {
+            match saved_openai_key {
+                Some(ref v) => std::env::set_var("SCORPIO_OPENAI_API_KEY", v),
+                None => std::env::remove_var("SCORPIO_OPENAI_API_KEY"),
+            }
+        }
+
+        assert_eq!(
+            providers
+                .openai
+                .api_key
+                .as_ref()
+                .map(ExposeSecret::expose_secret),
+            Some("sk-openai")
+        );
+        assert_eq!(
+            providers.deepseek.base_url.as_deref(),
+            Some("https://deepseek.example.com/v1")
+        );
+        assert_eq!(providers.deepseek.rpm, 45);
+    }
+
+    #[test]
+    fn load_effective_providers_config_from_user_path_reads_env_base_url_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let partial = crate::settings::PartialConfig::default();
+        unsafe {
+            std::env::set_var(
+                "SCORPIO__PROVIDERS__DEEPSEEK__BASE_URL",
+                "https://deepseek.example.com/v1",
+            );
+        }
+
+        let result = Config::load_effective_providers_config_from_user_path(&path, &partial);
+
+        unsafe {
+            std::env::remove_var("SCORPIO__PROVIDERS__DEEPSEEK__BASE_URL");
+        }
+
+        let providers = result.expect("env provider overrides should load");
+        assert_eq!(
+            providers.deepseek.base_url.as_deref(),
+            Some("https://deepseek.example.com/v1")
+        );
     }
 }
