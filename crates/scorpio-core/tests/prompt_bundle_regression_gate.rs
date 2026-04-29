@@ -424,6 +424,7 @@ fn branching_prompts_name_all_outcome_kind_values() {
         Role::ConservativeRisk,
         Role::NeutralRisk,
         Role::RiskModerator,
+        Role::FundManager,
     ] {
         let rendered =
             render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
