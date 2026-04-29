@@ -47,9 +47,7 @@ pub(crate) fn compact_technical_report(data: &TechnicalData) -> String {
 /// Exposed as a separate function so test code can inspect the structured
 /// value rather than parse the serialized string.
 pub(crate) fn compact_technical_value(data: &TechnicalData) -> Value {
-    // Start from the full serialization preserving struct field order.
-    let json_str = serde_json::to_string(data).unwrap_or_else(|_| "null".to_owned());
-    let mut value: Value = serde_json::from_str(&json_str).unwrap_or(Value::Null);
+    let mut value = serde_json::to_value(data).unwrap_or(Value::Null);
 
     if let Value::Object(ref mut map) = value {
         // Replace options_context with the compact projection.
@@ -268,10 +266,13 @@ mod tests {
         // Strike 175 has OI = 5_000 + 7_500 = 12_500
         // Strike 180 has OI = 8_000 + 4_500 = 12_500 — tie; max_by_key picks last in iteration
         // (180 has same OI as 175 so last wins = 180)
-        // Actually, 175: call_oi=5000 + put_oi=7500 = 12500, 180: call_oi=8000 + put_oi=4500 = 12500
-        // max_by_key keeps the last of equal keys, so 180 wins
         let highest = &v["options_context"]["outcome"]["highest_oi_strike"];
         assert_eq!(highest["oi"], json!(12_500u64));
+        assert_eq!(
+            highest["strike"],
+            json!(180.0),
+            "tie-breaking: 180 should win as the last element with equal OI"
+        );
     }
 
     #[test]
@@ -332,6 +333,90 @@ mod tests {
         assert!(
             v["options_context"]["outcome"]["highest_oi_strike"].is_null(),
             "highest_oi_strike should be absent for empty strikes: {v:?}"
+        );
+    }
+
+    #[test]
+    fn compact_technical_value_sparse_chain_produces_compact_object() {
+        let mut data = sample_technical_with_options_context_for_projection_tests();
+        data.options_context = Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::SparseChain,
+        });
+        let v = compact_technical_value(&data);
+        assert_eq!(v["options_context"]["status"], json!("available"));
+        assert_eq!(
+            v["options_context"]["outcome"]["kind"],
+            json!("sparse_chain")
+        );
+    }
+
+    #[test]
+    fn compact_technical_value_historical_run_produces_compact_object() {
+        let mut data = sample_technical_with_options_context_for_projection_tests();
+        data.options_context = Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::HistoricalRun,
+        });
+        let v = compact_technical_value(&data);
+        assert_eq!(v["options_context"]["status"], json!("available"));
+        assert_eq!(
+            v["options_context"]["outcome"]["kind"],
+            json!("historical_run")
+        );
+    }
+
+    #[test]
+    fn compact_technical_value_missing_spot_produces_compact_object() {
+        let mut data = sample_technical_with_options_context_for_projection_tests();
+        data.options_context = Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::MissingSpot,
+        });
+        let v = compact_technical_value(&data);
+        assert_eq!(v["options_context"]["status"], json!("available"));
+        assert_eq!(
+            v["options_context"]["outcome"]["kind"],
+            json!("missing_spot")
+        );
+    }
+
+    #[test]
+    fn compact_snapshot_value_no_highest_oi_when_strikes_have_zero_oi() {
+        let snap = OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-01-17".to_owned(),
+            near_term_strikes: vec![
+                NearTermStrike {
+                    strike: 95.0,
+                    call_iv: Some(0.18),
+                    put_iv: Some(0.22),
+                    call_volume: Some(100),
+                    put_volume: Some(200),
+                    call_oi: None,
+                    put_oi: None,
+                },
+                NearTermStrike {
+                    strike: 100.0,
+                    call_iv: Some(0.20),
+                    put_iv: Some(0.20),
+                    call_volume: Some(300),
+                    put_volume: Some(150),
+                    call_oi: Some(0),
+                    put_oi: Some(0),
+                },
+            ],
+        };
+        let mut data = sample_technical_with_options_context_for_projection_tests();
+        data.options_context = Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(snap),
+        });
+        let v = compact_technical_value(&data);
+        assert!(
+            v["options_context"]["outcome"]["highest_oi_strike"].is_null(),
+            "highest_oi_strike should be absent when all strikes have zero OI: {v:?}"
         );
     }
 
