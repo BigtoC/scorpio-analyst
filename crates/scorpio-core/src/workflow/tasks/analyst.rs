@@ -24,8 +24,8 @@ use crate::{
     state::{
         AgentTokenUsage, AssetShape, DataCoverageReport, DerivedValuation, EvidenceKind,
         EvidenceRecord, EvidenceSource, FundamentalData, NewsData, PhaseTokenUsage,
-        ProvenanceSummary, ScenarioValuation, SentimentData, TechnicalData, TradingState,
-        derive_valuation,
+        ProvenanceSummary, ScenarioValuation, SentimentData, TechnicalData,
+        TechnicalOptionsContext, TradingState, derive_valuation,
     },
     valuation::ValuatorRegistry,
     workflow::{
@@ -821,8 +821,13 @@ impl Task for AnalystSyncTask {
                 |state, data| state.set_technical_indicators(data),
                 |state, data| {
                     let mut datasets = vec!["ohlcv".to_owned()];
-                    if data.options_summary.is_some() {
-                        datasets.push("options_snapshot".to_owned());
+                    // `fetched_at` is a coarse cycle anchor: options prefetch and OHLCV
+                    // tool calls are temporally decoupled within the technical run.
+                    if matches!(
+                        data.options_context,
+                        Some(TechnicalOptionsContext::Available { .. })
+                    ) {
+                        datasets.push("options_context".to_owned());
                     }
                     state.set_evidence_technical(EvidenceRecord {
                         kind: EvidenceKind::Technical,

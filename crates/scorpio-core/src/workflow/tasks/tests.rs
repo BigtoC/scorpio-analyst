@@ -7,9 +7,10 @@ use super::*;
 use crate::{
     analysis_packs::resolve_runtime_policy,
     config::LlmConfig,
+    data::traits::{OptionsOutcome, OptionsSnapshot},
     state::{
         AgentTokenUsage, FundamentalData, NewsData, ScenarioValuation, SentimentData,
-        TechnicalData, TradingState,
+        TechnicalData, TechnicalOptionsContext, TradingState,
     },
     workflow::context_bridge::{
         deserialize_state_from_context, serialize_state_to_context, write_prefixed_result,
@@ -199,6 +200,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -349,6 +351,7 @@ async fn analyst_sync_derives_required_inputs_from_runtime_policy() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -699,6 +702,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -813,6 +817,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -1941,6 +1946,7 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -2118,6 +2124,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -2328,6 +2335,7 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
             volume_avg: None,
             summary: "ok".to_owned(),
             options_summary: None,
+            options_context: None,
         },
     )
     .await
@@ -2388,240 +2396,277 @@ async fn news_analyst_invalid_cached_news_fails_closed() {
     }
 }
 
-// ─── Task 7: options_snapshot dataset in technical evidence ───────────────────
+// ─── Task 7: options_context dataset in technical evidence ────────────────────
+
+async fn run_analyst_sync_with_technical(technical_data: TechnicalData) -> Vec<String> {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test-options-context.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+
+    for analyst_key in [
+        common::ANALYST_FUNDAMENTAL,
+        common::ANALYST_SENTIMENT,
+        common::ANALYST_NEWS,
+        common::ANALYST_TECHNICAL,
+    ] {
+        ctx.set(
+            format!(
+                "{}.{}.{}",
+                common::ANALYST_PREFIX,
+                analyst_key,
+                common::OK_SUFFIX
+            ),
+            true,
+        )
+        .await;
+    }
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &technical_data,
+    )
+    .await
+    .unwrap();
+
+    AnalystSyncTask::new(store)
+        .run(ctx.clone())
+        .await
+        .expect("task should succeed");
+
+    let recovered = deserialize_state_from_context(&ctx).await.unwrap();
+    recovered
+        .evidence_technical()
+        .expect("technical evidence must be Some")
+        .sources[0]
+        .datasets
+        .clone()
+}
 
 #[tokio::test]
-async fn technical_evidence_includes_options_snapshot_dataset_when_options_summary_present() {
-    // Case 1: options_summary present → datasets = ["ohlcv", "options_snapshot"]
-    {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test-options-snapshot-1.db");
-        let store = Arc::new(
-            crate::workflow::SnapshotStore::new(Some(&db_path))
-                .await
-                .expect("snapshot store creation should succeed"),
-        );
+async fn technical_evidence_includes_options_context_dataset_when_options_available() {
+    // Case 1: Available { outcome: HistoricalRun } → datasets = ["ohlcv", "options_context"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::HistoricalRun,
+        }),
+    })
+    .await;
+    assert!(
+        datasets.contains(&"ohlcv".to_owned()),
+        "ohlcv must always be present"
+    );
+    assert!(
+        datasets.contains(&"options_context".to_owned()),
+        "options_context must be in datasets for Available(HistoricalRun), got: {datasets:?}"
+    );
 
-        let ctx = Context::new();
-        let state = sample_state();
-        seed_state(&ctx, &state).await;
+    // Case 2: Available { outcome: Snapshot(_) } → datasets = ["ohlcv", "options_context"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: Some("mock options data".to_owned()),
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(OptionsSnapshot {
+                spot_price: 100.0,
+                atm_iv: 0.25,
+                iv_term_structure: vec![],
+                put_call_volume_ratio: 0.8,
+                put_call_oi_ratio: 0.9,
+                max_pain_strike: 100.0,
+                near_term_expiration: "2026-05-16".to_owned(),
+                near_term_strikes: vec![],
+            }),
+        }),
+    })
+    .await;
+    assert!(
+        datasets.contains(&"ohlcv".to_owned()),
+        "ohlcv must always be present"
+    );
+    assert!(
+        datasets.contains(&"options_context".to_owned()),
+        "options_context must be in datasets for Available(Snapshot), got: {datasets:?}"
+    );
 
-        for analyst_key in [
-            common::ANALYST_FUNDAMENTAL,
-            common::ANALYST_SENTIMENT,
-            common::ANALYST_NEWS,
-            common::ANALYST_TECHNICAL,
-        ] {
-            ctx.set(
-                format!(
-                    "{}.{}.{}",
-                    common::ANALYST_PREFIX,
-                    analyst_key,
-                    common::OK_SUFFIX
-                ),
-                true,
-            )
-            .await;
-        }
+    // Case 3: FetchFailed → datasets = ["ohlcv"] (not "options_context")
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::FetchFailed {
+            reason: "network error".to_owned(),
+        }),
+    })
+    .await;
+    assert_eq!(
+        datasets,
+        vec!["ohlcv".to_owned()],
+        "FetchFailed must not add options_context dataset"
+    );
 
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_FUNDAMENTAL,
-            &FundamentalData {
-                revenue_growth_pct: None,
-                pe_ratio: Some(20.0),
-                eps: None,
-                current_ratio: None,
-                debt_to_equity: None,
-                gross_margin: None,
-                net_income: None,
-                insider_transactions: vec![],
-                summary: "ok".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_SENTIMENT,
-            &SentimentData {
-                overall_score: 0.5,
-                source_breakdown: vec![],
-                engagement_peaks: vec![],
-                summary: "ok".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_NEWS,
-            &NewsData {
-                articles: vec![],
-                macro_events: vec![],
-                summary: "ok".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        // Technical data with options_summary present.
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_TECHNICAL,
-            &TechnicalData {
-                rsi: None,
-                macd: None,
-                atr: None,
-                sma_20: None,
-                sma_50: None,
-                ema_12: None,
-                ema_26: None,
-                bollinger_upper: None,
-                bollinger_lower: None,
-                support_level: None,
-                resistance_level: None,
-                volume_avg: None,
-                summary: "ok".to_owned(),
-                options_summary: Some("mock options data".to_owned()),
-            },
-        )
-        .await
-        .unwrap();
+    // Case 4: options_context = None → datasets = ["ohlcv"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: None,
+    })
+    .await;
+    assert_eq!(
+        datasets,
+        vec!["ohlcv".to_owned()],
+        "None options_context must not add options_context dataset"
+    );
 
-        let task = AnalystSyncTask::new(store);
-        task.run(ctx.clone()).await.expect("task should succeed");
+    // Case 5: Available { outcome: MissingSpot } → datasets = ["ohlcv", "options_context"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::MissingSpot,
+        }),
+    })
+    .await;
+    assert!(
+        datasets.contains(&"options_context".to_owned()),
+        "options_context must be in datasets for Available(MissingSpot), got: {datasets:?}"
+    );
 
-        let recovered = deserialize_state_from_context(&ctx).await.unwrap();
-        let evidence = recovered
-            .evidence_technical()
-            .expect("technical evidence must be Some");
-        let datasets = &evidence.sources[0].datasets;
-        assert!(
-            datasets.contains(&"ohlcv".to_owned()),
-            "ohlcv must always be present"
-        );
-        assert!(
-            datasets.contains(&"options_snapshot".to_owned()),
-            "options_snapshot must be in datasets when options_summary is present, got: {datasets:?}"
-        );
-    }
-
-    // Case 2: options_summary absent → datasets = ["ohlcv"]
-    {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test-options-snapshot-2.db");
-        let store = Arc::new(
-            crate::workflow::SnapshotStore::new(Some(&db_path))
-                .await
-                .expect("snapshot store creation should succeed"),
-        );
-
-        let ctx = Context::new();
-        let state = sample_state();
-        seed_state(&ctx, &state).await;
-
-        for analyst_key in [
-            common::ANALYST_FUNDAMENTAL,
-            common::ANALYST_SENTIMENT,
-            common::ANALYST_NEWS,
-            common::ANALYST_TECHNICAL,
-        ] {
-            ctx.set(
-                format!(
-                    "{}.{}.{}",
-                    common::ANALYST_PREFIX,
-                    analyst_key,
-                    common::OK_SUFFIX
-                ),
-                true,
-            )
-            .await;
-        }
-
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_FUNDAMENTAL,
-            &FundamentalData {
-                revenue_growth_pct: None,
-                pe_ratio: Some(20.0),
-                eps: None,
-                current_ratio: None,
-                debt_to_equity: None,
-                gross_margin: None,
-                net_income: None,
-                insider_transactions: vec![],
-                summary: "ok".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_SENTIMENT,
-            &SentimentData {
-                overall_score: 0.5,
-                source_breakdown: vec![],
-                engagement_peaks: vec![],
-                summary: "ok".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_NEWS,
-            &NewsData {
-                articles: vec![],
-                macro_events: vec![],
-                summary: "ok".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        // Technical data without options_summary.
-        write_prefixed_result(
-            &ctx,
-            common::ANALYST_PREFIX,
-            common::ANALYST_TECHNICAL,
-            &TechnicalData {
-                rsi: None,
-                macd: None,
-                atr: None,
-                sma_20: None,
-                sma_50: None,
-                ema_12: None,
-                ema_26: None,
-                bollinger_upper: None,
-                bollinger_lower: None,
-                support_level: None,
-                resistance_level: None,
-                volume_avg: None,
-                summary: "ok".to_owned(),
-                options_summary: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let task = AnalystSyncTask::new(store);
-        task.run(ctx.clone()).await.expect("task should succeed");
-
-        let recovered = deserialize_state_from_context(&ctx).await.unwrap();
-        let evidence = recovered
-            .evidence_technical()
-            .expect("technical evidence must be Some");
-        let datasets = &evidence.sources[0].datasets;
-        assert_eq!(
-            datasets,
-            &vec!["ohlcv".to_owned()],
-            "datasets should only contain ohlcv when options_summary is None"
-        );
-    }
+    // Case 6: Available { outcome: NoListedInstrument } → datasets = ["ohlcv", "options_context"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::NoListedInstrument,
+        }),
+    })
+    .await;
+    assert!(
+        datasets.contains(&"options_context".to_owned()),
+        "options_context must be in datasets for Available(NoListedInstrument), got: {datasets:?}"
+    );
 }

@@ -7,11 +7,13 @@ use crate::{
     error::TradingError,
     state::{
         AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TechnicalData, TradingState,
+        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TechnicalData,
+        TechnicalOptionsContext, TradingState,
     },
     workflow::{
-        SnapshotStore, context_bridge::write_prefixed_result,
-        tasks::test_helpers::replace_with_stubs,
+        SnapshotStore,
+        context_bridge::write_prefixed_result,
+        tasks::test_helpers::{replace_with_stubs, replace_with_stubs_using_technical},
     },
 };
 
@@ -469,6 +471,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
                 volume_avg: None,
                 summary: fund.payload.summary,
                 options_summary: None,
+                options_context: None,
             },
             sources: fund.sources,
             quality_flags: fund.quality_flags,
@@ -965,6 +968,7 @@ fn clear_equity_resets_options_summary_unit() {
         volume_avg: None,
         summary: "stale technical summary".to_owned(),
         options_summary: Some("stale options data".to_owned()),
+        options_context: None,
     });
 
     assert!(
@@ -986,6 +990,33 @@ fn clear_equity_resets_options_summary_unit() {
         state.technical_indicators().is_none(),
         "clear_equity must clear technical_indicators (and therefore options_summary)"
     );
+}
+
+#[test]
+fn clear_equity_resets_options_context_unit() {
+    let mut state = TradingState::new("AAPL", "2026-01-01");
+    state.set_technical_indicators(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stale".to_owned(),
+        options_summary: Some("stale interpretation".to_owned()),
+        options_context: Some(crate::state::TechnicalOptionsContext::FetchFailed {
+            reason: "stale provider failure".to_owned(),
+        }),
+    });
+
+    state.clear_equity();
+    assert!(state.technical_indicators().is_none());
 }
 
 #[tokio::test]
@@ -1056,6 +1087,7 @@ async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
         volume_avg: None,
         summary: "stale technical summary".to_owned(),
         options_summary: Some("stale options summary from previous run".to_owned()),
+        options_context: None,
     });
 
     let final_state = pipeline
@@ -1071,5 +1103,180 @@ async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
             .map(|t| t.options_summary.is_none())
             .unwrap_or(true),
         "stale options_summary must be cleared by reset_cycle_outputs"
+    );
+}
+
+fn make_pipeline(db_name: &'static str) -> (crate::workflow::TradingPipeline, tempfile::TempDir) {
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join(db_name);
+    let store =
+        futures::executor::block_on(SnapshotStore::new(Some(&db_path))).expect("snapshot store");
+    let pipeline = crate::workflow::TradingPipeline::new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-test",
+            10,
+        )),
+        store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+    (pipeline, dir)
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
+    use crate::agents::trader::build_prompt_context_for_test as build_prompt_context;
+    use crate::data::traits::{OptionsOutcome, OptionsSnapshot};
+
+    let (pipeline, _dir) = make_pipeline("pipeline-preserves-options-context.db");
+
+    let technical_data = TechnicalData {
+        rsi: Some(55.0),
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stub: technical with snapshot".to_owned(),
+        options_summary: Some("snapshot options summary".to_owned()),
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(OptionsSnapshot {
+                spot_price: 100.0,
+                atm_iv: 0.25,
+                iv_term_structure: vec![],
+                put_call_volume_ratio: 0.8,
+                put_call_oi_ratio: 0.9,
+                max_pain_strike: 100.0,
+                near_term_expiration: "2026-05-16".to_owned(),
+                near_term_strikes: vec![],
+            }),
+        }),
+    };
+
+    replace_with_stubs_using_technical(
+        &pipeline,
+        Arc::clone(&pipeline.snapshot_store),
+        technical_data,
+    )
+    .expect("stub install must succeed");
+
+    let final_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("pipeline must succeed");
+
+    let technical = final_state
+        .technical_indicators()
+        .expect("technical_indicators must be present after a successful cycle");
+    assert!(
+        matches!(
+            technical.options_context,
+            Some(TechnicalOptionsContext::Available { .. })
+        ),
+        "Available options_context must survive the full pipeline cycle"
+    );
+
+    // Verify downstream prompt rendering includes the structured options_context key.
+    let ctx = build_prompt_context(&final_state, "AAPL", "2026-03-20");
+    assert!(
+        ctx.system_prompt.contains(r#""options_context""#),
+        "compact technical report must include options_context JSON key in trader prompt: {}",
+        &ctx.system_prompt[..ctx.system_prompt.len().min(500)]
+    );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_preserves_fetch_failed_options_context_and_coherent_prompt() {
+    use crate::agents::trader::build_prompt_context_for_test as build_prompt_context;
+
+    let (pipeline, _dir) = make_pipeline("pipeline-preserves-fetch-failed-options.db");
+
+    let technical_data = TechnicalData {
+        rsi: Some(50.0),
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "stub: technical with fetch failed".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::FetchFailed {
+            reason: "timeout".to_owned(),
+        }),
+    };
+
+    replace_with_stubs_using_technical(
+        &pipeline,
+        Arc::clone(&pipeline.snapshot_store),
+        technical_data,
+    )
+    .expect("stub install must succeed");
+
+    let final_state = pipeline
+        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+        .await
+        .expect("pipeline must succeed even when options prefetch failed");
+
+    let technical = final_state
+        .technical_indicators()
+        .expect("technical_indicators must be present");
+    assert!(
+        matches!(
+            technical.options_context,
+            Some(TechnicalOptionsContext::FetchFailed { .. })
+        ),
+        "FetchFailed options_context must survive the pipeline cycle"
+    );
+
+    // Downstream prompt rendering must not panic and must include the
+    // options_context key with fetch_failed status so agents know to ignore it.
+    let ctx = build_prompt_context(&final_state, "AAPL", "2026-03-20");
+    assert!(
+        ctx.system_prompt.contains(r#""options_context""#),
+        "FetchFailed must produce an options_context JSON key so agents see the failure status"
+    );
+    assert!(
+        ctx.system_prompt.contains("fetch_failed"),
+        "FetchFailed options_context must carry fetch_failed status in the prompt"
+    );
+    assert!(
+        !ctx.system_prompt.contains(r#""status":"available""#),
+        "FetchFailed must not claim available status in the prompt"
     );
 }

@@ -20,10 +20,8 @@ use crate::{
 };
 
 pub(super) use crate::agents::shared::{
-    UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_data_quality_context,
-    build_enrichment_context, build_evidence_context, build_pack_context,
-    build_thesis_memory_context, extract_json_object, sanitize_date_for_prompt,
-    sanitize_prompt_context, sanitize_symbol_for_prompt,
+    UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, extract_json_object,
+    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -258,36 +256,7 @@ pub(super) fn validate_raw_model_output_size(
 
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
 pub(super) fn build_analyst_context(state: &TradingState) -> String {
-    let fundamental_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.fundamental_metrics()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let technical_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.technical_indicators()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let sentiment_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_sentiment()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let news_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.macro_news()).unwrap_or_else(|_| "null".to_owned()),
-    );
-    let vix_report = sanitize_prompt_context(
-        &serde_json::to_string(&state.market_volatility()).unwrap_or_else(|_| "null".to_owned()),
-    );
-
-    let evidence_section = build_evidence_context(state);
-    let data_quality_section = build_data_quality_context(state);
-    let enrichment_section = build_enrichment_context(state);
-    let pack_section = build_pack_context(state);
-    let pack_context = if pack_section.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{pack_section}")
-    };
-
-    format!(
-        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n- Past learnings: {}\n\n{evidence_section}\n\n{data_quality_section}\n\n{enrichment_section}{pack_context}",
-        build_thesis_memory_context(state)
-    )
+    crate::agents::shared::build_analyst_context_body(state)
 }
 
 /// Borrow the runtime policy from `state` or return a typed `Config` error
@@ -984,4 +953,201 @@ mod tests {
     // the rendered output across 13 roles × 4 scenarios. The tests here
     // were duplicating that gate while keeping the legacy constants
     // alive — both removed.
+
+    // ── Options context projection tests ─────────────────────────────────
+
+    fn sample_technical_with_options_context() -> crate::state::TechnicalData {
+        use crate::data::traits::options::{
+            IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
+        use crate::state::TechnicalOptionsContext;
+
+        let snap = OptionsSnapshot {
+            spot_price: 182.0,
+            atm_iv: 0.28,
+            iv_term_structure: vec![
+                IvTermPoint {
+                    expiration: "2026-01-17".to_owned(),
+                    atm_iv: 0.28,
+                },
+                IvTermPoint {
+                    expiration: "2026-02-21".to_owned(),
+                    atm_iv: 0.31,
+                },
+            ],
+            put_call_volume_ratio: 1.1,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 180.0,
+            near_term_expiration: "2026-01-17".to_owned(),
+            near_term_strikes: vec![
+                NearTermStrike {
+                    strike: 175.0,
+                    call_iv: Some(0.25),
+                    put_iv: Some(0.30),
+                    call_volume: Some(1_000),
+                    put_volume: Some(2_000),
+                    call_oi: Some(5_000),
+                    put_oi: Some(7_500),
+                },
+                NearTermStrike {
+                    strike: 180.0,
+                    call_iv: Some(0.27),
+                    put_iv: Some(0.28),
+                    call_volume: Some(3_000),
+                    put_volume: Some(1_500),
+                    call_oi: Some(8_000),
+                    put_oi: Some(4_500),
+                },
+            ],
+        };
+
+        crate::state::TechnicalData {
+            rsi: Some(58.0),
+            macd: None,
+            atr: Some(3.1),
+            sma_20: Some(182.0),
+            sma_50: Some(176.0),
+            ema_12: Some(183.0),
+            ema_26: Some(178.0),
+            bollinger_upper: Some(188.0),
+            bollinger_lower: Some(172.0),
+            support_level: Some(176.5),
+            resistance_level: Some(187.5),
+            volume_avg: Some(65_000_000.0),
+            summary: "Momentum constructive.".to_owned(),
+            options_summary: Some("Near-term IV elevated.".to_owned()),
+            options_context: Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(snap),
+            }),
+        }
+    }
+
+    #[test]
+    fn risk_analyst_context_projects_options_context() {
+        let mut state = make_state();
+        state.set_technical_indicators(sample_technical_with_options_context());
+
+        let context = build_analyst_context(&state);
+
+        // 1. options_context key must appear in rendered context
+        assert!(
+            context.contains("options_context"),
+            "options_context must appear in risk context: {context}"
+        );
+        // 2. Compact summary fields must be present
+        assert!(context.contains("atm_iv"), "atm_iv missing: {context}");
+        assert!(
+            context.contains("put_call_volume_ratio"),
+            "put_call_volume_ratio missing: {context}"
+        );
+        assert!(
+            context.contains("put_call_oi_ratio"),
+            "put_call_oi_ratio missing: {context}"
+        );
+        assert!(
+            context.contains("max_pain_strike"),
+            "max_pain_strike missing: {context}"
+        );
+        assert!(
+            context.contains("near_term_expiration"),
+            "near_term_expiration missing: {context}"
+        );
+        // 3. Raw near_term_strikes array must NOT appear verbatim
+        assert!(
+            !context.contains("near_term_strikes"),
+            "near_term_strikes array must be stripped: {context}"
+        );
+        // 4. iv_term_structure array must NOT appear
+        assert!(
+            !context.contains("iv_term_structure"),
+            "iv_term_structure array must be stripped: {context}"
+        );
+    }
+
+    #[test]
+    fn risk_analyst_context_includes_options_context() {
+        let mut state = make_state();
+        state.set_technical_indicators(sample_technical_with_options_context());
+        let rendered = build_analyst_context(&state);
+        assert!(
+            rendered.contains("options_context"),
+            "options_context must appear in risk context: {rendered}"
+        );
+        assert!(
+            rendered.contains("snapshot"),
+            "snapshot kind must appear in risk context: {rendered}"
+        );
+    }
+
+    #[test]
+    fn risk_context_handles_legacy_options_summary_blob() {
+        let mut state = make_state();
+        state.set_technical_indicators(crate::state::TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "Legacy run.".to_owned(),
+            options_summary: Some("{ old raw json blob }".to_owned()),
+            options_context: None,
+        });
+
+        let context = build_analyst_context(&state);
+
+        // Legacy blob passes through as a plain string
+        assert!(
+            context.contains("old raw json blob"),
+            "legacy options_summary must pass through: {context}"
+        );
+        // No options_context key since it's None
+        assert!(
+            !context.contains("options_context"),
+            "options_context must be absent for legacy data: {context}"
+        );
+    }
+
+    #[test]
+    fn risk_analyst_context_handles_fetch_failed() {
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let mut state = make_state();
+        state.set_technical_indicators(TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "OK".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "connection refused".to_owned(),
+            }),
+        });
+
+        let context = build_analyst_context(&state);
+
+        assert!(
+            context.contains("fetch_failed"),
+            "fetch_failed status must appear in risk context: {context}"
+        );
+        assert!(
+            context.contains("options_context"),
+            "options_context must appear for FetchFailed: {context}"
+        );
+    }
 }

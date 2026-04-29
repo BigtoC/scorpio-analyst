@@ -42,6 +42,10 @@ const KNOWN_PLACEHOLDERS: &[&str] = &[
     "{aggressive_case}",
     "{neutral_case}",
     "{conservative_case}",
+    // Technical analyst options-availability placeholders (replaced at prompt-render time).
+    "{options_tool_note}",
+    "{options_summary_field_note}",
+    "{options_instructions_note}",
 ];
 
 /// True when the slot has no meaningful content for the LLM prompt.
@@ -273,7 +277,7 @@ mod tests {
     fn known_placeholder_vocabulary_is_closed() {
         // Locking the closed allowlist size so any future placeholder addition
         // forces a deliberate code change to this constant + tests.
-        assert_eq!(KNOWN_PLACEHOLDERS.len(), 25);
+        assert_eq!(KNOWN_PLACEHOLDERS.len(), 28);
         assert!(KNOWN_PLACEHOLDERS.contains(&"{ticker}"));
         assert!(KNOWN_PLACEHOLDERS.contains(&"{trader_proposal}"));
         assert!(KNOWN_PLACEHOLDERS.contains(&"{current_price}"));

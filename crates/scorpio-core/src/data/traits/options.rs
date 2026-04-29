@@ -36,6 +36,18 @@ pub enum OptionsOutcome {
     MissingSpot,
 }
 
+impl std::fmt::Display for OptionsOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Snapshot(_) => write!(f, "snapshot"),
+            Self::NoListedInstrument => write!(f, "no_listed_instrument"),
+            Self::SparseChain => write!(f, "sparse_chain"),
+            Self::HistoricalRun => write!(f, "historical_run"),
+            Self::MissingSpot => write!(f, "missing_spot"),
+        }
+    }
+}
+
 /// Normalized options-chain snapshot used by downstream analysis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OptionsSnapshot {

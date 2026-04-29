@@ -406,6 +406,45 @@ pub(crate) fn build_pack_context(state: &TradingState) -> String {
     }
 }
 
+/// Build the common analyst-data snapshot body shared by researcher and risk prompts.
+///
+/// Returns the formatted data lines (fundamental, technical, sentiment, news, VIX,
+/// past learnings, evidence, data quality, enrichment, pack) without any leading
+/// untrusted-context notice. Callers that need the notice prepend it themselves.
+pub(crate) fn build_analyst_context_body(state: &TradingState) -> String {
+    let fundamental_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.fundamental_metrics()).unwrap_or_else(|_| "null".to_owned()),
+    );
+    let technical_report = state
+        .technical_indicators()
+        .map(super::compact_technical_report)
+        .unwrap_or_else(|| "null".to_owned());
+    let sentiment_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.market_sentiment()).unwrap_or_else(|_| "null".to_owned()),
+    );
+    let news_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.macro_news()).unwrap_or_else(|_| "null".to_owned()),
+    );
+    let vix_report = sanitize_prompt_context(
+        &serde_json::to_string(&state.market_volatility()).unwrap_or_else(|_| "null".to_owned()),
+    );
+
+    let evidence_section = build_evidence_context(state);
+    let data_quality_section = build_data_quality_context(state);
+    let enrichment_section = build_enrichment_context(state);
+    let pack_section = build_pack_context(state);
+    let pack_context = if pack_section.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{pack_section}")
+    };
+
+    format!(
+        "- Fundamental data: {fundamental_report}\n- Technical data: {technical_report}\n- Sentiment data: {sentiment_report}\n- News data: {news_report}\n- Market volatility (VIX): {vix_report}\n- Past learnings: {}\n\n{evidence_section}\n\n{data_quality_section}\n\n{enrichment_section}{pack_context}",
+        build_thesis_memory_context(state),
+    )
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {

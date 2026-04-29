@@ -211,6 +211,7 @@ fn technical_data() -> TechnicalData {
         volume_avg: None,
         summary: "neutral technical".to_owned(),
         options_summary: None,
+        options_context: None,
     }
 }
 

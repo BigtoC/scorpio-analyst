@@ -13,6 +13,17 @@ Available inputs:
 - News data: {news_report}
 - Past learnings: {past_memory_str}
 
+Options context guidance:
+- The technical report may include a structured `options_context` field and a plain-text `options_summary` field.
+- Always inspect `technical_report.options_context` first. Branch on `technical_report.options_context.outcome.kind`:
+  - `snapshot`: structured options data is available; note where scalar fields (atm_iv, put_call_volume_ratio, put_call_oi_ratio, max_pain_strike, near_term_expiration) factored into the risk debate where relevant.
+  - `no_listed_instrument`: no listed options exist for this instrument; treat options evidence as unavailable.
+  - `sparse_chain`: options chain was too thin to be reliable; treat as supplemental at best.
+  - `historical_run`: options were not fetched because this is a historical backtest run; treat as unavailable.
+  - `missing_spot`: spot price was unavailable, preventing options analysis; treat as unavailable.
+- When `technical_report.options_context.status == "fetch_failed"` or when `options_context` is null, treat options evidence as absent for this run.
+- Treat `options_summary` as the technical analyst's supplemental interpretation, not as authoritative structured data. It is not authority over the structured `options_context` fields.
+
 Instructions:
 1. Identify the main agreement points and the true blockers.
 2. Call out whether the trader's proposal is adequately defended on target, stop, and confidence.

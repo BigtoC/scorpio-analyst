@@ -226,6 +226,7 @@ impl graph_flow::Task for StubAnalystChild {
                     volume_avg: None,
                     summary: "stub: neutral technical".to_owned(),
                     options_summary: None,
+                    options_context: None,
                 };
                 write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_TECHNICAL, &data)
                     .await
@@ -781,6 +782,58 @@ impl graph_flow::Task for StubFundManagerTask {
     }
 }
 
+/// Stub technical analyst child that returns caller-supplied [`TechnicalData`].
+///
+/// Use when a test needs specific `options_context` values; the default
+/// neutral fixture from [`StubAnalystChild::technical`] has `options_context: None`.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct CustomTechnicalAnalystChild {
+    data: TechnicalData,
+}
+
+impl CustomTechnicalAnalystChild {
+    /// Wrap `data` in an `Arc`-boxed task ready for use in a [`FanOutTask`].
+    #[allow(dead_code)]
+    pub fn new(data: TechnicalData) -> Arc<Self> {
+        Arc::new(Self { data })
+    }
+}
+
+#[async_trait::async_trait]
+impl graph_flow::Task for CustomTechnicalAnalystChild {
+    fn id(&self) -> &str {
+        "technical_analyst"
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+        use crate::workflow::context_bridge::write_prefixed_result;
+
+        write_prefixed_result(&context, ANALYST_PREFIX, ANALYST_TECHNICAL, &self.data)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "CustomTechnicalAnalystChild: context write failed: {error}"
+                ))
+            })?;
+
+        common::write_flag(&context, ANALYST_TECHNICAL, true).await;
+        let usage = stub_usage("Stub Technical Analyst");
+        common::write_analyst_usage(&context, ANALYST_TECHNICAL, &usage)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "CustomTechnicalAnalystChild: usage write failed: {error}"
+                ))
+            })?;
+
+        Ok(graph_flow::TaskResult::new(
+            None,
+            graph_flow::NextAction::Continue,
+        ))
+    }
+}
+
 /// Replace all LLM-calling tasks in the pipeline with deterministic stubs.
 pub fn replace_with_stubs(
     pipeline: &crate::workflow::TradingPipeline,
@@ -817,6 +870,34 @@ pub fn replace_with_stubs(
     }))?;
 
     pipeline.replace_task_for_test(Arc::new(StubFundManagerTask { snapshot_store }))?;
+
+    Ok(())
+}
+
+/// Replace all stubs and override the technical analyst child with `data`.
+///
+/// Calls [`replace_with_stubs`] first, then replaces the analyst fan-out with a
+/// custom child that returns `data`. Use in tests that need specific
+/// `options_context` values — the default neutral fixture has `options_context: None`.
+#[allow(dead_code)]
+pub fn replace_with_stubs_using_technical(
+    pipeline: &crate::workflow::TradingPipeline,
+    snapshot_store: Arc<SnapshotStore>,
+    data: TechnicalData,
+) -> Result<(), crate::workflow::pipeline::WorkflowTestSeamError> {
+    use graph_flow::fanout::FanOutTask;
+
+    replace_with_stubs(pipeline, Arc::clone(&snapshot_store))?;
+
+    pipeline.replace_task_for_test(FanOutTask::new(
+        "analyst_fanout",
+        vec![
+            StubAnalystChild::fundamental(),
+            StubAnalystChild::sentiment(),
+            StubAnalystChild::news(),
+            CustomTechnicalAnalystChild::new(data),
+        ],
+    ))?;
 
     Ok(())
 }

@@ -6,6 +6,7 @@ use scorpio_core::data::adapters::{
     estimates::{ConsensusEvidence, PriceTargetSummary, RecommendationsSummary},
     events::EventNewsEvidence,
 };
+use scorpio_core::data::traits::options::{OptionsOutcome, OptionsSnapshot};
 use scorpio_core::state::*;
 
 fn arb_enrichment_status() -> impl Strategy<Value = EnrichmentStatus> {
@@ -198,6 +199,37 @@ fn arb_macd_values() -> impl Strategy<Value = MacdValues> {
     })
 }
 
+fn arb_technical_options_context() -> impl Strategy<Value = Option<TechnicalOptionsContext>> {
+    prop_oneof![
+        Just(None),
+        "[a-z ]{0,40}".prop_map(|reason| Some(TechnicalOptionsContext::FetchFailed { reason })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::HistoricalRun,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::NoListedInstrument,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::SparseChain,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::MissingSpot,
+        })),
+        Just(Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(OptionsSnapshot {
+                spot_price: 180.0,
+                atm_iv: 0.28,
+                iv_term_structure: vec![],
+                put_call_volume_ratio: 1.1,
+                put_call_oi_ratio: 1.0,
+                max_pain_strike: 180.0,
+                near_term_expiration: "2026-01-17".to_owned(),
+                near_term_strikes: vec![],
+            }),
+        })),
+    ]
+}
+
 fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
     (
         arb_opt_f64(),
@@ -215,6 +247,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
             arb_opt_f64(),
             "[a-z ]{0,30}",
             proptest::option::of("[A-Za-z0-9 :;./%-]{0,80}"),
+            arb_technical_options_context(),
         ),
     )
         .prop_map(
@@ -228,7 +261,14 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
                 ema_26,
                 bollinger_upper,
                 bollinger_lower,
-                (support_level, resistance_level, volume_avg, summary, options_summary),
+                (
+                    support_level,
+                    resistance_level,
+                    volume_avg,
+                    summary,
+                    options_summary,
+                    options_context,
+                ),
             )| {
                 TechnicalData {
                     rsi,
@@ -245,6 +285,7 @@ fn arb_technical_data() -> impl Strategy<Value = TechnicalData> {
                     volume_avg,
                     summary,
                     options_summary,
+                    options_context,
                 }
             },
         )
@@ -762,12 +803,21 @@ where
     );
 }
 
-proptest! {
-    #[test]
-    fn trading_state_json_roundtrip(state in arb_trading_state()) {
-        assert_json_idempotent(&state);
-    }
+#[test]
+fn trading_state_json_roundtrip() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            proptest!(|(state in arb_trading_state())| {
+                assert_json_idempotent(&state);
+            });
+        })
+        .expect("failed to spawn thread with larger stack")
+        .join()
+        .expect("test thread panicked");
+}
 
+proptest! {
     #[test]
     fn token_usage_tracker_json_roundtrip(tracker in arb_token_usage_tracker()) {
         assert_json_idempotent(&tracker);

@@ -9,6 +9,9 @@ use std::time::Instant;
 
 use rig::tool::ToolDyn;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     analysis_packs::RuntimePolicy,
@@ -16,6 +19,7 @@ use crate::{
     constants::TECHNICAL_ANALYST_MAX_TURNS,
     data::{
         GetOhlcv, GetOptionsSnapshot, OhlcvToolContext, YFinanceClient, YFinanceOptionsProvider,
+        traits::options::OptionsProvider,
     },
     domain::Symbol,
     error::{RetryPolicy, TradingError},
@@ -24,13 +28,127 @@ use crate::{
         CalculateMacd, CalculateRsi,
     },
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, TechnicalData, TradingState},
+    state::{AgentTokenUsage, MacdValues, TechnicalData, TechnicalOptionsContext, TradingState},
 };
 
 use super::common::{
     analyst_runtime_config, render_analyst_system_prompt, run_analyst_inference,
     validate_summary_content,
 };
+
+// ─── LLM response type ────────────────────────────────────────────────────────
+
+/// Intermediate type that models the raw JSON the LLM writes for the Technical
+/// Analyst phase.
+///
+/// This is **not** the persisted type — it contains only the fields the model
+/// can meaningfully fill in. `options_context` is intentionally absent: it is a
+/// Rust-side artifact produced by prefetching, not model output. `options_summary`
+/// is optional short-form interpretation, not a transport for raw tool JSON.
+/// After parsing, [`assemble_technical_data`] merges this response with the
+/// prefetched `options_context` to produce the final [`TechnicalData`] that gets
+/// written to `TradingState`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+struct TechnicalAnalystResponse {
+    rsi: Option<f64>,
+    macd: Option<MacdValues>,
+    atr: Option<f64>,
+    sma_20: Option<f64>,
+    sma_50: Option<f64>,
+    ema_12: Option<f64>,
+    ema_26: Option<f64>,
+    bollinger_upper: Option<f64>,
+    bollinger_lower: Option<f64>,
+    support_level: Option<f64>,
+    resistance_level: Option<f64>,
+    volume_avg: Option<f64>,
+    summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    options_summary: Option<String>,
+}
+
+/// Parse a JSON string (LLM output) into [`TechnicalAnalystResponse`], mapping
+/// errors to [`TradingError::SchemaViolation`].
+///
+/// Validates that `macd` is an object (or null), never a scalar — the same
+/// guard previously applied when parsing directly into [`TechnicalData`].
+fn parse_technical_response(json_str: &str) -> Result<TechnicalAnalystResponse, TradingError> {
+    let value: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
+            message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+        })?;
+
+    if value.get("macd").is_some_and(|macd| macd.is_number()) {
+        return Err(TradingError::SchemaViolation {
+            message: "TechnicalAnalyst: failed to parse LLM output: field `macd` must be an object with `macd_line`, `signal_line`, and `histogram`, or null".to_owned(),
+        });
+    }
+
+    serde_json::from_value(value).map_err(|e| TradingError::SchemaViolation {
+        message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
+    })
+}
+
+/// Merge a parsed LLM response with the Rust-owned `options_context` into the
+/// final [`TechnicalData`] that gets written to state.
+///
+/// `options_summary` is only preserved when `options_context` is
+/// `Some(TechnicalOptionsContext::Available { outcome: OptionsOutcome::Snapshot(_) })`.
+/// In all other cases (no context, fetch failed, historical run, etc.) it is
+/// cleared because the LLM had no live snapshot to interpret.
+fn assemble_technical_data(
+    response: TechnicalAnalystResponse,
+    options_context: Option<TechnicalOptionsContext>,
+    symbol: &str,
+) -> TechnicalData {
+    use crate::data::traits::options::OptionsOutcome;
+
+    let keep_options_summary = matches!(
+        options_context,
+        Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(_),
+        })
+    );
+
+    let outcome_kind_str = match &options_context {
+        Some(TechnicalOptionsContext::Available { outcome }) => outcome.to_string(),
+        Some(TechnicalOptionsContext::FetchFailed { .. }) => "fetch_failed".to_owned(),
+        None => "none".to_owned(),
+    };
+
+    if !keep_options_summary && response.options_summary.is_some() {
+        tracing::warn!(
+            symbol = %symbol,
+            outcome_kind = %outcome_kind_str,
+            reason = "cleared_non_snapshot",
+            "options_summary cleared before persistence"
+        );
+    }
+
+    TechnicalData {
+        rsi: response.rsi,
+        macd: response.macd,
+        atr: response.atr,
+        sma_20: response.sma_20,
+        sma_50: response.sma_50,
+        ema_12: response.ema_12,
+        ema_26: response.ema_26,
+        bollinger_upper: response.bollinger_upper,
+        bollinger_lower: response.bollinger_lower,
+        support_level: response.support_level,
+        resistance_level: response.resistance_level,
+        volume_avg: response.volume_avg,
+        summary: response.summary,
+        options_summary: keep_options_summary
+            .then_some(response.options_summary)
+            .flatten(),
+        options_context,
+    }
+}
+
+/// Maximum length (Unicode scalar values) for the `reason` field in
+/// [`TechnicalOptionsContext::FetchFailed`].
+const MAX_OPTIONS_FETCH_REASON_CHARS: usize = 256;
 
 /// Build the rendered system prompt for the Technical Analyst.
 ///
@@ -39,21 +157,107 @@ use super::common::{
 /// [`render_analyst_system_prompt`] helper. Preflight's
 /// `validate_active_pack_completeness` gate ensures the slot is non-empty
 /// before any analyst task runs.
+///
+/// The `options_tool_available` flag controls whether the prompt includes
+/// guidance for calling `get_options_snapshot` or instructs the model to skip
+/// options analysis entirely.
 pub(crate) fn build_technical_system_prompt(
     symbol: &str,
     target_date: &str,
     policy: &RuntimePolicy,
+    options_tool_available: bool,
 ) -> String {
+    let tool_note = if options_tool_available {
+        "- `get_options_snapshot` — call once with the same symbol and date; only valid for today's US/Eastern date"
+    } else {
+        "- Live options provider not available for this run. Skip options analysis and do not emit `options_summary`."
+    };
+
+    let options_summary_field_note = if options_tool_available {
+        "- `options_summary` — a brief interpretation of the live snapshot; omit entirely (or use `null`) when `get_options_snapshot` is unavailable, returns a non-snapshot kind (historical_run, sparse_chain, no_listed_instrument, missing_spot), or was not called"
+    } else {
+        "- `options_summary` — omit entirely (use `null`); options data is not available for this run"
+    };
+
+    let options_instructions_note = if options_tool_available {
+        "8. If `get_options_snapshot` returns a live snapshot (`\"kind\": \"snapshot\"`), write a brief interpretation in `options_summary` using only the scalar snapshot fields already surfaced to you. Do not copy raw tool JSON into `options_summary`. If the tool is unavailable or returns any non-snapshot kind, omit `options_summary` from your output."
+    } else {
+        "8. Options data is not available for this run. Do not call any options tool and do not populate `options_summary`."
+    };
+
     render_analyst_system_prompt(
         policy.prompt_bundle.technical_analyst.as_ref(),
         symbol,
         target_date,
         policy,
     )
+    .replace("{options_tool_note}", tool_note)
+    .replace("{options_summary_field_note}", options_summary_field_note)
+    .replace("{options_instructions_note}", options_instructions_note)
 }
 
 /// Number of calendar days of OHLCV history to request.
 const OHLCV_LOOKBACK_DAYS: i64 = 365;
+
+// ─── prepare_options_runtime ──────────────────────────────────────────────────
+
+/// Output of [`prepare_options_runtime`] — classifies a prefetch result into
+/// the pieces needed to wire the tool into the agent and build the prompt.
+struct PreparedOptionsRuntime {
+    /// The context to persist into `TechnicalData`.
+    options_context: Option<TechnicalOptionsContext>,
+    /// Whether to bind the tool and include options guidance in the prompt.
+    options_tool_available: bool,
+    /// The prefetched tool to add to the agent's tool list; `None` when unavailable.
+    tool: Option<GetOptionsSnapshot>,
+}
+
+/// Classify a prefetch result into [`PreparedOptionsRuntime`].
+///
+/// - `Ok(outcome)` (all outcomes including `HistoricalRun`): the tool is available
+///   (bound with prefetched data for replay), and the prompt will include options guidance.
+/// - `Err(e)`: the tool is unavailable, the prompt will instruct the model to skip
+///   options analysis, and the error reason is sanitized and truncated.
+fn prepare_options_runtime(
+    prefetched: Result<crate::data::traits::options::OptionsOutcome, TradingError>,
+    symbol: &str,
+    target_date: &str,
+) -> PreparedOptionsRuntime {
+    use crate::data::yfinance::options::OptionsToolContext;
+    use crate::providers::factory::sanitize_error_summary;
+
+    match prefetched {
+        Ok(outcome) => {
+            let options_context_enum = TechnicalOptionsContext::Available {
+                outcome: outcome.clone(),
+            };
+
+            // Build a pre-populated context using the synchronous constructor so
+            // that `prepare_options_runtime` stays synchronous.
+            let ctx = OptionsToolContext::new_prefilled(outcome);
+            let tool = GetOptionsSnapshot::scoped_prefetched(symbol, target_date, ctx);
+
+            PreparedOptionsRuntime {
+                options_context: Some(options_context_enum),
+                options_tool_available: true,
+                tool: Some(tool),
+            }
+        }
+        Err(e) => {
+            let raw_reason = sanitize_error_summary(&e.to_string());
+            let reason: String = raw_reason
+                .chars()
+                .take(MAX_OPTIONS_FETCH_REASON_CHARS)
+                .collect();
+
+            PreparedOptionsRuntime {
+                options_context: Some(TechnicalOptionsContext::FetchFailed { reason }),
+                options_tool_available: false,
+                tool: None,
+            }
+        }
+    }
+}
 
 /// The Technical Analyst agent.
 ///
@@ -65,7 +269,7 @@ pub struct TechnicalAnalyst {
     yfinance: YFinanceClient,
     symbol: String,
     target_date: String,
-    system_prompt: String,
+    policy: RuntimePolicy,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
     // Stored for test assertions; not read by production code.
@@ -99,15 +303,13 @@ impl TechnicalAnalyst {
         })?;
 
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt =
-            build_technical_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
         Ok(Self {
             handle,
             yfinance,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
-            system_prompt,
+            policy: policy.clone(),
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
             typed_symbol,
@@ -126,8 +328,22 @@ impl TechnicalAnalyst {
         let start_date = derive_start_date(&self.target_date, OHLCV_LOOKBACK_DAYS)?;
         let ohlcv_context = OhlcvToolContext::new();
 
+        // Prefetch options once before inference so the LLM replays from the cache.
         let options_provider = YFinanceOptionsProvider::new(self.yfinance.clone());
-        let tools: Vec<Box<dyn ToolDyn>> = vec![
+        let prefetched = options_provider
+            .fetch_snapshot(&self.typed_symbol, &self.target_date)
+            .await;
+
+        let prepared = prepare_options_runtime(prefetched, &self.symbol, &self.target_date);
+
+        let system_prompt = build_technical_system_prompt(
+            &self.symbol,
+            &self.target_date,
+            &self.policy,
+            prepared.options_tool_available,
+        );
+
+        let mut tools: Vec<Box<dyn ToolDyn>> = vec![
             Box::new(GetOhlcv::scoped(
                 self.yfinance.clone(),
                 self.symbol.clone(),
@@ -141,14 +357,13 @@ impl TechnicalAnalyst {
             Box::new(CalculateAtr::new(ohlcv_context.clone())),
             Box::new(CalculateBollingerBands::new(ohlcv_context.clone())),
             Box::new(CalculateIndicatorByName::new(ohlcv_context)),
-            Box::new(GetOptionsSnapshot::scoped(
-                options_provider,
-                self.symbol.clone(),
-                self.target_date.clone(),
-            )),
         ];
 
-        let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
+        if let Some(options_tool) = prepared.tool {
+            tools.push(Box::new(options_tool));
+        }
+
+        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
 
         let prompt = format!(
             "Fetch OHLCV data for {} from {} to {} using get_ohlcv, compute indicators with \
@@ -162,7 +377,7 @@ impl TechnicalAnalyst {
             self.timeout,
             &self.retry_policy,
             TECHNICAL_ANALYST_MAX_TURNS,
-            parse_technical,
+            parse_technical_response,
             validate_technical,
         )
         .await?;
@@ -175,18 +390,24 @@ impl TechnicalAnalyst {
             outcome.rate_limit_wait_ms,
         );
 
-        Ok((outcome.output, usage))
+        let technical_data =
+            assemble_technical_data(outcome.output, prepared.options_context, &self.symbol);
+
+        Ok((technical_data, usage))
     }
 }
 
-fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
-    if data.summary.trim().is_empty() {
+fn validate_technical(response: &TechnicalAnalystResponse) -> Result<(), TradingError> {
+    if response.summary.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "TechnicalAnalyst: summary must not be empty".to_owned(),
         });
     }
-    validate_summary_content("TechnicalAnalyst", &data.summary)?;
-    if let Some(rsi) = data.rsi
+    validate_summary_content("TechnicalAnalyst", &response.summary)?;
+    if let Some(options_summary) = response.options_summary.as_deref() {
+        validate_summary_content("TechnicalAnalyst options_summary", options_summary)?;
+    }
+    if let Some(rsi) = response.rsi
         && !(0.0..=100.0).contains(&rsi)
     {
         return Err(TradingError::SchemaViolation {
@@ -194,27 +415,6 @@ fn validate_technical(data: &TechnicalData) -> Result<(), TradingError> {
         });
     }
     Ok(())
-}
-
-/// Deserialize a JSON string into [`TechnicalData`], mapping errors to
-/// [`TradingError::SchemaViolation`].
-///
-/// Exposed for use as the `parse` hook in `run_analyst_inference`.
-pub(crate) fn parse_technical(json_str: &str) -> Result<TechnicalData, TradingError> {
-    let value: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
-            message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-        })?;
-
-    if value.get("macd").is_some_and(|macd| macd.is_number()) {
-        return Err(TradingError::SchemaViolation {
-            message: "TechnicalAnalyst: failed to parse LLM output: field `macd` must be an object with `macd_line`, `signal_line`, and `histogram`, or null".to_owned(),
-        });
-    }
-
-    serde_json::from_value(value).map_err(|e| TradingError::SchemaViolation {
-        message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
-    })
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -243,11 +443,46 @@ mod tests {
     use super::*;
     use crate::state::{MacdValues, TechnicalData};
 
-    /// Parse and validate a JSON string — combines `parse_technical` + `validate_technical`
-    /// for test convenience. Tests that need only structural parsing can call `parse_technical`
+    /// Parse and validate a JSON string — combines `parse_technical_response` + `validate_technical`
+    /// for test convenience. Tests that need only structural parsing can call `parse_technical_response`
     /// directly; tests that also exercise the semantic validation layer call this helper.
-    fn parse_and_validate(json: &str) -> Result<TechnicalData, TradingError> {
-        parse_technical(json).and_then(|data| validate_technical(&data).map(|()| data))
+    fn parse_and_validate(json: &str) -> Result<TechnicalAnalystResponse, TradingError> {
+        parse_technical_response(json).and_then(|resp| validate_technical(&resp).map(|()| resp))
+    }
+
+    // ── Task 2 test helpers ───────────────────────────────────────────────────
+
+    fn sample_technical_response_with_options_summary() -> TechnicalAnalystResponse {
+        TechnicalAnalystResponse {
+            rsi: Some(52.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "Moderate bullish trend.".to_owned(),
+            options_summary: Some("Near-term IV remains elevated into earnings.".to_owned()),
+        }
+    }
+
+    fn sample_options_snapshot() -> crate::data::traits::options::OptionsSnapshot {
+        use crate::data::traits::options::OptionsSnapshot;
+        OptionsSnapshot {
+            spot_price: 150.0,
+            atm_iv: 0.25,
+            iv_term_structure: vec![],
+            put_call_volume_ratio: 0.8,
+            put_call_oi_ratio: 0.9,
+            max_pain_strike: 150.0,
+            near_term_expiration: "2026-05-16".to_owned(),
+            near_term_strikes: vec![],
+        }
     }
 
     // ── Task 4.4: Correct TechnicalData extraction ────────────────────────
@@ -387,7 +622,7 @@ mod tests {
 
     #[test]
     fn malformed_json_returns_schema_violation() {
-        let result = parse_technical("not json");
+        let result = parse_technical_response("not json");
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -398,7 +633,7 @@ mod tests {
     #[test]
     fn json_missing_summary_returns_schema_violation() {
         // `summary` is required
-        let result = parse_technical(r#"{"rsi": 50.0}"#);
+        let result = parse_technical_response(r#"{"rsi": 50.0}"#);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -477,6 +712,7 @@ mod tests {
             volume_avg: Some(500_000.0),
             summary: "Neutral trend.".to_owned(),
             options_summary: None,
+            options_context: None,
         };
 
         let serialized = serde_json::to_string(&original).expect("serialise");
@@ -621,7 +857,7 @@ mod tests {
             },
         ));
 
-        let outcome = run_analyst_inference::<TechnicalData, _, _>(
+        let outcome = run_analyst_inference::<TechnicalAnalystResponse, _, _>(
             &agent,
             "analyse AAPL technical",
             std::time::Duration::from_millis(100),
@@ -630,7 +866,7 @@ mod tests {
                 base_delay: std::time::Duration::from_millis(1),
             },
             1,
-            super::parse_technical,
+            super::parse_technical_response,
             super::validate_technical,
         )
         .await
@@ -663,12 +899,36 @@ mod tests {
             "volume_avg": null,
             "summary": "Legacy snapshot without options."
         }"#;
-        let data = parse_technical(json)
+        let data = parse_technical_response(json)
             .expect("legacy snapshot without options_summary must deserialize");
         assert!(
             data.options_summary.is_none(),
             "missing options_summary field should default to None"
         );
+    }
+
+    #[test]
+    fn technical_data_missing_options_context_defaults_to_none() {
+        let json = r#"{
+            "rsi": 55.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "legacy technical payload",
+            "options_summary": null
+        }"#;
+
+        let data: TechnicalData =
+            serde_json::from_str(json).expect("legacy payload should deserialize");
+        assert!(data.options_context.is_none());
     }
 
     #[test]
@@ -689,7 +949,8 @@ mod tests {
             "summary": "Momentum is weakening and MACD is negative."
         }"#;
 
-        let err = parse_technical(json).expect_err("scalar MACD should not silently parse");
+        let err =
+            parse_technical_response(json).expect_err("scalar MACD should not silently parse");
 
         match err {
             TradingError::SchemaViolation { message } => {
@@ -714,7 +975,7 @@ mod tests {
 
         let policy =
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy);
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
 
         for phrase in [
             "Prefer authoritative runtime evidence",
@@ -751,7 +1012,7 @@ mod tests {
             "summary": "Moderate bullish trend.",
             "options_summary": "{\"kind\":\"snapshot\",\"spot_price\":150.0,\"atm_iv\":0.25}"
         }"#;
-        let data = parse_technical(json).expect("should parse with options_summary");
+        let data = parse_technical_response(json).expect("should parse with options_summary");
         assert!(
             data.options_summary.is_some(),
             "options_summary should be Some when present in JSON"
@@ -922,7 +1183,7 @@ mod tests {
             "Pack technical prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy);
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
 
         assert!(
             prompt.contains(
@@ -930,5 +1191,384 @@ mod tests {
             ),
             "runtime-policy prompt bundle should drive the technical prompt body: {prompt}"
         );
+    }
+
+    // ── Task 2: TechnicalAnalystResponse split ────────────────────────────────
+
+    #[test]
+    fn parse_technical_response_accepts_options_summary_without_options_context() {
+        let json = r#"{
+            "rsi": 52.0,
+            "macd": null,
+            "atr": null,
+            "sma_20": null,
+            "sma_50": null,
+            "ema_12": null,
+            "ema_26": null,
+            "bollinger_upper": null,
+            "bollinger_lower": null,
+            "support_level": null,
+            "resistance_level": null,
+            "volume_avg": null,
+            "summary": "Moderate bullish trend.",
+            "options_summary": "Near-term IV remains elevated into earnings."
+        }"#;
+
+        let data = parse_technical_response(json).expect("response should parse");
+        assert_eq!(
+            data.options_summary.as_deref(),
+            Some("Near-term IV remains elevated into earnings.")
+        );
+    }
+
+    #[test]
+    fn assemble_technical_data_keeps_options_summary_for_live_snapshot() {
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(sample_options_snapshot()),
+            }),
+            "TEST",
+        );
+        assert!(data.options_summary.is_some());
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_for_non_snapshot_outcome() {
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::HistoricalRun,
+            }),
+            "TEST",
+        );
+        assert!(data.options_summary.is_none());
+    }
+
+    // ── Task 4: prepare_options_runtime + prompt conditioning ─────────────────
+
+    #[test]
+    fn build_technical_system_prompt_includes_options_guidance_when_tool_available() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        let policy = resolve_runtime_policy("baseline").unwrap();
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
+        assert!(
+            prompt.contains("get_options_snapshot"),
+            "prompt must mention get_options_snapshot when tool is available: {prompt}"
+        );
+        assert!(
+            prompt.contains("brief interpretation") || prompt.contains("concise interpretation"),
+            "prompt must describe options_summary as an interpretation, not raw JSON: {prompt}"
+        );
+        assert!(
+            !prompt.contains("serialize the full tool output as a JSON string"),
+            "prompt must not instruct the model to copy raw tool JSON into options_summary: {prompt}"
+        );
+    }
+
+    #[test]
+    fn build_technical_system_prompt_omits_options_guidance_when_tool_unavailable() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        let policy = resolve_runtime_policy("baseline").unwrap();
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, false);
+        assert!(
+            !prompt.contains("call once with the same symbol and date"),
+            "prompt must not include live-options guidance when tool is unavailable: {prompt}"
+        );
+        assert!(
+            prompt.contains("not available for this run"),
+            "prompt must tell the model options are not available: {prompt}"
+        );
+        assert!(
+            !prompt.contains("get_options_snapshot"),
+            "prompt must not mention get_options_snapshot when tool is unavailable: {prompt}"
+        );
+    }
+
+    #[test]
+    fn build_technical_system_prompt_includes_options_guidance_for_historical_run() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        let policy = resolve_runtime_policy("baseline").unwrap();
+        // Historical run still keeps the tool available (the tool returns HistoricalRun kind).
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
+        assert!(
+            prompt.contains("get_options_snapshot"),
+            "prompt must mention get_options_snapshot for historical run (tool-available path): {prompt}"
+        );
+        assert!(
+            !prompt.contains("not available for this run"),
+            "historical run path uses tool-available variant, must not say unavailable: {prompt}"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_persists_fetch_failed_context_and_omits_tool() {
+        let prepared = prepare_options_runtime(
+            Err(TradingError::NetworkTimeout {
+                message: "connection refused".to_owned(),
+                elapsed: std::time::Duration::ZERO,
+            }),
+            "AAPL",
+            "2026-01-01",
+        );
+        assert!(!prepared.options_tool_available);
+        assert!(prepared.tool.is_none());
+        assert!(
+            matches!(
+                prepared.options_context,
+                Some(TechnicalOptionsContext::FetchFailed { .. })
+            ),
+            "expected FetchFailed context"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_keeps_tool_available_for_historical_run() {
+        use crate::data::traits::options::OptionsOutcome;
+        let prepared =
+            prepare_options_runtime(Ok(OptionsOutcome::HistoricalRun), "AAPL", "2026-01-01");
+        assert!(prepared.options_tool_available);
+        assert!(prepared.tool.is_some());
+        assert!(
+            matches!(
+                prepared.options_context,
+                Some(TechnicalOptionsContext::Available {
+                    outcome: OptionsOutcome::HistoricalRun,
+                })
+            ),
+            "expected Available(HistoricalRun) context"
+        );
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_when_outcome_is_not_snapshot() {
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::HistoricalRun,
+            }),
+            "TEST",
+        );
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared when outcome is HistoricalRun"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_truncates_fetch_failed_reason_to_256_chars() {
+        let long_error = "x".repeat(500);
+        let prepared = prepare_options_runtime(
+            Err(TradingError::NetworkTimeout {
+                message: long_error,
+                elapsed: std::time::Duration::ZERO,
+            }),
+            "AAPL",
+            "2026-01-01",
+        );
+        if let Some(TechnicalOptionsContext::FetchFailed { reason }) = prepared.options_context {
+            assert!(
+                reason.chars().count() <= MAX_OPTIONS_FETCH_REASON_CHARS,
+                "reason must be truncated to at most {} chars, got {} chars",
+                MAX_OPTIONS_FETCH_REASON_CHARS,
+                reason.chars().count()
+            );
+        } else {
+            panic!("expected FetchFailed context");
+        }
+    }
+
+    #[test]
+    fn prepare_options_runtime_truncates_fetch_failed_reason_unicode() {
+        // 'é' is 2 bytes but 1 Unicode scalar — verify truncation is on chars, not bytes.
+        let long_unicode = "é".repeat(300);
+        let prepared = prepare_options_runtime(
+            Err(TradingError::NetworkTimeout {
+                message: long_unicode,
+                elapsed: std::time::Duration::ZERO,
+            }),
+            "AAPL",
+            "2026-01-01",
+        );
+        if let Some(TechnicalOptionsContext::FetchFailed { reason }) = prepared.options_context {
+            assert!(
+                reason.chars().count() <= MAX_OPTIONS_FETCH_REASON_CHARS,
+                "reason must be truncated to at most {} Unicode scalars, got {} scalars ({} bytes)",
+                MAX_OPTIONS_FETCH_REASON_CHARS,
+                reason.chars().count(),
+                reason.len()
+            );
+        } else {
+            panic!("expected FetchFailed context");
+        }
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_for_fetch_failed() {
+        let response = sample_technical_response_with_options_summary();
+        assert!(
+            response.options_summary.is_some(),
+            "test setup: response must have options_summary set"
+        );
+
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::FetchFailed {
+                reason: "connection refused".to_owned(),
+            }),
+            "AAPL",
+        );
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared when context is FetchFailed"
+        );
+        assert!(
+            matches!(
+                data.options_context,
+                Some(TechnicalOptionsContext::FetchFailed { .. })
+            ),
+            "FetchFailed context must be preserved"
+        );
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_for_none_context() {
+        let response = sample_technical_response_with_options_summary();
+        assert!(
+            response.options_summary.is_some(),
+            "test setup: response must have options_summary set"
+        );
+
+        let data = assemble_technical_data(response, None, "AAPL");
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared when options_context is None (legacy/no-options run)"
+        );
+        assert!(
+            data.options_context.is_none(),
+            "None context must remain None"
+        );
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_and_returns_none_for_non_snapshot() {
+        // Behavioral assertion: when options_context is not a live Snapshot,
+        // assemble_technical_data must clear options_summary. This proves the
+        // warn branch was taken (the only code path that produces None from a
+        // Some(options_summary) input).
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        assert!(
+            response.options_summary.is_some(),
+            "test setup: response must have options_summary set"
+        );
+
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::SparseChain,
+            }),
+            "AAPL",
+        );
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared (and warn emitted) when outcome is SparseChain"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_outcome_flows_unchanged_through_assembly() {
+        // Single-fetch guarantee at the helper seam: the outcome produced by
+        // `prepare_options_runtime` is exactly what `assemble_technical_data`
+        // persists in `TechnicalData.options_context`, with no intermediate
+        // re-fetch or transformation.
+        use crate::data::traits::options::{OptionsOutcome, OptionsSnapshot};
+
+        let outcome = OptionsOutcome::Snapshot(OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.25,
+            iv_term_structure: vec![],
+            put_call_volume_ratio: 0.8,
+            put_call_oi_ratio: 0.9,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-05-16".to_owned(),
+            near_term_strikes: vec![],
+        });
+
+        let prepared = prepare_options_runtime(Ok(outcome.clone()), "AAPL", "2026-01-01");
+
+        assert_eq!(
+            prepared.options_context,
+            Some(TechnicalOptionsContext::Available {
+                outcome: outcome.clone()
+            }),
+            "prepare_options_runtime must record the exact prefetched outcome"
+        );
+        assert!(
+            prepared.tool.is_some(),
+            "a Snapshot outcome must bind a tool"
+        );
+
+        let response = TechnicalAnalystResponse {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "test".to_owned(),
+            options_summary: Some("live snapshot summary".to_owned()),
+        };
+
+        let data = assemble_technical_data(response, prepared.options_context, "AAPL");
+
+        assert_eq!(
+            data.options_context,
+            Some(TechnicalOptionsContext::Available { outcome }),
+            "assemble_technical_data must preserve the prefetched outcome unchanged"
+        );
+        assert!(
+            data.options_summary.is_some(),
+            "Snapshot outcome must preserve options_summary through assembly"
+        );
+    }
+
+    #[test]
+    fn validate_technical_rejects_control_chars_in_options_summary() {
+        let response = TechnicalAnalystResponse {
+            rsi: Some(52.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "Moderate bullish trend.".to_owned(),
+            options_summary: Some("bad\u{0000}summary".to_owned()),
+        };
+
+        let err = validate_technical(&response).expect_err("control chars must be rejected");
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
     }
 }

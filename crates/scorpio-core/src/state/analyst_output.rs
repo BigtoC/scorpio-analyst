@@ -22,7 +22,7 @@ pub enum AnalystOutput {
     Fundamental(FundamentalData),
     Sentiment(SentimentData),
     News(NewsData),
-    Technical(TechnicalData),
+    Technical(Box<TechnicalData>),
     /// Placeholder — crypto tokenomics analyst output.
     Tokenomics(()),
     /// Placeholder — crypto on-chain analyst output.

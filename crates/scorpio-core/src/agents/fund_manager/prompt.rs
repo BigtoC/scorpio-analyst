@@ -4,8 +4,9 @@ use crate::{
         shared::{
             UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_data_quality_context,
             build_enrichment_context, build_evidence_context, build_pack_context,
-            build_thesis_memory_context, build_valuation_context, sanitize_date_for_prompt,
-            sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
+            build_thesis_memory_context, build_valuation_context, compact_technical_report,
+            sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+            serialize_prompt_value,
         },
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
@@ -194,7 +195,10 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Technical data: {}",
-            serialize_prompt_value(&state.technical_indicators())
+            state
+                .technical_indicators()
+                .map(compact_technical_report)
+                .unwrap_or_else(|| "null".to_owned())
         ),
         MAX_USER_PROMPT_CHARS,
     );
@@ -280,8 +284,8 @@ mod tests {
         analysis_packs::resolve_runtime_policy,
         state::{
             DebateMessage, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData,
-            RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction,
-            TradeProposal, TradingState,
+            RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData,
+            TechnicalOptionsContext, TradeAction, TradeProposal, TradingState,
         },
         workflow::Role,
     };
@@ -350,6 +354,7 @@ mod tests {
             volume_avg: Some(65_000_000.0),
             summary: "Momentum constructive.".to_owned(),
             options_summary: None,
+            options_context: None,
         });
         state.set_market_sentiment(SentimentData {
             overall_score: 0.34,
@@ -526,5 +531,220 @@ mod tests {
         assert!(user_prompt.contains("Apple raises guidance"));
         assert!(user_prompt.contains("Consensus estimates status: fetch_failed"));
         assert!(user_prompt.contains("Yahoo Finance earnings trend unavailable"));
+    }
+
+    // ── Options context projection tests ─────────────────────────────────
+
+    fn sample_technical_with_options_context() -> TechnicalData {
+        use crate::data::traits::options::{
+            IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
+
+        let snap = OptionsSnapshot {
+            spot_price: 182.0,
+            atm_iv: 0.28,
+            iv_term_structure: vec![
+                IvTermPoint {
+                    expiration: "2026-01-17".to_owned(),
+                    atm_iv: 0.28,
+                },
+                IvTermPoint {
+                    expiration: "2026-02-21".to_owned(),
+                    atm_iv: 0.31,
+                },
+            ],
+            put_call_volume_ratio: 1.1,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 180.0,
+            near_term_expiration: "2026-01-17".to_owned(),
+            near_term_strikes: vec![
+                NearTermStrike {
+                    strike: 175.0,
+                    call_iv: Some(0.25),
+                    put_iv: Some(0.30),
+                    call_volume: Some(1_000),
+                    put_volume: Some(2_000),
+                    call_oi: Some(5_000),
+                    put_oi: Some(7_500),
+                },
+                NearTermStrike {
+                    strike: 180.0,
+                    call_iv: Some(0.27),
+                    put_iv: Some(0.28),
+                    call_volume: Some(3_000),
+                    put_volume: Some(1_500),
+                    call_oi: Some(8_000),
+                    put_oi: Some(4_500),
+                },
+            ],
+        };
+
+        TechnicalData {
+            rsi: Some(58.0),
+            macd: None,
+            atr: Some(3.1),
+            sma_20: Some(182.0),
+            sma_50: Some(176.0),
+            ema_12: Some(183.0),
+            ema_26: Some(178.0),
+            bollinger_upper: Some(188.0),
+            bollinger_lower: Some(172.0),
+            support_level: Some(176.5),
+            resistance_level: Some(187.5),
+            volume_avg: Some(65_000_000.0),
+            summary: "Momentum constructive.".to_owned(),
+            options_summary: Some("Near-term IV elevated.".to_owned()),
+            options_context: Some(crate::state::TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(snap),
+            }),
+        }
+    }
+
+    #[test]
+    fn fund_manager_prompt_projects_options_context() {
+        let mut state = populated_state();
+        state.set_technical_indicators(sample_technical_with_options_context());
+
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
+
+        // 1. options_context key must appear in the user prompt
+        assert!(
+            user_prompt.contains("options_context"),
+            "options_context must appear in fund manager user prompt: {user_prompt}"
+        );
+        // 2. Compact summary fields must be present
+        assert!(
+            user_prompt.contains("atm_iv"),
+            "atm_iv missing: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("put_call_volume_ratio"),
+            "put_call_volume_ratio missing: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("max_pain_strike"),
+            "max_pain_strike missing: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("near_term_expiration"),
+            "near_term_expiration missing: {user_prompt}"
+        );
+        // 3. Raw near_term_strikes array must NOT appear verbatim
+        assert!(
+            !user_prompt.contains("near_term_strikes"),
+            "near_term_strikes array must be stripped from fund manager prompt: {user_prompt}"
+        );
+        // 4. iv_term_structure array must NOT appear
+        assert!(
+            !user_prompt.contains("iv_term_structure"),
+            "iv_term_structure array must be stripped from fund manager prompt: {user_prompt}"
+        );
+    }
+
+    #[test]
+    fn fund_manager_prompt_handles_legacy_options_summary_blob() {
+        let mut state = populated_state();
+        state.set_technical_indicators(TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "Legacy run.".to_owned(),
+            options_summary: Some("{ old raw json blob }".to_owned()),
+            options_context: None,
+        });
+
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
+
+        // Legacy blob passes through as a plain string field
+        assert!(
+            user_prompt.contains("old raw json blob"),
+            "legacy options_summary must pass through: {user_prompt}"
+        );
+        // No options_context key since it's None
+        assert!(
+            !user_prompt.contains("options_context"),
+            "options_context must be absent for legacy data: {user_prompt}"
+        );
+    }
+
+    #[test]
+    fn fund_manager_prompt_names_non_snapshot_options_outcomes_as_unavailable() {
+        let prompt = baseline_fund_manager_prompt();
+
+        for token in [
+            "historical_run",
+            "sparse_chain",
+            "no_listed_instrument",
+            "missing_spot",
+        ] {
+            assert!(
+                prompt.contains(token),
+                "fund manager prompt must mention non-snapshot outcome {token}: {prompt}"
+            );
+        }
+
+        assert!(
+            prompt.contains("outcome.kind"),
+            "fund manager prompt must tell the model to inspect options_context.outcome.kind: {prompt}"
+        );
+    }
+
+    #[test]
+    fn fund_manager_prompt_handles_fetch_failed_options_context() {
+        let mut state = populated_state();
+        state.set_technical_indicators(TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "OK".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "network timeout".to_owned(),
+            }),
+        });
+
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
+
+        assert!(
+            user_prompt.contains("fetch_failed"),
+            "fetch_failed status must appear in fund manager prompt: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("options_context"),
+            "options_context must appear for FetchFailed: {user_prompt}"
+        );
     }
 }

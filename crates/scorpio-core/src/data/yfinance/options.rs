@@ -8,6 +8,8 @@
 //! `OptionsOutcome::HistoricalRun` without making any network calls, since
 //! Yahoo Finance only publishes current live options data.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::TimeZone as _;
 use chrono_tz::US::Eastern;
@@ -16,6 +18,7 @@ use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::RwLock;
 use yfinance_rs::CacheMode;
 use yfinance_rs::YfError;
 use yfinance_rs::core::conversions::money_to_f64;
@@ -641,6 +644,122 @@ async fn fetch_from_stub(
     }))
 }
 
+// ─── OptionsToolContext ───────────────────────────────────────────────────────
+
+/// Write-once analysis-scoped cache for a prefetched [`OptionsOutcome`].
+///
+/// Mirrors [`OhlcvToolContext`](super::ohlcv::OhlcvToolContext) semantics: a single
+/// `Arc<RwLock<Option<Arc<OptionsOutcome>>>>` provides shared ownership across cloned
+/// tool instances; the inner `Arc<OptionsOutcome>` avoids re-cloning the heap data
+/// on each read.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OptionsToolContext {
+    outcome: Arc<RwLock<Option<Arc<OptionsOutcome>>>>,
+}
+
+impl OptionsToolContext {
+    /// Create an empty context for use in tests that call [`Self::store`] directly.
+    ///
+    /// Only called from test code; suppressed in production builds to avoid
+    /// dead-code warnings. When compiling with `test-helpers` for integration
+    /// tests the `#[allow(dead_code)]` keeps clippy/rustc quiet — the method is
+    /// real API even though it is not reachable from library code.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a pre-populated context without an async call.
+    ///
+    /// This is the synchronous counterpart to [`Self::store`], used when the
+    /// outcome is already known at construction time (e.g. in
+    /// `prepare_options_runtime`).
+    #[must_use]
+    pub(crate) fn new_prefilled(outcome: OptionsOutcome) -> Self {
+        Self {
+            outcome: Arc::new(RwLock::new(Some(Arc::new(outcome)))),
+        }
+    }
+
+    /// Store an [`OptionsOutcome`] in the context.
+    ///
+    /// Write-once: returns [`TradingError::SchemaViolation`] if an outcome has
+    /// already been stored, preventing the LLM from overwriting the first fetch
+    /// with adversarial data on a second tool call.
+    ///
+    /// Only called from test code; `#[allow(dead_code)]` prevents spurious
+    /// warnings when compiling the `test-helpers` feature on the lib target.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    pub(crate) async fn store(&self, outcome: OptionsOutcome) -> Result<(), TradingError> {
+        let mut lock = self.outcome.write().await;
+        if lock.is_some() {
+            return Err(TradingError::SchemaViolation {
+                message: "options snapshot has already been prefetched for this analysis; \
+                          get_options_snapshot may only be stored once per analysis cycle"
+                    .to_owned(),
+            });
+        }
+        *lock = Some(Arc::new(outcome));
+        Ok(())
+    }
+
+    /// Load the prefetched [`OptionsOutcome`].
+    ///
+    /// Returns a cheap `Arc` clone. Returns [`TradingError::SchemaViolation`] if
+    /// the context is empty (nothing has been stored yet).
+    pub(crate) async fn load(&self) -> Result<Arc<OptionsOutcome>, TradingError> {
+        self.outcome
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| TradingError::SchemaViolation {
+                message: "options context is empty; options outcome was not prefetched".to_owned(),
+            })
+    }
+}
+
+// ─── Shared serialization helper ─────────────────────────────────────────────
+
+/// Serialize an [`OptionsOutcome`] into the JSON shape expected by the `get_options_snapshot`
+/// tool output contract.
+///
+/// - `Snapshot` variants are serialized as-is with no injected `reason`.
+/// - All other variants have a human-readable `reason` field injected so the LLM
+///   understands why live options data is absent.
+fn serialize_options_outcome_for_tool(
+    outcome: &OptionsOutcome,
+) -> Result<serde_json::Value, TradingError> {
+    let mut val = serde_json::to_value(outcome).map_err(|e| TradingError::SchemaViolation {
+        message: format!("failed to serialize OptionsOutcome: {e}"),
+    })?;
+
+    if let serde_json::Value::Object(ref mut map) = val {
+        let reason = match outcome {
+            OptionsOutcome::NoListedInstrument => {
+                Some("this symbol has no listed options on Yahoo")
+            }
+            OptionsOutcome::SparseChain => {
+                Some("options exist but no usable contracts within \u{b1}20% of spot")
+            }
+            OptionsOutcome::HistoricalRun => Some(
+                "target_date is not market-local US/Eastern today; live options intentionally skipped",
+            ),
+            OptionsOutcome::MissingSpot => {
+                Some("no underlying close price available for target_date")
+            }
+            OptionsOutcome::Snapshot(_) => None,
+        };
+        if let Some(r) = reason {
+            map.insert("reason".to_owned(), serde_json::Value::String(r.to_owned()));
+        }
+    }
+
+    Ok(val)
+}
+
 // ─── rig::tool::Tool wrapper ──────────────────────────────────────────────────
 
 /// Args for the `get_options_snapshot` tool call.
@@ -661,10 +780,14 @@ pub struct GetOptionsSnapshot {
     allowed_symbol: Option<String>,
     #[serde(skip)]
     target_date: Option<String>,
+    /// Prefetched context for replay; takes precedence over the live provider.
+    #[serde(skip)]
+    context: Option<OptionsToolContext>,
 }
 
 impl GetOptionsSnapshot {
-    /// Create a fully-scoped tool for a specific symbol and date.
+    /// Create a fully-scoped tool for a specific symbol and date, backed by a
+    /// live provider.
     #[must_use]
     pub fn scoped(
         provider: YFinanceOptionsProvider,
@@ -675,6 +798,26 @@ impl GetOptionsSnapshot {
             provider: Some(provider),
             allowed_symbol: Some(symbol.into()),
             target_date: Some(target_date.into()),
+            context: None,
+        }
+    }
+
+    /// Create a fully-scoped tool that replays a prefetched [`OptionsOutcome`]
+    /// from `context` without making any network calls.
+    ///
+    /// The `context` must have been populated via [`OptionsToolContext::store`] or
+    /// [`OptionsToolContext::new_prefilled`] before any tool calls are made.
+    #[must_use]
+    pub(crate) fn scoped_prefetched(
+        symbol: impl Into<String>,
+        target_date: impl Into<String>,
+        context: OptionsToolContext,
+    ) -> Self {
+        Self {
+            provider: None,
+            allowed_symbol: Some(symbol.into()),
+            target_date: Some(target_date.into()),
+            context: Some(context),
         }
     }
 }
@@ -745,48 +888,29 @@ impl Tool for GetOptionsSnapshot {
             });
         }
 
-        let provider = self.provider.as_ref().ok_or_else(|| {
-            TradingError::Config(anyhow::anyhow!(
+        // Precedence:
+        // 1. Prefetched context (replay path) — no network call.
+        // 2. Live provider — fetch from Yahoo Finance.
+        // 3. Neither set — return Config error.
+        let outcome = if let Some(ctx) = &self.context {
+            // load() returns SchemaViolation if the context is empty.
+            let arc = ctx.load().await?;
+            (*arc).clone()
+        } else if let Some(provider) = &self.provider {
+            let symbol =
+                Symbol::Equity(crate::domain::Ticker::parse(&args.symbol).map_err(|e| {
+                    TradingError::SchemaViolation {
+                        message: format!("invalid ticker {}: {e}", args.symbol),
+                    }
+                })?);
+            provider.fetch_snapshot(&symbol, &args.target_date).await?
+        } else {
+            return Err(TradingError::Config(anyhow::anyhow!(
                 "YFinanceOptionsProvider not set on GetOptionsSnapshot tool"
-            ))
-        })?;
+            )));
+        };
 
-        let symbol = Symbol::Equity(crate::domain::Ticker::parse(&args.symbol).map_err(|e| {
-            TradingError::SchemaViolation {
-                message: format!("invalid ticker {}: {e}", args.symbol),
-            }
-        })?);
-
-        let outcome = provider.fetch_snapshot(&symbol, &args.target_date).await?;
-
-        // Serialize and inject a human-readable `reason` for non-Snapshot variants.
-        let mut val =
-            serde_json::to_value(&outcome).map_err(|e| TradingError::SchemaViolation {
-                message: format!("failed to serialize OptionsOutcome: {e}"),
-            })?;
-
-        if let serde_json::Value::Object(ref mut map) = val {
-            let reason = match &outcome {
-                OptionsOutcome::NoListedInstrument => {
-                    Some("this symbol has no listed options on Yahoo")
-                }
-                OptionsOutcome::SparseChain => {
-                    Some("options exist but no usable contracts within \u{b1}20% of spot")
-                }
-                OptionsOutcome::HistoricalRun => Some(
-                    "target_date is not market-local US/Eastern today; live options intentionally skipped",
-                ),
-                OptionsOutcome::MissingSpot => {
-                    Some("no underlying close price available for target_date")
-                }
-                OptionsOutcome::Snapshot(_) => None,
-            };
-            if let Some(r) = reason {
-                map.insert("reason".to_owned(), serde_json::Value::String(r.to_owned()));
-            }
-        }
-
-        Ok(val)
+        serialize_options_outcome_for_tool(&outcome)
     }
 }
 
@@ -887,6 +1011,127 @@ mod tests {
     fn provider_with_stub(stub: StubbedFinancialResponses) -> YFinanceOptionsProvider {
         let client = YFinanceClient::with_stubbed_financials(stub);
         YFinanceOptionsProvider::new(client)
+    }
+
+    fn sample_snapshot() -> OptionsOutcome {
+        use crate::data::traits::options::{IvTermPoint, NearTermStrike, OptionsSnapshot};
+        OptionsOutcome::Snapshot(OptionsSnapshot {
+            spot_price: 150.0,
+            atm_iv: 0.29,
+            iv_term_structure: vec![IvTermPoint {
+                expiration: "2030-01-18".to_owned(),
+                atm_iv: 0.29,
+            }],
+            put_call_volume_ratio: 0.8,
+            put_call_oi_ratio: 1.1,
+            max_pain_strike: 150.0,
+            near_term_expiration: "2030-01-18".to_owned(),
+            near_term_strikes: vec![NearTermStrike {
+                strike: 150.0,
+                call_iv: Some(0.30),
+                put_iv: Some(0.28),
+                call_volume: Some(100),
+                put_volume: Some(80),
+                call_oi: Some(500),
+                put_oi: Some(400),
+            }],
+        })
+    }
+
+    // ── OptionsToolContext tests ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn options_tool_context_loads_prefetched_outcome() {
+        let ctx = OptionsToolContext::new();
+        ctx.store(OptionsOutcome::HistoricalRun)
+            .await
+            .expect("store once");
+        assert_eq!(
+            *ctx.load().await.expect("load stored outcome"),
+            OptionsOutcome::HistoricalRun
+        );
+    }
+
+    #[tokio::test]
+    async fn options_tool_context_store_write_once_rejects_second_write() {
+        let ctx = OptionsToolContext::new();
+        ctx.store(OptionsOutcome::HistoricalRun)
+            .await
+            .expect("first store must succeed");
+        let result = ctx.store(OptionsOutcome::MissingSpot).await;
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_options_snapshot_replays_prefetched_snapshot_without_refetch() {
+        let ctx = OptionsToolContext::new();
+        ctx.store(sample_snapshot()).await.unwrap();
+
+        let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
+        let result = rig::tool::Tool::call(
+            &tool,
+            OptionsSnapshotArgs {
+                symbol: "AAPL".to_owned(),
+                target_date: today_eastern(),
+            },
+        )
+        .await
+        .expect("prefetched replay should succeed");
+
+        assert_eq!(result["kind"], "snapshot");
+    }
+
+    #[tokio::test]
+    async fn get_options_snapshot_replays_prefetched_historical_run_with_reason() {
+        let ctx = OptionsToolContext::new();
+        ctx.store(OptionsOutcome::HistoricalRun).await.unwrap();
+
+        let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", yesterday_eastern(), ctx.clone());
+        let result = rig::tool::Tool::call(
+            &tool,
+            OptionsSnapshotArgs {
+                symbol: "AAPL".to_owned(),
+                target_date: yesterday_eastern(),
+            },
+        )
+        .await
+        .expect("prefetched replay should succeed");
+
+        assert_eq!(result["kind"], "historical_run");
+        assert!(result.get("reason").is_some());
+    }
+
+    #[tokio::test]
+    async fn get_options_snapshot_replay_is_idempotent_across_multiple_calls() {
+        // The LLM may invoke get_options_snapshot more than once in a run.
+        // load() must be multi-read (not consuming): calling Tool::call() twice must both succeed
+        // and return identical output.
+        let ctx = OptionsToolContext::new();
+        ctx.store(sample_snapshot()).await.unwrap();
+
+        let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
+        let result1 = rig::tool::Tool::call(
+            &tool,
+            OptionsSnapshotArgs {
+                symbol: "AAPL".to_owned(),
+                target_date: today_eastern(),
+            },
+        )
+        .await
+        .expect("first call should succeed");
+        let result2 = rig::tool::Tool::call(
+            &tool,
+            OptionsSnapshotArgs {
+                symbol: "AAPL".to_owned(),
+                target_date: today_eastern(),
+            },
+        )
+        .await
+        .expect("second call should succeed");
+        assert_eq!(result1, result2, "replay must be idempotent");
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────
@@ -1438,6 +1683,72 @@ mod tests {
             outcome_yesterday,
             OptionsOutcome::HistoricalRun,
             "yesterday's US/Eastern date should return HistoricalRun"
+        );
+    }
+
+    // ── serialize_options_outcome_for_tool unit tests ────────────────────
+
+    #[test]
+    fn serialize_options_outcome_snapshot_has_no_reason() {
+        let outcome = sample_snapshot();
+        let val = serialize_options_outcome_for_tool(&outcome).expect("serialization must succeed");
+        assert_eq!(val["kind"], "snapshot");
+        assert!(
+            val.get("reason").is_none(),
+            "Snapshot must not have an injected reason field: {val}"
+        );
+    }
+
+    #[test]
+    fn serialize_options_outcome_no_listed_instrument_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::NoListedInstrument)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "no_listed_instrument");
+        assert_eq!(val["reason"], "this symbol has no listed options on Yahoo");
+    }
+
+    #[test]
+    fn serialize_options_outcome_sparse_chain_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::SparseChain)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "sparse_chain");
+        assert!(
+            val.get("reason").is_some(),
+            "SparseChain must have a reason"
+        );
+    }
+
+    #[test]
+    fn serialize_options_outcome_historical_run_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::HistoricalRun)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "historical_run");
+        assert!(
+            val["reason"].as_str().unwrap().contains("market-local"),
+            "HistoricalRun reason should explain the date mismatch: {val}"
+        );
+    }
+
+    #[test]
+    fn serialize_options_outcome_missing_spot_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::MissingSpot)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "missing_spot");
+        assert!(
+            val.get("reason").is_some(),
+            "MissingSpot must have a reason"
+        );
+    }
+
+    // ── OptionsToolContext::load empty-context test ──────────────────────
+
+    #[tokio::test]
+    async fn options_tool_context_load_fails_on_empty_context() {
+        let ctx = OptionsToolContext::new();
+        let result = ctx.load().await;
+        assert!(
+            matches!(result.unwrap_err(), TradingError::SchemaViolation { .. }),
+            "load() on an empty context must return SchemaViolation"
         );
     }
 }
