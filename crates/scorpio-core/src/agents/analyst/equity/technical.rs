@@ -43,10 +43,11 @@ use super::common::{
 ///
 /// This is **not** the persisted type — it contains only the fields the model
 /// can meaningfully fill in. `options_context` is intentionally absent: it is a
-/// Rust-side artifact produced by prefetching, not model output. After parsing,
-/// [`assemble_technical_data`] merges this response with the prefetched
-/// `options_context` to produce the final [`TechnicalData`] that gets written to
-/// `TradingState`.
+/// Rust-side artifact produced by prefetching, not model output. `options_summary`
+/// is optional short-form interpretation, not a transport for raw tool JSON.
+/// After parsing, [`assemble_technical_data`] merges this response with the
+/// prefetched `options_context` to produce the final [`TechnicalData`] that gets
+/// written to `TradingState`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 struct TechnicalAnalystResponse {
     rsi: Option<f64>,
@@ -94,7 +95,7 @@ fn parse_technical_response(json_str: &str) -> Result<TechnicalAnalystResponse, 
 /// `options_summary` is only preserved when `options_context` is
 /// `Some(TechnicalOptionsContext::Available { outcome: OptionsOutcome::Snapshot(_) })`.
 /// In all other cases (no context, fetch failed, historical run, etc.) it is
-/// cleared because the LLM had no valid snapshot to summarize.
+/// cleared because the LLM had no live snapshot to interpret.
 fn assemble_technical_data(
     response: TechnicalAnalystResponse,
     options_context: Option<TechnicalOptionsContext>,
@@ -179,13 +180,13 @@ pub(crate) fn build_technical_system_prompt(
     };
 
     let options_summary_field_note = if options_tool_available {
-        "- `options_summary` — omit entirely (or use `null`) when `get_options_snapshot` is unavailable, returns a non-snapshot kind (historical_run, sparse_chain, no_listed_instrument, missing_spot), or was not called; include only when a live snapshot with `\"kind\": \"snapshot\"` is returned"
+        "- `options_summary` — a brief interpretation of the live snapshot; omit entirely (or use `null`) when `get_options_snapshot` is unavailable, returns a non-snapshot kind (historical_run, sparse_chain, no_listed_instrument, missing_spot), or was not called"
     } else {
         "- `options_summary` — omit entirely (use `null`); options data is not available for this run"
     };
 
     let options_instructions_note = if options_tool_available {
-        "8. If `get_options_snapshot` returns a live snapshot (`\"kind\": \"snapshot\"`), serialize the full tool output as a JSON string and place it in `options_summary`. Do not interpret it or summarize it — store the raw JSON string. If the tool is unavailable or returns any non-snapshot kind, omit `options_summary` from your output."
+        "8. If `get_options_snapshot` returns a live snapshot (`\"kind\": \"snapshot\"`), write a brief interpretation in `options_summary` using only the scalar snapshot fields already surfaced to you. Do not copy raw tool JSON into `options_summary`. If the tool is unavailable or returns any non-snapshot kind, omit `options_summary` from your output."
     } else {
         "8. Options data is not available for this run. Do not call any options tool and do not populate `options_summary`."
     };
@@ -228,7 +229,7 @@ fn prepare_options_runtime(
     symbol: &str,
     target_date: &str,
 ) -> PreparedOptionsRuntime {
-    use crate::data::OptionsToolContext;
+    use crate::data::yfinance::options::OptionsToolContext;
     use crate::providers::factory::sanitize_error_summary;
 
     match prefetched {
@@ -409,6 +410,9 @@ fn validate_technical(response: &TechnicalAnalystResponse) -> Result<(), Trading
         });
     }
     validate_summary_content("TechnicalAnalyst", &response.summary)?;
+    if let Some(options_summary) = response.options_summary.as_deref() {
+        validate_summary_content("TechnicalAnalyst options_summary", options_summary)?;
+    }
     if let Some(rsi) = response.rsi
         && !(0.0..=100.0).contains(&rsi)
     {
@@ -1264,6 +1268,14 @@ mod tests {
             prompt.contains("get_options_snapshot"),
             "prompt must mention get_options_snapshot when tool is available: {prompt}"
         );
+        assert!(
+            prompt.contains("brief interpretation") || prompt.contains("concise interpretation"),
+            "prompt must describe options_summary as an interpretation, not raw JSON: {prompt}"
+        );
+        assert!(
+            !prompt.contains("serialize the full tool output as a JSON string"),
+            "prompt must not instruct the model to copy raw tool JSON into options_summary: {prompt}"
+        );
     }
 
     #[test]
@@ -1494,5 +1506,28 @@ mod tests {
             data.options_summary.is_some(),
             "Snapshot outcome must preserve options_summary through assembly"
         );
+    }
+
+    #[test]
+    fn validate_technical_rejects_control_chars_in_options_summary() {
+        let response = TechnicalAnalystResponse {
+            rsi: Some(52.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "Moderate bullish trend.".to_owned(),
+            options_summary: Some("bad\u{0000}summary".to_owned()),
+        };
+
+        let err = validate_technical(&response).expect_err("control chars must be rejected");
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
     }
 }
