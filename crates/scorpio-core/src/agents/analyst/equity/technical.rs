@@ -111,15 +111,9 @@ fn assemble_technical_data(
     );
 
     let outcome_kind_str = match &options_context {
-        Some(TechnicalOptionsContext::Available { outcome }) => match outcome {
-            OptionsOutcome::Snapshot(_) => "snapshot",
-            OptionsOutcome::HistoricalRun => "historical_run",
-            OptionsOutcome::SparseChain => "sparse_chain",
-            OptionsOutcome::NoListedInstrument => "no_listed_instrument",
-            OptionsOutcome::MissingSpot => "missing_spot",
-        },
-        Some(TechnicalOptionsContext::FetchFailed { .. }) => "fetch_failed",
-        None => "none",
+        Some(TechnicalOptionsContext::Available { outcome }) => outcome.to_string(),
+        Some(TechnicalOptionsContext::FetchFailed { .. }) => "fetch_failed".to_owned(),
+        None => "none".to_owned(),
     };
 
     if !keep_options_summary && response.options_summary.is_some() {
@@ -1416,6 +1410,53 @@ mod tests {
         } else {
             panic!("expected FetchFailed context");
         }
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_for_fetch_failed() {
+        let response = sample_technical_response_with_options_summary();
+        assert!(
+            response.options_summary.is_some(),
+            "test setup: response must have options_summary set"
+        );
+
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::FetchFailed {
+                reason: "connection refused".to_owned(),
+            }),
+            "AAPL",
+        );
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared when context is FetchFailed"
+        );
+        assert!(
+            matches!(
+                data.options_context,
+                Some(TechnicalOptionsContext::FetchFailed { .. })
+            ),
+            "FetchFailed context must be preserved"
+        );
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_for_none_context() {
+        let response = sample_technical_response_with_options_summary();
+        assert!(
+            response.options_summary.is_some(),
+            "test setup: response must have options_summary set"
+        );
+
+        let data = assemble_technical_data(response, None, "AAPL");
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared when options_context is None (legacy/no-options run)"
+        );
+        assert!(
+            data.options_context.is_none(),
+            "None context must remain None"
+        );
     }
 
     #[test]
