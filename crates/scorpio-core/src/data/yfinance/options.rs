@@ -693,8 +693,7 @@ impl OptionsToolContext {
             .await
             .clone()
             .ok_or_else(|| TradingError::SchemaViolation {
-                message: "options context is empty; options outcome was not prefetched"
-                    .to_owned(),
+                message: "options context is empty; options outcome was not prefetched".to_owned(),
             })
     }
 }
@@ -1032,12 +1031,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn options_tool_context_store_write_once_rejects_second_write() {
+        let ctx = OptionsToolContext::new();
+        ctx.store(OptionsOutcome::HistoricalRun)
+            .await
+            .expect("first store must succeed");
+        let result = ctx.store(OptionsOutcome::MissingSpot).await;
+        assert!(matches!(
+            result.unwrap_err(),
+            TradingError::SchemaViolation { .. }
+        ));
+    }
+
+    #[tokio::test]
     async fn get_options_snapshot_replays_prefetched_snapshot_without_refetch() {
         let ctx = OptionsToolContext::new();
         ctx.store(sample_snapshot()).await.unwrap();
 
-        let tool =
-            GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
+        let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
         let result = rig::tool::Tool::call(
             &tool,
             OptionsSnapshotArgs {
@@ -1056,8 +1067,7 @@ mod tests {
         let ctx = OptionsToolContext::new();
         ctx.store(OptionsOutcome::HistoricalRun).await.unwrap();
 
-        let tool =
-            GetOptionsSnapshot::scoped_prefetched("AAPL", yesterday_eastern(), ctx.clone());
+        let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", yesterday_eastern(), ctx.clone());
         let result = rig::tool::Tool::call(
             &tool,
             OptionsSnapshotArgs {
@@ -1080,8 +1090,7 @@ mod tests {
         let ctx = OptionsToolContext::new();
         ctx.store(sample_snapshot()).await.unwrap();
 
-        let tool =
-            GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
+        let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
         let result1 = rig::tool::Tool::call(
             &tool,
             OptionsSnapshotArgs {

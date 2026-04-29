@@ -27,7 +27,7 @@ use crate::{
         CalculateMacd, CalculateRsi,
     },
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
-    state::{AgentTokenUsage, MacdValues, TechnicalData, TradingState, TechnicalOptionsContext},
+    state::{AgentTokenUsage, MacdValues, TechnicalData, TechnicalOptionsContext, TradingState},
 };
 
 use super::common::{
@@ -70,9 +70,7 @@ struct TechnicalAnalystResponse {
 ///
 /// Validates that `macd` is an object (or null), never a scalar — the same
 /// guard previously applied when parsing directly into [`TechnicalData`].
-fn parse_technical_response(
-    json_str: &str,
-) -> Result<TechnicalAnalystResponse, TradingError> {
+fn parse_technical_response(json_str: &str) -> Result<TechnicalAnalystResponse, TradingError> {
     let value: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| TradingError::SchemaViolation {
             message: format!("TechnicalAnalyst: failed to parse LLM output: {e}"),
@@ -126,7 +124,9 @@ fn assemble_technical_data(
         // TODO(task-4): emit tracing::warn! with symbol, outcome_kind, reason="cleared_non_snapshot"
         // when dropping a non-empty options_summary. Symbol is available in run() but not here;
         // Task 4 adds the warn! when wiring assemble_technical_data into the runtime prefetch flow.
-        options_summary: keep_options_summary.then_some(response.options_summary).flatten(),
+        options_summary: keep_options_summary
+            .then_some(response.options_summary)
+            .flatten(),
         options_context,
     }
 }
@@ -831,7 +831,8 @@ mod tests {
             "summary": "Momentum is weakening and MACD is negative."
         }"#;
 
-        let err = parse_technical_response(json).expect_err("scalar MACD should not silently parse");
+        let err =
+            parse_technical_response(json).expect_err("scalar MACD should not silently parse");
 
         match err {
             TradingError::SchemaViolation { message } => {
@@ -1096,7 +1097,10 @@ mod tests {
         }"#;
 
         let data = parse_technical_response(json).expect("response should parse");
-        assert_eq!(data.options_summary.as_deref(), Some("Near-term IV remains elevated into earnings."));
+        assert_eq!(
+            data.options_summary.as_deref(),
+            Some("Near-term IV remains elevated into earnings.")
+        );
     }
 
     #[test]
