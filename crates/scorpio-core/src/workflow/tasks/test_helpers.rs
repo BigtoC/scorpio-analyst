@@ -786,6 +786,7 @@ impl graph_flow::Task for StubFundManagerTask {
 ///
 /// Use when a test needs specific `options_context` values; the default
 /// neutral fixture from [`StubAnalystChild::technical`] has `options_context: None`.
+#[derive(Debug)]
 pub struct CustomTechnicalAnalystChild {
     data: TechnicalData,
 }
