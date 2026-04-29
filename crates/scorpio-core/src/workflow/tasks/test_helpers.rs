@@ -787,12 +787,14 @@ impl graph_flow::Task for StubFundManagerTask {
 /// Use when a test needs specific `options_context` values; the default
 /// neutral fixture from [`StubAnalystChild::technical`] has `options_context: None`.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CustomTechnicalAnalystChild {
     data: TechnicalData,
 }
 
 impl CustomTechnicalAnalystChild {
     /// Wrap `data` in an `Arc`-boxed task ready for use in a [`FanOutTask`].
+    #[allow(dead_code)]
     pub fn new(data: TechnicalData) -> Arc<Self> {
         Arc::new(Self { data })
     }
@@ -877,6 +879,7 @@ pub fn replace_with_stubs(
 /// Calls [`replace_with_stubs`] first, then replaces the analyst fan-out with a
 /// custom child that returns `data`. Use in tests that need specific
 /// `options_context` values — the default neutral fixture has `options_context: None`.
+#[allow(dead_code)]
 pub fn replace_with_stubs_using_technical(
     pipeline: &crate::workflow::TradingPipeline,
     snapshot_store: Arc<SnapshotStore>,
