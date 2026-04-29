@@ -1456,10 +1456,15 @@ mod tests {
 
         assert_eq!(
             prepared.options_context,
-            Some(TechnicalOptionsContext::Available { outcome: outcome.clone() }),
+            Some(TechnicalOptionsContext::Available {
+                outcome: outcome.clone()
+            }),
             "prepare_options_runtime must record the exact prefetched outcome"
         );
-        assert!(prepared.tool.is_some(), "a Snapshot outcome must bind a tool");
+        assert!(
+            prepared.tool.is_some(),
+            "a Snapshot outcome must bind a tool"
+        );
 
         let response = TechnicalAnalystResponse {
             rsi: None,

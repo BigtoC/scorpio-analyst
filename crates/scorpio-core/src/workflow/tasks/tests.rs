@@ -2418,7 +2418,12 @@ async fn run_analyst_sync_with_technical(technical_data: TechnicalData) -> Vec<S
         common::ANALYST_TECHNICAL,
     ] {
         ctx.set(
-            format!("{}.{}.{}", common::ANALYST_PREFIX, analyst_key, common::OK_SUFFIX),
+            format!(
+                "{}.{}.{}",
+                common::ANALYST_PREFIX,
+                analyst_key,
+                common::OK_SUFFIX
+            ),
             true,
         )
         .await;
@@ -2467,11 +2472,19 @@ async fn run_analyst_sync_with_technical(technical_data: TechnicalData) -> Vec<S
     )
     .await
     .unwrap();
-    write_prefixed_result(&ctx, common::ANALYST_PREFIX, common::ANALYST_TECHNICAL, &technical_data)
-        .await
-        .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &technical_data,
+    )
+    .await
+    .unwrap();
 
-    AnalystSyncTask::new(store).run(ctx.clone()).await.expect("task should succeed");
+    AnalystSyncTask::new(store)
+        .run(ctx.clone())
+        .await
+        .expect("task should succeed");
 
     let recovered = deserialize_state_from_context(&ctx).await.unwrap();
     recovered
@@ -2505,7 +2518,10 @@ async fn technical_evidence_includes_options_context_dataset_when_options_availa
         }),
     })
     .await;
-    assert!(datasets.contains(&"ohlcv".to_owned()), "ohlcv must always be present");
+    assert!(
+        datasets.contains(&"ohlcv".to_owned()),
+        "ohlcv must always be present"
+    );
     assert!(
         datasets.contains(&"options_context".to_owned()),
         "options_context must be in datasets for Available(HistoricalRun), got: {datasets:?}"
@@ -2541,7 +2557,10 @@ async fn technical_evidence_includes_options_context_dataset_when_options_availa
         }),
     })
     .await;
-    assert!(datasets.contains(&"ohlcv".to_owned()), "ohlcv must always be present");
+    assert!(
+        datasets.contains(&"ohlcv".to_owned()),
+        "ohlcv must always be present"
+    );
     assert!(
         datasets.contains(&"options_context".to_owned()),
         "options_context must be in datasets for Available(Snapshot), got: {datasets:?}"

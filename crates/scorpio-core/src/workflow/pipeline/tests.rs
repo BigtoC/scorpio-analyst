@@ -11,7 +11,8 @@ use crate::{
         TechnicalOptionsContext, TradingState,
     },
     workflow::{
-        SnapshotStore, context_bridge::write_prefixed_result,
+        SnapshotStore,
+        context_bridge::write_prefixed_result,
         tasks::test_helpers::{replace_with_stubs, replace_with_stubs_using_technical},
     },
 };
@@ -1129,8 +1130,8 @@ fn make_pipeline(db_name: &'static str) -> (crate::workflow::TradingPipeline, te
     };
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join(db_name);
-    let store = futures::executor::block_on(SnapshotStore::new(Some(&db_path)))
-        .expect("snapshot store");
+    let store =
+        futures::executor::block_on(SnapshotStore::new(Some(&db_path))).expect("snapshot store");
     let pipeline = crate::workflow::TradingPipeline::new(
         config,
         crate::data::FinnhubClient::for_test(),
@@ -1182,8 +1183,12 @@ async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
         }),
     };
 
-    replace_with_stubs_using_technical(&pipeline, Arc::clone(&pipeline.snapshot_store), technical_data)
-        .expect("stub install must succeed");
+    replace_with_stubs_using_technical(
+        &pipeline,
+        Arc::clone(&pipeline.snapshot_store),
+        technical_data,
+    )
+    .expect("stub install must succeed");
 
     let final_state = pipeline
         .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
@@ -1194,7 +1199,10 @@ async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
         .technical_indicators()
         .expect("technical_indicators must be present after a successful cycle");
     assert!(
-        matches!(technical.options_context, Some(TechnicalOptionsContext::Available { .. })),
+        matches!(
+            technical.options_context,
+            Some(TechnicalOptionsContext::Available { .. })
+        ),
         "Available options_context must survive the full pipeline cycle"
     );
 
@@ -1233,8 +1241,12 @@ async fn run_analysis_cycle_preserves_fetch_failed_options_context_and_coherent_
         }),
     };
 
-    replace_with_stubs_using_technical(&pipeline, Arc::clone(&pipeline.snapshot_store), technical_data)
-        .expect("stub install must succeed");
+    replace_with_stubs_using_technical(
+        &pipeline,
+        Arc::clone(&pipeline.snapshot_store),
+        technical_data,
+    )
+    .expect("stub install must succeed");
 
     let final_state = pipeline
         .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))

@@ -823,7 +823,10 @@ impl Task for AnalystSyncTask {
                     let mut datasets = vec!["ohlcv".to_owned()];
                     // `fetched_at` is a coarse cycle anchor: options prefetch and OHLCV
                     // tool calls are temporally decoupled within the technical run.
-                    if matches!(data.options_context, Some(TechnicalOptionsContext::Available { .. })) {
+                    if matches!(
+                        data.options_context,
+                        Some(TechnicalOptionsContext::Available { .. })
+                    ) {
                         datasets.push("options_context".to_owned());
                     }
                     state.set_evidence_technical(EvidenceRecord {
