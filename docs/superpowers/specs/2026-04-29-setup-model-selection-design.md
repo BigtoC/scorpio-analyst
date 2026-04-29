@@ -54,7 +54,9 @@ The key product decisions are:
 | Listing failure | Skip listing for that provider and use manual entry | Approved user scope; listing is opportunistic |
 | Manual entry option | Always append `Enter model manually` last | Approved user scope; supports newly released or private models |
 | Returned model list | Show every returned model ID | Approved user scope |
+| Duplicate returned model IDs | Preserve as returned | Matches the approved rule to show every returned model ID without curation |
 | Saved model behavior | If listed, show first; otherwise default to manual with prefilled text | Approved user scope |
+| Saved provider fallback | If unsupported or ineligible, ignore it and default to the first eligible provider | Keeps setup usable as the recovery path for stale configs |
 | Refresh behavior | None | Approved user scope |
 
 ## Architecture
@@ -118,6 +120,11 @@ This keeps the crate boundary clean:
 - Remove `ProvidersConfig.copilot` and any related defaults/helpers.
 - Keep provider-name validation accurate for the temporary supported set: `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`.
 
+`crates/scorpio-core/src/settings.rs`
+
+- Keep `PartialConfig` provider/model routing fields as raw optional strings with no provider-name validation.
+- This lets `scorpio setup` continue to load stale `copilot` selections from `~/.scorpio-analyst/config.toml` and overwrite them through the normal wizard path.
+
 `crates/scorpio-core/src/rate_limit.rs`
 
 - Remove the Copilot rate-limiter slot and related tests.
@@ -172,6 +179,8 @@ The module's responsibilities are:
   - API key
   - optional `base_url`
 - convert provider-specific model metadata into ordered `Vec<String>` based on model IDs
+- preserve provider/API order exactly, including duplicate IDs if the upstream provider returns them
+- normalize an empty successful provider response into `Unavailable { reason }` rather than presenting an empty picker
 - sanitize provider-specific discovery errors before exposing them to CLI callers
 - short-circuit `openrouter` into `ManualOnly` without making a network request
 
@@ -211,7 +220,12 @@ For each tier:
 
 Manual text entry remains validated exactly as today: the model name must not be empty.
 
-If the user changes providers, the model from the previously selected provider is not silently carried across. Manual prefill only uses the current tier's saved model when it is still relevant to the provider being configured.
+Saved-provider fallback is explicit:
+
+- if the saved provider is still eligible, keep using it as the default provider selection
+- if the saved provider is unsupported after the Copilot removal, or is no longer eligible because no key is present, ignore it and default the provider prompt to the first eligible provider
+- if the user changes providers, the model from the previously selected provider is not silently carried across
+- manual prefill only uses the current tier's saved model when that saved model belongs to the currently selected provider path
 
 ### Discovery bootstrap inside setup
 
@@ -232,6 +246,7 @@ This keeps the existing `inquire`-driven prompt flow intact and preserves the ap
 - Document that listed providers can present a fetched model menu plus `Enter model manually`.
 - Document that `openrouter` remains manual-only.
 - Remove or replace any statements that imply custom Copilot is still available.
+- Limit documentation changes in this slice to `README.md`; no historical design docs or `.env.example` updates are required.
 
 No `.env.example` change is required for Copilot because the current custom path used `SCORPIO_COPILOT_CLI_PATH`, not an API key entry in `.env.example`.
 
@@ -259,7 +274,9 @@ No `.env.example` change is required for Copilot because the current custom path
 ### Temporary Copilot removal
 
 - `copilot` is intentionally not a supported provider after this change.
-- Existing configs that still select `copilot` will fail provider-name validation until the follow-up task reintroduces Copilot through official `rig` support.
+- `scorpio analyze` and any other runtime config load that still resolves `copilot` will fail with the normal unsupported-provider validation error until the user reruns setup or edits config.
+- `scorpio setup` remains the intended recovery path for stale Copilot configs because it loads `PartialConfig`, not the validated runtime `Config` shape.
+- A Copilot-only existing config is recoverable through setup: step 3 will require the user to add at least one supported keyed provider before step 4 can continue.
 - This is an explicit product trade-off in this spec, not an accidental regression.
 
 ### Model discovery failures
@@ -268,6 +285,13 @@ No `.env.example` change is required for Copilot because the current custom path
 - `Unavailable` reasons should be sanitized before being shown in CLI text.
 - Discovery must not leak API keys or raw sensitive response bodies.
 - A provider discovery failure must not affect other providers' listings.
+- A provider response that succeeds but returns zero models is treated as `Unavailable`, with a user-facing message that the provider returned no models.
+
+The CLI text contract should stay stable enough for tests:
+
+- `Model listing is manual-only for openrouter; enter the model manually.`
+- `Could not load models for <provider>; enter the model manually.`
+- `No models were returned for <provider>; enter the model manually.`
 
 ### Setup step behavior
 
