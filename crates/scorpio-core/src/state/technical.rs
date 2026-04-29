@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use crate::data::traits::options::OptionsOutcome;
 
 // SCHEMA EVOLUTION WARNING: `TechnicalOptionsContext::Available { outcome }` embeds
-// `OptionsOutcome` directly. Adding a new `OptionsOutcome` variant in a future PR is a
-// backward-incompatible snapshot change (serde unknown-tag deserialization fails for
-// externally-tagged enums). Any future variant addition MUST bump `THESIS_MEMORY_SCHEMA_VERSION`.
+// `OptionsOutcome` directly. `OptionsOutcome` uses `#[serde(tag = "kind")]` (internally-tagged),
+// so adding a new variant is a backward-incompatible snapshot change — serde's
+// internally-tagged deserialization rejects unknown tags. Any future variant addition
+// MUST bump `THESIS_MEMORY_SCHEMA_VERSION`.
 
 /// Persisted outcome of the options-snapshot fetch performed during the
 /// Technical Analyst phase. Carried forward so downstream agents can consume
