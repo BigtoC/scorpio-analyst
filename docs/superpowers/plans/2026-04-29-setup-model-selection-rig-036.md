@@ -18,7 +18,7 @@
 - Use `@superpowers:subagent-driven-development` for execution and `@superpowers:verification-before-completion` before declaring the work done.
 - CI uses `cargo nextest`, not `cargo test`. Use `cargo nextest` for every targeted test run in this plan.
 - Confirm `protoc --version` prints a version string before the first workspace build. If it is missing on macOS, install it with `brew install protobuf`.
-- Start with the `rig-core 0.36.0` bump only. If `graph-flow` is incompatible, stop and wait for the separate user-owned patch instead of mixing that work into this change.
+- Start with the `rig-core 0.36.0` bump only, gated by Task 1 Step 0's feasibility spike. If `cargo check --workspace --all-features --locked` after the bump fails with errors pointing into `graph-flow` rather than into Scorpio source, stop, revert with `git checkout HEAD -- Cargo.toml Cargo.lock`, hand off the `graph-flow` patch upstream, and re-open this plan after a compatible `graph-flow` release ships. Do not partially execute Task 1 and leave the workspace broken on the feature branch. Note: the workspace currently pins `rig-core 0.35.0` (not `0.32`); the actual delta is 0.35 → 0.36, and `graph-flow 0.5.1`'s manifest declares `rig-core = "0.35.0"`, which Cargo resolves as `>=0.35.0,<0.36.0` and will not unify with `0.36.0`.
 - Do not preserve the custom ACP Copilot path behind feature flags, compatibility wrappers, or dead code. Remove it completely.
 - Do not add official `rig` Copilot support in this plan. That is the next task.
 - Keep `openrouter` manual-only in setup even if upstream adds listing support.
@@ -60,6 +60,23 @@
 - Modify: `crates/scorpio-core/src/config.rs`
 - Modify: `crates/scorpio-core/src/settings.rs`
 - Modify: `crates/scorpio-core/src/rate_limit.rs`
+
+- [ ] **Step 0: Run the graph-flow feasibility spike before any other code changes**
+
+Verify the workspace can compile against `rig-core 0.36.0` end-to-end before touching any other code. This guards against the `graph-flow 0.5.1` × `rig-core 0.36.0` incompatibility that would otherwise be discovered only after Tasks 1-2 commit destructive Copilot deletions:
+
+```bash
+cargo update -p rig-core --precise 0.36.0
+cargo check --workspace --all-features --locked
+```
+
+Expected outcomes:
+
+- `cargo check` succeeds. Continue.
+- `cargo check` fails with errors pointing only into Scorpio source (uses of `ProviderId::Copilot`, `ProviderClient::Copilot`, `preflight_copilot_if_configured`, etc.). These are exactly the cleanups Tasks 1-2 will perform. Continue.
+- `cargo check` fails with errors pointing into `graph-flow` (e.g. trait-bound mismatches inside `graph_flow::context` or `graph_flow::executor`, or duplicate-version errors for `rig-core` re-exports). STOP. Revert with `git checkout HEAD -- Cargo.toml Cargo.lock` and abandon this plan until a compatible `graph-flow` release ships. Do not proceed to Step 1.
+
+This step intentionally leaves `Cargo.toml`/`Cargo.lock` modified on disk if the spike succeeds; Step 3 below will rewrite the same files in a more deliberate form.
 
 - [ ] **Step 1: Write the failing config and recovery tests**
 
@@ -115,6 +132,27 @@ deep_thinking_model = "o3"
     assert_eq!(loaded.quick_thinking_model.as_deref(), Some("claude-haiku"));
     assert_eq!(loaded.deep_thinking_provider.as_deref(), Some("openai"));
 }
+
+// crates/scorpio-core/src/config.rs
+#[test]
+fn load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let (_dir, path) = write_config(
+        r#"
+[llm]
+quick_thinking_provider = "copilot"
+deep_thinking_provider = "openai"
+quick_thinking_model = "claude-haiku"
+deep_thinking_model = "o3"
+"#,
+    );
+
+    let err = Config::load_from_user_path(&path)
+        .expect_err("a config that still routes to copilot should fail to load at runtime");
+    let msg = err.to_string();
+    assert!(msg.contains("Copilot"), "expected friendly Copilot reference; got: {msg}");
+    assert!(msg.contains("scorpio setup"), "expected guidance to run setup; got: {msg}");
+}
 ```
 
 - [ ] **Step 2: Run the focused tests to verify they fail**
@@ -122,13 +160,14 @@ deep_thinking_model = "o3"
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features --locked -E 'test(deserialize_provider_name_rejects_copilot) | test(load_from_rejects_copilot_provider_name) | test(load_user_config_at_preserves_stale_copilot_routing_strings)'
+cargo nextest run -p scorpio-core --all-features --locked -E 'test(deserialize_provider_name_rejects_copilot) | test(load_from_rejects_copilot_provider_name) | test(load_user_config_at_preserves_stale_copilot_routing_strings) | test(load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot)'
 ```
 
 Expected:
 
 - `deserialize_provider_name_rejects_copilot` fails because `copilot` is still accepted.
 - `load_from_rejects_copilot_provider_name` fails because config loading still allows `copilot`.
+- `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` fails because the recovery wrapper around `Config::load_from_user_path` does not exist yet.
 - The settings regression may already pass; keep it as the recovery-path guard.
 
 - [ ] **Step 3: Bump the workspace dependency and refresh the lockfile**
@@ -196,12 +235,32 @@ let provider_rpms = [
 
 Also update any loops, helper matches, and assertions in these files that still enumerate Copilot.
 
+Add a stale-config recovery wrapper to `Config::load_from_user_path` so analysis startup degrades helpfully when an existing `~/.scorpio-analyst/config.toml` still routes to Copilot. Detect the specific deserialize error and surface a friendlier message; do not silently rewrite the on-disk file:
+
+```rust
+// crates/scorpio-core/src/config.rs
+pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Config> {
+    match Self::load_from_user_path_inner(path) {
+        Ok(cfg) => Ok(cfg),
+        Err(err) if err.to_string().contains("unknown LLM provider: \"copilot\"") => {
+            Err(anyhow::anyhow!(
+                "Your saved configuration still routes to the Copilot provider, which has been removed. \
+                 Run `scorpio setup` to update routing to a supported provider."
+            ))
+        }
+        Err(err) => Err(err),
+    }
+}
+```
+
+The exact wrapper name is not load-bearing; what matters is that runtime startup paths (`scorpio analyze`) surface a recognisable `Copilot` + `scorpio setup` message rather than a raw `unknown LLM provider` serde error. The `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` test pins this contract.
+
 - [ ] **Step 5: Re-run the targeted tests and stop if `graph-flow` blocks the upgrade**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features --locked -E 'test(deserialize_provider_name_rejects_copilot) | test(load_from_rejects_copilot_provider_name) | test(load_user_config_at_preserves_stale_copilot_routing_strings) | test(provider_rate_limiters_construction_mixed_rpms) | test(provider_id_deepseek_exposes_strings_and_missing_key_hint)'
+cargo nextest run -p scorpio-core --all-features --locked -E 'test(deserialize_provider_name_rejects_copilot) | test(load_from_rejects_copilot_provider_name) | test(load_user_config_at_preserves_stale_copilot_routing_strings) | test(load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot) | test(provider_rate_limiters_construction_mixed_rpms) | test(provider_id_deepseek_exposes_strings_and_missing_key_hint)'
 ```
 
 Expected:
@@ -209,14 +268,11 @@ Expected:
 - PASS.
 - If failures now point into `graph-flow` compatibility rather than Copilot removal, stop here and hand off the `graph-flow` patch separately before continuing this plan.
 
-- [ ] **Step 6: Commit the dependency and provider-surface cleanup**
+- [ ] **Step 6: Hold the dependency and provider-surface cleanup uncommitted**
 
-Run:
+Do not commit yet. After Task 1's edits, `cargo build --workspace` will fail because Task 2's match-arm cleanups have not landed: `providers/factory/{client.rs,agent.rs}` still reference `ProviderId::Copilot`, and `app/mod.rs` still calls `preflight_copilot_if_configured`. A commit at this point would land an unbuildable revision on the feature branch, breaking `git bisect` and per-commit CI checks.
 
-```bash
-git add Cargo.toml Cargo.lock crates/scorpio-core/src/providers/mod.rs crates/scorpio-core/src/config.rs crates/scorpio-core/src/settings.rs crates/scorpio-core/src/rate_limit.rs
-git commit -m "build(providers): bump rig-core to 0.36.0 and drop copilot config surface"
-```
+Tasks 1 and 2 commit together at the end of Task 2 (Step 5) under one message that covers both the dependency bump and the runtime deletion. Leave the changes from Steps 1-5 in the working tree and proceed directly to Task 2.
 
 ### Task 2: Delete the custom Copilot runtime and remove factory/setup wiring
 
@@ -318,7 +374,7 @@ Delete the two Copilot-only source files. Then remove:
 - the `preflight_copilot_if_configured` import/call in `crates/scorpio-core/src/app/mod.rs`
 - `SCORPIO_COPILOT_CLI_PATH` validation helpers and tests
 - `ProviderClient::Copilot` dispatch in `agent.rs`
-- Copilot-only setup health-check preflight in `steps.rs`
+- Copilot-only setup health-check preflight in `steps.rs`, including the `run_single_health_check_rejects_copilot_provider_that_fails_preflight` test and the `SCORPIO_COPILOT_CLI_PATH` env-handling helpers it relies on
 - stale “Copilot” wording in `agents/analyst/equity/common.rs`
 
 - [ ] **Step 4: Re-run targeted core and CLI slices**
@@ -328,22 +384,26 @@ Run:
 ```bash
 cargo nextest run -p scorpio-core --all-features --locked -E 'test(validate_provider_id_rejects_copilot) | test(build_agent_creates_openai_agent) | test(build_agent_creates_openrouter_agent) | test(build_agent_creates_deepseek_agent) | test(run_analysis_cycle_success_path_populates_all_phases)'
 cargo nextest run -p scorpio-cli --all-features --locked -E 'test(provider_id_display_matches_as_str) | test(run_single_health_check_requires_same_analysis_readiness_as_analyze)'
+if rg -n 'ProviderId::Copilot|copilot::|preflight_copilot_if_configured|providers\.copilot|cfg\.copilot' crates/; then exit 1; fi
 ```
 
 Expected:
 
-- Both commands PASS.
+- All three commands PASS (the `rg` grep prints no matches, so the `if` block is skipped and the shell exits 0).
 - No compile failures remain for `copilot::`, `ProviderClient::Copilot`, or `preflight_copilot_if_configured`.
 
-- [ ] **Step 5: Commit the runtime deletion**
+- [ ] **Step 5: Commit Tasks 1 and 2 atomically**
 
-Run:
+Stage every file modified by Tasks 1 + 2 plus the deletions, commit once, and verify the resulting tree compiles cleanly. This is the first commit on the branch, so every later commit must continue to compile against `cargo check`.
 
 ```bash
-git add crates/scorpio-core/src/providers/mod.rs crates/scorpio-core/src/providers/factory/mod.rs crates/scorpio-core/src/providers/factory/client.rs crates/scorpio-core/src/providers/factory/agent.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/src/agents/analyst/equity/common.rs crates/scorpio-cli/src/cli/setup/steps.rs
+git add Cargo.toml Cargo.lock crates/scorpio-core/src/providers/mod.rs crates/scorpio-core/src/config.rs crates/scorpio-core/src/settings.rs crates/scorpio-core/src/rate_limit.rs crates/scorpio-core/src/providers/factory/mod.rs crates/scorpio-core/src/providers/factory/client.rs crates/scorpio-core/src/providers/factory/agent.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/src/agents/analyst/equity/common.rs crates/scorpio-cli/src/cli/setup/steps.rs
 git rm crates/scorpio-core/src/providers/acp.rs crates/scorpio-core/src/providers/copilot.rs
-git commit -m "refactor(providers): remove custom copilot runtime"
+git commit -m "refactor(providers): bump rig-core to 0.36.0 and remove custom copilot runtime"
+cargo check --workspace --all-features --locked
 ```
+
+Expected: `cargo check` exits 0 against the just-committed tree. If it fails, the commit landed an unbuildable revision; fix forward in a follow-up commit before proceeding to Task 3.
 
 ## Chunk 2: Core Provider Discovery for Setup
 
@@ -354,7 +414,7 @@ git commit -m "refactor(providers): remove custom copilot runtime"
 
 - [ ] **Step 1: Write the failing helper tests**
 
-Add these tests before the helper exists:
+Add these tests inside the existing `#[cfg(test)] mod tests` block in `crates/scorpio-core/src/config.rs` so they pick up the existing `ENV_LOCK`, `MINIMAL_CONFIG_TOML`, and `write_config(...)` helpers. Add them before the helper exists:
 
 ```rust
 // crates/scorpio-core/src/config.rs
@@ -657,6 +717,60 @@ mod tests {
             })
         );
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn discover_setup_models_with_times_out_slow_providers_without_blocking_others() {
+        let outcomes = discover_setup_models_with(
+            [ProviderId::OpenAI, ProviderId::Anthropic],
+            |provider| async move {
+                match provider {
+                    ProviderId::OpenAI => Ok(ModelList::new(vec![Model::from_id("gpt-4o-mini")])),
+                    ProviderId::Anthropic => {
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        Ok(ModelList::new(vec![Model::from_id("claude-haiku")]))
+                    }
+                    _ => unreachable!(),
+                }
+            },
+        )
+        .await;
+
+        assert!(matches!(
+            outcomes.get(&ProviderId::OpenAI),
+            Some(ModelDiscoveryOutcome::Listed(_))
+        ));
+        let anthropic = outcomes.get(&ProviderId::Anthropic);
+        let Some(ModelDiscoveryOutcome::Unavailable { reason }) = anthropic else {
+            panic!("expected Unavailable for slow provider; got {anthropic:?}");
+        };
+        assert!(reason.contains("anthropic"));
+        assert!(reason.contains("timed out") || reason.contains("Could not load"));
+    }
+
+    #[test]
+    fn unavailable_reason_uses_fixed_template_regardless_of_upstream_error_shape() {
+        let leak_patterns = [
+            "Bearer sk-ant-secret-token leaked from upstream",
+            "x-api-key: sk-real-key was rejected",
+            "Authorization: Bearer sk-secret-key invalid",
+            "request to https://api.example.com?api_key=sk-leaked failed",
+            "raw sk-rawtoken at the start of the message",
+            "{\"error\":{\"message\":\"Invalid Authorization: Bearer sk-leaked\"}}",
+        ];
+
+        for upstream in leak_patterns {
+            let outcome = unavailable_from_error(ProviderId::OpenAI, upstream);
+            let ModelDiscoveryOutcome::Unavailable { reason } = outcome else {
+                panic!("expected unavailable outcome for upstream={upstream:?}");
+            };
+            assert_eq!(
+                reason,
+                "Could not load models for openai; enter the model manually.",
+                "reason must come from a fixed template; got {reason:?} for upstream={upstream:?}"
+            );
+            assert!(reason.len() <= 120, "reason exceeds 120-char cap: {reason:?}");
+        }
+    }
 }
 ```
 
@@ -665,7 +779,7 @@ mod tests {
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features --locked -E 'test(openrouter_returns_manual_only) | test(normalize_model_list_preserves_order_and_duplicates) | test(normalize_empty_model_list_returns_unavailable) | test(unavailable_reason_is_sanitized) | test(collect_outcomes_keeps_one_result_per_provider) | test(discover_setup_models_with_sanitizes_failures_and_preserves_successes)'
+cargo nextest run -p scorpio-core --all-features --locked -E 'test(openrouter_returns_manual_only) | test(normalize_model_list_preserves_order_and_duplicates) | test(normalize_empty_model_list_returns_unavailable) | test(unavailable_reason_is_sanitized) | test(collect_outcomes_keeps_one_result_per_provider) | test(discover_setup_models_with_sanitizes_failures_and_preserves_successes) | test(discover_setup_models_with_times_out_slow_providers_without_blocking_others) | test(unavailable_reason_uses_fixed_template_regardless_of_upstream_error_shape)'
 ```
 
 Expected: FAIL because the module and helper functions do not exist yet.
@@ -680,6 +794,7 @@ use std::collections::HashMap;
 
 use futures::future::join_all;
 use rig::client::ModelListingClient;
+use rig::model::ModelList;
 use rig::providers::{anthropic, deepseek, gemini, openai};
 
 use crate::config::{ProviderSettings, ProvidersConfig};
@@ -708,6 +823,8 @@ pub async fn discover_setup_models(
     .await
 }
 
+const DISCOVERY_TIMEOUT_SECS: u64 = 10;
+
 async fn discover_setup_models_with<I, F, Fut>(
     eligible: I,
     load: F,
@@ -717,12 +834,21 @@ where
     F: Fn(ProviderId) -> Fut + Copy,
     Fut: Future<Output = Result<ModelList, String>>,
 {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
     collect_discovery_outcomes(eligible.into_iter(), |provider| async move {
         let outcome = match provider {
             ProviderId::OpenRouter => manual_only_outcome(provider),
-            _ => match load(provider).await {
-                Ok(models) => normalize_model_list(provider, models),
-                Err(err) => unavailable_from_error(provider, &err),
+            _ => match timeout(Duration::from_secs(DISCOVERY_TIMEOUT_SECS), load(provider)).await {
+                Ok(Ok(models)) => normalize_model_list(provider, models),
+                Ok(Err(err)) => unavailable_from_error(provider, &err),
+                Err(_elapsed) => ModelDiscoveryOutcome::Unavailable {
+                    reason: format!(
+                        "Listing for {} timed out; enter the model manually.",
+                        provider.as_str()
+                    ),
+                },
             },
         };
         (provider, outcome)
@@ -739,6 +865,8 @@ Implementation notes:
 - Convert `ModelList.data.into_iter().map(|model| model.id)` into ordered `Vec<String>`.
 - If `list_models()` succeeds but returns no items, convert that to `Unavailable` with the exact CLI-facing message from the spec.
 - Keep the test seam (`discover_setup_models_with`) private to the module; it exists only so the public best-effort behavior can be tested without network calls.
+- Wrap each provider call inside `discover_setup_models_with` with `tokio::time::timeout(Duration::from_secs(DISCOVERY_TIMEOUT_SECS), load(provider))` so a single slow provider cannot stall the whole batch. Map the timeout error to `Unavailable { reason: "Listing for <provider> timed out; enter the model manually." }`. The `discover_setup_models_with_times_out_slow_providers_without_blocking_others` test pins this with `tokio::time::pause()` and a 30s sleep — assert the slow provider degrades to `Unavailable` while the fast provider still returns `Listed`.
+- `unavailable_from_error` MUST construct the user-facing reason from a fixed template that ignores the upstream error string entirely: `format!("Could not load models for {}; enter the model manually.", provider.as_str())`. Do NOT include any substring of the `error: &str` argument in the reason; the argument exists only for `tracing::warn!(provider = provider.as_str(), error = %err, "list_models failed")` logging on the implementer's side. The `unavailable_reason_uses_fixed_template_regardless_of_upstream_error_shape` negative-leak test locks this contract by asserting the reason is byte-for-byte equal to the fixed template across multiple synthetic leak shapes (Bearer, x-api-key, Authorization, query-string `api_key=`, raw `sk-` substring, JSON-embedded). The 120-character cap is implicitly satisfied by the template and asserted in the same test.
 - If `rig-core 0.36.0` does not expose `deepseek.list_models()`, stop immediately because the dependency baseline is wrong.
 
 Update `crates/scorpio-core/src/providers/factory/mod.rs` at the same time:
@@ -756,7 +884,7 @@ pub use discovery::{ModelDiscoveryOutcome, discover_setup_models};
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features --locked -E 'test(openrouter_returns_manual_only) | test(normalize_model_list_preserves_order_and_duplicates) | test(normalize_empty_model_list_returns_unavailable) | test(unavailable_reason_is_sanitized) | test(collect_outcomes_keeps_one_result_per_provider) | test(discover_setup_models_with_sanitizes_failures_and_preserves_successes)'
+cargo nextest run -p scorpio-core --all-features --locked -E 'test(openrouter_returns_manual_only) | test(normalize_model_list_preserves_order_and_duplicates) | test(normalize_empty_model_list_returns_unavailable) | test(unavailable_reason_is_sanitized) | test(collect_outcomes_keeps_one_result_per_provider) | test(discover_setup_models_with_sanitizes_failures_and_preserves_successes) | test(discover_setup_models_with_times_out_slow_providers_without_blocking_others) | test(unavailable_reason_uses_fixed_template_regardless_of_upstream_error_shape)'
 ```
 
 Expected: PASS.
