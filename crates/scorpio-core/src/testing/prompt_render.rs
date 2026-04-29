@@ -11,11 +11,12 @@ use crate::{
         risk::{DualRiskStatus, render_risk_system_prompt},
         trader::build_prompt_context_for_test as build_trader_prompt_context,
     },
+    data::traits::options::{IvTermPoint, OptionsOutcome, OptionsSnapshot},
     state::{
         DataCoverageReport, DebateMessage, EvidenceKind, EvidenceRecord, EvidenceSource,
         FundamentalData, MarketVolatilityData, NewsData, ProvenanceSummary, RiskLevel, RiskReport,
-        SentimentData, TechnicalData, TradeAction, TradeProposal, TradingState, VixRegime,
-        VixTrend,
+        SentimentData, TechnicalData, TechnicalOptionsContext, TradeAction, TradeProposal,
+        TradingState, VixRegime, VixTrend,
     },
     workflow::Role,
 };
@@ -473,8 +474,25 @@ fn sample_technical_data() -> TechnicalData {
         resistance_level: Some(184.5),
         volume_avg: Some(72_000_000.0),
         summary: "Trend is constructive with price holding above key moving averages.".to_owned(),
-        options_summary: None,
-        options_context: None,
+        options_summary: Some(
+            "Near-term IV remains elevated, but the front-month term structure is orderly."
+                .to_owned(),
+        ),
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(OptionsSnapshot {
+                spot_price: 180.0,
+                atm_iv: 0.28,
+                iv_term_structure: vec![IvTermPoint {
+                    expiration: FIXTURE_DATE.to_owned(),
+                    atm_iv: 0.28,
+                }],
+                put_call_volume_ratio: 1.1,
+                put_call_oi_ratio: 1.0,
+                max_pain_strike: 180.0,
+                near_term_expiration: FIXTURE_DATE.to_owned(),
+                near_term_strikes: vec![],
+            }),
+        }),
     }
 }
 

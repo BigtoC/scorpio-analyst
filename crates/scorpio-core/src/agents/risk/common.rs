@@ -1097,6 +1097,21 @@ mod tests {
     }
 
     #[test]
+    fn risk_analyst_context_includes_options_context() {
+        let mut state = make_state();
+        state.set_technical_indicators(sample_technical_with_options_context());
+        let rendered = build_analyst_context(&state);
+        assert!(
+            rendered.contains("options_context"),
+            "options_context must appear in risk context: {rendered}"
+        );
+        assert!(
+            rendered.contains("snapshot"),
+            "snapshot kind must appear in risk context: {rendered}"
+        );
+    }
+
+    #[test]
     fn risk_context_handles_legacy_options_summary_blob() {
         let mut state = make_state();
         state.set_technical_indicators(crate::state::TechnicalData {

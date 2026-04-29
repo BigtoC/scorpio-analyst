@@ -374,6 +374,75 @@ fn user_prompt_inert_scenarios_match_happy_path() {
 // output for every role × scenario must match `tests/fixtures/prompt_bundle/`.
 
 #[test]
+fn branching_prompts_reference_options_context_field_path() {
+    // Every branching role must tell the agent to inspect options_context and
+    // treat options_summary as supplemental, not authoritative.
+    for role in [
+        Role::BullishResearcher,
+        Role::BearishResearcher,
+        Role::DebateModerator,
+        Role::Trader,
+        Role::AggressiveRisk,
+        Role::ConservativeRisk,
+        Role::NeutralRisk,
+        Role::RiskModerator,
+    ] {
+        let rendered =
+            render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
+        assert!(
+            rendered.contains("options_context"),
+            "{role:?} prompt must reference options_context"
+        );
+        assert!(
+            rendered.contains("outcome.kind"),
+            "{role:?} prompt must tell the agent to branch on outcome.kind"
+        );
+        assert!(
+            rendered.contains("supplemental") || rendered.contains("not authority"),
+            "{role:?} prompt must treat options_summary as supplemental"
+        );
+    }
+}
+
+#[test]
+fn branching_prompts_name_all_outcome_kind_values() {
+    let outcome_kind_tokens = [
+        "snapshot",
+        "no_listed_instrument",
+        "sparse_chain",
+        "historical_run",
+        "missing_spot",
+    ];
+    let status_tokens = ["fetch_failed", "available"];
+
+    for role in [
+        Role::BullishResearcher,
+        Role::BearishResearcher,
+        Role::DebateModerator,
+        Role::Trader,
+        Role::AggressiveRisk,
+        Role::ConservativeRisk,
+        Role::NeutralRisk,
+        Role::RiskModerator,
+    ] {
+        let rendered =
+            render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
+        for token in outcome_kind_tokens {
+            assert!(
+                rendered.contains(token),
+                "{role:?} prompt must mention outcome.kind value {token}"
+            );
+        }
+        for token in status_tokens {
+            assert!(
+                rendered.contains(token),
+                "{role:?} prompt must mention status value {token}"
+            );
+        }
+    }
+}
+
+#[test]
 fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // Sanity: the regression gate is only meaningful if the baseline pack
     // actually populates every required slot. This is also asserted in the

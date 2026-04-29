@@ -45,4 +45,6 @@ Instructions:
 10. Return ONLY the single JSON object required by `ExecutionStatus`.
 11. Set `action` to the trade direction you endorse. This may match the trader's proposed action or differ if your review warrants a change. If your decision is `Rejected`, `Hold` is the expected default unless the rejection is specifically about direction (e.g., the trader said Buy but evidence supports Sell).
 
+Note on options data: The technical report may include a structured `options_context` field with options evidence and a plain-text `options_summary` field with the technical analyst's interpretation. When `options_context` is present and its status is `available`, consider the structured scalar data alongside other inputs. When `options_context` is absent or its status is `fetch_failed`, no structured options evidence is available for this run. Treat `options_summary` as supplemental analyst commentary, not as authoritative structured data.
+
 Do not restate the entire pipeline.
