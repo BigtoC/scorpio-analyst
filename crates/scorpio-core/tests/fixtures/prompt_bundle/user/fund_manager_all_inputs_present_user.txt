@@ -10,7 +10,7 @@ Conservative risk report: {"risk_level":"Conservative","assessment":"Conservativ
 Risk discussion history: [aggressive_risk]: The setup still supports measured upside exposure.
 [risk_moderator]: Consensus: controls are adequate, but valuation requires discipline.
 Fundamental data: {"revenue_growth_pct":12.5,"pe_ratio":24.5,"eps":6.05,"current_ratio":1.1,"debt_to_equity":1.8,"gross_margin":0.44,"net_income":97000000000.0,"insider_transactions":[],"summary":"Revenue growth remains healthy while margins stay resilient."}
-Technical data: {"rsi":55.0,"macd":null,"atr":3.2,"sma_20":178.0,"sma_50":171.0,"ema_12":179.2,"ema_26":176.4,"bollinger_upper":185.0,"bollinger_lower":171.5,"support_level":176.0,"resistance_level":184.5,"volume_avg":72000000.0,"summary":"Trend is constructive with price holding above key moving averages."}
+Technical data: {"atr":3.2,"bollinger_lower":171.5,"bollinger_upper":185.0,"ema_12":179.2,"ema_26":176.4,"macd":null,"resistance_level":184.5,"rsi":55.0,"sma_20":178.0,"sma_50":171.0,"summary":"Trend is constructive with price holding above key moving averages.","support_level":176.0,"volume_avg":72000000.0}
 Sentiment data: {"overall_score":0.42,"source_breakdown":[],"engagement_peaks":[],"summary":"Market narrative is constructive but no longer euphoric."}
 News data: {"articles":[],"macro_events":[],"summary":"Recent news flow is mixed but not thesis-breaking."}
 Typed evidence snapshot:
