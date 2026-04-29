@@ -284,8 +284,8 @@ mod tests {
         analysis_packs::resolve_runtime_policy,
         state::{
             DebateMessage, FundamentalData, ImpactDirection, MacroEvent, NewsArticle, NewsData,
-            RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData, TradeAction,
-            TradeProposal, TradingState,
+            RiskLevel, RiskReport, SentimentData, SentimentSource, TechnicalData,
+            TechnicalOptionsContext, TradeAction, TradeProposal, TradingState,
         },
         workflow::Role,
     };
@@ -705,6 +705,46 @@ mod tests {
         assert!(
             prompt.contains("outcome.kind"),
             "fund manager prompt must tell the model to inspect options_context.outcome.kind: {prompt}"
+        );
+    }
+
+    #[test]
+    fn fund_manager_prompt_handles_fetch_failed_options_context() {
+        let mut state = populated_state();
+        state.set_technical_indicators(TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "OK".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "network timeout".to_owned(),
+            }),
+        });
+
+        let (_system_prompt, user_prompt) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
+
+        assert!(
+            user_prompt.contains("fetch_failed"),
+            "fetch_failed status must appear in fund manager prompt: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("options_context"),
+            "options_context must appear for FetchFailed: {user_prompt}"
         );
     }
 }

@@ -2617,4 +2617,56 @@ async fn technical_evidence_includes_options_context_dataset_when_options_availa
         vec!["ohlcv".to_owned()],
         "None options_context must not add options_context dataset"
     );
+
+    // Case 5: Available { outcome: MissingSpot } → datasets = ["ohlcv", "options_context"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::MissingSpot,
+        }),
+    })
+    .await;
+    assert!(
+        datasets.contains(&"options_context".to_owned()),
+        "options_context must be in datasets for Available(MissingSpot), got: {datasets:?}"
+    );
+
+    // Case 6: Available { outcome: NoListedInstrument } → datasets = ["ohlcv", "options_context"]
+    let datasets = run_analyst_sync_with_technical(TechnicalData {
+        rsi: None,
+        macd: None,
+        atr: None,
+        sma_20: None,
+        sma_50: None,
+        ema_12: None,
+        ema_26: None,
+        bollinger_upper: None,
+        bollinger_lower: None,
+        support_level: None,
+        resistance_level: None,
+        volume_avg: None,
+        summary: "ok".to_owned(),
+        options_summary: None,
+        options_context: Some(TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::NoListedInstrument,
+        }),
+    })
+    .await;
+    assert!(
+        datasets.contains(&"options_context".to_owned()),
+        "options_context must be in datasets for Available(NoListedInstrument), got: {datasets:?}"
+    );
 }

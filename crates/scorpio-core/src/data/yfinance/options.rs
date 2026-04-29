@@ -1685,4 +1685,70 @@ mod tests {
             "yesterday's US/Eastern date should return HistoricalRun"
         );
     }
+
+    // ── serialize_options_outcome_for_tool unit tests ────────────────────
+
+    #[test]
+    fn serialize_options_outcome_snapshot_has_no_reason() {
+        let outcome = sample_snapshot();
+        let val = serialize_options_outcome_for_tool(&outcome).expect("serialization must succeed");
+        assert_eq!(val["kind"], "snapshot");
+        assert!(
+            val.get("reason").is_none(),
+            "Snapshot must not have an injected reason field: {val}"
+        );
+    }
+
+    #[test]
+    fn serialize_options_outcome_no_listed_instrument_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::NoListedInstrument)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "no_listed_instrument");
+        assert_eq!(val["reason"], "this symbol has no listed options on Yahoo");
+    }
+
+    #[test]
+    fn serialize_options_outcome_sparse_chain_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::SparseChain)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "sparse_chain");
+        assert!(
+            val.get("reason").is_some(),
+            "SparseChain must have a reason"
+        );
+    }
+
+    #[test]
+    fn serialize_options_outcome_historical_run_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::HistoricalRun)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "historical_run");
+        assert!(
+            val["reason"].as_str().unwrap().contains("market-local"),
+            "HistoricalRun reason should explain the date mismatch: {val}"
+        );
+    }
+
+    #[test]
+    fn serialize_options_outcome_missing_spot_has_reason() {
+        let val = serialize_options_outcome_for_tool(&OptionsOutcome::MissingSpot)
+            .expect("serialization must succeed");
+        assert_eq!(val["kind"], "missing_spot");
+        assert!(
+            val.get("reason").is_some(),
+            "MissingSpot must have a reason"
+        );
+    }
+
+    // ── OptionsToolContext::load empty-context test ──────────────────────
+
+    #[tokio::test]
+    async fn options_tool_context_load_fails_on_empty_context() {
+        let ctx = OptionsToolContext::new();
+        let result = ctx.load().await;
+        assert!(
+            matches!(result.unwrap_err(), TradingError::SchemaViolation { .. }),
+            "load() on an empty context must return SchemaViolation"
+        );
+    }
 }

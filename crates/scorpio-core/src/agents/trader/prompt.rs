@@ -285,4 +285,41 @@ mod tests {
             "options_context JSON key must be absent from compact report for legacy data: {system}"
         );
     }
+
+    #[test]
+    fn trader_prompt_context_handles_fetch_failed_options_context() {
+        let mut state = TradingState::new("AAPL", "2026-01-17");
+        with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: Some(55.0),
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "OK".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "network timeout".to_owned(),
+            }),
+        });
+
+        let ctx = build_prompt_context(&state, "AAPL", "2026-01-17");
+        let system = &ctx.system_prompt;
+
+        assert!(
+            system.contains("fetch_failed"),
+            "fetch_failed status must appear in trader system prompt: {system}"
+        );
+        assert!(
+            system.contains("options_context"),
+            "options_context must appear for FetchFailed: {system}"
+        );
+    }
 }
