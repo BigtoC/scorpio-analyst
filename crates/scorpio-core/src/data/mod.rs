@@ -48,3 +48,4 @@ pub use yfinance::{
     Candle, GetOhlcv, GetOptionsSnapshot, OhlcvArgs, OhlcvToolContext, YFinanceClient,
     YFinanceNewsProvider, YFinanceOptionsProvider, fetch_vix_data, get_latest_close,
 };
+pub(crate) use yfinance::OptionsToolContext;

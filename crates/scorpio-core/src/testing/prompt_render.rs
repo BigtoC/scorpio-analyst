@@ -113,6 +113,7 @@ fn render_prompt_output(
                 &state.asset_symbol,
                 &state.target_date,
                 analyst_policy(),
+                true, // tool-available variant for deterministic fixtures
             ),
             user_prompt: None,
         },

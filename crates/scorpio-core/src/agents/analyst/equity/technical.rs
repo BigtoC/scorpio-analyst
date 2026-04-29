@@ -19,6 +19,7 @@ use crate::{
     constants::TECHNICAL_ANALYST_MAX_TURNS,
     data::{
         GetOhlcv, GetOptionsSnapshot, OhlcvToolContext, YFinanceClient, YFinanceOptionsProvider,
+        traits::options::OptionsProvider,
     },
     domain::Symbol,
     error::{RetryPolicy, TradingError},
@@ -107,6 +108,26 @@ fn assemble_technical_data(
         })
     );
 
+    let outcome_kind_str = match &options_context {
+        Some(TechnicalOptionsContext::Available { outcome }) => match outcome {
+            OptionsOutcome::Snapshot(_) => "snapshot",
+            OptionsOutcome::HistoricalRun => "historical_run",
+            OptionsOutcome::SparseChain => "sparse_chain",
+            OptionsOutcome::NoListedInstrument => "no_listed_instrument",
+            OptionsOutcome::MissingSpot => "missing_spot",
+        },
+        Some(TechnicalOptionsContext::FetchFailed { .. }) => "fetch_failed",
+        None => "none",
+    };
+
+    if !keep_options_summary && response.options_summary.is_some() {
+        tracing::warn!(
+            outcome_kind = %outcome_kind_str,
+            reason = "cleared_non_snapshot",
+            "options_summary cleared before persistence"
+        );
+    }
+
     TechnicalData {
         rsi: response.rsi,
         macd: response.macd,
@@ -121,15 +142,16 @@ fn assemble_technical_data(
         resistance_level: response.resistance_level,
         volume_avg: response.volume_avg,
         summary: response.summary,
-        // TODO(task-4): emit tracing::warn! with symbol, outcome_kind, reason="cleared_non_snapshot"
-        // when dropping a non-empty options_summary. Symbol is available in run() but not here;
-        // Task 4 adds the warn! when wiring assemble_technical_data into the runtime prefetch flow.
         options_summary: keep_options_summary
             .then_some(response.options_summary)
             .flatten(),
         options_context,
     }
 }
+
+/// Maximum length (Unicode scalar values) for the `reason` field in
+/// [`TechnicalOptionsContext::FetchFailed`].
+const MAX_OPTIONS_FETCH_REASON_CHARS: usize = 256;
 
 /// Build the rendered system prompt for the Technical Analyst.
 ///
@@ -138,21 +160,107 @@ fn assemble_technical_data(
 /// [`render_analyst_system_prompt`] helper. Preflight's
 /// `validate_active_pack_completeness` gate ensures the slot is non-empty
 /// before any analyst task runs.
+///
+/// The `options_tool_available` flag controls whether the prompt includes
+/// guidance for calling `get_options_snapshot` or instructs the model to skip
+/// options analysis entirely.
 pub(crate) fn build_technical_system_prompt(
     symbol: &str,
     target_date: &str,
     policy: &RuntimePolicy,
+    options_tool_available: bool,
 ) -> String {
+    let tool_note = if options_tool_available {
+        "- `get_options_snapshot` — call once with the same symbol and date; only valid for today's US/Eastern date"
+    } else {
+        "- Live options provider not available for this run. Skip options analysis and do not emit `options_summary`."
+    };
+
+    let options_summary_field_note = if options_tool_available {
+        "- `options_summary` — omit entirely (or use `null`) when `get_options_snapshot` is unavailable, returns a non-snapshot kind (historical_run, sparse_chain, no_listed_instrument, missing_spot), or was not called; include only when a live snapshot with `\"kind\": \"snapshot\"` is returned"
+    } else {
+        "- `options_summary` — omit entirely (use `null`); options data is not available for this run"
+    };
+
+    let options_instructions_note = if options_tool_available {
+        "8. If `get_options_snapshot` returns a live snapshot (`\"kind\": \"snapshot\"`), serialize the full tool output as a JSON string and place it in `options_summary`. Do not interpret it or summarize it — store the raw JSON string. If the tool is unavailable or returns any non-snapshot kind, omit `options_summary` from your output."
+    } else {
+        "8. Options data is not available for this run. Do not call any options tool and do not populate `options_summary`."
+    };
+
     render_analyst_system_prompt(
         policy.prompt_bundle.technical_analyst.as_ref(),
         symbol,
         target_date,
         policy,
     )
+    .replace("{options_tool_note}", tool_note)
+    .replace("{options_summary_field_note}", options_summary_field_note)
+    .replace("{options_instructions_note}", options_instructions_note)
 }
 
 /// Number of calendar days of OHLCV history to request.
 const OHLCV_LOOKBACK_DAYS: i64 = 365;
+
+// ─── prepare_options_runtime ──────────────────────────────────────────────────
+
+/// Output of [`prepare_options_runtime`] — classifies a prefetch result into
+/// the pieces needed to wire the tool into the agent and build the prompt.
+struct PreparedOptionsRuntime {
+    /// The context to persist into `TechnicalData`.
+    options_context: Option<TechnicalOptionsContext>,
+    /// Whether to bind the tool and include options guidance in the prompt.
+    options_tool_available: bool,
+    /// The prefetched tool to add to the agent's tool list; `None` when unavailable.
+    tool: Option<GetOptionsSnapshot>,
+}
+
+/// Classify a prefetch result into [`PreparedOptionsRuntime`].
+///
+/// - `Ok(outcome)` (all outcomes including `HistoricalRun`): the tool is available
+///   (bound with prefetched data for replay), and the prompt will include options guidance.
+/// - `Err(e)`: the tool is unavailable, the prompt will instruct the model to skip
+///   options analysis, and the error reason is sanitized and truncated.
+fn prepare_options_runtime(
+    prefetched: Result<crate::data::traits::options::OptionsOutcome, TradingError>,
+    symbol: &str,
+    target_date: &str,
+) -> PreparedOptionsRuntime {
+    use crate::data::OptionsToolContext;
+    use crate::providers::factory::sanitize_error_summary;
+
+    match prefetched {
+        Ok(outcome) => {
+            let options_context_enum = TechnicalOptionsContext::Available {
+                outcome: outcome.clone(),
+            };
+
+            // Build a pre-populated context using the synchronous constructor so
+            // that `prepare_options_runtime` stays synchronous.
+            let ctx = OptionsToolContext::new_prefilled(outcome);
+            let tool = GetOptionsSnapshot::scoped_prefetched(symbol, target_date, ctx);
+
+            PreparedOptionsRuntime {
+                options_context: Some(options_context_enum),
+                options_tool_available: true,
+                tool: Some(tool),
+            }
+        }
+        Err(e) => {
+            let raw_reason = sanitize_error_summary(&e.to_string());
+            let reason: String = raw_reason
+                .chars()
+                .take(MAX_OPTIONS_FETCH_REASON_CHARS)
+                .collect();
+
+            PreparedOptionsRuntime {
+                options_context: Some(TechnicalOptionsContext::FetchFailed { reason }),
+                options_tool_available: false,
+                tool: None,
+            }
+        }
+    }
+}
 
 /// The Technical Analyst agent.
 ///
@@ -164,7 +272,7 @@ pub struct TechnicalAnalyst {
     yfinance: YFinanceClient,
     symbol: String,
     target_date: String,
-    system_prompt: String,
+    policy: RuntimePolicy,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
     // Stored for test assertions; not read by production code.
@@ -198,15 +306,13 @@ impl TechnicalAnalyst {
         })?;
 
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt =
-            build_technical_system_prompt(&runtime.symbol, &runtime.target_date, policy);
 
         Ok(Self {
             handle,
             yfinance,
             symbol: runtime.symbol,
             target_date: runtime.target_date,
-            system_prompt,
+            policy: policy.clone(),
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
             typed_symbol,
@@ -225,8 +331,23 @@ impl TechnicalAnalyst {
         let start_date = derive_start_date(&self.target_date, OHLCV_LOOKBACK_DAYS)?;
         let ohlcv_context = OhlcvToolContext::new();
 
+        // Prefetch options once before inference so the LLM replays from the cache.
         let options_provider = YFinanceOptionsProvider::new(self.yfinance.clone());
-        let tools: Vec<Box<dyn ToolDyn>> = vec![
+        let prefetched = options_provider
+            .fetch_snapshot(&self.typed_symbol, &self.target_date)
+            .await;
+
+        let prepared =
+            prepare_options_runtime(prefetched, &self.symbol, &self.target_date);
+
+        let system_prompt = build_technical_system_prompt(
+            &self.symbol,
+            &self.target_date,
+            &self.policy,
+            prepared.options_tool_available,
+        );
+
+        let mut tools: Vec<Box<dyn ToolDyn>> = vec![
             Box::new(GetOhlcv::scoped(
                 self.yfinance.clone(),
                 self.symbol.clone(),
@@ -240,14 +361,13 @@ impl TechnicalAnalyst {
             Box::new(CalculateAtr::new(ohlcv_context.clone())),
             Box::new(CalculateBollingerBands::new(ohlcv_context.clone())),
             Box::new(CalculateIndicatorByName::new(ohlcv_context)),
-            Box::new(GetOptionsSnapshot::scoped(
-                options_provider,
-                self.symbol.clone(),
-                self.target_date.clone(),
-            )),
         ];
 
-        let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
+        if let Some(options_tool) = prepared.tool {
+            tools.push(Box::new(options_tool));
+        }
+
+        let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
 
         let prompt = format!(
             "Fetch OHLCV data for {} from {} to {} using get_ohlcv, compute indicators with \
@@ -274,9 +394,7 @@ impl TechnicalAnalyst {
             outcome.rate_limit_wait_ms,
         );
 
-        // `options_context` is a Rust-side artifact — not model output. In this
-        // task it is always `None`; Task 4 will prefetch it and pass it in.
-        let technical_data = assemble_technical_data(outcome.output, None);
+        let technical_data = assemble_technical_data(outcome.output, prepared.options_context);
 
         Ok((technical_data, usage))
     }
@@ -857,7 +975,7 @@ mod tests {
 
         let policy =
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy);
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
 
         for phrase in [
             "Prefer authoritative runtime evidence",
@@ -1065,7 +1183,7 @@ mod tests {
             "Pack technical prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy);
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
 
         assert!(
             prompt.contains(
@@ -1129,5 +1247,134 @@ mod tests {
             }),
         );
         assert!(data.options_summary.is_none());
+    }
+
+    // ── Task 4: prepare_options_runtime + prompt conditioning ─────────────────
+
+    #[test]
+    fn build_technical_system_prompt_includes_options_guidance_when_tool_available() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        let policy = resolve_runtime_policy("baseline").unwrap();
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
+        assert!(
+            prompt.contains("get_options_snapshot"),
+            "prompt must mention get_options_snapshot when tool is available: {prompt}"
+        );
+    }
+
+    #[test]
+    fn build_technical_system_prompt_omits_options_guidance_when_tool_unavailable() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        let policy = resolve_runtime_policy("baseline").unwrap();
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, false);
+        assert!(
+            !prompt.contains("call once with the same symbol and date"),
+            "prompt must not include live-options guidance when tool is unavailable: {prompt}"
+        );
+        assert!(
+            prompt.contains("not available for this run"),
+            "prompt must tell the model options are not available: {prompt}"
+        );
+        assert!(
+            !prompt.contains("get_options_snapshot"),
+            "prompt must not mention get_options_snapshot when tool is unavailable: {prompt}"
+        );
+    }
+
+    #[test]
+    fn build_technical_system_prompt_includes_options_guidance_for_historical_run() {
+        use crate::analysis_packs::resolve_runtime_policy;
+        let policy = resolve_runtime_policy("baseline").unwrap();
+        // Historical run still keeps the tool available (the tool returns HistoricalRun kind).
+        let prompt = build_technical_system_prompt("AAPL", "2026-01-01", &policy, true);
+        assert!(
+            prompt.contains("get_options_snapshot"),
+            "prompt must mention get_options_snapshot for historical run (tool-available path): {prompt}"
+        );
+        assert!(
+            !prompt.contains("not available for this run"),
+            "historical run path uses tool-available variant, must not say unavailable: {prompt}"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_persists_fetch_failed_context_and_omits_tool() {
+        let prepared = prepare_options_runtime(
+            Err(TradingError::NetworkTimeout {
+                message: "connection refused".to_owned(),
+                elapsed: std::time::Duration::ZERO,
+            }),
+            "AAPL",
+            "2026-01-01",
+        );
+        assert!(!prepared.options_tool_available);
+        assert!(prepared.tool.is_none());
+        assert!(
+            matches!(
+                prepared.options_context,
+                Some(TechnicalOptionsContext::FetchFailed { .. })
+            ),
+            "expected FetchFailed context"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_keeps_tool_available_for_historical_run() {
+        use crate::data::traits::options::OptionsOutcome;
+        let prepared = prepare_options_runtime(
+            Ok(OptionsOutcome::HistoricalRun),
+            "AAPL",
+            "2026-01-01",
+        );
+        assert!(prepared.options_tool_available);
+        assert!(prepared.tool.is_some());
+        assert!(
+            matches!(
+                prepared.options_context,
+                Some(TechnicalOptionsContext::Available {
+                    outcome: OptionsOutcome::HistoricalRun,
+                })
+            ),
+            "expected Available(HistoricalRun) context"
+        );
+    }
+
+    #[test]
+    fn assemble_technical_data_clears_options_summary_when_outcome_is_not_snapshot() {
+        use crate::data::traits::options::OptionsOutcome;
+
+        let response = sample_technical_response_with_options_summary();
+        let data = assemble_technical_data(
+            response,
+            Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::HistoricalRun,
+            }),
+        );
+        assert!(
+            data.options_summary.is_none(),
+            "options_summary must be cleared when outcome is HistoricalRun"
+        );
+    }
+
+    #[test]
+    fn prepare_options_runtime_truncates_fetch_failed_reason_to_256_chars() {
+        let long_error = "x".repeat(500);
+        let prepared = prepare_options_runtime(
+            Err(TradingError::NetworkTimeout {
+                message: long_error,
+                elapsed: std::time::Duration::ZERO,
+            }),
+            "AAPL",
+            "2026-01-01",
+        );
+        if let Some(TechnicalOptionsContext::FetchFailed { reason }) = prepared.options_context {
+            assert!(
+                reason.len() <= 256,
+                "reason must be truncated to at most 256 chars, got {} chars",
+                reason.len()
+            );
+        } else {
+            panic!("expected FetchFailed context");
+        }
     }
 }

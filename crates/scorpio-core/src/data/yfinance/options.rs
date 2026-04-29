@@ -658,10 +658,29 @@ pub(crate) struct OptionsToolContext {
 }
 
 impl OptionsToolContext {
+    /// Create an empty context for use in tests that call [`Self::store`] directly.
+    ///
+    /// Only called from test code; suppressed in production builds to avoid
+    /// dead-code warnings. When compiling with `test-helpers` for integration
+    /// tests the `#[allow(dead_code)]` keeps clippy/rustc quiet — the method is
+    /// real API even though it is not reachable from library code.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
     #[must_use]
-    #[allow(dead_code)] // used by TechnicalAnalyst::run() in follow-on task
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a pre-populated context without an async call.
+    ///
+    /// This is the synchronous counterpart to [`Self::store`], used when the
+    /// outcome is already known at construction time (e.g. in
+    /// `prepare_options_runtime`).
+    #[must_use]
+    pub(crate) fn new_prefilled(outcome: OptionsOutcome) -> Self {
+        Self {
+            outcome: Arc::new(RwLock::new(Some(Arc::new(outcome)))),
+        }
     }
 
     /// Store an [`OptionsOutcome`] in the context.
@@ -669,7 +688,11 @@ impl OptionsToolContext {
     /// Write-once: returns [`TradingError::SchemaViolation`] if an outcome has
     /// already been stored, preventing the LLM from overwriting the first fetch
     /// with adversarial data on a second tool call.
-    #[allow(dead_code)] // used by TechnicalAnalyst::run() in follow-on task
+    ///
+    /// Only called from test code; `#[allow(dead_code)]` prevents spurious
+    /// warnings when compiling the `test-helpers` feature on the lib target.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
     pub(crate) async fn store(&self, outcome: OptionsOutcome) -> Result<(), TradingError> {
         let mut lock = self.outcome.write().await;
         if lock.is_some() {
@@ -782,10 +805,9 @@ impl GetOptionsSnapshot {
     /// Create a fully-scoped tool that replays a prefetched [`OptionsOutcome`]
     /// from `context` without making any network calls.
     ///
-    /// The `context` must have been populated via [`OptionsToolContext::store`]
-    /// before any tool calls are made.
+    /// The `context` must have been populated via [`OptionsToolContext::store`] or
+    /// [`OptionsToolContext::new_prefilled`] before any tool calls are made.
     #[must_use]
-    #[allow(dead_code)] // used by TechnicalAnalyst::run() in follow-on task
     pub(crate) fn scoped_prefetched(
         symbol: impl Into<String>,
         target_date: impl Into<String>,
