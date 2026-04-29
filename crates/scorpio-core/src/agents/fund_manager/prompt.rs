@@ -536,14 +536,22 @@ mod tests {
     // ── Options context projection tests ─────────────────────────────────
 
     fn sample_technical_with_options_context() -> TechnicalData {
-        use crate::data::traits::options::{IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot};
+        use crate::data::traits::options::{
+            IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
 
         let snap = OptionsSnapshot {
             spot_price: 182.0,
             atm_iv: 0.28,
             iv_term_structure: vec![
-                IvTermPoint { expiration: "2026-01-17".to_owned(), atm_iv: 0.28 },
-                IvTermPoint { expiration: "2026-02-21".to_owned(), atm_iv: 0.31 },
+                IvTermPoint {
+                    expiration: "2026-01-17".to_owned(),
+                    atm_iv: 0.28,
+                },
+                IvTermPoint {
+                    expiration: "2026-02-21".to_owned(),
+                    atm_iv: 0.31,
+                },
             ],
             put_call_volume_ratio: 1.1,
             put_call_oi_ratio: 1.0,
@@ -610,7 +618,10 @@ mod tests {
             "options_context must appear in fund manager user prompt: {user_prompt}"
         );
         // 2. Compact summary fields must be present
-        assert!(user_prompt.contains("atm_iv"), "atm_iv missing: {user_prompt}");
+        assert!(
+            user_prompt.contains("atm_iv"),
+            "atm_iv missing: {user_prompt}"
+        );
         assert!(
             user_prompt.contains("put_call_volume_ratio"),
             "put_call_volume_ratio missing: {user_prompt}"

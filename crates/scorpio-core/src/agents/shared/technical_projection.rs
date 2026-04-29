@@ -39,15 +39,13 @@ pub(crate) fn compact_technical_report(data: &TechnicalData) -> String {
     sanitize_prompt_context(&serialized)
 }
 
-/// Produce the compact `serde_json::Value` from `data`.
+/// Projects `TechnicalData` into a compact `serde_json::Value` for downstream prompts.
+/// Preserves all indicator fields, replaces `options_context` with a stripped version
+/// that omits raw arrays (`near_term_strikes`, `iv_term_structure`) to avoid bloating
+/// prompt context. Key ordering is alphabetical (standard `serde_json` `BTreeMap` behavior).
 ///
 /// Exposed as a separate function so test code can inspect the structured
 /// value rather than parse the serialized string.
-///
-/// Uses `to_string` + `from_str` rather than `to_value` to preserve the
-/// struct field declaration order in the serialized JSON (serde_json's
-/// `to_value` sorts keys alphabetically via `BTreeMap`; `to_string` uses
-/// the declared order).
 pub(crate) fn compact_technical_value(data: &TechnicalData) -> Value {
     // Start from the full serialization preserving struct field order.
     let json_str = serde_json::to_string(data).unwrap_or_else(|_| "null".to_owned());
@@ -100,7 +98,11 @@ fn compact_snapshot_value(snap: &OptionsSnapshot) -> Value {
         .iter()
         .filter_map(|s| {
             let total_oi = s.call_oi.unwrap_or(0).saturating_add(s.put_oi.unwrap_or(0));
-            if total_oi > 0 { Some((s.strike, total_oi)) } else { None }
+            if total_oi > 0 {
+                Some((s.strike, total_oi))
+            } else {
+                None
+            }
         })
         .max_by_key(|&(_, oi)| oi)
         .map(|(strike, oi)| json!({ "strike": strike, "oi": oi }));

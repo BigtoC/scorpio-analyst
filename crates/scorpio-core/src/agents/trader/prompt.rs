@@ -126,8 +126,14 @@ mod tests {
             spot_price: 182.0,
             atm_iv: 0.28,
             iv_term_structure: vec![
-                IvTermPoint { expiration: "2026-01-17".to_owned(), atm_iv: 0.28 },
-                IvTermPoint { expiration: "2026-02-21".to_owned(), atm_iv: 0.31 },
+                IvTermPoint {
+                    expiration: "2026-01-17".to_owned(),
+                    atm_iv: 0.28,
+                },
+                IvTermPoint {
+                    expiration: "2026-02-21".to_owned(),
+                    atm_iv: 0.31,
+                },
             ],
             put_call_volume_ratio: 1.1,
             put_call_oi_ratio: 1.0,
