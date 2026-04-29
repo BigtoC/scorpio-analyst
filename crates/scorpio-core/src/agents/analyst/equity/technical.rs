@@ -123,6 +123,9 @@ fn assemble_technical_data(
         resistance_level: response.resistance_level,
         volume_avg: response.volume_avg,
         summary: response.summary,
+        // TODO(task-4): emit tracing::warn! with symbol, outcome_kind, reason="cleared_non_snapshot"
+        // when dropping a non-empty options_summary. Symbol is available in run() but not here;
+        // Task 4 adds the warn! when wiring assemble_technical_data into the runtime prefetch flow.
         options_summary: keep_options_summary.then_some(response.options_summary).flatten(),
         options_context,
     }
@@ -258,7 +261,7 @@ impl TechnicalAnalyst {
             self.timeout,
             &self.retry_policy,
             TECHNICAL_ANALYST_MAX_TURNS,
-            parse_technical,
+            parse_technical_response,
             validate_technical,
         )
         .await?;
@@ -296,15 +299,6 @@ fn validate_technical(response: &TechnicalAnalystResponse) -> Result<(), Trading
     Ok(())
 }
 
-/// Deserialize a JSON string into [`TechnicalAnalystResponse`], mapping errors to
-/// [`TradingError::SchemaViolation`].
-///
-/// Used as the `parse` hook in `run_analyst_inference`. Also used by tests that
-/// exercise the structural parsing layer.
-fn parse_technical(json_str: &str) -> Result<TechnicalAnalystResponse, TradingError> {
-    parse_technical_response(json_str)
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Compute the OHLCV start date by subtracting `days` calendar days from
@@ -331,11 +325,11 @@ mod tests {
     use super::*;
     use crate::state::{MacdValues, TechnicalData};
 
-    /// Parse and validate a JSON string — combines `parse_technical` + `validate_technical`
-    /// for test convenience. Tests that need only structural parsing can call `parse_technical`
+    /// Parse and validate a JSON string — combines `parse_technical_response` + `validate_technical`
+    /// for test convenience. Tests that need only structural parsing can call `parse_technical_response`
     /// directly; tests that also exercise the semantic validation layer call this helper.
     fn parse_and_validate(json: &str) -> Result<TechnicalAnalystResponse, TradingError> {
-        parse_technical(json).and_then(|resp| validate_technical(&resp).map(|()| resp))
+        parse_technical_response(json).and_then(|resp| validate_technical(&resp).map(|()| resp))
     }
 
     // ── Task 2 test helpers ───────────────────────────────────────────────────
@@ -510,7 +504,7 @@ mod tests {
 
     #[test]
     fn malformed_json_returns_schema_violation() {
-        let result = parse_technical("not json");
+        let result = parse_technical_response("not json");
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -521,7 +515,7 @@ mod tests {
     #[test]
     fn json_missing_summary_returns_schema_violation() {
         // `summary` is required
-        let result = parse_technical(r#"{"rsi": 50.0}"#);
+        let result = parse_technical_response(r#"{"rsi": 50.0}"#);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -754,7 +748,7 @@ mod tests {
                 base_delay: std::time::Duration::from_millis(1),
             },
             1,
-            super::parse_technical,
+            super::parse_technical_response,
             super::validate_technical,
         )
         .await
@@ -787,7 +781,7 @@ mod tests {
             "volume_avg": null,
             "summary": "Legacy snapshot without options."
         }"#;
-        let data = parse_technical(json)
+        let data = parse_technical_response(json)
             .expect("legacy snapshot without options_summary must deserialize");
         assert!(
             data.options_summary.is_none(),
@@ -837,7 +831,7 @@ mod tests {
             "summary": "Momentum is weakening and MACD is negative."
         }"#;
 
-        let err = parse_technical(json).expect_err("scalar MACD should not silently parse");
+        let err = parse_technical_response(json).expect_err("scalar MACD should not silently parse");
 
         match err {
             TradingError::SchemaViolation { message } => {
@@ -899,7 +893,7 @@ mod tests {
             "summary": "Moderate bullish trend.",
             "options_summary": "{\"kind\":\"snapshot\",\"spot_price\":150.0,\"atm_iv\":0.25}"
         }"#;
-        let data = parse_technical(json).expect("should parse with options_summary");
+        let data = parse_technical_response(json).expect("should parse with options_summary");
         assert!(
             data.options_summary.is_some(),
             "options_summary should be Some when present in JSON"
