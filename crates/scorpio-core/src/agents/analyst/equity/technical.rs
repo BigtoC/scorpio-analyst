@@ -1432,4 +1432,62 @@ mod tests {
             "options_summary must be cleared (and warn emitted) when outcome is SparseChain"
         );
     }
+
+    #[test]
+    fn prepare_options_runtime_outcome_flows_unchanged_through_assembly() {
+        // Single-fetch guarantee at the helper seam: the outcome produced by
+        // `prepare_options_runtime` is exactly what `assemble_technical_data`
+        // persists in `TechnicalData.options_context`, with no intermediate
+        // re-fetch or transformation.
+        use crate::data::traits::options::{OptionsOutcome, OptionsSnapshot};
+
+        let outcome = OptionsOutcome::Snapshot(OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.25,
+            iv_term_structure: vec![],
+            put_call_volume_ratio: 0.8,
+            put_call_oi_ratio: 0.9,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-05-16".to_owned(),
+            near_term_strikes: vec![],
+        });
+
+        let prepared = prepare_options_runtime(Ok(outcome.clone()), "AAPL", "2026-01-01");
+
+        assert_eq!(
+            prepared.options_context,
+            Some(TechnicalOptionsContext::Available { outcome: outcome.clone() }),
+            "prepare_options_runtime must record the exact prefetched outcome"
+        );
+        assert!(prepared.tool.is_some(), "a Snapshot outcome must bind a tool");
+
+        let response = TechnicalAnalystResponse {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "test".to_owned(),
+            options_summary: Some("live snapshot summary".to_owned()),
+        };
+
+        let data = assemble_technical_data(response, prepared.options_context, "AAPL");
+
+        assert_eq!(
+            data.options_context,
+            Some(TechnicalOptionsContext::Available { outcome }),
+            "assemble_technical_data must preserve the prefetched outcome unchanged"
+        );
+        assert!(
+            data.options_summary.is_some(),
+            "Snapshot outcome must preserve options_summary through assembly"
+        );
+    }
 }
