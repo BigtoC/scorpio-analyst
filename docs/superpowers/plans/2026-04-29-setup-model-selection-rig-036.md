@@ -235,14 +235,27 @@ let provider_rpms = [
 
 Also update any loops, helper matches, and assertions in these files that still enumerate Copilot.
 
-Add a stale-config recovery wrapper to `Config::load_from_user_path` so analysis startup degrades helpfully when an existing `~/.scorpio-analyst/config.toml` still routes to Copilot. Detect the specific deserialize error and surface a friendlier message; do not silently rewrite the on-disk file:
+Add a stale-config recovery wrapper to `Config::load_from_user_path` so analysis startup degrades helpfully when an existing `~/.scorpio-analyst/config.toml` still routes to Copilot. Detect the specific deserialize error and surface a friendlier message; do not silently rewrite the on-disk file. Two implementation details are load-bearing:
+
+1. Rename the existing public `Config::load_from_user_path` body to a private `Config::load_from_user_path_inner(...) -> Result<Self>`, then introduce the new public `load_from_user_path` shown below as a thin wrapper. The plan's `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` test calls the public name, so the public signature must stay identical.
+2. Walk the `anyhow::Error` chain (or use the alternate `{:#}` formatter) — `err.to_string()` only renders the topmost context, and `Config::load_effective_runtime` already attaches `.context("failed to deserialize configuration")?` over the inner serde error. A plain `to_string().contains(...)` matcher cannot fire because the inner serde message never reaches the topmost layer. Walking `err.chain()` is required for the matcher to work.
+3. Pin the marker as a `pub(crate) const` shared by `deserialize_provider_name` and the wrapper so a future error-message edit cannot silently break the contract:
 
 ```rust
 // crates/scorpio-core/src/config.rs
+
+pub(crate) const STALE_COPILOT_PROVIDER_MARKER: &str = "unknown LLM provider: \"copilot\"";
+
+// inside deserialize_provider_name's Err branch:
+Err(serde::de::Error::custom(format!(
+    "{STALE_COPILOT_PROVIDER_MARKER} (supported: openai, anthropic, gemini, openrouter, deepseek)"
+)))
+
+// new public wrapper:
 pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Config> {
     match Self::load_from_user_path_inner(path) {
         Ok(cfg) => Ok(cfg),
-        Err(err) if err.to_string().contains("unknown LLM provider: \"copilot\"") => {
+        Err(err) if err.chain().any(|cause| cause.to_string().contains(STALE_COPILOT_PROVIDER_MARKER)) => {
             Err(anyhow::anyhow!(
                 "Your saved configuration still routes to the Copilot provider, which has been removed. \
                  Run `scorpio setup` to update routing to a supported provider."
@@ -253,7 +266,7 @@ pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Config> {
 }
 ```
 
-The exact wrapper name is not load-bearing; what matters is that runtime startup paths (`scorpio analyze`) surface a recognisable `Copilot` + `scorpio setup` message rather than a raw `unknown LLM provider` serde error. The `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` test pins this contract.
+What matters: runtime startup paths (`scorpio analyze`) surface a recognisable `Copilot` + `scorpio setup` message rather than a raw `unknown LLM provider` serde error, and the contract is anchored by the shared constant. The `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` test pins this end-to-end through `Config::load_effective_runtime`'s anyhow context wrapper.
 
 - [ ] **Step 5: Re-run the targeted tests and stop if `graph-flow` blocks the upgrade**
 
@@ -394,16 +407,16 @@ Expected:
 
 - [ ] **Step 5: Commit Tasks 1 and 2 atomically**
 
-Stage every file modified by Tasks 1 + 2 plus the deletions, commit once, and verify the resulting tree compiles cleanly. This is the first commit on the branch, so every later commit must continue to compile against `cargo check`.
+Stage every file modified by Tasks 1 + 2 plus the deletions, verify the working tree compiles cleanly, and only then commit. This is the first commit on the branch, so it must build cleanly before being recorded; every later commit must continue to compile against `cargo check`. Run `cargo check` BEFORE `git commit` so an unbuildable tree never lands.
 
 ```bash
 git add Cargo.toml Cargo.lock crates/scorpio-core/src/providers/mod.rs crates/scorpio-core/src/config.rs crates/scorpio-core/src/settings.rs crates/scorpio-core/src/rate_limit.rs crates/scorpio-core/src/providers/factory/mod.rs crates/scorpio-core/src/providers/factory/client.rs crates/scorpio-core/src/providers/factory/agent.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/src/agents/analyst/equity/common.rs crates/scorpio-cli/src/cli/setup/steps.rs
 git rm crates/scorpio-core/src/providers/acp.rs crates/scorpio-core/src/providers/copilot.rs
-git commit -m "refactor(providers): bump rig-core to 0.36.0 and remove custom copilot runtime"
 cargo check --workspace --all-features --locked
+git commit -m "refactor(providers): bump rig-core to 0.36.0 and remove custom copilot runtime"
 ```
 
-Expected: `cargo check` exits 0 against the just-committed tree. If it fails, the commit landed an unbuildable revision; fix forward in a follow-up commit before proceeding to Task 3.
+Expected: `cargo check` exits 0 BEFORE the commit. If it fails, do not commit; iterate on the working tree until `cargo check` passes. Cargo.lock is included in the `git add` list above to keep the committed tree reproducible against the bumped `rig-core 0.36.0` resolution.
 
 ## Chunk 2: Core Provider Discovery for Setup
 
@@ -596,8 +609,22 @@ git commit -m "refactor(config): add setup-safe provider settings loader"
 ### Task 4: Add provider-backed model discovery in `scorpio-core`
 
 **Files:**
+- Modify: `crates/scorpio-core/Cargo.toml`
 - Create: `crates/scorpio-core/src/providers/factory/discovery.rs`
 - Modify: `crates/scorpio-core/src/providers/factory/mod.rs`
+
+- [ ] **Step 0: Enable `tokio` `test-util` for paused-clock tests**
+
+The new discovery test uses `#[tokio::test(start_paused = true)]`, which requires the `test-util` Cargo feature. The workspace-level `tokio = { version = "1", features = ["full"] }` does **not** include `test-util` (it is intentionally excluded from `full`). Add an override in `crates/scorpio-core/Cargo.toml`'s `[dev-dependencies]` so the feature is enabled only in test builds:
+
+```toml
+# crates/scorpio-core/Cargo.toml
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+# ... existing dev-deps unchanged
+```
+
+Without this, the failing test in Step 1 will not compile (the `start_paused` attribute is unknown) and the TDD red-step in Step 2 degrades from "test fails by assertion" to "test fails to compile" (cf. the broader Adversarial finding about compile-vs-assertion FAIL).
 
 - [ ] **Step 1: Write the failing discovery tests in the new module**
 
@@ -866,7 +893,7 @@ Implementation notes:
 - If `list_models()` succeeds but returns no items, convert that to `Unavailable` with the exact CLI-facing message from the spec.
 - Keep the test seam (`discover_setup_models_with`) private to the module; it exists only so the public best-effort behavior can be tested without network calls.
 - Wrap each provider call inside `discover_setup_models_with` with `tokio::time::timeout(Duration::from_secs(DISCOVERY_TIMEOUT_SECS), load(provider))` so a single slow provider cannot stall the whole batch. Map the timeout error to `Unavailable { reason: "Listing for <provider> timed out; enter the model manually." }`. The `discover_setup_models_with_times_out_slow_providers_without_blocking_others` test pins this with `tokio::time::pause()` and a 30s sleep — assert the slow provider degrades to `Unavailable` while the fast provider still returns `Listed`.
-- `unavailable_from_error` MUST construct the user-facing reason from a fixed template that ignores the upstream error string entirely: `format!("Could not load models for {}; enter the model manually.", provider.as_str())`. Do NOT include any substring of the `error: &str` argument in the reason; the argument exists only for `tracing::warn!(provider = provider.as_str(), error = %err, "list_models failed")` logging on the implementer's side. The `unavailable_reason_uses_fixed_template_regardless_of_upstream_error_shape` negative-leak test locks this contract by asserting the reason is byte-for-byte equal to the fixed template across multiple synthetic leak shapes (Bearer, x-api-key, Authorization, query-string `api_key=`, raw `sk-` substring, JSON-embedded). The 120-character cap is implicitly satisfied by the template and asserted in the same test.
+- `unavailable_from_error` MUST construct the user-facing reason from a fixed template that ignores the upstream error string entirely: `format!("Could not load models for {}; enter the model manually.", provider.as_str())`. Do NOT include any substring of the `error: &str` argument in the reason; the argument exists only for diagnostic logging — and that logging MUST also be sanitized. Use the existing `crate::providers::factory::error::sanitize_error_summary(err)` helper before emitting via tracing: `tracing::warn!(provider = provider.as_str(), error = %sanitize_error_summary(err), "list_models failed")`. Do NOT log `error = %err` — the project ships JSON-formatted tracing output (`tracing-subscriber` `json` feature), and operators routinely forward those logs to aggregators. A raw upstream error containing `Bearer sk-…` would leak into durable log storage even though the CLI message stays clean. The fixed template protects the CLI channel; `sanitize_error_summary` extends the same protection to the tracing channel. The `unavailable_reason_uses_fixed_template_regardless_of_upstream_error_shape` negative-leak test locks the CLI contract by asserting the reason is byte-for-byte equal to the fixed template across multiple synthetic leak shapes (Bearer, x-api-key, Authorization, query-string `api_key=`, raw `sk-` substring, JSON-embedded). The 120-character cap is implicitly satisfied by the template and asserted in the same test.
 - If `rig-core 0.36.0` does not expose `deepseek.list_models()`, stop immediately because the dependency baseline is wrong.
 
 Update `crates/scorpio-core/src/providers/factory/mod.rs` at the same time:
