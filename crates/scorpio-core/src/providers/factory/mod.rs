@@ -14,11 +14,13 @@
 //! | [`agent`]  | [`LlmAgent`], [`build_agent`], [`build_agent_with_tools`], [`prompt_typed`], mock infrastructure |
 //! | [`retry`]  | [`RetryOutcome`], all retry/budget loop functions |
 //! | [`text_retry`] | [`prompt_text_with_retry`] — tool-enabled text prompt with retry |
+//! | [`discovery`] | setup-only provider model listing and normalized discovery outcomes |
 
 mod agent;
 #[cfg(test)]
 pub(crate) mod agent_test_support;
 mod client;
+mod discovery;
 mod error;
 mod retry;
 mod text_retry;
@@ -42,6 +44,7 @@ pub use retry::{
 
 pub use text_retry::prompt_text_with_retry;
 
+pub use discovery::{ModelDiscoveryOutcome, discover_setup_models};
 pub use error::sanitize_error_summary;
 
 // ── test-only mock infrastructure ────────────────────────────────────────────
