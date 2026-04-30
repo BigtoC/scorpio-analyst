@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-30
 **Author:** brainstorming session with BigtoC
-**Status:** Draft — pending written-spec review and implementation plan
+**Status:** Revised — security model and rig API gaps addressed; ready for implementation plan
 
 ## Summary
 
@@ -63,6 +63,8 @@ The key product decisions are:
 
 The existing provider layer in `crates/scorpio-core/src/providers/` remains the sole runtime integration seam.
 
+**Effective Merged Provider Config** (used throughout this document): The union of Scorpio-saved provider settings (`PartialConfig`'s provider secrets, base URLs, and RPM limits) and environment-variable overrides (`SCORPIO_*_API_KEY`, `SCORPIO__PROVIDERS__*` env vars). Does *not* include `[llm]` tier routing decisions; those are independent. Used for setup eligibility, runtime client construction, and rate limiting.
+
 The target architecture is:
 
 1. `ProviderId` gains `Copilot` and `XiaomiMimo`.
@@ -101,7 +103,7 @@ This keeps the change inside the same seams that already own OpenAI, Anthropic, 
 - Extend helper lookups like `settings_for(...)`, `base_url_for(...)`, `rpm_for(...)`, and `api_key_for(...)`.
 - Add Xiaomi MiMo env-secret loading via `SCORPIO_XIAOMIMIMO_API_KEY`.
 - Do not add a Scorpio-specific Copilot API-key env contract.
-- Adjust the current "no LLM provider API key found" warning path so Copilot-only routing does not produce misleading diagnostics.
+- Adjust the current "no LLM provider API key found" warning path so Copilot-only routing does not produce misleading diagnostics. In `validate()` (config.rs:569–592), check whether both `llm.quick_thinking_provider` and `llm.deep_thinking_provider` are `"copilot"` and skip or replace the no-key warning in that case. Audit all call sites of `has_any_llm_key()` and `is_analysis_ready()` to ensure none emit a false missing-key warning for Copilot-only configs.
 
 The important config rule is:
 
@@ -129,16 +131,18 @@ The important config rule is:
 - Import `rig::providers::{copilot, xiaomimimo}`.
 - Extend `ProviderClient` with `Copilot(copilot::Client)` and `XiaomiMimo(xiaomimimo::Client)`.
 - Extend `validate_provider_id(...)` so `copilot` and `xiaomimimo` resolve cleanly.
-- Add a small explicit Copilot auth context at the Scorpio seam, for example `CopilotAuthMode::{InteractiveSetup, NonInteractiveRuntime}`.
+- Add a small explicit Copilot auth context at the Scorpio seam: `CopilotAuthMode::{InteractiveSetup, NonInteractiveRuntime}`.
 - Thread that mode through `create_completion_model(...)` and the first Copilot request path so setup and runtime do not have to fork the whole provider factory.
-- Add a Copilot client-construction branch using `copilot::Client::builder()`, setting a resolved absolute token directory under Scorpio's config root, and enabling `oauth()` only for the interactive setup mode.
-- In runtime mode, permit only cached/reusable Copilot auth state that Scorpio can validate as equal to or narrower than the approved Copilot-inference privilege allowlist. If the cache is missing, expired, or broader than allowed, fail with sanitized guidance instead of beginning device flow.
-- Make the allowed interactive seam explicit: only the final setup verification step (`step5_health_check`) may construct Copilot with `InteractiveSetup`. Runtime call sites such as `Config::is_analysis_ready(...)`, `AnalysisRuntime` initialization, and normal analyze execution use `NonInteractiveRuntime`.
+- **InteractiveSetup path:** build the client using `copilot::Client::builder().oauth().token_dir(scorpio_token_dir).build()`. The `.oauth()` call enables device flow. This path is exclusively for `step5_health_check`.
+- **NonInteractiveRuntime path:** before constructing any Copilot client, check for the existence of the token cache files under Scorpio's managed token directory. If the expected files are absent, return `TradingError::Config` with guidance to run `scorpio setup` — do not attempt client construction. If the files exist, construct the client using `copilot::Client::builder().oauth().token_dir(scorpio_token_dir).on_device_code(|_| { /* no-op: device flow is not allowed in runtime */ }).build()`. This no-op handler ensures that if the cache is stale and rig internally attempts device flow, it will receive no user-code display and the resulting auth failure is caught and converted to a `TradingError::Config`.
+- **Never call `copilot::Client::from_env()`** in any Scorpio code path. rig's `from_env()` checks `GITHUB_COPILOT_API_KEY`, `COPILOT_GITHUB_ACCESS_TOKEN`, and `GITHUB_TOKEN` env vars, which would bypass Scorpio's device-flow gate and token directory isolation. Always construct via the builder with an explicit `token_dir`.
+- Make the allowed interactive seam explicit: only the final setup verification step (`step5_health_check`) may construct Copilot with `InteractiveSetup`. All other call sites (`Config::is_analysis_ready(...)`, `AnalysisRuntime` initialization, normal analyze execution) use `NonInteractiveRuntime`.
 - Reject `providers.copilot.base_url` with a config error in this first slice instead of forwarding OAuth traffic to an arbitrary custom host.
-- Resolve and create the Copilot token directory before handing it to rig, use owner-only directory permissions on Unix, and surface a sanitized config/auth error if the path cannot be resolved or created.
+- Resolve and create the Copilot token directory before handing it to rig, use owner-only directory permissions (`0o700`) on Unix, and surface a sanitized config/auth error if the path cannot be resolved or created. **The `.token_dir()` call on the builder is mandatory on every code path.** rig's default token dir is `$XDG_CONFIG_HOME/github_copilot` (shared with VS Code, JetBrains, etc.) — omitting `.token_dir()` silently uses the system-wide cache, which breaks Scorpio's auth isolation and makes cache resets ineffective. Add a test asserting that every Copilot client construction path in Scorpio passes a token directory argument.
+- Before reading cached tokens on any reuse (setup or runtime), verify that the token directory is owned by the current effective user and has at most `0o700` permissions on Unix. If the check fails, treat it as a cache-miss and fail with guidance rather than proceeding.
 - Treat the Copilot token directory as rig-managed secret state: Scorpio must not mirror tokens into config files, env vars, or logs. Cache reset / re-auth for this slice is deleting that directory and rerunning setup.
 - Add a Xiaomi MiMo branch that requires a configured API key and uses `xiaomimimo::Client::builder().api_key(...).base_url(...).build()` when `base_url` is present, otherwise `xiaomimimo::Client::new(...)`.
-- For Xiaomi MiMo `base_url`, parse and validate the URL structurally. Require `https://` by default. Plain `http://` is allowed only for exact loopback targets used in explicit local development. Reject ambiguous or unsafe forms such as userinfo-based hosts (`127.0.0.1@evil.com`) or lookalikes like `localhost.evil.com`. The setup/docs path must warn that prompts and API keys will be sent to that configured host.
+- For Xiaomi MiMo `base_url`, parse and validate the URL using the `url` crate (never string-prefix or contains checks). Require `https://` by default. Plain `http://` is allowed only when the parsed host component is an exact member of the loopback allowlist `{127.0.0.1, ::1, localhost}` — no other hosts. Reject any URL where the parsed `userinfo` component is non-empty (e.g. `127.0.0.1@evil.com` parses as host `evil.com`). Reject empty `base_url` values (`Some("")` or `Some("  ")`) the same as `None`. The setup/docs path must warn that prompts and API keys will be sent to that configured host.
 
 This file remains the only place where provider-name strings become concrete rig clients.
 
@@ -146,9 +150,13 @@ This file remains the only place where provider-name strings become concrete rig
 
 `crates/scorpio-core/src/providers/factory/agent.rs`
 
-- Add Copilot and Xiaomi MiMo to the internal dispatch enum and type aliases.
+- Add Copilot and Xiaomi MiMo to the internal dispatch enum and type aliases. The concrete types are:
+  - `type CopilotModel = rig::providers::copilot::CompletionModel<reqwest::Client>`
+  - `type XiaomiMimoModel = rig::providers::openai::completion::GenericCompletionModel<rig::providers::xiaomimimo::XiaomiMimoExt, reqwest::Client>`
 - Extend `build_agent_inner(...)` to construct provider-backed agents for both clients through the same `CompletionClient` pattern used elsewhere.
+- Confirm whether Copilot or Xiaomi MiMo require `.max_tokens(N)` during agent construction (Anthropic requires `.max_tokens(4096)`); specify the requirement explicitly so implementers do not have to discover it at runtime.
 - Preserve Scorpio's current provider-agnostic `LlmAgent` public surface.
+- Extend token usage tracking to handle `CopilotCompletionResponse::Chat` (uses `prompt_tokens + total_tokens` from `openai::completion::Usage`) and `CopilotCompletionResponse::Responses` (uses `input_tokens + output_tokens` from `ResponsesUsage`). Specify how both map to Scorpio's `TokenUsageTracker` fields.
 
 The intent is that every downstream agent continues to depend on Scorpio's wrapper, not on provider-specific `rig` types.
 
@@ -158,7 +166,9 @@ The intent is that every downstream agent continues to depend on Scorpio's wrapp
 
 - Add Copilot and Xiaomi MiMo to `ProviderRateLimiters::from_config(...)`.
 - Extend the provider-to-RPM mapping helpers and tests.
-- Use conservative defaults for both providers so the first implementation does not assume premium quotas.
+- Use conservative defaults for both providers so the first implementation does not assume premium quotas:
+  - **Copilot:** 30 requests/min (conservative for device-flow-backed, non-premium auth)
+  - **Xiaomi MiMo:** 50 requests/min (pending provider documentation; increase if observed limits are higher)
 
 This keeps rate limiting uniform even though Copilot auth differs from the keyed providers.
 
@@ -177,6 +187,7 @@ The required setup behavior is:
 - Step 4 routing must always include Copilot.
 - Step 4 must include additional keyed providers based on the effective merged provider config (saved file + env), not only `PartialConfig`'s file-backed secret fields.
 - When keyed providers are available, append Copilot after them so existing default-selection behavior stays stable and Copilot does not become the implicit first choice.
+- **`validate_step3_result` and `providers_with_keys` must both be updated.** `validate_step3_result` currently errors when all five keyed provider keys are `None` — it must also pass when Copilot-only was selected (tracked via a `copilot_only: bool` wizard-state flag or equivalent). `providers_with_keys` returns only providers with a non-None key field; step 4 routing must instead query a separate `eligible_routing_providers(partial, copilot_only_selected)` function that always appends `ProviderId::Copilot`. The `WIZARD_PROVIDERS` constant must be split into `KEYED_WIZARD_PROVIDERS` (step 3, keyed providers only) and a step 4 routing list.
 - Provider prompt defaulting should continue to preserve any saved provider when it remains eligible.
 - Using env-derived keyed-provider credentials in setup must not persist those secrets back into the saved user config unless the user explicitly typed them during this setup run.
 
@@ -189,7 +200,7 @@ Extend the existing model-selection flow without changing its provider-first men
 Copilot behavior:
 
 - Return a `Listed(...)` discovery outcome from a static curated list.
-- Keep that list intentionally small in the first slice, for example `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-5.1-codex`, `claude-sonnet-4`, `gemini-2.0-flash-001`, and `o3-mini`.
+- Keep that list intentionally small in the first slice, for example `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `claude-sonnet-4`, `gemini-2.0-flash-001`, and `o3-mini`. **Do not include `gpt-5.1-codex` or other Codex-class models in the first slice:** rig routes any model whose lowercase name contains `codex` to the `/responses` endpoint (`CompletionRoute::Responses`) instead of `/chat/completions`, which uses a different request/response shape (`ResponsesRequest`, `ResponsesUsage`) that may interact differently with Scorpio's structured-output and tool-calling paths. Codex models can be added to the curated list in a follow-up slice after verifying compatibility.
 - Append `Enter model manually` as the last option.
 - If a saved Copilot model is not in the curated list, default to manual entry and prefill the saved value rather than remapping it automatically.
 
@@ -253,32 +264,45 @@ This keeps the new providers normal tier-selectable options rather than introduc
 
 ### Auth/runtime behavior
 
-- Copilot client construction should succeed without an API key.
-- Only interactive setup health checks may trigger Copilot device flow in this first slice.
-- The control seam for that rule is the explicit Copilot auth mode passed into the Copilot construction / first-use path.
-- `step5_health_check` is the only approved interactive verification seam for Copilot auth in setup.
-- The approved Copilot bootstrap privilege allowlist for this slice is the current rig-native GitHub device-flow request scope `read:user` only.
-- "Equal to or narrower than the allowlist" therefore means the bootstrap token was minted through that exact `read:user` flow, and any future upstream scope metadata surfaced to Scorpio must not broaden it beyond `read:user`.
-- The authoritative comparison source is Scorpio's own Copilot token directory under `~/.scorpio-analyst/github_copilot/`, specifically the rig-managed bootstrap token cache plus the paired `api-key.json` metadata that binds the Copilot API token to a bootstrap-token fingerprint.
-- Scorpio must also own a minimal identity-binding record outside the rig-managed cache, stored under the same config root with owner-only permissions, containing the confirmed GitHub identity Scorpio accepted for this Copilot setup (for example numeric account ID plus login).
-- Before starting Copilot device flow in `step5_health_check`, setup must show the expected OAuth privilege boundary and require explicit user confirmation.
-- That same setup confirmation step must also surface the GitHub identity Scorpio expects to authorize once it can be determined from the `read:user` bootstrap flow.
-- If Scorpio cannot determine the requested privilege boundary from upstream behavior, or if it appears broader than the approved Copilot-inference allowlist, setup must abort instead of silently proceeding into device flow.
-- After device flow completes and rig writes auth state, `step5_health_check` must immediately re-open the Scorpio-owned Copilot token directory and re-run the same validation checks before treating the authorization as successful or issuing any inference call.
-- Fresh Copilot auth is valid only when Scorpio can verify all of the following from the just-written cache: the bootstrap token came from the expected `read:user` flow, the rig metadata binds the Copilot API token to that bootstrap-token fingerprint, and the confirmed GitHub identity matches the one surfaced during setup consent. Only after that check succeeds may Scorpio write or refresh its own identity-binding record.
-- Cached Copilot auth must be validated against that same allowlist before reuse in either setup or runtime. Scorpio should accept cached auth only when it can verify all of the following: the cache lives under Scorpio's managed Copilot token directory, the rig metadata binds the Copilot API token to the cached bootstrap token fingerprint, and no surfaced upstream privilege metadata broadens the bootstrap grant beyond `read:user`.
-- Cached Copilot auth must also be bound to that Scorpio-owned identity reference. Runtime or setup reuse is valid only when the freshly revalidated bootstrap-path identity matches the stored Scorpio-owned identity-binding record.
-- If Scorpio cannot prove a cached grant is within the allowlist, if the metadata binding is missing, if the identity-binding record is missing, unreadable, or inconsistent with the freshly revalidated identity, or if a future rig/upstream change stops exposing the fields Scorpio depends on for this comparison, it must fail closed, refuse reuse, ask the user to clear the Copilot cache, and require a fresh confirmed device-flow authorization.
-- Non-interactive runtime paths should fail fast with sanitized, actionable guidance rather than initiating device flow automatically.
-- Display the Copilot verification URI and user code only to the interactive terminal path, never to structured logs or sanitized error strings.
-- Copilot auth and runtime failures should pass through Scorpio's error-sanitization helpers, extended to redact GitHub OAuth token prefixes (for example `ghu_`, `gho_`, `ghr_`, `github_pat_`), bearer tokens, and device/user codes.
-- Copilot support must document and verify the least-privilege expectation of the upstream OAuth flow; if upstream exposes broader GitHub token access than required for Copilot inference, Scorpio should surface that as a documented risk and avoid broadening it further.
-- If the Copilot token directory cannot be resolved or created, fail with a sanitized actionable error instead of silently falling back to rig's global default location.
-- Xiaomi MiMo runtime failures should flow through the existing retry and sanitization layers like the other keyed providers.
+**Copilot auth model**
+
+rig-core 0.36.0 does not expose the OAuth scope of a cached grant, and the `bootstrap_token_fingerprint` stored in `api-key.json` is computed by `DefaultHasher` (process-randomized, non-cryptographic, not cross-process verifiable). Scorpio's security model therefore relies on a live GitHub identity call, not on internal rig metadata.
+
+- Copilot client construction must succeed without a Scorpio-managed API key.
+- Only `step5_health_check` may trigger Copilot device flow.
+- The control seam is `CopilotAuthMode::{InteractiveSetup, NonInteractiveRuntime}` threaded into the factory; see the Provider construction section for the concrete builder approaches for each mode.
+
+**Device flow consent (InteractiveSetup / `step5_health_check` only)**
+
+1. Before initiating device flow, display the expected OAuth privilege boundary (`read:user` scope) and require explicit user confirmation.
+2. Initiate rig's device flow. Display the verification URI and user code to the interactive terminal only — never to structured logs or error strings.
+3. After device flow completes and rig writes auth state, immediately call `GET https://api.github.com/user` using the access token rig cached, and read the `X-OAuth-Scopes` response header.
+4. Validate: the `X-OAuth-Scopes` header must include `read:user` and must not include any scope broader than Copilot inference requires (e.g., `repo`, `write:*`, `admin:*`). If the scope is absent, unreadable, or broader than allowed, abort and instruct the user to clear the Copilot cache and rerun setup.
+5. Record the numeric GitHub account ID and login from the `GET /user` response body into Scorpio's identity-binding record (stored at `<config_root>/github_copilot/scorpio-identity.json` with `0o600` permissions). The numeric account ID is mandatory — the login is stored for display only and must not be used as the primary identity key.
+6. Only after steps 4 and 5 succeed may setup report success and issue any inference call.
+
+**Cached auth reuse (setup and runtime)**
+
+Before reusing cached Copilot credentials:
+
+1. Verify the token directory is owned by the current effective user and has at most `0o700` permissions. Fail closed if not.
+2. Verify `scorpio-identity.json` exists, is readable, and contains a numeric account ID.
+3. Call `GET https://api.github.com/user` with the cached access token to re-confirm the live identity. The returned numeric account ID must match the stored record. If the token is expired or the identity does not match, fail closed, ask the user to clear the Copilot cache, and require a fresh setup run.
+4. Read the `X-OAuth-Scopes` header from the same response and apply the same scope validation as step 4 above.
+
+Note: GitHub Enterprise Copilot installations may redirect inference traffic to a custom endpoint via the `api` field in rig's `api-key.json` — this is a GitHub-controlled redirect (not user-configurable) and is acceptable. The trust boundary restriction on `providers.copilot.base_url` is specifically about user-specified host overrides, not GitHub Enterprise-managed redirects.
+
+**Error handling**
+
+- Non-interactive runtime paths must fail fast with sanitized, actionable guidance — never initiate device flow.
+- If the Copilot token directory cannot be resolved or created, fail with a sanitized actionable error (never fall back to rig's global default `~/.config/github_copilot`).
+- Copilot auth and runtime failures must pass through Scorpio's error-sanitization helpers, extended to redact GitHub OAuth token prefixes (`ghu_`, `gho_`, `ghr_`, `github_pat_`), bearer tokens, and device/user codes.
+- Audit rig's Copilot OAuth implementation for tracing spans or log emissions that contain the verification URI or user code. Add defense-in-depth redaction patterns for the verification URI format (`https://github.com/login/device`) and the 8-character hyphenated user code pattern.
+- Xiaomi MiMo runtime failures flow through the existing retry and sanitization layers like the other keyed providers.
 
 ### Provider trust boundaries
 
-- `providers.copilot.base_url` is unsupported because OAuth-backed traffic must not be redirected to arbitrary hosts in this slice.
+- `providers.copilot.base_url` is unsupported because Scorpio must not redirect OAuth-backed inference traffic to user-specified hosts. Note: GitHub Enterprise-managed endpoint redirects in rig's `api-key.json` are GitHub-controlled and acceptable.
 - `providers.xiaomimimo.base_url` remains supported, but Scorpio must treat it as an advanced trusted-host override.
 - Setup text and docs must warn that Xiaomi MiMo prompts, responses, and API keys are sent to the configured host.
 - Non-HTTPS Xiaomi MiMo endpoints should be rejected except explicit loopback/local-development cases validated by structural URL parsing.
@@ -313,15 +337,16 @@ This keeps the new providers normal tier-selectable options rather than introduc
 - Add Xiaomi MiMo success, missing-key failure, and base-url override tests.
 - Add validation coverage for the new provider-name branches.
 - Add Copilot token-dir resolution / creation failure coverage and Copilot `base_url` rejection coverage.
-- Add Copilot auth-mode coverage proving setup may enter interactive auth while runtime refuses to start device flow.
-- Add coverage that setup requires explicit user confirmation before entering Copilot device flow and aborts when the upstream OAuth privilege boundary is unknown or broader than allowed.
-- Add coverage that `step5_health_check` re-validates newly written Copilot auth after device flow completes before reporting success.
-- Add coverage that cached Copilot auth is rejected when its privilege boundary is unknown or broader than the approved allowlist.
-- Add coverage that the approved allowlist is exactly the rig-native `read:user` bootstrap scope, and that cached Copilot auth is rejected when the bootstrap-token fingerprint binding is missing or unverifiable.
-- Add coverage that cached Copilot auth is rejected when the confirmed GitHub identity is missing, changed unexpectedly, or cannot be bound to the trusted bootstrap path.
-- Add coverage that Scorpio's own identity-binding record is written only after successful post-device-flow validation and that cached auth is rejected when that record is missing, unreadable, or inconsistent.
-- Add Xiaomi MiMo `base_url` validation coverage for HTTPS, loopback exceptions, and rejected insecure remote hosts.
+- Add coverage asserting that every Copilot client construction code path calls `.token_dir()` explicitly and never calls `from_env()`.
+- Add Copilot auth-mode coverage proving: (a) `InteractiveSetup` path calls `.oauth()` and sets `on_device_code`; (b) `NonInteractiveRuntime` path performs a pre-flight token file existence check and fails with `TradingError::Config` if the files are absent; (c) `NonInteractiveRuntime` path sets a no-op `on_device_code` handler that returns an error if invoked.
+- Add coverage that `step5_health_check` calls `GET /user` after device flow, validates `X-OAuth-Scopes`, and aborts if the scope is broader than allowed or absent.
+- Add coverage that `step5_health_check` writes `scorpio-identity.json` with the numeric account ID only after successful scope validation.
+- Add coverage that cached auth reuse calls `GET /user`, re-validates the numeric account ID against the stored record, and fails closed on mismatch.
+- Add coverage that cached Copilot auth is rejected when `scorpio-identity.json` is missing, unreadable, or contains no numeric account ID.
+- Add coverage that token directory ownership/permission check fails closed on a directory Scorpio does not own.
+- Add Xiaomi MiMo `base_url` validation coverage for HTTPS, loopback exceptions (parsed via `url` crate host comparison against `{127.0.0.1, ::1, localhost}` allowlist), userinfo-presence rejection, and rejected insecure remote hosts.
 - Add caller-mapping coverage or targeted integration tests proving `step5_health_check` uses the interactive Copilot auth mode while runtime readiness paths use the non-interactive mode.
+- **Migration:** Before adding `ProviderId::Copilot`, delete or invert the nine existing rejection tests: `validate_provider_id_rejects_copilot` (client.rs), `deserialize_provider_name_rejects_copilot`, `load_from_rejects_copilot_provider_name`, `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot`, two env-override copilot error tests (config.rs), `load_user_config_at_preserves_stale_copilot_routing_strings` (settings.rs), `default_provider_index_falls_back_to_first_eligible_when_saved_provider_is_unsupported` (model_selection.rs). Also remove `STALE_COPILOT_PROVIDER_MARKER` and the recovery wrapper in `config.rs`.
 
 `crates/scorpio-core/src/providers/factory/agent.rs`
 
@@ -329,7 +354,8 @@ This keeps the new providers normal tier-selectable options rather than introduc
 
 `crates/scorpio-core/src/providers/factory/discovery.rs`
 
-- Add tests proving Copilot returns the curated static list.
+- Add tests proving Copilot returns the curated static list with no network request and without constructing a client.
+- Add a compile-time or type-level assertion verifying that `ProviderId::Copilot` never reaches the `list_models()` code path (since `CopilotExt`'s `ModelListing = Nothing` makes this a compile error).
 - Add tests proving Xiaomi MiMo discovery maps model IDs correctly and falls back to manual entry when required.
 - Add first-run discovery coverage proving Xiaomi MiMo listing works before quick/deep routing exists.
 
@@ -354,10 +380,12 @@ This keeps the new providers normal tier-selectable options rather than introduc
 
 `crates/scorpio-cli/src/cli/setup/model_selection.rs`
 
-- Add Copilot static-model menu coverage.
+- Add Copilot static-model menu coverage (confirming no Codex-class models in the list for slice 1).
 - Add Xiaomi MiMo listing/manual fallback coverage.
 - Add coverage that saved-but-unlisted Copilot models default to manual entry with prefilled text.
 - Preserve saved-provider and saved-model defaulting tests across the expanded provider set.
+- Add coverage that `discover_provider_models_blocking` for Copilot returns the static curated list without constructing a client or calling `Config::load_effective_runtime`.
+- Add coverage that `discover_provider_models_blocking` for Xiaomi MiMo calls `Config::load_effective_providers_config_from_user_path` (not `Config::load_effective_runtime`) so first-run discovery works before `[llm]` routing exists.
 
 ### Verification commands
 
