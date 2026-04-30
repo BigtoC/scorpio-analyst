@@ -123,76 +123,73 @@ fn unavailable_from_error(provider: ProviderId, error: &str) -> ModelDiscoveryOu
     }
 }
 
+fn unavailable_for_custom_base_url(provider: ProviderId) -> ModelDiscoveryOutcome {
+    tracing::warn!(
+        provider = provider.as_str(),
+        "automatic model discovery is disabled when a custom base_url is configured"
+    );
+    ModelDiscoveryOutcome::Unavailable {
+        reason: format!(
+            "Could not load models for {}; enter the model manually.",
+            provider.as_str()
+        ),
+    }
+}
+
 // ── Provider-specific model listing helpers ─────────────────────────────────
 
 use crate::config::ProviderSettings;
 use secrecy::ExposeSecret;
 
 async fn list_openai_models(settings: &ProviderSettings) -> Result<ModelList, String> {
+    if settings.base_url.is_some() {
+        return Err("custom base_url requires manual entry".to_owned());
+    }
     let key = settings
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = match settings.base_url.as_deref() {
-        Some(url) => rig::providers::openai::Client::builder()
-            .api_key(key.expose_secret())
-            .base_url(url)
-            .build()
-            .map_err(|e| format!("client build error: {e}"))?,
-        None => rig::providers::openai::Client::new(key.expose_secret())
-            .map_err(|e| format!("client build error: {e}"))?,
-    };
+    let client = rig::providers::openai::Client::new(key.expose_secret())
+        .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
 
 async fn list_anthropic_models(settings: &ProviderSettings) -> Result<ModelList, String> {
+    if settings.base_url.is_some() {
+        return Err("custom base_url requires manual entry".to_owned());
+    }
     let key = settings
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = match settings.base_url.as_deref() {
-        Some(url) => rig::providers::anthropic::Client::builder()
-            .api_key(key.expose_secret())
-            .base_url(url)
-            .build()
-            .map_err(|e| format!("client build error: {e}"))?,
-        None => rig::providers::anthropic::Client::new(key.expose_secret())
-            .map_err(|e| format!("client build error: {e}"))?,
-    };
+    let client = rig::providers::anthropic::Client::new(key.expose_secret())
+        .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
 
 async fn list_gemini_models(settings: &ProviderSettings) -> Result<ModelList, String> {
+    if settings.base_url.is_some() {
+        return Err("custom base_url requires manual entry".to_owned());
+    }
     let key = settings
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = match settings.base_url.as_deref() {
-        Some(url) => rig::providers::gemini::Client::builder()
-            .api_key(key.expose_secret())
-            .base_url(url)
-            .build()
-            .map_err(|e| format!("client build error: {e}"))?,
-        None => rig::providers::gemini::Client::new(key.expose_secret())
-            .map_err(|e| format!("client build error: {e}"))?,
-    };
+    let client = rig::providers::gemini::Client::new(key.expose_secret())
+        .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
 
 async fn list_deepseek_models(settings: &ProviderSettings) -> Result<ModelList, String> {
+    if settings.base_url.is_some() {
+        return Err("custom base_url requires manual entry".to_owned());
+    }
     let key = settings
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = match settings.base_url.as_deref() {
-        Some(url) => rig::providers::deepseek::Client::builder()
-            .api_key(key.expose_secret())
-            .base_url(url)
-            .build()
-            .map_err(|e| format!("client build error: {e}"))?,
-        None => rig::providers::deepseek::Client::new(key.expose_secret())
-            .map_err(|e| format!("client build error: {e}"))?,
-    };
+    let client = rig::providers::deepseek::Client::new(key.expose_secret())
+        .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
 
@@ -357,5 +354,26 @@ mod tests {
                 "reason exceeds 120-char cap: {reason:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn discover_setup_models_treats_custom_base_url_as_unavailable() {
+        let providers = ProvidersConfig {
+            openai: ProviderSettings {
+                api_key: Some(secrecy::SecretString::from("sk-test")),
+                base_url: Some("https://gateway.internal/v1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let outcomes = discover_setup_models(&[ProviderId::OpenAI], &providers).await;
+
+        assert_eq!(
+            outcomes.get(&ProviderId::OpenAI),
+            Some(&ModelDiscoveryOutcome::Unavailable {
+                reason: "Could not load models for openai; enter the model manually.".into(),
+            })
+        );
     }
 }
