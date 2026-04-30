@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "rust-best-practices": {
+      "source": "BigtoC/my-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-best-practices/SKILL.md",
+      "computedHash": "2b4a7fdf0c0fe9dbf9079e5e4215e15de23db9961f63cecf3b759cb974501cdf"
+    }
+  }
+}
