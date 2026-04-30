@@ -1,6 +1,6 @@
 # Setup Model Selection and Rig-Core 0.36.0 Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use `@superpowers:subagent-driven-development` (if subagents available) or `@superpowers:executing-plans` to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED: Use `@superpowers:subagent-driven-development` (if subagents available) or `@superpowers:executing-plans` to implement this plan. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Upgrade `rig-core` to `0.36.0`, remove Scorpio's custom Copilot implementation, and replace manual-only setup step 4 model entry with provider-backed model selection plus manual fallback.
 
@@ -60,7 +60,7 @@
 - Modify: `crates/scorpio-core/src/settings.rs`
 - Modify: `crates/scorpio-core/src/rate_limit.rs`
 
-- [ ] **Step 0: Run the graph-flow feasibility spike before any other code changes**
+- [x] **Step 0: Run the graph-flow feasibility spike before any other code changes**
 
 Verify the workspace can compile against `rig-core 0.36.0` end-to-end before touching any other code. This guards against the `graph-flow 0.5.1` × `rig-core 0.36.0` incompatibility that would otherwise be discovered only after Tasks 1-2 commit destructive Copilot deletions:
 
@@ -77,7 +77,7 @@ Expected outcomes:
 
 This step intentionally leaves `Cargo.toml`/`Cargo.lock` modified on disk if the spike succeeds; Step 3 below will rewrite the same files in a more deliberate form.
 
-- [ ] **Step 1: Write the failing config and recovery tests**
+- [x] **Step 1: Write the failing config and recovery tests**
 
 Add these tests before changing production code:
 
@@ -154,7 +154,7 @@ deep_thinking_model = "o3"
 }
 ```
 
-- [ ] **Step 2: Run the focused tests to verify they fail**
+- [x] **Step 2: Run the focused tests to verify they fail**
 
 Run:
 
@@ -169,7 +169,7 @@ Expected:
 - `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` fails because the recovery wrapper around `Config::load_from_user_path` does not exist yet.
 - The settings regression may already pass; keep it as the recovery-path guard.
 
-- [ ] **Step 3: Bump the workspace dependency and refresh the lockfile**
+- [x] **Step 3: Bump the workspace dependency and refresh the lockfile**
 
 Run:
 
@@ -189,7 +189,7 @@ Expected:
 - `Cargo.lock` now resolves `rig-core 0.36.0`.
 - Do not touch `graph-flow` here.
 
-- [ ] **Step 4: Implement the validated-provider and rate-limit cleanup**
+- [x] **Step 4: Implement the validated-provider and rate-limit cleanup**
 
 Make the minimal production edits needed for the tests and new dependency baseline:
 
@@ -267,7 +267,7 @@ pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Config> {
 
 What matters: runtime startup paths (`scorpio analyze`) surface a recognisable `Copilot` + `scorpio setup` message rather than a raw `unknown LLM provider` serde error, and the contract is anchored by the shared constant. The `load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot` test pins this end-to-end through `Config::load_effective_runtime`'s anyhow context wrapper.
 
-- [ ] **Step 5: Re-run the targeted tests and stop if `graph-flow` blocks the upgrade**
+- [x] **Step 5: Re-run the targeted tests and stop if `graph-flow` blocks the upgrade**
 
 Run:
 
@@ -280,7 +280,7 @@ Expected:
 - PASS.
 - If failures now point into `graph-flow` compatibility rather than Copilot removal, stop here and hand off the `graph-flow` patch separately before continuing this plan.
 
-- [ ] **Step 6: Hold the dependency and provider-surface cleanup uncommitted**
+- [x] **Step 6: Hold the dependency and provider-surface cleanup uncommitted**
 
 Do not commit yet. After Task 1's edits, `cargo build --workspace` will fail because Task 2's match-arm cleanups have not landed: `providers/factory/{client.rs,agent.rs}` still reference `ProviderId::Copilot`, and `app/mod.rs` still calls `preflight_copilot_if_configured`. A commit at this point would land an unbuildable revision on the feature branch, breaking `git bisect` and per-commit CI checks.
 
@@ -299,7 +299,7 @@ Tasks 1 and 2 commit together at the end of Task 2 (Step 5) under one message th
 - Modify: `crates/scorpio-core/src/agents/analyst/equity/common.rs`
 - Modify: `crates/scorpio-cli/src/cli/setup/steps.rs`
 
-- [ ] **Step 1: Write the failing factory validation test**
+- [x] **Step 1: Write the failing factory validation test**
 
 Add this test before editing the factory:
 
@@ -315,7 +315,7 @@ fn validate_provider_id_rejects_copilot() {
 }
 ```
 
-- [ ] **Step 2: Run the focused factory slice and verify it fails**
+- [x] **Step 2: Run the focused factory slice and verify it fails**
 
 Run:
 
@@ -327,7 +327,7 @@ Expected:
 
 - FAIL because `validate_provider_id("copilot")` still returns `Ok(ProviderId::Copilot)`.
 
-- [ ] **Step 3: Remove the custom Copilot runtime and update the remaining provider factory paths**
+- [x] **Step 3: Remove the custom Copilot runtime and update the remaining provider factory paths**
 
 Apply the minimal deletions and match cleanup:
 
@@ -389,7 +389,7 @@ Delete the two Copilot-only source files. Then remove:
 - Copilot-only setup health-check preflight in `steps.rs`, including the `run_single_health_check_rejects_copilot_provider_that_fails_preflight` test and the `SCORPIO_COPILOT_CLI_PATH` env-handling helpers it relies on
 - stale “Copilot” wording in `agents/analyst/equity/common.rs`
 
-- [ ] **Step 4: Re-run targeted core and CLI slices**
+- [x] **Step 4: Re-run targeted core and CLI slices**
 
 Run:
 
@@ -404,7 +404,7 @@ Expected:
 - All three commands PASS (the `rg` grep prints no matches, so the `if` block is skipped and the shell exits 0).
 - No compile failures remain for `copilot::`, `ProviderClient::Copilot`, or `preflight_copilot_if_configured`.
 
-- [ ] **Step 5: Commit Tasks 1 and 2 atomically**
+- [x] **Step 5: Commit Tasks 1 and 2 atomically**
 
 Stage every file modified by Tasks 1 + 2 plus the deletions, verify the working tree compiles cleanly, and only then commit. This is the first commit on the branch, so it must build cleanly before being recorded; every later commit must continue to compile against `cargo check`. Run `cargo check` BEFORE `git commit` so an unbuildable tree never lands.
 
@@ -424,7 +424,7 @@ Expected: `cargo check` exits 0 BEFORE the commit. If it fails, do not commit; i
 **Files:**
 - Modify: `crates/scorpio-core/src/config.rs`
 
-- [ ] **Step 1: Write the failing helper tests**
+- [x] **Step 1: Write the failing helper tests**
 
 Add these tests inside the existing `#[cfg(test)] mod tests` block in `crates/scorpio-core/src/config.rs` so they pick up the existing `ENV_LOCK`, `MINIMAL_CONFIG_TOML`, and `write_config(...)` helpers. Add them before the helper exists:
 
@@ -488,7 +488,7 @@ fn load_effective_providers_config_from_user_path_reads_env_base_url_override() 
 }
 ```
 
-- [ ] **Step 2: Run the helper slice and verify it fails**
+- [x] **Step 2: Run the helper slice and verify it fails**
 
 Run:
 
@@ -500,7 +500,7 @@ Expected:
 
 - FAIL because `Config::load_effective_providers_config_from_user_path` does not exist yet.
 
-- [ ] **Step 3: Implement the path-aware provider-settings loader in `config.rs`**
+- [x] **Step 3: Implement the path-aware provider-settings loader in `config.rs`**
 
 Add a dedicated helper instead of reusing `Config::load_effective_runtime`:
 
@@ -586,7 +586,7 @@ Do not deserialize `LlmConfig` inside this helper. That is the entire point of t
 
 Also keep the helper contract explicit in the code comments: it preserves file-backed `[providers.*]` settings plus env overrides and current wizard secrets, but it does not attempt to validate or reuse the current `[llm]` routing values.
 
-- [ ] **Step 4: Re-run the helper slice**
+- [x] **Step 4: Re-run the helper slice**
 
 Run:
 
@@ -596,7 +596,7 @@ cargo nextest run -p scorpio-core --all-features --locked -E 'test(load_effectiv
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the helper**
+- [x] **Step 5: Commit the helper**
 
 Run:
 
@@ -612,7 +612,7 @@ git commit -m "refactor(config): add setup-safe provider settings loader"
 - Create: `crates/scorpio-core/src/providers/factory/discovery.rs`
 - Modify: `crates/scorpio-core/src/providers/factory/mod.rs`
 
-- [ ] **Step 0: Enable `tokio` `test-util` for paused-clock tests**
+- [x] **Step 0: Enable `tokio` `test-util` for paused-clock tests**
 
 The new discovery test uses `#[tokio::test(start_paused = true)]`, which requires the `test-util` Cargo feature. The workspace-level `tokio = { version = "1", features = ["full"] }` does **not** include `test-util` (it is intentionally excluded from `full`). Add an override in `crates/scorpio-core/Cargo.toml`'s `[dev-dependencies]` so the feature is enabled only in test builds:
 
@@ -625,7 +625,7 @@ tokio = { workspace = true, features = ["test-util"] }
 
 Without this, the failing test in Step 1 will not compile (the `start_paused` attribute is unknown) and the TDD red-step in Step 2 degrades from "test fails by assertion" to "test fails to compile" (cf. the broader Adversarial finding about compile-vs-assertion FAIL).
 
-- [ ] **Step 1: Write the failing discovery tests in the new module**
+- [x] **Step 1: Write the failing discovery tests in the new module**
 
 Create `crates/scorpio-core/src/providers/factory/discovery.rs` with tests first:
 
@@ -800,7 +800,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the discovery slice and verify it fails**
+- [x] **Step 2: Run the discovery slice and verify it fails**
 
 Run:
 
@@ -810,7 +810,7 @@ cargo nextest run -p scorpio-core --all-features --locked -E 'test(openrouter_re
 
 Expected: FAIL because the module and helper functions do not exist yet.
 
-- [ ] **Step 3: Implement the discovery module and export it**
+- [x] **Step 3: Implement the discovery module and export it**
 
 Build the smallest core discovery surface that matches the spec:
 
@@ -905,7 +905,7 @@ mod discovery;
 pub use discovery::{ModelDiscoveryOutcome, discover_setup_models};
 ```
 
-- [ ] **Step 4: Re-run the discovery slice**
+- [x] **Step 4: Re-run the discovery slice**
 
 Run:
 
@@ -915,7 +915,7 @@ cargo nextest run -p scorpio-core --all-features --locked -E 'test(openrouter_re
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the discovery module**
+- [x] **Step 5: Commit the discovery module**
 
 Run:
 
@@ -933,7 +933,7 @@ git commit -m "feat(setup): add provider model discovery in core"
 - Create: `crates/scorpio-cli/src/cli/setup/model_selection.rs`
 - Modify: `crates/scorpio-cli/src/cli/setup/steps.rs`
 
-- [ ] **Step 1: Write the failing step-4 helper tests in the new module**
+- [x] **Step 1: Write the failing step-4 helper tests in the new module**
 
 Create `crates/scorpio-cli/src/cli/setup/model_selection.rs` with tests first:
 
@@ -1097,7 +1097,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the CLI slice and verify it fails**
+- [x] **Step 2: Run the CLI slice and verify it fails**
 
 Run:
 
@@ -1107,7 +1107,7 @@ cargo nextest run -p scorpio-cli --all-features --locked -E 'test(default_provid
 
 Expected: FAIL because `model_selection.rs` and its helper types do not exist yet.
 
-- [ ] **Step 3: Implement the step-4 helper module and keep `steps.rs` thin**
+- [x] **Step 3: Implement the step-4 helper module and keep `steps.rs` thin**
 
 Add `mod model_selection;` in `crates/scorpio-cli/src/cli/setup/mod.rs`, then build a focused helper module:
 
@@ -1205,7 +1205,7 @@ Implementation notes:
   - selecting `Enter model manually` then opens the text prompt, whose initial value comes from `manual_initial_value(...)`
   - `ManualOnly` / `Unavailable` -> skip picker and go straight to the manual text prompt
 
-- [ ] **Step 4: Update `steps.rs` to use the new helper and remove leftover Copilot-only logic**
+- [x] **Step 4: Update `steps.rs` to use the new helper and remove leftover Copilot-only logic**
 
 Refactor `steps.rs` so it becomes:
 
@@ -1237,7 +1237,7 @@ step!(step4_provider_routing(&config_path, &mut partial));
 
 Also remove the old Copilot preflight helper call from the health-check path if any references remain.
 
-- [ ] **Step 5: Run the focused CLI slices**
+- [x] **Step 5: Run the focused CLI slices**
 
 Run:
 
@@ -1247,7 +1247,7 @@ cargo nextest run -p scorpio-cli --all-features --locked -E 'test(default_provid
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the step-4 UX change**
+- [x] **Step 6: Commit the step-4 UX change**
 
 Run:
 
@@ -1261,7 +1261,7 @@ git commit -m "feat(setup): list provider models in step 4"
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update the setup and limitation text in `README.md`**
+- [x] **Step 1: Update the setup and limitation text in `README.md`**
 
 Replace the outdated setup note and limitation section with factual copy matching the spec. The resulting README should say all of the following:
 
@@ -1280,7 +1280,7 @@ Use copy in this shape:
 The previous custom ACP-based Copilot provider was removed as part of the `rig-core 0.36.0` upgrade. A follow-up change will reintroduce Copilot through upstream `rig` support.
 ```
 
-- [ ] **Step 2: Verify the README text changed in the intended places**
+- [x] **Step 2: Verify the README text changed in the intended places**
 
 Run:
 
@@ -1294,7 +1294,7 @@ Expected:
 - The new setup-step wording is present.
 - The old “Copilot provider does not yet support tool calling” ACP wording is gone because the second command prints no matches and exits successfully.
 
-- [ ] **Step 3: Run the full verification sequence**
+- [x] **Step 3: Run the full verification sequence**
 
 Run these commands in order:
 
@@ -1309,7 +1309,7 @@ Expected:
 - All three commands PASS.
 - If any failure appears unrelated to this slice, stop and use `@superpowers:systematic-debugging` before editing more code.
 
-- [ ] **Step 4: Commit the docs and final green verification state**
+- [x] **Step 4: Commit the docs and final green verification state**
 
 Run:
 
