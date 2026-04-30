@@ -54,7 +54,7 @@ where
     F: Fn(ProviderId) -> Fut + Copy,
     Fut: Future<Output = Result<ModelList, String>>,
 {
-    collect_discovery_outcomes(eligible.into_iter(), |provider| async move {
+    collect_discovery_outcomes(eligible, |provider| async move {
         let outcome = match provider {
             ProviderId::OpenRouter => manual_only_outcome(provider),
             _ => match timeout(Duration::from_secs(DISCOVERY_TIMEOUT_SECS), load(provider)).await {
