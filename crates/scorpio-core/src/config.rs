@@ -407,10 +407,21 @@ impl Config {
     /// If the saved config still routes to the removed Copilot provider, a friendly
     /// error message guides the user to run `scorpio setup`.
     pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Self> {
-        match Self::load_from_user_path_inner(path) {
+        let path = path.as_ref();
+        let partial = crate::settings::load_user_config_at(path)?;
+        let saved_routes_to_copilot = [
+            partial.quick_thinking_provider.as_deref(),
+            partial.deep_thinking_provider.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|provider| provider.eq_ignore_ascii_case("copilot"));
+
+        match Self::load_effective_runtime(partial) {
             Ok(cfg) => Ok(cfg),
             Err(err)
-                if err
+                if saved_routes_to_copilot
+                    && err
                     .chain()
                     .any(|cause| cause.to_string().contains(STALE_COPILOT_PROVIDER_MARKER)) =>
             {
@@ -421,13 +432,6 @@ impl Config {
             }
             Err(err) => Err(err),
         }
-    }
-
-    fn load_from_user_path_inner(path: impl AsRef<Path>) -> Result<Self> {
-        use crate::settings::{PartialConfig, load_user_config_at};
-
-        let partial: PartialConfig = load_user_config_at(path)?;
-        Self::load_effective_runtime(partial)
     }
 
     /// Build the effective runtime config from in-memory wizard/file values.
@@ -1584,6 +1588,45 @@ deep_thinking_model = "o3"
         );
     }
 
+    #[test]
+    fn load_from_user_path_does_not_rewrite_env_override_copilot_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+"#,
+        );
+
+        let saved_quick = std::env::var("SCORPIO__LLM__QUICK_THINKING_PROVIDER").ok();
+        unsafe {
+            std::env::set_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER", "copilot");
+        }
+
+        let err = Config::load_from_user_path(&path)
+            .expect_err("env override should fail without stale-file rewrite");
+
+        unsafe {
+            match saved_quick {
+                Some(ref value) => std::env::set_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER", value),
+                None => std::env::remove_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER"),
+            }
+        }
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("unknown LLM provider: \"copilot\""),
+            "expected raw env override error; got: {msg}"
+        );
+        assert!(
+            !msg.contains("Run `scorpio setup`"),
+            "env override failures must not be rewritten as stale saved config: {msg}"
+        );
+    }
+
     // ── Symbol validation stubs (relocated to Unit 6 — cli::analyze tests) ──
 
     /// Symbol-validation tests for `Config::validate()` were removed in Unit 3
@@ -1715,7 +1758,7 @@ rpm = 45
 "#,
         );
         let partial = crate::settings::PartialConfig {
-            openai_api_key: Some("sk-openai".into()),
+            openai_api_key: Some("sk-partial-openai".into()),
             ..Default::default()
         };
 
@@ -1723,7 +1766,7 @@ rpm = 45
         // won't overwrite it with the .env file value.
         let saved_openai_key = std::env::var("SCORPIO_OPENAI_API_KEY").ok();
         unsafe {
-            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-openai");
+            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-env-openai");
         }
 
         let providers = Config::load_effective_providers_config_from_user_path(&path, &partial)
@@ -1743,7 +1786,7 @@ rpm = 45
                 .api_key
                 .as_ref()
                 .map(ExposeSecret::expose_secret),
-            Some("sk-openai")
+            Some("sk-env-openai")
         );
         assert_eq!(
             providers.deepseek.base_url.as_deref(),
