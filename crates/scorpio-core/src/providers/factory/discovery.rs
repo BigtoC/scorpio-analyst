@@ -14,12 +14,21 @@ use super::error::sanitize_error_summary;
 const DISCOVERY_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of setup-time model discovery for a provider.
+///
+/// This enum is only for the interactive setup flow. It decides whether setup
+/// can show a picker of discovered model IDs, must fall back to manual entry,
+/// or should explain that listing is temporarily unavailable.
 pub enum ModelDiscoveryOutcome {
     Listed(Vec<String>),
     ManualOnly { reason: String },
     Unavailable { reason: String },
 }
 
+/// Discover setup-time model options for the given eligible providers.
+///
+/// This helper is intentionally setup-only: it returns prompt-oriented outcomes
+/// for the wizard and is not a general runtime provider-readiness check.
 pub async fn discover_setup_models(
     eligible: &[ProviderId],
     providers: &ProvidersConfig,

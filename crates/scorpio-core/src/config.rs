@@ -123,7 +123,7 @@ where
 ///
 /// Used by [`Config::load_from_user_path`] to detect stale copilot routing
 /// and surface a friendly recovery message instead of a raw serde error.
-pub(crate) const STALE_COPILOT_PROVIDER_MARKER: &str = "copilot";
+pub(crate) const STALE_COPILOT_PROVIDER_MARKER: &str = "unknown LLM provider: \"copilot\"";
 
 fn default_debate_rounds() -> u32 {
     3
@@ -409,7 +409,11 @@ impl Config {
     pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Self> {
         match Self::load_from_user_path_inner(path) {
             Ok(cfg) => Ok(cfg),
-            Err(err) if format!("{err:#}").contains(STALE_COPILOT_PROVIDER_MARKER) => {
+            Err(err)
+                if err
+                    .chain()
+                    .any(|cause| cause.to_string().contains(STALE_COPILOT_PROVIDER_MARKER)) =>
+            {
                 Err(anyhow::anyhow!(
                     "Your saved configuration still routes to the Copilot provider, which has been removed. \
                      Run `scorpio setup` to update routing to a supported provider."
@@ -1557,6 +1561,26 @@ deep_thinking_model = "o3"
         assert!(
             msg.contains("scorpio setup"),
             "expected guidance to run setup; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_from_user_path_does_not_rewrite_unrelated_copilot_path_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copilot-config.toml");
+        std::fs::write(&path, "not valid toml = [").expect("invalid config file should be written");
+
+        let err = Config::load_from_user_path(&path)
+            .expect_err("invalid config file should surface its original parse failure");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("failed to parse user config") || msg.contains("TOML parse error"),
+            "expected original parse failure; got: {msg}"
+        );
+        assert!(
+            !msg.contains("Run `scorpio setup`"),
+            "unrelated copilot mentions must not trigger stale-provider guidance: {msg}"
         );
     }
 
