@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use scorpio_core::config::Config;
@@ -17,7 +18,18 @@ enum ModelMenuOption {
 impl std::fmt::Display for ModelMenuOption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Listed(name) => f.write_str(name),
+            Self::Listed(name) => {
+                for ch in name.chars() {
+                    if ch.is_control() {
+                        for escaped in ch.escape_default() {
+                            f.write_char(escaped)?;
+                        }
+                    } else {
+                        f.write_char(ch)?;
+                    }
+                }
+                Ok(())
+            }
             Self::Manual => f.write_str("Enter model manually"),
         }
     }
@@ -51,8 +63,29 @@ struct ProviderRoutingPlan {
 
 fn default_provider_index(eligible: &[ProviderId], saved_provider: Option<&str>) -> usize {
     saved_provider
-        .and_then(|name| eligible.iter().position(|p| p.as_str() == name))
+        .and_then(|name| {
+            eligible
+                .iter()
+                .position(|p| p.as_str().eq_ignore_ascii_case(name))
+        })
         .unwrap_or(0)
+}
+
+fn bootstrap_fallback_outcome(provider: ProviderId) -> ModelDiscoveryOutcome {
+    match provider {
+        ProviderId::OpenRouter => ModelDiscoveryOutcome::ManualOnly {
+            reason: format!(
+                "Model listing is manual-only for {}; enter the model manually.",
+                provider.as_str()
+            ),
+        },
+        _ => ModelDiscoveryOutcome::Unavailable {
+            reason: format!(
+                "Could not load models for {}; enter the model manually.",
+                provider.as_str()
+            ),
+        },
+    }
 }
 
 fn listed_model_options(models: &[String], saved_model: Option<&str>) -> Vec<ModelMenuOption> {
@@ -206,17 +239,7 @@ fn discover_setup_models_blocking(
             Err(_) => {
                 return eligible
                     .iter()
-                    .map(|&p| {
-                        (
-                            p,
-                            ModelDiscoveryOutcome::Unavailable {
-                                reason: format!(
-                                    "Could not load models for {}; enter the model manually.",
-                                    p.as_str()
-                                ),
-                            },
-                        )
-                    })
+                    .map(|&p| (p, bootstrap_fallback_outcome(p)))
                     .collect();
             }
         };
@@ -229,17 +252,7 @@ fn discover_setup_models_blocking(
         Err(_) => {
             return eligible
                 .iter()
-                .map(|&p| {
-                    (
-                        p,
-                        ModelDiscoveryOutcome::Unavailable {
-                            reason: format!(
-                                "Could not load models for {}; enter the model manually.",
-                                p.as_str()
-                            ),
-                        },
-                    )
-                })
+                .map(|&p| (p, bootstrap_fallback_outcome(p)))
                 .collect();
         }
     };
@@ -360,6 +373,12 @@ mod tests {
     }
 
     #[test]
+    fn default_provider_index_matches_saved_provider_case_insensitively() {
+        let eligible = vec![ProviderId::OpenAI, ProviderId::OpenRouter, ProviderId::DeepSeek];
+        assert_eq!(default_provider_index(&eligible, Some("OPENROUTER")), 1);
+    }
+
+    #[test]
     fn listed_model_options_put_saved_model_first_and_manual_last() {
         let options = listed_model_options(
             &["gpt-4o-mini".into(), "o3".into(), "gpt-4o-mini".into()],
@@ -454,6 +473,27 @@ mod tests {
                 ),
                 initial_value: "qwen/qwen3.6-plus-preview:free".into(),
             }
+        );
+    }
+
+    #[test]
+    fn bootstrap_fallback_preserves_openrouter_manual_only() {
+        assert_eq!(
+            bootstrap_fallback_outcome(ProviderId::OpenRouter),
+            ModelDiscoveryOutcome::ManualOnly {
+                reason: "Model listing is manual-only for openrouter; enter the model manually."
+                    .into(),
+            }
+        );
+    }
+
+    #[test]
+    fn model_menu_option_display_escapes_control_characters() {
+        let option = ModelMenuOption::Listed("gpt\n4\tmini\u{7}".into());
+        assert_eq!(option.to_string(), "gpt\\n4\\tmini\\u{7}");
+        assert_eq!(
+            option,
+            ModelMenuOption::Listed("gpt\n4\tmini\u{7}".into())
         );
     }
 
