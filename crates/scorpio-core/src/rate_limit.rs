@@ -137,7 +137,6 @@ impl ProviderRateLimiters {
             (ProviderId::OpenAI, cfg.openai.rpm, "openai"),
             (ProviderId::Anthropic, cfg.anthropic.rpm, "anthropic"),
             (ProviderId::Gemini, cfg.gemini.rpm, "gemini"),
-            (ProviderId::Copilot, cfg.copilot.rpm, "copilot"),
             (ProviderId::OpenRouter, cfg.openrouter.rpm, "openrouter"),
             (ProviderId::DeepSeek, cfg.deepseek.rpm, "deepseek"),
         ];
@@ -199,7 +198,6 @@ mod tests {
                 ProviderId::OpenAI => cfg.openai.rpm = rpm,
                 ProviderId::Anthropic => cfg.anthropic.rpm = rpm,
                 ProviderId::Gemini => cfg.gemini.rpm = rpm,
-                ProviderId::Copilot => cfg.copilot.rpm = rpm,
                 ProviderId::OpenRouter => cfg.openrouter.rpm = rpm,
                 ProviderId::DeepSeek => cfg.deepseek.rpm = rpm,
             }
@@ -220,11 +218,6 @@ mod tests {
                 ..Default::default()
             },
             gemini: ProviderSettings {
-                base_url: None,
-                rpm: 0,
-                ..Default::default()
-            },
-            copilot: ProviderSettings {
                 base_url: None,
                 rpm: 0,
                 ..Default::default()
@@ -269,10 +262,6 @@ mod tests {
             registry.get(ProviderId::Anthropic).is_none(),
             "anthropic (rpm=0) should be absent"
         );
-        assert!(
-            registry.get(ProviderId::Copilot).is_none(),
-            "copilot (rpm=0) should be absent"
-        );
     }
 
     #[test]
@@ -297,7 +286,6 @@ mod tests {
         assert!(registry.get(ProviderId::OpenAI).is_none());
         assert!(registry.get(ProviderId::Anthropic).is_none());
         assert!(registry.get(ProviderId::Gemini).is_none());
-        assert!(registry.get(ProviderId::Copilot).is_none());
         assert!(
             registry.get(ProviderId::OpenRouter).is_none(),
             "openrouter (rpm=0) should be absent"

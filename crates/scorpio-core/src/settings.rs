@@ -16,6 +16,172 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
+struct UserConfigFile {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    finnhub_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    fred_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    openai_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    anthropic_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    gemini_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    openrouter_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    deepseek_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    quick_thinking_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    quick_thinking_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    deep_thinking_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    deep_thinking_model: Option<String>,
+    #[serde(default, skip_serializing_if = "UserConfigProviders::is_empty")]
+    providers: UserConfigProviders,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    openai_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    anthropic_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    gemini_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    openrouter_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    deepseek_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    openai_rpm: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    anthropic_rpm: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    gemini_rpm: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    openrouter_rpm: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    deepseek_rpm: Option<u32>,
+}
+
+#[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
+struct UserConfigProviders {
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    openai: UserConfigProvider,
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    anthropic: UserConfigProvider,
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    gemini: UserConfigProvider,
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    openrouter: UserConfigProvider,
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    deepseek: UserConfigProvider,
+}
+
+impl UserConfigProviders {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
+struct UserConfigProvider {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    rpm: Option<u32>,
+}
+
+impl UserConfigProvider {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+impl From<UserConfigFile> for PartialConfig {
+    fn from(value: UserConfigFile) -> Self {
+        let openai = value.providers.openai;
+        let anthropic = value.providers.anthropic;
+        let gemini = value.providers.gemini;
+        let openrouter = value.providers.openrouter;
+        let deepseek = value.providers.deepseek;
+
+        Self {
+            finnhub_api_key: value.finnhub_api_key,
+            fred_api_key: value.fred_api_key,
+            openai_api_key: value.openai_api_key,
+            anthropic_api_key: value.anthropic_api_key,
+            gemini_api_key: value.gemini_api_key,
+            openrouter_api_key: value.openrouter_api_key,
+            deepseek_api_key: value.deepseek_api_key,
+            quick_thinking_provider: value.quick_thinking_provider,
+            quick_thinking_model: value.quick_thinking_model,
+            deep_thinking_provider: value.deep_thinking_provider,
+            deep_thinking_model: value.deep_thinking_model,
+            openai_base_url: openai.base_url.or(value.openai_base_url),
+            anthropic_base_url: anthropic.base_url.or(value.anthropic_base_url),
+            gemini_base_url: gemini.base_url.or(value.gemini_base_url),
+            openrouter_base_url: openrouter.base_url.or(value.openrouter_base_url),
+            deepseek_base_url: deepseek.base_url.or(value.deepseek_base_url),
+            openai_rpm: openai.rpm.or(value.openai_rpm),
+            anthropic_rpm: anthropic.rpm.or(value.anthropic_rpm),
+            gemini_rpm: gemini.rpm.or(value.gemini_rpm),
+            openrouter_rpm: openrouter.rpm.or(value.openrouter_rpm),
+            deepseek_rpm: deepseek.rpm.or(value.deepseek_rpm),
+        }
+    }
+}
+
+impl From<&PartialConfig> for UserConfigFile {
+    fn from(value: &PartialConfig) -> Self {
+        Self {
+            finnhub_api_key: value.finnhub_api_key.clone(),
+            fred_api_key: value.fred_api_key.clone(),
+            openai_api_key: value.openai_api_key.clone(),
+            anthropic_api_key: value.anthropic_api_key.clone(),
+            gemini_api_key: value.gemini_api_key.clone(),
+            openrouter_api_key: value.openrouter_api_key.clone(),
+            deepseek_api_key: value.deepseek_api_key.clone(),
+            quick_thinking_provider: value.quick_thinking_provider.clone(),
+            quick_thinking_model: value.quick_thinking_model.clone(),
+            deep_thinking_provider: value.deep_thinking_provider.clone(),
+            deep_thinking_model: value.deep_thinking_model.clone(),
+            providers: UserConfigProviders {
+                openai: UserConfigProvider {
+                    base_url: value.openai_base_url.clone(),
+                    rpm: value.openai_rpm,
+                },
+                anthropic: UserConfigProvider {
+                    base_url: value.anthropic_base_url.clone(),
+                    rpm: value.anthropic_rpm,
+                },
+                gemini: UserConfigProvider {
+                    base_url: value.gemini_base_url.clone(),
+                    rpm: value.gemini_rpm,
+                },
+                openrouter: UserConfigProvider {
+                    base_url: value.openrouter_base_url.clone(),
+                    rpm: value.openrouter_rpm,
+                },
+                deepseek: UserConfigProvider {
+                    base_url: value.deepseek_base_url.clone(),
+                    rpm: value.deepseek_rpm,
+                },
+            },
+            openai_base_url: None,
+            anthropic_base_url: None,
+            gemini_base_url: None,
+            openrouter_base_url: None,
+            deepseek_base_url: None,
+            openai_rpm: None,
+            anthropic_rpm: None,
+            gemini_rpm: None,
+            openrouter_rpm: None,
+            deepseek_rpm: None,
+        }
+    }
+}
+
 /// Structured failure type returned from [`load_user_config_at`].
 ///
 /// Bumped to `pub` so CLI-side recovery UX can `downcast_ref` on
@@ -83,6 +249,36 @@ pub struct PartialConfig {
     /// Deep-thinking model name.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub deep_thinking_model: Option<String>,
+    /// Optional OpenAI base URL override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub openai_base_url: Option<String>,
+    /// Optional Anthropic base URL override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub anthropic_base_url: Option<String>,
+    /// Optional Gemini base URL override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gemini_base_url: Option<String>,
+    /// Optional OpenRouter base URL override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub openrouter_base_url: Option<String>,
+    /// Optional DeepSeek base URL override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deepseek_base_url: Option<String>,
+    /// Optional OpenAI requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub openai_rpm: Option<u32>,
+    /// Optional Anthropic requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub anthropic_rpm: Option<u32>,
+    /// Optional Gemini requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gemini_rpm: Option<u32>,
+    /// Optional OpenRouter requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub openrouter_rpm: Option<u32>,
+    /// Optional DeepSeek requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deepseek_rpm: Option<u32>,
 }
 
 /// Redacts an `Option<String>` API-key field for `Debug` output.
@@ -107,6 +303,16 @@ impl std::fmt::Debug for PartialConfig {
             .field("quick_thinking_model", &self.quick_thinking_model)
             .field("deep_thinking_provider", &self.deep_thinking_provider)
             .field("deep_thinking_model", &self.deep_thinking_model)
+            .field("openai_base_url", &self.openai_base_url)
+            .field("anthropic_base_url", &self.anthropic_base_url)
+            .field("gemini_base_url", &self.gemini_base_url)
+            .field("openrouter_base_url", &self.openrouter_base_url)
+            .field("deepseek_base_url", &self.deepseek_base_url)
+            .field("openai_rpm", &self.openai_rpm)
+            .field("anthropic_rpm", &self.anthropic_rpm)
+            .field("gemini_rpm", &self.gemini_rpm)
+            .field("openrouter_rpm", &self.openrouter_rpm)
+            .field("deepseek_rpm", &self.deepseek_rpm)
             .finish()
     }
 }
@@ -147,13 +353,15 @@ pub fn load_user_config_at(path: impl AsRef<Path>) -> anyhow::Result<PartialConf
         path: path.to_path_buf(),
         source,
     })?;
-    toml::from_str(&content).map_err(|source| {
-        UserConfigFileError::Parse {
-            path: path.to_path_buf(),
-            source,
-        }
-        .into()
-    })
+    toml::from_str::<UserConfigFile>(&content)
+        .map(PartialConfig::from)
+        .map_err(|source| {
+            UserConfigFileError::Parse {
+                path: path.to_path_buf(),
+                source,
+            }
+            .into()
+        })
 }
 
 /// Load [`PartialConfig`] from the default user config path.
@@ -178,7 +386,8 @@ pub fn save_user_config_at(cfg: &PartialConfig, path: impl AsRef<Path>) -> anyho
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create config directory: {}", parent.display()))?;
 
-    let toml_str = toml::to_string_pretty(cfg).context("failed to serialize config")?;
+    let toml_str =
+        toml::to_string_pretty(&UserConfigFile::from(cfg)).context("failed to serialize config")?;
 
     let mut tmp = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("failed to create temp file in: {}", parent.display()))?;
@@ -242,6 +451,16 @@ mod tests {
             quick_thinking_model: Some("gpt-4o-mini".into()),
             deep_thinking_provider: Some("anthropic".into()),
             deep_thinking_model: Some("claude-opus-4-5".into()),
+            openai_base_url: Some("https://openai.example.com/v1".into()),
+            anthropic_base_url: Some("https://anthropic.example.com/v1".into()),
+            gemini_base_url: Some("https://gemini.example.com/v1beta".into()),
+            openrouter_base_url: Some("https://openrouter.example.com/api/v1".into()),
+            deepseek_base_url: Some("https://deepseek.example.com/v1".into()),
+            openai_rpm: Some(501),
+            anthropic_rpm: Some(502),
+            gemini_rpm: Some(503),
+            openrouter_rpm: Some(21),
+            deepseek_rpm: Some(61),
         }
     }
 
@@ -456,6 +675,82 @@ mod tests {
         let output = format!("{cfg:?}");
         assert!(!output.contains("sk-deepseek-secret"));
         assert!(output.contains("[REDACTED]"));
+    }
+
+    // ── Debug redaction ───────────────────────────────────────────────────────
+
+    // ── Copilot routing preservation test ─────────────────────────────────
+
+    #[test]
+    fn load_user_config_at_preserves_stale_copilot_routing_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+quick_thinking_provider = "copilot"
+quick_thinking_model = "claude-haiku"
+deep_thinking_provider = "openai"
+deep_thinking_model = "o3"
+"#,
+        );
+        let loaded = load_user_config_at(&path).expect("partial config should still load");
+        assert_eq!(loaded.quick_thinking_provider.as_deref(), Some("copilot"));
+        assert_eq!(loaded.quick_thinking_model.as_deref(), Some("claude-haiku"));
+        assert_eq!(loaded.deep_thinking_provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn load_user_config_at_preserves_provider_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+quick_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+
+openai_base_url = "https://openai.example.com/v1"
+openai_rpm = 123
+deepseek_base_url = "https://deepseek.example.com/v1"
+deepseek_rpm = 45
+"#,
+        );
+
+        let loaded = load_user_config_at(&path).expect("partial config should still load");
+
+        assert_eq!(
+            loaded.openai_base_url.as_deref(),
+            Some("https://openai.example.com/v1")
+        );
+        assert_eq!(loaded.openai_rpm, Some(123));
+        assert_eq!(
+            loaded.deepseek_base_url.as_deref(),
+            Some("https://deepseek.example.com/v1")
+        );
+        assert_eq!(loaded.deepseek_rpm, Some(45));
+    }
+
+    #[test]
+    fn load_user_config_at_prefers_nested_provider_overrides_over_legacy_flat_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+openai_base_url = "https://legacy-openai.example.com/v1"
+openai_rpm = 11
+
+[providers.openai]
+base_url = "https://nested-openai.example.com/v1"
+rpm = 22
+"#,
+        );
+
+        let loaded = load_user_config_at(&path).expect("partial config should still load");
+
+        assert_eq!(
+            loaded.openai_base_url.as_deref(),
+            Some("https://nested-openai.example.com/v1")
+        );
+        assert_eq!(loaded.openai_rpm, Some(22));
     }
 
     // ── Debug redaction ───────────────────────────────────────────────────────

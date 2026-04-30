@@ -154,7 +154,7 @@ where
         .await;
     }
 
-    // Native typed-output path (OpenAI, Anthropic, Gemini, Copilot)
+    // Native typed-output path (OpenAI, Anthropic, Gemini)
     let outcome =
         match prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns).await {
             Ok(outcome) => outcome,

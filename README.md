@@ -179,7 +179,7 @@ cargo run -p scorpio-cli -- setup
 
 The repo-root `config.toml` is deprecated and is not read at runtime. If you prefer a non-interactive flow, set the `SCORPIO__LLM__QUICK_THINKING_PROVIDER`, `SCORPIO__LLM__DEEP_THINKING_PROVIDER`, `SCORPIO__LLM__QUICK_THINKING_MODEL`, and `SCORPIO__LLM__DEEP_THINKING_MODEL` environment variables directly instead.
 
-> **Note:** GitHub Copilot does not yet support tool calling — use OpenAI, Anthropic, Gemini, OpenRouter, or DeepSeek for the `quick_thinking_provider`. See [Known Limitations](#known-limitations) for details.
+> **Note:** `scorpio setup` now fetches model lists for supported keyed providers during step 4. OpenRouter remains manual-only, and `Enter model manually` is always available.
 
 ### 3. Run
 
@@ -229,13 +229,9 @@ The active roadmap assumes only free-tier Finnhub, yfinance, and FRED. As a resu
 
 See the active roadmap summary at [`docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md`](docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md) and the optional deferred follow-on plan at [`docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md`](docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md).
 
-**GitHub Copilot provider does not yet support tool calling (Phase 1 analysts non-functional with Copilot)**
+**GitHub Copilot is temporarily unavailable in this build**
 
-The current Copilot provider communicates over ACP (Agent Client Protocol) via a single shared subprocess. The ACP `session/new` call hardcodes an empty `mcp_servers` list and the prompt-building path silently drops any tools passed to it — meaning all four Phase 1 analyst agents (Fundamental, Sentiment, News, Technical) fail to invoke their data-fetching tools when Copilot is configured as the provider.
-
-The fix requires routing analyst tools through a per-session MCP helper server, splitting the Copilot monolith into focused modules, and adding a worker pool to eliminate the shared-subprocess bottleneck. The full implementation plan is at [`docs/superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md`](docs/superpowers/plans/2026-03-27-copilot-phase1-mcp-tool-calling.md).
-
-Until that work is complete, use OpenAI, Anthropic, Gemini, OpenRouter, or DeepSeek as the `quick_thinking_provider` for Phase 1 analysts.
+The previous custom ACP-based Copilot provider was removed as part of the `rig-core 0.36.0` upgrade. A follow-up change will reintroduce Copilot through upstream `rig` support.
 
 ## Spec Driven Development Workflow Shortcuts
 

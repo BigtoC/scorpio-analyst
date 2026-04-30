@@ -34,7 +34,7 @@ use anyhow::Context;
 use crate::config::Config;
 use crate::data::{FinnhubClient, FredClient, YFinanceClient, symbol::validate_symbol};
 use crate::providers::ModelTier;
-use crate::providers::factory::{create_completion_model, preflight_copilot_if_configured};
+use crate::providers::factory::create_completion_model;
 use crate::rate_limit::{ProviderRateLimiters, SharedRateLimiter};
 use crate::state::TradingState;
 use crate::workflow::{SnapshotStore, TradingPipeline};
@@ -68,7 +68,6 @@ impl AnalysisRuntime {
     /// # Errors
     ///
     /// Returns `Err` if any of the following fail:
-    /// - Copilot provider preflight (when configured).
     /// - SQLite snapshot store initialization.
     /// - Quick- or deep-thinking completion-model handle creation.
     /// - Finnhub or FRED client construction.
@@ -83,10 +82,6 @@ impl AnalysisRuntime {
         let quick_provider = cfg.llm.quick_thinking_provider.clone();
         let deep_provider = cfg.llm.deep_thinking_provider.clone();
         let rate_limiters = ProviderRateLimiters::from_config(&cfg.providers);
-
-        preflight_copilot_if_configured(&cfg.llm, &cfg.providers, &rate_limiters)
-            .await
-            .context("failed to preflight configured Copilot provider")?;
 
         let snapshot_store = SnapshotStore::from_config(&cfg)
             .await
