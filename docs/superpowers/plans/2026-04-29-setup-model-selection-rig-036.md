@@ -14,7 +14,7 @@
 
 ## Guardrails
 
-- Use `@superpowers:subagent-driven-development` for execution and `@superpowers:verification-before-completion` before declaring the work done.
+- Use `@superpowers:subagent-driven-development` for execution when subagents are available; otherwise use `@superpowers:executing-plans`. Use `@superpowers:verification-before-completion` before declaring the work done.
 - CI uses `cargo nextest`, not `cargo test`. Use `cargo nextest` for every targeted test run in this plan.
 - Confirm `protoc --version` prints a version string before the first workspace build. If it is missing on macOS, install it with `brew install protobuf`.
 - Start with the `rig-core 0.36.0` bump only, gated by Task 1 Step 0's feasibility spike. If `cargo check --workspace --all-features --locked` after the bump fails with errors pointing into `graph-flow` rather than into Scorpio source, stop, revert with `git checkout HEAD -- Cargo.toml Cargo.lock`, hand off the `graph-flow` patch upstream, and re-open this plan after a compatible `graph-flow` release ships. Do not partially execute Task 1 and leave the workspace broken on the feature branch. Note: the workspace currently pins `rig-core 0.35.0` (not `0.32`); the actual delta is 0.35 → 0.36, and `graph-flow 0.5.1`'s manifest declares `rig-core = "0.35.0"`, which Cargo resolves as `>=0.35.0,<0.36.0` and will not unify with `0.36.0`.
@@ -37,6 +37,7 @@
 | Modify | `crates/scorpio-core/src/config.rs`                       | Remove Copilot from validated provider names, remove `ProvidersConfig.copilot`, and add a setup-safe provider-settings merge helper |
 | Modify | `crates/scorpio-core/src/settings.rs`                     | Keep stale provider/model strings round-trippable through `PartialConfig` and add recovery-path coverage                            |
 | Modify | `crates/scorpio-core/src/rate_limit.rs`                   | Remove Copilot limiter wiring and keep the remaining provider registry correct                                                      |
+| Modify | `crates/scorpio-core/Cargo.toml`                          | Enable `tokio` `test-util` for paused-clock discovery tests                                                                         |
 | Modify | `crates/scorpio-core/src/providers/factory/mod.rs`        | Remove Copilot preflight export and add discovery-module exports                                                                    |
 | Modify | `crates/scorpio-core/src/providers/factory/client.rs`     | Remove Copilot client construction and provider validation branches                                                                 |
 | Modify | `crates/scorpio-core/src/app/mod.rs`                      | Remove the runtime Copilot preflight call so analysis startup matches the new provider surface                                      |
@@ -602,6 +603,7 @@ Run:
 
 ```bash
 git add crates/scorpio-core/src/config.rs
+cargo check --workspace --all-features --locked
 git commit -m "refactor(config): add setup-safe provider settings loader"
 ```
 
@@ -623,7 +625,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # ... existing dev-deps unchanged
 ```
 
-Without this, the failing test in Step 1 will not compile (the `start_paused` attribute is unknown) and the TDD red-step in Step 2 degrades from "test fails by assertion" to "test fails to compile" (cf. the broader Adversarial finding about compile-vs-assertion FAIL).
+Without this, the failing test in Step 1 will not compile (the `start_paused` attribute is unknown) and the TDD red-step in Step 2 degrades from "test fails by assertion" to "test fails to compile".
 
 - [x] **Step 1: Write the failing discovery tests in the new module**
 
@@ -920,7 +922,8 @@ Expected: PASS.
 Run:
 
 ```bash
-git add crates/scorpio-core/src/providers/factory/mod.rs crates/scorpio-core/src/providers/factory/discovery.rs
+git add crates/scorpio-core/Cargo.toml crates/scorpio-core/src/providers/factory/mod.rs crates/scorpio-core/src/providers/factory/discovery.rs
+cargo check --workspace --all-features --locked
 git commit -m "feat(setup): add provider model discovery in core"
 ```
 
@@ -1184,7 +1187,7 @@ Implementation notes:
 - `steps.rs` should delegate `step4_provider_routing` to `model_selection::prompt_provider_routing`.
 - Pass the existing user config path from `setup/mod.rs` into `step4_provider_routing`, then into `model_selection::prompt_provider_routing`, so discovery can call `Config::load_effective_providers_config_from_user_path(config_path, partial)` and preserve file-backed `[providers.*]` overrides while ignoring stale Copilot routing.
 - Build a current-thread Tokio runtime inside the blocking bootstrap helper and call `discover_setup_models` once.
-- If provider-settings loading or async discovery fails before any per-provider results exist, synthesize `Unavailable` outcomes for every eligible provider using the spec’s CLI message contract.
+- If provider-settings loading or async discovery fails before any per-provider results exist, synthesize `Unavailable` outcomes for every eligible provider that normally uses listing, but preserve `ModelDiscoveryOutcome::ManualOnly` for `openrouter`.
 - Keep `WIZARD_PROVIDERS` order as the source of truth for the “first eligible provider” fallback.
 - `step4_provider_routing` may assume `eligible` is non-empty because step 3 already enforces that at least one keyed provider exists before step 4 runs.
 - Keep `provider_key`/`set_provider_key` free of Copilot branches after the provider enum cleanup.
@@ -1253,6 +1256,7 @@ Run:
 
 ```bash
 git add crates/scorpio-cli/src/cli/setup/mod.rs crates/scorpio-cli/src/cli/setup/model_selection.rs crates/scorpio-cli/src/cli/setup/steps.rs
+cargo check --workspace --all-features --locked
 git commit -m "feat(setup): list provider models in step 4"
 ```
 
