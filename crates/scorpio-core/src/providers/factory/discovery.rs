@@ -123,19 +123,6 @@ fn unavailable_from_error(provider: ProviderId, error: &str) -> ModelDiscoveryOu
     }
 }
 
-fn unavailable_for_custom_base_url(provider: ProviderId) -> ModelDiscoveryOutcome {
-    tracing::warn!(
-        provider = provider.as_str(),
-        "automatic model discovery is disabled when a custom base_url is configured"
-    );
-    ModelDiscoveryOutcome::Unavailable {
-        reason: format!(
-            "Could not load models for {}; enter the model manually.",
-            provider.as_str()
-        ),
-    }
-}
-
 // ── Provider-specific model listing helpers ─────────────────────────────────
 
 use crate::config::ProviderSettings;
