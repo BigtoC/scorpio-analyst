@@ -47,20 +47,6 @@ enum ModelPromptMode {
     },
 }
 
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TierRoutingPlan {
-    provider: ProviderId,
-    prompt_mode: ModelPromptMode,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ProviderRoutingPlan {
-    quick: TierRoutingPlan,
-    deep: TierRoutingPlan,
-}
-
 fn default_provider_index(eligible: &[ProviderId], saved_provider: Option<&str>) -> usize {
     saved_provider
         .and_then(|name| {
@@ -228,108 +214,56 @@ fn prompt_manual_model(label: &str, initial: &str) -> Result<String, inquire::In
         .prompt()
 }
 
-fn discover_setup_models_blocking(
-    config_path: &Path,
+fn discover_provider_models_blocking(
     partial: &PartialConfig,
-    eligible: &[ProviderId],
-) -> HashMap<ProviderId, ModelDiscoveryOutcome> {
-    let providers =
-        match Config::load_effective_providers_config_from_user_path(config_path, partial) {
-            Ok(p) => p,
-            Err(_) => {
-                return eligible
-                    .iter()
-                    .map(|&p| (p, bootstrap_fallback_outcome(p)))
-                    .collect();
-            }
-        };
+    provider: ProviderId,
+) -> ModelDiscoveryOutcome {
+    let providers = Config::load_effective_runtime(partial.clone())
+        .map(|cfg| cfg.providers)
+        .ok();
+
+    let Some(providers) = providers else {
+        return bootstrap_fallback_outcome(provider);
+    };
+
+    let settings = providers.settings_for(provider);
+    if settings.base_url.is_some() {
+        return bootstrap_fallback_outcome(provider);
+    }
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
-        Err(_) => {
-            return eligible
-                .iter()
-                .map(|&p| (p, bootstrap_fallback_outcome(p)))
-                .collect();
-        }
+        Err(_) => return bootstrap_fallback_outcome(provider),
     };
 
-    runtime.block_on(discover_setup_models(eligible, &providers))
-}
-
-#[cfg(test)]
-fn build_provider_routing_plan(
-    eligible: &[ProviderId],
-    discovery: &HashMap<ProviderId, ModelDiscoveryOutcome>,
-    saved_quick_provider: Option<&str>,
-    saved_quick_model: Option<&str>,
-    saved_deep_provider: Option<&str>,
-    saved_deep_model: Option<&str>,
-) -> ProviderRoutingPlan {
-    let quick_idx = default_provider_index(eligible, saved_quick_provider);
-    let quick_provider = eligible[quick_idx];
-    let quick_fallback = ModelDiscoveryOutcome::Unavailable {
-        reason: format!(
-            "Could not load models for {}; enter the model manually.",
-            quick_provider.as_str()
-        ),
-    };
-    let quick_outcome = discovery.get(&quick_provider).unwrap_or(&quick_fallback);
-    let quick_mode = prompt_mode_for_provider(
-        quick_provider,
-        quick_outcome,
-        saved_quick_provider,
-        saved_quick_model,
-    );
-
-    let deep_idx = default_provider_index(eligible, saved_deep_provider);
-    let deep_provider = eligible[deep_idx];
-    let deep_fallback = ModelDiscoveryOutcome::Unavailable {
-        reason: format!(
-            "Could not load models for {}; enter the model manually.",
-            deep_provider.as_str()
-        ),
-    };
-    let deep_outcome = discovery.get(&deep_provider).unwrap_or(&deep_fallback);
-    let deep_mode = prompt_mode_for_provider(
-        deep_provider,
-        deep_outcome,
-        saved_deep_provider,
-        saved_deep_model,
-    );
-
-    ProviderRoutingPlan {
-        quick: TierRoutingPlan {
-            provider: quick_provider,
-            prompt_mode: quick_mode,
-        },
-        deep: TierRoutingPlan {
-            provider: deep_provider,
-            prompt_mode: deep_mode,
-        },
-    }
+    runtime
+        .block_on(discover_setup_models(&[provider], &providers))
+        .remove(&provider)
+        .unwrap_or_else(|| bootstrap_fallback_outcome(provider))
 }
 
 pub fn prompt_provider_routing(
     partial: &mut PartialConfig,
     eligible: Vec<ProviderId>,
-    config_path: &Path,
+    _config_path: &Path,
 ) -> Result<(), inquire::InquireError> {
-    let discovery = discover_setup_models_blocking(config_path, partial, &eligible);
+    let mut discovery_cache: HashMap<ProviderId, ModelDiscoveryOutcome> = HashMap::new();
 
     let quick_provider = prompt_provider(
         "Quick-thinking provider (used by analyst agents):",
         &eligible,
         partial.quick_thinking_provider.as_deref(),
     )?;
+    let quick_outcome = discovery_cache
+        .entry(quick_provider)
+        .or_insert_with(|| discover_provider_models_blocking(partial, quick_provider))
+        .clone();
     let quick_model = prompt_model_for_provider(
         quick_provider,
-        discovery
-            .get(&quick_provider)
-            .expect("provider outcome exists"),
+        &quick_outcome,
         partial.quick_thinking_provider.as_deref(),
         partial.quick_thinking_model.as_deref(),
     )?;
@@ -339,11 +273,13 @@ pub fn prompt_provider_routing(
         &eligible,
         partial.deep_thinking_provider.as_deref(),
     )?;
+    let deep_outcome = discovery_cache
+        .entry(deep_provider)
+        .or_insert_with(|| discover_provider_models_blocking(partial, deep_provider))
+        .clone();
     let deep_model = prompt_model_for_provider(
         deep_provider,
-        discovery
-            .get(&deep_provider)
-            .expect("provider outcome exists"),
+        &deep_outcome,
         partial.deep_thinking_provider.as_deref(),
         partial.deep_thinking_model.as_deref(),
     )?;
@@ -361,6 +297,7 @@ mod tests {
     use super::*;
     use scorpio_core::providers::ProviderId;
     use scorpio_core::providers::factory::ModelDiscoveryOutcome;
+    use std::cell::Cell;
 
     #[test]
     fn default_provider_index_falls_back_to_first_eligible_when_saved_provider_is_unsupported() {
@@ -374,7 +311,11 @@ mod tests {
 
     #[test]
     fn default_provider_index_matches_saved_provider_case_insensitively() {
-        let eligible = vec![ProviderId::OpenAI, ProviderId::OpenRouter, ProviderId::DeepSeek];
+        let eligible = vec![
+            ProviderId::OpenAI,
+            ProviderId::OpenRouter,
+            ProviderId::DeepSeek,
+        ];
         assert_eq!(default_provider_index(&eligible, Some("OPENROUTER")), 1);
     }
 
@@ -491,10 +432,7 @@ mod tests {
     fn model_menu_option_display_escapes_control_characters() {
         let option = ModelMenuOption::Listed("gpt\n4\tmini\u{7}".into());
         assert_eq!(option.to_string(), "gpt\\n4\\tmini\\u{7}");
-        assert_eq!(
-            option,
-            ModelMenuOption::Listed("gpt\n4\tmini\u{7}".into())
-        );
+        assert_eq!(option, ModelMenuOption::Listed("gpt\n4\tmini\u{7}".into()));
     }
 
     #[test]
@@ -517,35 +455,27 @@ mod tests {
     }
 
     #[test]
-    fn build_provider_routing_plan_reuses_one_prefetched_snapshot_for_both_tiers() {
-        let eligible = vec![ProviderId::OpenAI, ProviderId::DeepSeek];
-        let discovery = std::collections::HashMap::from([
-            (
-                ProviderId::OpenAI,
-                ModelDiscoveryOutcome::Listed(vec!["gpt-4o-mini".into()]),
-            ),
-            (
-                ProviderId::DeepSeek,
-                ModelDiscoveryOutcome::Listed(vec!["deepseek-chat".into()]),
-            ),
-        ]);
-        let plan = build_provider_routing_plan(
-            &eligible,
-            &discovery,
-            Some("openai"),
-            Some("gpt-4o-mini"),
-            Some("deepseek"),
-            Some("deepseek-chat"),
-        );
-        assert_eq!(plan.quick.provider, ProviderId::OpenAI);
-        assert_eq!(plan.deep.provider, ProviderId::DeepSeek);
-        assert!(matches!(
-            plan.quick.prompt_mode,
-            ModelPromptMode::Select { .. }
-        ));
-        assert!(matches!(
-            plan.deep.prompt_mode,
-            ModelPromptMode::Select { .. }
-        ));
+    fn discovery_cache_reuses_same_provider_result() {
+        let hits = Cell::new(0);
+        let mut cache = HashMap::new();
+        let provider = ProviderId::OpenAI;
+
+        let first = cache
+            .entry(provider)
+            .or_insert_with(|| {
+                hits.set(hits.get() + 1);
+                ModelDiscoveryOutcome::Listed(vec!["gpt-4o-mini".into()])
+            })
+            .clone();
+        let second = cache
+            .entry(provider)
+            .or_insert_with(|| {
+                hits.set(hits.get() + 1);
+                ModelDiscoveryOutcome::Listed(vec!["o3".into()])
+            })
+            .clone();
+
+        assert_eq!(hits.get(), 1);
+        assert_eq!(first, second);
     }
 }

@@ -626,6 +626,29 @@ mod tests {
     }
 
     #[test]
+    fn load_effective_runtime_preserves_provider_overrides_from_partial() {
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            openai_api_key: Some("sk-from-file".into()),
+            openai_base_url: Some("https://openai.example.com/v1".into()),
+            openai_rpm: Some(123),
+            ..Default::default()
+        };
+
+        let cfg = scorpio_core::config::Config::load_effective_runtime(partial)
+            .expect("merged config should load");
+
+        assert_eq!(
+            cfg.providers.openai.base_url.as_deref(),
+            Some("https://openai.example.com/v1")
+        );
+        assert_eq!(cfg.providers.openai.rpm, 123);
+    }
+
+    #[test]
     fn run_single_health_check_requires_same_analysis_readiness_as_analyze() {
         let partial = PartialConfig {
             quick_thinking_provider: Some("openai".into()),
