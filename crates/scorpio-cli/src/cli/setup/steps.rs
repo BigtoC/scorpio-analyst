@@ -90,13 +90,25 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
 /// Prompt for one or more LLM provider keys, requiring at least one configured provider.
 pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     loop {
-        let provider = inquire::Select::new(
-            "Select an LLM provider to configure:",
-            provider_choices(partial),
-        )
-        .prompt()?;
+        let mut items: Vec<ProviderSelectItem> = provider_choices(partial)
+            .into_iter()
+            .map(ProviderSelectItem::Provider)
+            .collect();
+        items.push(ProviderSelectItem::Skip);
 
-        let chosen = provider.provider;
+        let selection =
+            inquire::Select::new("Select an LLM provider to configure:", items).prompt()?;
+
+        let chosen = match selection {
+            ProviderSelectItem::Skip => {
+                if validate_step3_result(partial).is_ok() {
+                    break;
+                }
+                println!("✗ At least one LLM provider is required.");
+                continue;
+            }
+            ProviderSelectItem::Provider(c) => c.provider,
+        };
         let existing = provider_key(partial, chosen).map(str::to_owned);
 
         let prompt_label = format!("{chosen} API key:");
@@ -213,18 +225,6 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
     }
 }
 
-/// Write all four provider-routing fields into `partial` atomically.
-pub(super) fn apply_provider_routing(
-    partial: &mut PartialConfig,
-    quick: (ProviderId, String),
-    deep: (ProviderId, String),
-) {
-    partial.quick_thinking_provider = Some(quick.0.as_str().to_owned());
-    partial.quick_thinking_model = Some(quick.1);
-    partial.deep_thinking_provider = Some(deep.0.as_str().to_owned());
-    partial.deep_thinking_model = Some(deep.1);
-}
-
 /// Return `Err` when no LLM provider key is present in `partial`.
 pub(super) fn validate_step3_result(partial: &PartialConfig) -> Result<(), &'static str> {
     if partial.openai_api_key.is_none()
@@ -311,6 +311,21 @@ struct ProviderChoice {
 impl std::fmt::Display for ProviderChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.label)
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ProviderSelectItem {
+    Provider(ProviderChoice),
+    Skip,
+}
+
+impl std::fmt::Display for ProviderSelectItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(c) => c.fmt(f),
+            Self::Skip => f.write_str("Skip this step"),
+        }
     }
 }
 
@@ -427,25 +442,6 @@ mod tests {
         assert_eq!(
             apply_optional_secret("new", Some("old".to_owned())),
             Some("new".to_owned())
-        );
-    }
-
-    // ── apply_provider_routing ────────────────────────────────────────────────
-
-    #[test]
-    fn apply_provider_routing_writes_all_four_fields() {
-        let mut partial = PartialConfig::default();
-        apply_provider_routing(
-            &mut partial,
-            (ProviderId::OpenAI, "gpt-4o-mini".into()),
-            (ProviderId::Anthropic, "claude-opus-4-5".into()),
-        );
-        assert_eq!(partial.quick_thinking_provider.as_deref(), Some("openai"));
-        assert_eq!(partial.quick_thinking_model.as_deref(), Some("gpt-4o-mini"));
-        assert_eq!(partial.deep_thinking_provider.as_deref(), Some("anthropic"));
-        assert_eq!(
-            partial.deep_thinking_model.as_deref(),
-            Some("claude-opus-4-5")
         );
     }
 
