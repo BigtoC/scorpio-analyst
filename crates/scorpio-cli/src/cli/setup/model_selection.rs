@@ -152,6 +152,21 @@ fn manual_initial_value(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProviderOrSkip {
+    Provider(ProviderId),
+    Skip,
+}
+
+impl std::fmt::Display for ProviderOrSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(p) => write!(f, "{p}"),
+            Self::Skip => f.write_str("Skip this step"),
+        }
+    }
+}
+
 fn prompt_provider(
     label: &str,
     eligible: &[ProviderId],
@@ -161,6 +176,26 @@ fn prompt_provider(
     inquire::Select::new(label, eligible.to_vec())
         .with_starting_cursor(default_idx)
         .prompt()
+}
+
+fn prompt_provider_or_skip(
+    label: &str,
+    eligible: &[ProviderId],
+    saved_provider: Option<&str>,
+) -> Result<Option<ProviderId>, inquire::InquireError> {
+    let default_idx = default_provider_index(eligible, saved_provider);
+    let mut choices: Vec<ProviderOrSkip> = eligible
+        .iter()
+        .map(|&p| ProviderOrSkip::Provider(p))
+        .collect();
+    choices.push(ProviderOrSkip::Skip);
+    match inquire::Select::new(label, choices)
+        .with_starting_cursor(default_idx)
+        .prompt()?
+    {
+        ProviderOrSkip::Provider(p) => Ok(Some(p)),
+        ProviderOrSkip::Skip => Ok(None),
+    }
 }
 
 fn prompt_model_for_provider(
@@ -252,11 +287,14 @@ pub fn prompt_provider_routing(
 ) -> Result<(), inquire::InquireError> {
     let mut discovery_cache: HashMap<ProviderId, ModelDiscoveryOutcome> = HashMap::new();
 
-    let quick_provider = prompt_provider(
+    let Some(quick_provider) = prompt_provider_or_skip(
         "Quick-thinking provider (used by analyst agents):",
         &eligible,
         partial.quick_thinking_provider.as_deref(),
-    )?;
+    )?
+    else {
+        return Ok(());
+    };
     let quick_outcome = discovery_cache
         .entry(quick_provider)
         .or_insert_with(|| discover_provider_models_blocking(partial, quick_provider))
