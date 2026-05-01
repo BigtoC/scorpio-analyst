@@ -150,7 +150,13 @@ impl AnalysisRuntime {
     /// - The pipeline completes without producing a final execution status.
     pub async fn run(&self, symbol: &str) -> anyhow::Result<TradingState> {
         let symbol = validate_symbol(symbol)?;
-        let target_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let target_date = {
+            use chrono::TimeZone as _;
+            chrono_tz::US::Eastern
+                .from_utc_datetime(&chrono::Utc::now().naive_utc())
+                .date_naive()
+                .to_string()
+        };
 
         tracing::info!(
             quick_provider = %self.quick_provider,
