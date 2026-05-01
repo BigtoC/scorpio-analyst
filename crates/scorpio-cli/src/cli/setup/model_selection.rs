@@ -7,8 +7,6 @@ use scorpio_core::providers::ProviderId;
 use scorpio_core::providers::factory::{ModelDiscoveryOutcome, discover_setup_models};
 use scorpio_core::settings::PartialConfig;
 
-use super::steps::apply_provider_routing;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ModelMenuOption {
     Listed(String),
@@ -167,17 +165,6 @@ impl std::fmt::Display for ProviderOrSkip {
     }
 }
 
-fn prompt_provider(
-    label: &str,
-    eligible: &[ProviderId],
-    saved_provider: Option<&str>,
-) -> Result<ProviderId, inquire::InquireError> {
-    let default_idx = default_provider_index(eligible, saved_provider);
-    inquire::Select::new(label, eligible.to_vec())
-        .with_starting_cursor(default_idx)
-        .prompt()
-}
-
 fn prompt_provider_or_skip(
     label: &str,
     eligible: &[ProviderId],
@@ -287,46 +274,44 @@ pub fn prompt_provider_routing(
 ) -> Result<(), inquire::InquireError> {
     let mut discovery_cache: HashMap<ProviderId, ModelDiscoveryOutcome> = HashMap::new();
 
-    let Some(quick_provider) = prompt_provider_or_skip(
+    if let Some(quick_provider) = prompt_provider_or_skip(
         "Quick-thinking provider (used by analyst agents):",
         &eligible,
         partial.quick_thinking_provider.as_deref(),
-    )?
-    else {
-        return Ok(());
-    };
-    let quick_outcome = discovery_cache
-        .entry(quick_provider)
-        .or_insert_with(|| discover_provider_models_blocking(partial, quick_provider))
-        .clone();
-    let quick_model = prompt_model_for_provider(
-        quick_provider,
-        &quick_outcome,
-        partial.quick_thinking_provider.as_deref(),
-        partial.quick_thinking_model.as_deref(),
-    )?;
+    )? {
+        let quick_outcome = discovery_cache
+            .entry(quick_provider)
+            .or_insert_with(|| discover_provider_models_blocking(partial, quick_provider))
+            .clone();
+        let quick_model = prompt_model_for_provider(
+            quick_provider,
+            &quick_outcome,
+            partial.quick_thinking_provider.as_deref(),
+            partial.quick_thinking_model.as_deref(),
+        )?;
+        partial.quick_thinking_provider = Some(quick_provider.as_str().to_owned());
+        partial.quick_thinking_model = Some(quick_model);
+    }
 
-    let deep_provider = prompt_provider(
+    if let Some(deep_provider) = prompt_provider_or_skip(
         "Deep-thinking provider (used by researcher, trader, and risk agents):",
         &eligible,
         partial.deep_thinking_provider.as_deref(),
-    )?;
-    let deep_outcome = discovery_cache
-        .entry(deep_provider)
-        .or_insert_with(|| discover_provider_models_blocking(partial, deep_provider))
-        .clone();
-    let deep_model = prompt_model_for_provider(
-        deep_provider,
-        &deep_outcome,
-        partial.deep_thinking_provider.as_deref(),
-        partial.deep_thinking_model.as_deref(),
-    )?;
+    )? {
+        let deep_outcome = discovery_cache
+            .entry(deep_provider)
+            .or_insert_with(|| discover_provider_models_blocking(partial, deep_provider))
+            .clone();
+        let deep_model = prompt_model_for_provider(
+            deep_provider,
+            &deep_outcome,
+            partial.deep_thinking_provider.as_deref(),
+            partial.deep_thinking_model.as_deref(),
+        )?;
+        partial.deep_thinking_provider = Some(deep_provider.as_str().to_owned());
+        partial.deep_thinking_model = Some(deep_model);
+    }
 
-    apply_provider_routing(
-        partial,
-        (quick_provider, quick_model),
-        (deep_provider, deep_model),
-    );
     Ok(())
 }
 
