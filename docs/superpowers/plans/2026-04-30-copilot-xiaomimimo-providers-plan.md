@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Re-introduce GitHub Copilot (OAuth/device-flow) and add Xiaomi MiMo (API key) as first-class LLM providers using `rig-core 0.36.0`'s native clients, while keeping `create_completion_model(...)` as Scorpio's runtime seam, storing Copilot auth in a Scorpio-owned token directory, and validating cached Copilot auth against GitHub identity, granted scopes, and approved endpoint drift.
+**Goal:** Re-introduce GitHub Copilot (OAuth/device-flow) and add Xiaomi MiMo (API key) as first-class LLM providers using `rig-core 0.36.0`'s native clients, while keeping `create_completion_model(...)` as Scorpio's runtime construction seam, storing Copilot auth in a Scorpio-owned token directory, and validating cached Copilot auth against GitHub identity and granted scopes once per analysis cycle when Copilot is actually selected for either provider tier.
 
-**Architecture:** Extend the existing provider seams (`ProviderId`, `ProvidersConfig`, `PartialConfig`, factory client/agent/discovery, rate limiter, setup wizard) without introducing new abstraction layers. `create_completion_model(...)` remains the runtime entrypoint and automatically routes Copilot through `NonInteractiveRuntime`; `step5_health_check` is the only interactive Copilot auth seam and uses an explicit helper with `InteractiveSetup`. Copilot's Scorpio-owned binding records the numeric GitHub account ID plus the approved GitHub API authority derived from rig's `api-key.json`, so runtime can detect account, scope, or endpoint drift. The Copilot token directory under Scorpio's config root is the primary filesystem security boundary: Scorpio owns and verifies the directory, while cache entries must be regular files and are best-effort hardened after auth. Xiaomi MiMo remains a first-class native provider because the approved scope explicitly avoids a generic compatible-provider abstraction; custom `base_url` stays an advanced trusted-host override with structural URL validation, redirects disabled, and explicit operator-facing warnings in setup and docs.
+**Architecture:** Extend the existing provider seams (`ProviderId`, `ProvidersConfig`, `PartialConfig`, factory client/agent/discovery, rate limiter, setup wizard) without introducing new abstraction layers. `create_completion_model(...)` remains the runtime construction seam and automatically routes Copilot through `NonInteractiveRuntime`; `step5_health_check` is the only interactive Copilot auth seam and uses an explicit helper with `InteractiveSetup`. Live Copilot validation is conditional: Scorpio performs it once per analysis cycle only when Copilot is selected for either routed tier, at the run-start boundary on or immediately before preflight. Copilot's Scorpio-owned binding records the numeric GitHub account ID, while local cache inspection may read `api-key.json.expires_at` as a staleness hint for rig's cached Copilot API token; for this slice, GitHub identity validation always uses `https://api.github.com/user`, and `api-key.json.endpoints.api` is treated only as the Copilot runtime base exposed by rig rather than as the GitHub `/user` authority. The Copilot token directory under Scorpio's config root is the primary filesystem security boundary: Scorpio owns and verifies the directory, while cache entries must be regular files and are best-effort hardened after auth. Xiaomi MiMo remains a first-class native provider because the approved scope explicitly avoids a generic compatible-provider abstraction; custom `base_url` stays an advanced trusted-host override with structural URL validation, redirects disabled, and explicit operator-facing warnings in setup and docs.
 
 **Tech Stack:** Rust 1.93, `rig-core 0.36.0` (`rig::providers::{copilot, xiaomimimo}`), `secrecy`, `tokio`, `reqwest`, `governor`, `inquire`, `toml`, `url` crate (new dep for base_url validation).
 
@@ -26,8 +26,8 @@
 | `crates/scorpio-core/src/providers/factory/agent.rs`        | Modify | Add Copilot/XiaomiMimo type aliases, dispatch arms, build branches, token usage handling                                                                    |
 | `crates/scorpio-core/src/providers/factory/discovery.rs`    | Modify | Short-circuit Copilot before `list_models()`; add Xiaomi MiMo listing                                                                                       |
 | `crates/scorpio-core/src/providers/factory/error.rs`        | Modify | Extend `redact_credentials` with GitHub OAuth token prefixes, device codes, verification URI                                                                |
-| `crates/scorpio-core/src/providers/factory/copilot_auth.rs` | Create | Identity-binding record + `GET /user` validation + `api-key.json` authority binding logic                                                                   |
-| `crates/scorpio-core/src/app/mod.rs`                        | Modify | Run async Copilot cached-auth revalidation during runtime bootstrap before handle creation                                                                  |
+| `crates/scorpio-core/src/providers/factory/copilot_auth.rs` | Create | Identity-binding record + `GET /user` validation + local Copilot cache inspection helpers                                                                   |
+| `crates/scorpio-core/src/workflow/pipeline/runtime.rs`      | Modify | Run conditional live Copilot validation once per analysis cycle before preflight                                                                            |
 | `crates/scorpio-core/src/rate_limit.rs`                     | Modify | Add Copilot+XiaomiMimo limiter mappings                                                                                                                     |
 | `crates/scorpio-cli/src/cli/setup/steps.rs`                 | Modify | Split keyed-provider prompting from routing eligibility; add Copilot-only bypass; update `validate_step3_result`/`providers_with_keys`; Xiaomi MiMo prompts |
 | `crates/scorpio-cli/src/cli/setup/model_selection.rs`       | Modify | Copilot static curated list; Xiaomi MiMo discovery; replace `Config::load_effective_runtime` with provider-only load                                        |
@@ -539,10 +539,10 @@ In `Config::load_effective_runtime` (after the `cfg: Config = ...` build and bef
 ```rust
         if cfg.providers.copilot.base_url.is_some() {
             return Err(anyhow::anyhow!(
-                "providers.copilot.base_url is not supported in this slice; \
-                 Copilot uses GitHub's API endpoint (or GitHub Enterprise endpoint via api-key.json)"
-            ));
-        }
+                 "providers.copilot.base_url is not supported in this slice; \
+                  Copilot uses GitHub's api.github.com endpoint from rig's cache"
+             ));
+         }
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -1720,9 +1720,18 @@ In `create_provider_client_for` at the bottom of the existing `match provider { 
             let client = match settings.base_url.as_deref() {
                 Some(raw_url) => {
                     let parsed = validate_xiaomimimo_base_url(raw_url)?;
+                    let http_client = reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .map_err(|e| {
+                            config_error(&format!(
+                                "failed to create Xiaomi MiMo HTTP client for base_url \"{raw_url}\": {e}"
+                            ))
+                        })?;
                     xiaomimimo::Client::builder()
                         .api_key(key.expose_secret())
                         .base_url(parsed.to_string())
+                        .http_client(http_client)
                         .build()
                         .map_err(|e| {
                             config_error(&format!(
@@ -1913,15 +1922,19 @@ pub fn create_completion_model_with_copilot(
         .oauth()
         .token_dir(token_dir);
 
-    if mode == CopilotAuthMode::NonInteractiveRuntime {
-        // No-op device-code handler — runtime code must not intentionally surface
-        // interactive auth, even if rig later falls through to its lazy auth path.
-        builder = builder.on_device_code(|_prompt| {
+    builder = match mode {
+        CopilotAuthMode::InteractiveSetup => builder.on_device_code(|prompt| {
+            // Print the verification URI and user code from `prompt` so Scorpio
+            // owns the device-flow UX instead of relying on rig's default stdout.
+        }),
+        CopilotAuthMode::NonInteractiveRuntime => builder.on_device_code(|_prompt| {
+            // No-op device-code handler — runtime code must not intentionally surface
+            // interactive auth, even if rig later falls through to its lazy auth path.
             tracing::error!(
                 "Copilot device flow attempted in non-interactive runtime mode; refusing to prompt"
             );
-        });
-    }
+        }),
+    };
 
     let client = builder.build().map_err(|e| {
         config_error(&format!("failed to construct Copilot client: {e}"))
@@ -2507,6 +2520,7 @@ EOF
 
 **Files:**
 - Modify: `crates/scorpio-cli/src/cli/setup/steps.rs:21-28, 229-258`
+- Modify: `crates/scorpio-core/src/config.rs` (provider-only merged loader used by setup)
 
 - [ ] **Step 1: Read the current state**
 
@@ -2676,7 +2690,7 @@ Expected: PASS.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add crates/scorpio-cli/src/cli/setup/steps.rs
+git add crates/scorpio-cli/src/cli/setup/steps.rs crates/scorpio-core/src/config.rs
 git commit -m "$(cat <<'EOF'
 refactor(setup): split keyed provider prompts from routing eligibility
 
@@ -2694,6 +2708,7 @@ EOF
 
 **Files:**
 - Modify: `crates/scorpio-cli/src/cli/setup/steps.rs` (Step-3 prompt loop)
+- Modify: `crates/scorpio-cli/src/cli/setup/mod.rs` (thread `StepThreeOutcome` into Step 4)
 
 - [ ] **Step 1: Find the Step-3 entry**
 
@@ -2860,7 +2875,7 @@ Find the call site (~line 221) and replace it with a call to `Config::load_effec
 
 - [ ] **Step 3: Add Copilot static menu**
 
-For the model picker UI: when `provider == ProviderId::Copilot`, build a `Select` with the curated models from `scorpio_core::providers::factory::COPILOT_CURATED_MODELS` (or its re-exported accessor) plus an `Enter model manually` option. The prompt copy should clarify that the list is a curated setup shortcut and that manual entry remains available for any other supported Copilot model:
+For the model picker UI: when `provider == ProviderId::Copilot`, build a `Select` with the curated models from `scorpio_core::providers::factory::COPILOT_CURATED_MODELS` (or its re-exported accessor) plus an `Enter model manually` option. The prompt copy should clarify that the list is a curated setup shortcut and that manual entry is allowed only for non-Codex Copilot models supported by Scorpio in this slice:
 
 ```rust
     if provider == ProviderId::Copilot {
@@ -2874,13 +2889,19 @@ For the model picker UI: when `provider == ProviderId::Copilot`, build a `Select
             .and_then(|s| options.iter().position(|opt| *opt == s))
             .unwrap_or(options.len() - 1); // manual
         let chosen = inquire::Select::new(
-            "Copilot model (curated defaults; choose manual entry for any other model)",
+            "Copilot model (curated defaults; manual entry allowed only for non-Codex models)",
             options.clone(),
         )
             .with_starting_cursor(default_index)
             .prompt()?;
         if chosen == MANUAL {
-            return Ok(prompt_manual_model_entry(saved));
+            let manual = prompt_manual_model_entry(saved);
+            if manual.to_ascii_lowercase().contains("codex") {
+                return Err(inquire::InquireError::Custom(Box::new(anyhow::anyhow!(
+                    "Codex-class Copilot models are out of scope for this slice; choose a non-Codex model"
+                ))));
+            }
+            return Ok(manual);
         }
         return Ok(chosen.to_owned());
     }
@@ -2937,7 +2958,7 @@ EOF
 
 ## Phase 9: Copilot OAuth Health Check (step5_health_check)
 
-### Task 22: Add the Copilot identity-binding record + live GitHub authority validator
+### Task 22: Add the Copilot identity-binding record + local cache inspection helpers
 
 **Files:**
 - Create: `crates/scorpio-core/src/providers/factory/copilot_auth.rs`
@@ -2953,9 +2974,11 @@ Create `crates/scorpio-core/src/providers/factory/copilot_auth.rs`:
 //! rig-core 0.36.0 does not surface OAuth scopes from cached grants, and the
 //! `bootstrap_token_fingerprint` in rig's `api-key.json` is computed by a
 //! process-randomized `DefaultHasher` (not cross-process verifiable). This
-//! module therefore relies on a live `GET /user` call against the GitHub authority
-//! currently bound in rig's `api-key.json` to confirm identity and inspect the
-//! `X-OAuth-Scopes` header.
+//! module therefore relies on a live `GET /user` call against `https://api.github.com`
+//! to confirm identity and inspect the `X-OAuth-Scopes` header. rig's
+//! `api-key.json` remains useful for local cache inspection (`expires_at`,
+//! `bootstrap_token_fingerprint`, and Copilot runtime-base metadata), but not as
+//! the authority for GitHub user-info validation.
 
 use std::path::Path;
 
@@ -2973,9 +2996,6 @@ pub struct ScorpioIdentityBinding {
     pub github_login: String,
     /// Unix timestamp (seconds) at which this binding was written.
     pub written_at: i64,
-    /// Canonical GitHub user-info authority used when validating this grant
-    /// (for github.com this is `https://api.github.com`).
-    pub github_api_base: String,
 }
 
 /// Read the identity binding from the token directory.
@@ -3046,7 +3066,7 @@ pub const REQUIRED_SCOPE: &str = "read:user";
 /// valid Copilot device-flow grant.
 pub const ALLOWED_SCOPE_EXTRAS: &[&str] = &[];
 
-/// Live identity returned by `GET <github_api_base>/user`.
+/// Live identity returned by `GET https://api.github.com/user`.
 #[derive(Debug)]
 pub struct GitHubIdentity {
     pub id: u64,
@@ -3054,11 +3074,25 @@ pub struct GitHubIdentity {
     pub scopes: Vec<String>,
 }
 
-/// Resolve the GitHub user-info base URL from rig's `api-key.json` cache file
-/// (`endpoints.api`).
-/// Only `https://api.github.com` plus an explicit allowlist of approved GitHub
-/// Enterprise API base URLs are accepted here.
-pub fn read_github_api_base(token_dir: &Path) -> Result<String, TradingError> {
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ApiKeyRecord {
+    pub token: Option<String>,
+    pub expires_at: Option<i64>,
+    pub endpoints: Option<ApiKeyEndpoints>,
+    pub bootstrap_token_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ApiKeyEndpoints {
+    pub api: Option<String>,
+}
+
+/// Read rig's cached Copilot API-key record from `api-key.json`.
+///
+/// Scorpio uses this only for local cache inspection (for example, checking
+/// `expires_at` before runtime validation). GitHub identity validation always
+/// calls `https://api.github.com/user` directly in this slice.
+pub fn read_api_key_record(token_dir: &Path) -> Result<ApiKeyRecord, TradingError> {
     let path = token_dir.join("api-key.json");
     verify_copilot_secret_file_secure(&path)
         .map_err(|e| TradingError::Config(anyhow::anyhow!(e.to_string())))?;
@@ -3066,80 +3100,38 @@ pub fn read_github_api_base(token_dir: &Path) -> Result<String, TradingError> {
         TradingError::Config(anyhow::anyhow!("failed to read {}: {e}", path.display()))
     })?;
 
-    #[derive(Deserialize, Default)]
-    struct ApiKeyFile {
-        #[serde(default)]
-        endpoints: ApiKeyEndpoints,
-    }
-
-    #[derive(Deserialize, Default)]
-    struct ApiKeyEndpoints {
-        #[serde(default)]
-        api: Option<String>,
-    }
-
-    let parsed: ApiKeyFile = serde_json::from_str(&raw).map_err(|e| {
+    let parsed: ApiKeyRecord = serde_json::from_str(&raw).map_err(|e| {
         TradingError::Config(anyhow::anyhow!("failed to parse {}: {e}", path.display()))
     })?;
 
-    let candidate = parsed
-        .endpoints
-        .api
-        .unwrap_or_else(|| "https://api.github.com".to_owned());
-    let url = url::Url::parse(candidate.trim()).map_err(|e| {
-        TradingError::Config(anyhow::anyhow!("invalid GitHub API base URL in api-key.json: {e}"))
-    })?;
-    if url.scheme() != "https" {
-        return Err(TradingError::Config(anyhow::anyhow!(
-            "GitHub API base URL must use https"
-        )));
-    }
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(TradingError::Config(anyhow::anyhow!(
-            "GitHub API base URL must not contain userinfo, query, or fragment"
-        )));
-    }
-    let host = url.host_str().ok_or_else(|| {
-        TradingError::Config(anyhow::anyhow!("GitHub API base URL must include a host"))
-    })?;
-    let normalized = url.as_str().trim_end_matches('/').to_owned();
-    if url.path() != "/" && !url.path().is_empty() {
-        return Err(TradingError::Config(anyhow::anyhow!(
-            "GitHub API base URL must not contain a path component"
-        )));
-    }
-    let allowed = normalized == "https://api.github.com"
-        || approved_github_api_bases().iter().any(|base| *base == normalized);
-    if !allowed {
-        return Err(TradingError::Config(anyhow::anyhow!(
-            "GitHub API base URL {normalized:?} is not in the approved GitHub/GHE allowlist"
-        )));
-    }
-    Ok(normalized)
+    Ok(parsed)
 }
 
-fn approved_github_api_bases() -> &'static [&'static str] {
-    &[]
+/// Return true when rig's cached Copilot API token is still live according to
+/// `api-key.json.expires_at`.
+pub fn api_key_record_is_live(record: &ApiKeyRecord) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+    match record.expires_at {
+        Some(exp) => now < exp,
+        None => false,
+    }
 }
 
-/// Call `GET <github_api_base>/user` with the given access token, returning
+/// Call `GET https://api.github.com/user` with the given access token, returning
 /// the numeric ID, login, and the parsed `X-OAuth-Scopes` header.
-pub async fn fetch_github_identity(
-    github_api_base: &str,
-    access_token: &str,
-) -> Result<GitHubIdentity, TradingError> {
+pub async fn fetch_github_identity(access_token: &str) -> Result<GitHubIdentity, TradingError> {
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("scorpio-analyst")
         .build()
         .map_err(|e| {
             TradingError::Config(anyhow::anyhow!("reqwest client build failed: {e}"))
-        })?;
+    })?;
     let resp = client
-        .get(format!("{github_api_base}/user"))
+        .get("https://api.github.com/user")
         .bearer_auth(access_token)
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -3264,7 +3256,6 @@ mod tests {
             github_id: 42,
             github_login: "octocat".to_owned(),
             written_at: 1234567890,
-            github_api_base: "https://api.github.com".to_owned(),
         };
         write_binding(dir.path(), &binding).unwrap();
         let loaded = read_binding(dir.path()).unwrap();
@@ -3278,7 +3269,6 @@ mod tests {
             github_id: 0,
             github_login: "x".to_owned(),
             written_at: 0,
-            github_api_base: "https://api.github.com".to_owned(),
         };
         std::fs::write(
             dir.path().join("scorpio-identity.json"),
@@ -3312,10 +3302,11 @@ Expected: PASS.
 ```bash
 git add crates/scorpio-core/src/providers/factory/
 git commit -m "$(cat <<'EOF'
-feat(providers): add Copilot identity-binding + GET /user scope validator
+feat(providers): add Copilot identity-binding + cache inspection helpers
 
-Adds ScorpioIdentityBinding (numeric GitHub ID + login + timestamp + GitHub API authority)
-and a fetch_github_identity helper that calls GET /user against the bound authority and
+Adds ScorpioIdentityBinding (numeric GitHub ID + login + timestamp)
+plus local cache helpers for `api-key.json` inspection and a `fetch_github_identity`
+helper that calls GET /user against `https://api.github.com` and
 parses X-OAuth-Scopes.
 validate_scope rejects empty scopes, missing read:user, and any disallowed
 broader scope (repo, write:*, admin:*, delete_*, user:email).
@@ -3371,7 +3362,7 @@ Create `step5_validate_copilot_auth(token_dir)` as a separate function so it can
             .unwrap();
         }
 
-        step5_validate_copilot_auth_with(dir.path(), |_base, _token| async {
+        step5_validate_copilot_auth_with(dir.path(), |_token| async {
             Ok(copilot_auth::GitHubIdentity {
                 id: 42,
                 login: "octocat".to_owned(),
@@ -3384,7 +3375,6 @@ Create `step5_validate_copilot_auth(token_dir)` as a separate function so it can
         let binding = copilot_auth::read_binding(dir.path()).unwrap();
         assert_eq!(binding.github_id, 42);
         assert_eq!(binding.github_login, "octocat");
-        assert_eq!(binding.github_api_base, "https://api.github.com");
     }
 ```
 
@@ -3400,7 +3390,7 @@ async fn step5_validate_copilot_auth_with<F, Fut>(
     fetch_identity: F,
 ) -> anyhow::Result<()>
 where
-    F: Fn(&str, &str) -> Fut,
+    F: Fn(&str) -> Fut,
     Fut: std::future::Future<Output = Result<copilot_auth::GitHubIdentity, TradingError>>,
 {
     use scorpio_core::providers::factory::copilot_auth;
@@ -3409,12 +3399,12 @@ where
     let access = copilot_auth::read_access_token(token_dir)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    // 2. Resolve the GitHub authority rig bound for this Copilot grant.
-    let github_api_base = copilot_auth::read_github_api_base(token_dir)
+    // 2. Optionally inspect rig's cached Copilot API token metadata.
+    let _record = copilot_auth::read_api_key_record(token_dir)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    // 3. Confirm identity + scope via GET /user.
-    let identity = fetch_identity(&github_api_base, &access)
+    // 3. Confirm identity + scope via GET https://api.github.com/user.
+    let identity = fetch_identity(&access)
         .await
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     copilot_auth::validate_scope(&identity.scopes)
@@ -3425,7 +3415,6 @@ where
         github_id: identity.id,
         github_login: identity.login,
         written_at: chrono::Utc::now().timestamp(),
-        github_api_base,
     };
     copilot_auth::write_binding(token_dir, &binding)?;
 
@@ -3632,8 +3621,8 @@ Setup flow:
 1. Show OAuth scope boundary and require explicit consent.
 2. ensure_copilot_token_dir() with 0o700 perms.
 3. Build a Copilot handle for whichever tier is actually routed to Copilot and call `authorize_copilot()` inside the existing retry/save-anyway loop.
-4. Read access token, resolve the bound GitHub authority from api-key.json, call GET /user, and validate X-OAuth-Scopes.
-5. Write scorpio-identity.json with the numeric GitHub account ID and bound GitHub API authority.
+4. Read access token, inspect local `api-key.json` cache metadata, call `GET https://api.github.com/user`, and validate X-OAuth-Scopes.
+5. Write scorpio-identity.json with the numeric GitHub account ID.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -3643,12 +3632,12 @@ EOF
 ### Task 24: Cached auth reuse validation in runtime path
 
 **Files:**
-- Modify: `crates/scorpio-core/src/providers/factory/client.rs` (in `create_completion_model_with_copilot` or a new helper invoked before client construction)
-- Modify: `crates/scorpio-core/src/app/mod.rs` (`AnalysisRuntime::new` or a small async helper it calls)
-- Modify: `crates/scorpio-core/src/config.rs` (`Config::is_analysis_ready`)
-- Test: `crates/scorpio-core/src/providers/factory/client.rs`, `crates/scorpio-core/src/config.rs`, `crates/scorpio-core/tests/app_runtime.rs`
+- Modify: `crates/scorpio-core/src/providers/factory/client.rs` (keep local non-interactive cache checks)
+- Modify: `crates/scorpio-core/src/workflow/pipeline/runtime.rs` (run-start Copilot validation before graph execution)
+- Modify: `crates/scorpio-core/src/providers/factory/copilot_auth.rs` (optional `expires_at` helper/test)
+- Test: `crates/scorpio-core/src/providers/factory/client.rs`, `crates/scorpio-core/src/workflow/pipeline/runtime.rs`
 
-- [ ] **Step 1: Add a cache-validation step to `NonInteractiveRuntime`**
+- [ ] **Step 1: Keep `NonInteractiveRuntime` limited to local cache validation**
 
 In `create_completion_model_with_copilot`, before constructing the client, add (when `mode == NonInteractiveRuntime`):
 
@@ -3661,110 +3650,64 @@ In `create_completion_model_with_copilot`, before constructing the client, add (
         let binding = copilot_auth::read_binding(token_dir)
             .map_err(|e| config_error(&format!("identity binding rejected: {e}")))?;
 
-        // Re-read the GitHub authority from rig's cache and require it to match the
-        // previously bound authority. GitHub Enterprise-managed redirects are allowed,
-        // but drift must force a fresh setup run.
-        let github_api_base = copilot_auth::read_github_api_base(token_dir)
-            .map_err(|e| config_error(&format!("github authority rejected: {e}")))?;
-        if github_api_base != binding.github_api_base {
-            return Err(config_error(
-                "copilot cached authority changed; clear the Copilot cache and rerun `scorpio setup`",
-            ));
-        }
+        // Read rig's local cache metadata. `expires_at` is advisory here: it tells us
+        // whether the cached Copilot API token is stale, but not whether the GitHub
+        // bootstrap token or granted scopes are still valid.
+        let api_key_record = copilot_auth::read_api_key_record(token_dir)
+            .map_err(|e| config_error(&format!("api-key cache rejected: {e}")))?;
+        let _cached_api_key_is_live = copilot_auth::api_key_record_is_live(&api_key_record);
 
         // Do not perform the live GET /user check inside the synchronous client
-        // factory with block_on. Instead, move live identity/scope revalidation into
-        // an async readiness/bootstrap helper invoked by AnalysisRuntime::try_new(...)
-        // and Config::is_analysis_ready(), so runtime still fails closed before any
-        // analysis run begins.
+        // factory with block_on. Runtime identity/scope validation happens once per
+        // analysis cycle at the run-start boundary on or immediately before preflight.
 ```
 
-Decision: perform the live `GET /user` revalidation once per runtime bootstrap in `AnalysisRuntime::new(...)` and once in `Config::is_analysis_ready()` rather than inside `create_completion_model_with_copilot(...)`. The factory remains responsible for local token-dir/regular-file/authority checks; bootstrap/readiness remain responsible for async identity and scope validation.
+Decision: perform the live `GET /user` revalidation once per analysis cycle, only when Copilot is selected for either routed tier, at the run-start boundary on or immediately before preflight in `workflow::pipeline::runtime::run_analysis_cycle(...)`. The factory remains responsible for local token-dir/regular-file/cache checks; the per-run pipeline boundary is responsible for live identity and scope validation. Runtime fails closed: any `GET /user` transport error, timeout, non-success status, body parse failure, identity mismatch, or scope mismatch must block analysis and require the operator to retry later or rerun `scorpio setup`.
 
-- [ ] **Step 2: Add async Copilot bootstrap helpers to core runtime assembly**
+- [ ] **Step 2: Add a run-start Copilot validator in pipeline runtime**
 
-Add a shared async helper in `crates/scorpio-core/src/config.rs` plus a sync wrapper used by `Config::is_analysis_ready()`. Also add narrowly-scoped test-only injection helpers that delegate to the real entrypoints so the runtime/config tests below can substitute a fake validator without widening the production API surface:
+Add a shared async helper in `crates/scorpio-core/src/workflow/pipeline/runtime.rs` that runs before the graph session starts, after the initial state is prepared but before `Session::new_from_task(..., TASKS.preflight)` is executed:
 
 ```rust
-async fn validate_copilot_runtime_auth_if_configured(cfg: &Config) -> anyhow::Result<()> {
-    // For each tier routed to Copilot:
+async fn validate_copilot_auth_before_preflight_if_configured(cfg: &Config) -> anyhow::Result<()> {
+    if cfg.llm.quick_thinking_provider != "copilot"
+        && cfg.llm.deep_thinking_provider != "copilot"
+    {
+        return Ok(());
+    }
+
     // 1. Resolve Scorpio's token dir.
     // 2. Verify 0o700 ownership/permissions.
     // 3. Read scorpio-identity.json.
-    // 4. Read api-key.json authority.
+    // 4. Read api-key.json and optionally inspect `expires_at` as a stale-cache hint.
     // 5. Read access-token.
-    // 6. Call GET <github_api_base>/user.
+    // 6. Call GET https://api.github.com/user.
     // 7. Require matching github_id + allowed scopes.
 }
 
-fn validate_copilot_runtime_auth_if_configured_blocking(cfg: &Config) -> anyhow::Result<()> {
-    // Build a current-thread runtime locally and block only in this sync wrapper.
-    // Config::is_analysis_ready() stays sync for existing CLI call sites.
-}
-
 #[cfg(any(test, feature = "test-helpers"))]
-async fn validate_copilot_runtime_auth_with<F, Fut>(
+async fn validate_copilot_auth_before_preflight_with<F, Fut>(
     cfg: &Config,
     fetch_identity: F,
 ) -> anyhow::Result<()>
 where
-    F: Fn(&str, &str) -> Fut,
+    F: Fn(&str) -> Fut,
     Fut: std::future::Future<Output = Result<copilot_auth::GitHubIdentity, TradingError>>,
 {
-    // Same logic as validate_copilot_runtime_auth_if_configured, but with the
-    // GitHub identity fetch injected for hermetic tests.
-}
-
-#[cfg(any(test, feature = "test-helpers"))]
-impl Config {
-    pub fn is_analysis_ready_with_copilot_validator<F>(&self, validate: F) -> anyhow::Result<()>
-    where
-        F: Fn(&Config) -> anyhow::Result<()>,
-    {
-        validate(self)?;
-        let rate_limiters = crate::rate_limit::ProviderRateLimiters::from_config(&self.providers);
-
-        crate::providers::factory::create_completion_model(
-            crate::providers::ModelTier::QuickThinking,
-            &self.llm,
-            &self.providers,
-            &rate_limiters,
-        )
-        .map_err(|e| anyhow::anyhow!("quick-thinking provider is not ready: {e}"))?;
-
-        crate::providers::factory::create_completion_model(
-            crate::providers::ModelTier::DeepThinking,
-            &self.llm,
-            &self.providers,
-            &rate_limiters,
-        )
-        .map_err(|e| anyhow::anyhow!("deep-thinking provider is not ready: {e}"))?;
-
-        Ok(())
-    }
-}
-
-#[cfg(any(test, feature = "test-helpers"))]
-impl AnalysisRuntime {
-    pub async fn new_with_copilot_validator<F, Fut>(cfg: Config, validate: F) -> anyhow::Result<Self>
-    where
-        F: Fn(&Config) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<()>>,
-    {
-        validate(&cfg).await?;
-        // Same body as AnalysisRuntime::new, but skip the production validator call
-        // so the injected seam is exercised exactly once.
-    }
+    // Same logic as validate_copilot_auth_before_preflight_if_configured, but with
+    // the GitHub identity fetch injected for hermetic tests. Preserve fail-closed
+    // semantics: any fetch error or invalid response returns Err and blocks the run
+    // before preflight starts.
 }
 ```
 
-Call the async helper from `AnalysisRuntime::new(...)` before either `create_completion_model(...)` call. Call the sync wrapper from `Config::is_analysis_ready()` before returning success when either tier is routed to Copilot. Do **not** make `Config::is_analysis_ready()` async in this slice; `crates/scorpio-cli/src/cli/analyze.rs` and `crates/scorpio-cli/src/cli/setup/steps.rs` currently call it from synchronous code paths.
+Call the async helper from `run_analysis_cycle(...)` before the graph session is created and before preflight executes. Do not add a second live-validation pass to `AnalysisRuntime::new(...)` or `Config::is_analysis_ready()` in this slice.
 
 - [ ] **Step 3: Add tests**
 
 ```rust
     #[test]
-    fn runtime_mode_rejects_when_identity_binding_missing() {
+    fn noninteractive_factory_rejects_when_identity_binding_missing() {
         let dir = tempfile::tempdir().unwrap();
         let token_dir = dir.path().join("github_copilot");
         std::fs::create_dir_all(&token_dir).unwrap();
@@ -3808,14 +3751,14 @@ Call the async helper from `AnalysisRuntime::new(...)` before either `create_com
     }
 
     #[test]
-    fn runtime_mode_rejects_when_bound_github_authority_changes() {
+    fn noninteractive_factory_reads_api_key_record_for_local_cache_checks() {
         let dir = tempfile::tempdir().unwrap();
         let token_dir = dir.path().join("github_copilot");
         std::fs::create_dir_all(&token_dir).unwrap();
         std::fs::write(token_dir.join("access-token"), "ghu_test_token").unwrap();
         std::fs::write(
             token_dir.join("api-key.json"),
-            r#"{"endpoints":{"api":"https://ghe.example.com/api/v3"}}"#,
+            r#"{"token":"tid_test","expires_at":4102444800,"endpoints":{"api":"https://api.githubcopilot.com"}}"#,
         )
         .unwrap();
         #[cfg(unix)]
@@ -3838,7 +3781,6 @@ Call the async helper from `AnalysisRuntime::new(...)` before either `create_com
                 github_id: 42,
                 github_login: "octocat".to_owned(),
                 written_at: 0,
-                github_api_base: "https://api.github.com".to_owned(),
             },
         )
         .unwrap();
@@ -3855,23 +3797,23 @@ Call the async helper from `AnalysisRuntime::new(...)` before either `create_com
             CopilotAuthMode::NonInteractiveRuntime,
             &token_dir,
         );
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("authority"));
-    }
-
-    fn sample_runtime_config_with_copilot() -> Config {
-        let mut cfg = Config::default();
-        cfg.llm.quick_thinking_provider = "copilot".to_owned();
-        cfg.llm.quick_thinking_model = "gpt-4o".to_owned();
-        cfg.llm.deep_thinking_provider = "openai".to_owned();
-        cfg.llm.deep_thinking_model = "gpt-4o-mini".to_owned();
-        cfg
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn runtime_mode_rejects_when_live_github_identity_mismatches_binding() {
+    async fn preflight_guard_skips_when_copilot_not_selected() {
+        let cfg = sample_runtime_config_without_copilot();
+        validate_copilot_auth_before_preflight_with(&cfg, |_token| async {
+            panic!("should not fetch identity when Copilot is not selected");
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn preflight_guard_rejects_when_live_github_identity_mismatches_binding() {
         let cfg = sample_runtime_config_with_copilot();
-        let err = validate_copilot_runtime_auth_with(&cfg, |_base, _token| async {
+        let err = validate_copilot_auth_before_preflight_with(&cfg, |_token| async {
             Ok(copilot_auth::GitHubIdentity {
                 id: 99,
                 login: "wrong-user".to_owned(),
@@ -3884,9 +3826,9 @@ Call the async helper from `AnalysisRuntime::new(...)` before either `create_com
     }
 
     #[tokio::test]
-    async fn runtime_mode_rejects_when_live_scopes_exceed_allowed_set() {
+    async fn preflight_guard_rejects_when_live_scopes_exceed_allowed_set() {
         let cfg = sample_runtime_config_with_copilot();
-        let err = validate_copilot_runtime_auth_with(&cfg, |_base, _token| async {
+        let err = validate_copilot_auth_before_preflight_with(&cfg, |_token| async {
             Ok(copilot_auth::GitHubIdentity {
                 id: 42,
                 login: "octocat".to_owned(),
@@ -3899,51 +3841,45 @@ Call the async helper from `AnalysisRuntime::new(...)` before either `create_com
     }
 
     #[tokio::test]
-    async fn analysis_runtime_new_revalidates_copilot_before_handle_creation() {
+    async fn run_analysis_cycle_revalidates_copilot_before_preflight() {
         let cfg = sample_runtime_config_with_copilot();
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls_clone = calls.clone();
 
-        let result = AnalysisRuntime::new_with_copilot_validator(cfg, move |_cfg| {
+        let _ = validate_copilot_auth_before_preflight_with(&cfg, move |_token| {
             let calls = calls_clone.clone();
             async move {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
+                Ok(copilot_auth::GitHubIdentity {
+                    id: 42,
+                    login: "octocat".to_owned(),
+                    scopes: vec!["read:user".to_owned()],
+                })
             }
         })
         .await;
 
-        assert!(result.is_ok());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn is_analysis_ready_revalidates_copilot_before_reporting_success() {
-        let cfg = sample_runtime_config_with_copilot();
-        let err = cfg
-            .is_analysis_ready_with_copilot_validator(|_cfg| Err(anyhow::anyhow!("scope mismatch")))
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("scope mismatch"));
     }
 ```
 
 - [ ] **Step 4: Run tests**
 
 ```bash
-cargo test -p scorpio-core providers::factory::client::tests::runtime_mode_rejects_when_identity_binding_missing -- --exact
-cargo test -p scorpio-core providers::factory::client::tests::runtime_mode_rejects_when_bound_github_authority_changes -- --exact
-cargo test -p scorpio-core config::tests::runtime_mode_rejects_when_live_github_identity_mismatches_binding -- --exact
-cargo test -p scorpio-core config::tests::runtime_mode_rejects_when_live_scopes_exceed_allowed_set -- --exact
-cargo test -p scorpio-core --features test-helpers --test app_runtime analysis_runtime_new_revalidates_copilot_before_handle_creation -- --exact
-cargo test -p scorpio-core config::tests::is_analysis_ready_revalidates_copilot_before_reporting_success -- --exact
+cargo test -p scorpio-core providers::factory::client::tests::noninteractive_factory_rejects_when_identity_binding_missing -- --exact
+cargo test -p scorpio-core providers::factory::client::tests::noninteractive_factory_reads_api_key_record_for_local_cache_checks -- --exact
+cargo test -p scorpio-core workflow::pipeline::tests::preflight_guard_skips_when_copilot_not_selected -- --exact
+cargo test -p scorpio-core workflow::pipeline::tests::preflight_guard_rejects_when_live_github_identity_mismatches_binding -- --exact
+cargo test -p scorpio-core workflow::pipeline::tests::preflight_guard_rejects_when_live_scopes_exceed_allowed_set -- --exact
+cargo test -p scorpio-core workflow::pipeline::tests::run_analysis_cycle_revalidates_copilot_before_preflight -- --exact
 ```
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/scorpio-core/src/providers/factory/client.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/src/config.rs
-git commit -m "feat(providers): runtime Copilot reuse revalidates identity, scopes, and authority
+git add crates/scorpio-core/src/providers/factory/client.rs crates/scorpio-core/src/providers/factory/copilot_auth.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs
+git commit -m "feat(providers): validate Copilot identity and scopes before preflight when routed
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 ```
@@ -4048,7 +3984,7 @@ In the supported-providers table or list, re-add Copilot with a note that it use
 
 ```markdown
 - **GitHub Copilot** — OAuth/device-flow (no API key required). Run `scorpio setup` and select Copilot to authorize via GitHub. Token cache lives at `~/.scorpio-analyst/github_copilot/`.
-- Manual model entry remains available for Copilot even though setup starts from a curated list of known-good defaults.
+- Manual model entry remains available for Copilot only for non-Codex models supported in this slice; Codex-class models are rejected.
 ```
 
 - [ ] **Step 3: Add Xiaomi MiMo**
@@ -4158,7 +4094,7 @@ git add -A && git commit -m "chore: cargo fmt + clippy fixes for new providers"
 - [ ] Every spec section maps to at least one task above (provider identity, config validation, settings, factory client, factory agent, rate limiter, setup wizard, model selection, discovery, OAuth flow, error sanitization, docs).
 - [ ] No task contains "TBD", "implement later", "similar to Task N without showing the code", or other placeholder language.
 - [ ] Type names are consistent: `CopilotModel`, `XiaomiMimoModel`, `CopilotAuthMode`, `ProviderClient::Copilot`, `LlmAgentInner::Copilot`.
-- [ ] Function names are consistent: `validate_xiaomimimo_base_url`, `create_completion_model_with_copilot`, `CompletionModelHandle::authorize_copilot`, `eligible_routing_providers(partial, effective_providers)`, `validate_step3_result(partial, effective_providers, copilot_only_selected)`, `step5_validate_copilot_auth`, `effective_copilot_tiers`, and `read_github_api_base`.
+- [ ] Function names are consistent: `validate_xiaomimimo_base_url`, `create_completion_model_with_copilot`, `CompletionModelHandle::authorize_copilot`, `eligible_routing_providers(partial, effective_providers)`, `validate_step3_result(partial, effective_providers, copilot_only_selected)`, `step5_validate_copilot_auth`, `effective_copilot_tiers`, `read_api_key_record`, and `validate_copilot_auth_before_preflight_if_configured`.
 - [ ] Commit steps are present at useful checkpoints, but adjacent tasks may be squashed into larger phase-level commits.
 - [ ] Migration step (Phase 0) runs first and removes `STALE_COPILOT_PROVIDER_MARKER` before `ProviderId::Copilot` is added.
 - [ ] All tests use `#[test]` or `#[tokio::test]` and have explicit assertions.
