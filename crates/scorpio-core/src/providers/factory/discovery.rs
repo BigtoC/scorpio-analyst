@@ -13,6 +13,21 @@ use super::error::sanitize_error_summary;
 
 const DISCOVERY_TIMEOUT_SECS: u64 = 10;
 
+/// Curated Copilot model list for setup picker (slice 1).
+///
+/// Codex-class models are deliberately omitted because rig routes any model whose
+/// lowercase name contains "codex" to the Responses API endpoint, which uses a
+/// different request/response shape and may not interact correctly with Scorpio's
+/// structured-output and tool-calling paths.
+pub const COPILOT_CURATED_MODELS: &[&str] = &[
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.1",
+    "claude-sonnet-4",
+    "gemini-2.0-flash-001",
+    "o3-mini",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Result of setup-time model discovery for a provider.
 ///
@@ -29,20 +44,52 @@ pub enum ModelDiscoveryOutcome {
 ///
 /// This helper is intentionally setup-only: it returns prompt-oriented outcomes
 /// for the wizard and is not a general runtime provider-readiness check.
+///
+/// Copilot is short-circuited with a static curated list (`COPILOT_CURATED_MODELS`) —
+/// no network call is made, and no rig client is constructed, because the Copilot
+/// provider's `ModelListing` capability is `Nothing`.
 pub async fn discover_setup_models(
     eligible: &[ProviderId],
     providers: &ProvidersConfig,
 ) -> HashMap<ProviderId, ModelDiscoveryOutcome> {
-    discover_setup_models_with(eligible.iter().copied(), |provider| async move {
+    // Short-circuit Copilot with the static curated list (no network call, no client).
+    let mut outcomes: HashMap<ProviderId, ModelDiscoveryOutcome> = eligible
+        .iter()
+        .copied()
+        .filter(|p| *p == ProviderId::Copilot)
+        .map(|p| {
+            (
+                p,
+                ModelDiscoveryOutcome::Listed(
+                    COPILOT_CURATED_MODELS.iter().map(|s| s.to_string()).collect(),
+                ),
+            )
+        })
+        .collect();
+
+    let dynamic: Vec<ProviderId> = eligible
+        .iter()
+        .copied()
+        .filter(|p| *p != ProviderId::Copilot)
+        .collect();
+
+    let dynamic_outcomes = discover_setup_models_with(dynamic, |provider| async move {
         match provider {
             ProviderId::OpenRouter => Err("manual-only".to_owned()),
             ProviderId::OpenAI => list_openai_models(&providers.openai).await,
             ProviderId::Anthropic => list_anthropic_models(&providers.anthropic).await,
             ProviderId::Gemini => list_gemini_models(&providers.gemini).await,
             ProviderId::DeepSeek => list_deepseek_models(&providers.deepseek).await,
+            ProviderId::XiaomiMimo => list_xiaomimimo_models(&providers.xiaomimimo).await,
+            ProviderId::Copilot => unreachable!(
+                "Copilot is short-circuited above and never reaches the dynamic closure"
+            ),
         }
     })
-    .await
+    .await;
+
+    outcomes.extend(dynamic_outcomes);
+    outcomes
 }
 
 async fn discover_setup_models_with<I, F, Fut>(
@@ -178,6 +225,34 @@ async fn list_deepseek_models(settings: &ProviderSettings) -> Result<ModelList, 
     let client = rig::providers::deepseek::Client::new(key.expose_secret())
         .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
+}
+
+async fn list_xiaomimimo_models(settings: &ProviderSettings) -> Result<ModelList, String> {
+    if settings.base_url.is_some() {
+        return Err("custom base_url requires manual entry".to_owned());
+    }
+    let key = settings
+        .api_key
+        .as_ref()
+        .ok_or_else(|| "missing API key".to_owned())?;
+    let client = rig::providers::xiaomimimo::Client::new(key.expose_secret())
+        .map_err(|e| format!("client build error: {e}"))?;
+    let raw = client.list_models().await.map_err(|e| e.to_string())?;
+    Ok(sanitize_xiaomimimo_model_ids(raw))
+}
+
+fn sanitize_xiaomimimo_model_ids(list: ModelList) -> ModelList {
+    ModelList::new(
+        list.into_iter()
+            .filter(|m| is_safe_model_id(&m.id))
+            .collect(),
+    )
+}
+
+fn is_safe_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && !id.chars().any(|c| c.is_control() || c == '\u{7f}')
 }
 
 #[cfg(test)]
@@ -362,5 +437,106 @@ mod tests {
                 reason: "Could not load models for openai; enter the model manually.".into(),
             })
         );
+    }
+
+    // ── Copilot curated list ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn copilot_returns_curated_static_list_without_network() {
+        let providers = ProvidersConfig::default();
+        let outcomes = discover_setup_models(&[ProviderId::Copilot], &providers).await;
+        let outcome = outcomes.get(&ProviderId::Copilot).expect("copilot present");
+        let ModelDiscoveryOutcome::Listed(models) = outcome else {
+            panic!("expected Listed, got {outcome:?}");
+        };
+        assert!(models.contains(&"gpt-4o".to_owned()));
+        assert!(models.contains(&"gpt-4o-mini".to_owned()));
+        assert!(models.contains(&"claude-sonnet-4".to_owned()));
+        assert!(
+            !models.iter().any(|m| m.to_lowercase().contains("codex")),
+            "no Codex models in slice 1: {models:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn copilot_static_list_matches_curated_constant() {
+        let providers = ProvidersConfig::default();
+        let outcomes = discover_setup_models(&[ProviderId::Copilot], &providers).await;
+        let ModelDiscoveryOutcome::Listed(models) = outcomes
+            .get(&ProviderId::Copilot)
+            .expect("copilot present")
+        else {
+            panic!("expected Listed");
+        };
+        let expected: Vec<String> = COPILOT_CURATED_MODELS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(models, &expected);
+    }
+
+    // ── XiaomiMimo custom base_url ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn xiaomimimo_with_base_url_returns_unavailable() {
+        let providers = ProvidersConfig {
+            xiaomimimo: ProviderSettings {
+                api_key: Some(secrecy::SecretString::from("test-key")),
+                base_url: Some("https://api.xiaomimimo.com/v1".to_owned()),
+                rpm: 50,
+            },
+            ..Default::default()
+        };
+        let outcomes = discover_setup_models(&[ProviderId::XiaomiMimo], &providers).await;
+        let outcome = outcomes.get(&ProviderId::XiaomiMimo).expect("present");
+        assert!(
+            matches!(outcome, ModelDiscoveryOutcome::Unavailable { .. }),
+            "expected Unavailable for custom base_url; got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn xiaomimimo_without_api_key_returns_unavailable() {
+        let providers = ProvidersConfig::default(); // no api_key for xiaomimimo
+        let outcomes = discover_setup_models(&[ProviderId::XiaomiMimo], &providers).await;
+        let outcome = outcomes.get(&ProviderId::XiaomiMimo).expect("present");
+        assert!(
+            matches!(outcome, ModelDiscoveryOutcome::Unavailable { .. }),
+            "expected Unavailable for missing key; got {outcome:?}"
+        );
+    }
+
+    // ── sanitize_xiaomimimo_model_ids ────────────────────────────────────
+
+    #[test]
+    fn sanitize_xiaomimimo_model_ids_drops_control_chars() {
+        let list = ModelList::new(vec![
+            Model::from_id("mimo-v2.5"),
+            Model::from_id("mimo-v2\x00bad"), // NUL control char
+            Model::from_id("mimo-v2.5-pro"),
+            Model::from_id(""),               // empty
+        ]);
+        let sanitized = sanitize_xiaomimimo_model_ids(list);
+        let ids: Vec<&str> = sanitized.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"mimo-v2.5"));
+        assert!(ids.contains(&"mimo-v2.5-pro"));
+        assert!(!ids.iter().any(|id| id.contains('\x00')));
+        assert!(!ids.contains(&""));
+    }
+
+    #[test]
+    fn sanitize_xiaomimimo_model_ids_drops_oversized_ids() {
+        let long_id = "x".repeat(129);
+        let list = ModelList::new(vec![
+            Model::from_id("mimo-v2.5"),
+            Model::from_id(long_id.as_str()),
+        ]);
+        let sanitized = sanitize_xiaomimimo_model_ids(list);
+        let ids: Vec<&str> = sanitized.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"mimo-v2.5"));
+        assert!(!ids.iter().any(|id| id.len() > 128));
+    }
+
+    #[test]
+    fn is_safe_model_id_rejects_del_char() {
+        assert!(!is_safe_model_id("mimo\u{7f}bad"));
+        assert!(is_safe_model_id("mimo-v2.5"));
     }
 }

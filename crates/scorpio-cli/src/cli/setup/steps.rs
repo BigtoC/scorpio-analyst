@@ -13,19 +13,25 @@ use std::time::Duration;
 use anyhow::Context;
 use inquire::{PasswordDisplayMode, validator::Validation};
 
+use scorpio_core::config::ProvidersConfig;
 use scorpio_core::constants::HEALTH_CHECK_TIMEOUT_SECS;
 use scorpio_core::error::RetryPolicy;
 use scorpio_core::providers::{ModelTier, ProviderId};
 use scorpio_core::settings::PartialConfig;
 
-/// Wizard-visible providers — Copilot is intentionally excluded (no API-key concept).
-pub const WIZARD_PROVIDERS: &[ProviderId] = &[
+/// Step-3 keyed providers — those for which the wizard prompts for an API key.
+/// Copilot is intentionally excluded (it uses OAuth, not an API key).
+pub const KEYED_WIZARD_PROVIDERS: &[ProviderId] = &[
     ProviderId::OpenAI,
     ProviderId::Anthropic,
     ProviderId::Gemini,
     ProviderId::OpenRouter,
     ProviderId::DeepSeek,
+    ProviderId::XiaomiMimo,
 ];
+
+/// Alias kept for call sites that haven't yet migrated to `KEYED_WIZARD_PROVIDERS`.
+pub const WIZARD_PROVIDERS: &[ProviderId] = KEYED_WIZARD_PROVIDERS;
 
 // ── Step 1: Finnhub API key ───────────────────────────────────────────────────
 
@@ -89,6 +95,7 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
 
 /// Prompt for one or more LLM provider keys, requiring at least one configured provider.
 pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
+    let effective_providers = ProvidersConfig::default();
     loop {
         let mut items: Vec<ProviderSelectItem> = provider_choices(partial)
             .into_iter()
@@ -101,7 +108,7 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
 
         let chosen = match selection {
             ProviderSelectItem::Skip => {
-                if validate_step3_result(partial).is_ok() {
+                if validate_step3_result(partial, &effective_providers, false).is_ok() {
                     break;
                 }
                 println!("✗ At least one LLM provider is required.");
@@ -131,14 +138,14 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
 
         set_provider_key(partial, chosen, apply_optional_secret(&input, existing));
 
-        if validate_step3_result(partial).is_err() {
+        if validate_step3_result(partial, &effective_providers, false).is_err() {
             // Haven't met the minimum yet — loop without asking "more?".
             println!("✗ At least one LLM provider is required.");
             continue;
         }
 
         // Minimum met. Offer to add another if unconfigured providers remain.
-        let still_available: Vec<_> = WIZARD_PROVIDERS
+        let still_available: Vec<_> = KEYED_WIZARD_PROVIDERS
             .iter()
             .copied()
             .filter(|p| provider_key(partial, *p).is_none())
@@ -156,7 +163,8 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
             break;
         }
 
-        if providers_with_keys(partial).len() == WIZARD_PROVIDERS.len() {
+        if providers_with_keys(partial, &effective_providers).len() == KEYED_WIZARD_PROVIDERS.len()
+        {
             break;
         }
     }
@@ -165,12 +173,18 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
 
 // ── Step 4: Provider routing ──────────────────────────────────────────────────
 
-/// Prompt for quick/deep provider routing using only providers that have saved keys.
+/// Prompt for quick/deep provider routing using providers that have saved keys, plus Copilot.
 pub fn step4_provider_routing(
     config_path: &std::path::Path,
     partial: &mut PartialConfig,
 ) -> Result<(), inquire::InquireError> {
-    let eligible = providers_with_keys(partial);
+    let effective_providers =
+        scorpio_core::config::Config::load_effective_providers_config_from_user_path(
+            config_path,
+            partial,
+        )
+        .unwrap_or_default();
+    let eligible = eligible_routing_providers(partial, &effective_providers);
     super::model_selection::prompt_provider_routing(partial, eligible, config_path)
 }
 
@@ -225,32 +239,76 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
     }
 }
 
-/// Return `Err` when no LLM provider key is present in `partial`.
-pub(super) fn validate_step3_result(partial: &PartialConfig) -> Result<(), &'static str> {
-    if partial.openai_api_key.is_none()
-        && partial.anthropic_api_key.is_none()
-        && partial.gemini_api_key.is_none()
-        && partial.openrouter_api_key.is_none()
-        && partial.deepseek_api_key.is_none()
-    {
-        Err("At least one LLM provider is required.")
+/// Return `Err` when no LLM provider key is present (unless `copilot_only_selected`).
+pub(super) fn validate_step3_result(
+    partial: &PartialConfig,
+    effective_providers: &ProvidersConfig,
+    copilot_only_selected: bool,
+) -> Result<(), &'static str> {
+    if copilot_only_selected {
+        return Ok(());
+    }
+    if providers_with_keys(partial, effective_providers).is_empty() {
+        Err("At least one LLM provider is required (or pick the Copilot-only path)")
     } else {
         Ok(())
     }
 }
 
-/// Return the subset of `WIZARD_PROVIDERS` that have a non-`None` key in `partial`,
-/// preserving declaration order.
-pub(super) fn providers_with_keys(partial: &PartialConfig) -> Vec<ProviderId> {
-    WIZARD_PROVIDERS
+/// Return the subset of `KEYED_WIZARD_PROVIDERS` that have a non-`None` key
+/// in either `partial` or `effective_providers`, preserving declaration order.
+pub(super) fn providers_with_keys(
+    partial: &PartialConfig,
+    effective_providers: &ProvidersConfig,
+) -> Vec<ProviderId> {
+    KEYED_WIZARD_PROVIDERS
         .iter()
+        .filter(|p| match **p {
+            ProviderId::OpenAI => {
+                effective_providers.openai.api_key.is_some()
+                    || partial.openai_api_key.is_some()
+            }
+            ProviderId::Anthropic => {
+                effective_providers.anthropic.api_key.is_some()
+                    || partial.anthropic_api_key.is_some()
+            }
+            ProviderId::Gemini => {
+                effective_providers.gemini.api_key.is_some()
+                    || partial.gemini_api_key.is_some()
+            }
+            ProviderId::OpenRouter => {
+                effective_providers.openrouter.api_key.is_some()
+                    || partial.openrouter_api_key.is_some()
+            }
+            ProviderId::DeepSeek => {
+                effective_providers.deepseek.api_key.is_some()
+                    || partial.deepseek_api_key.is_some()
+            }
+            ProviderId::XiaomiMimo => {
+                effective_providers.xiaomimimo.api_key.is_some()
+                    || partial.xiaomimimo_api_key.is_some()
+            }
+            ProviderId::Copilot => false,
+        })
         .copied()
-        .filter(|p| provider_key(partial, *p).is_some())
         .collect()
 }
 
+/// Step-4 routing eligibility: keyed providers with secrets, plus Copilot.
+///
+/// Copilot is always appended at the end so existing default-selection behaviour
+/// stays stable and Copilot does not become the implicit first choice.
+pub(super) fn eligible_routing_providers(
+    partial: &PartialConfig,
+    effective_providers: &ProvidersConfig,
+) -> Vec<ProviderId> {
+    let mut eligible = providers_with_keys(partial, effective_providers);
+    eligible.push(ProviderId::Copilot);
+    eligible
+}
+
 fn provider_choices(partial: &PartialConfig) -> Vec<ProviderChoice> {
-    WIZARD_PROVIDERS
+    KEYED_WIZARD_PROVIDERS
         .iter()
         .copied()
         .map(|provider| ProviderChoice {
@@ -336,6 +394,8 @@ fn provider_key(partial: &PartialConfig, provider: ProviderId) -> Option<&str> {
         ProviderId::Gemini => partial.gemini_api_key.as_deref(),
         ProviderId::OpenRouter => partial.openrouter_api_key.as_deref(),
         ProviderId::DeepSeek => partial.deepseek_api_key.as_deref(),
+        ProviderId::XiaomiMimo => partial.xiaomimimo_api_key.as_deref(),
+        ProviderId::Copilot => None,
     }
 }
 
@@ -346,6 +406,8 @@ fn set_provider_key(partial: &mut PartialConfig, provider: ProviderId, value: Op
         ProviderId::Gemini => partial.gemini_api_key = value,
         ProviderId::OpenRouter => partial.openrouter_api_key = value,
         ProviderId::DeepSeek => partial.deepseek_api_key = value,
+        ProviderId::XiaomiMimo => partial.xiaomimimo_api_key = value,
+        ProviderId::Copilot => {}
     }
 }
 
@@ -406,6 +468,7 @@ fn run_single_health_check(cfg: &scorpio_core::config::Config) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scorpio_core::config::{ProviderSettings, ProvidersConfig};
     use secrecy::ExposeSecret;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -449,12 +512,18 @@ mod tests {
 
     #[test]
     fn validate_step3_result_all_none_returns_err() {
-        assert!(validate_step3_result(&PartialConfig::default()).is_err());
+        assert!(
+            validate_step3_result(&PartialConfig::default(), &ProvidersConfig::default(), false)
+                .is_err()
+        );
     }
 
     #[test]
     fn validate_step3_result_openai_key_returns_ok() {
-        assert!(validate_step3_result(&partial_with_openai()).is_ok());
+        assert!(
+            validate_step3_result(&partial_with_openai(), &ProvidersConfig::default(), false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -463,7 +532,7 @@ mod tests {
             anthropic_api_key: Some("sk-ant".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
     }
 
     #[test]
@@ -472,7 +541,7 @@ mod tests {
             gemini_api_key: Some("AIza".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
     }
 
     #[test]
@@ -481,14 +550,16 @@ mod tests {
             openrouter_api_key: Some("or-key".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
     }
 
     // ── providers_with_keys ───────────────────────────────────────────────────
 
     #[test]
     fn providers_with_keys_empty_partial_returns_empty() {
-        assert!(providers_with_keys(&PartialConfig::default()).is_empty());
+        assert!(
+            providers_with_keys(&PartialConfig::default(), &ProvidersConfig::default()).is_empty()
+        );
     }
 
     #[test]
@@ -498,22 +569,26 @@ mod tests {
             openai_api_key: Some("o".into()),
             ..Default::default()
         };
-        let result = providers_with_keys(&p);
-        // WIZARD_PROVIDERS order: OpenAI, Anthropic, Gemini, OpenRouter
+        let result = providers_with_keys(&p, &ProvidersConfig::default());
+        // KEYED_WIZARD_PROVIDERS order: OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, XiaomiMimo
         assert_eq!(result, vec![ProviderId::OpenAI, ProviderId::Gemini]);
     }
 
     #[test]
-    fn providers_with_keys_all_set_returns_all_wizard_providers() {
+    fn providers_with_keys_all_set_returns_all_keyed_wizard_providers() {
         let p = PartialConfig {
             openai_api_key: Some("o".into()),
             anthropic_api_key: Some("a".into()),
             gemini_api_key: Some("g".into()),
             openrouter_api_key: Some("r".into()),
             deepseek_api_key: Some("d".into()),
+            xiaomimimo_api_key: Some("m".into()),
             ..Default::default()
         };
-        assert_eq!(providers_with_keys(&p), WIZARD_PROVIDERS.to_vec());
+        assert_eq!(
+            providers_with_keys(&p, &ProvidersConfig::default()),
+            KEYED_WIZARD_PROVIDERS.to_vec()
+        );
     }
 
     // ── DeepSeek provider tests (Task C) ─────────────────────────────────────
@@ -524,7 +599,7 @@ mod tests {
             deepseek_api_key: Some("sk-deepseek".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
     }
 
     #[test]
@@ -549,8 +624,97 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            providers_with_keys(&p),
+            providers_with_keys(&p, &ProvidersConfig::default()),
             vec![ProviderId::OpenAI, ProviderId::DeepSeek]
+        );
+    }
+
+    // ── Phase 8 Task 19: KEYED_WIZARD_PROVIDERS + eligible_routing_providers ─
+
+    #[test]
+    fn keyed_wizard_providers_excludes_copilot() {
+        assert!(!KEYED_WIZARD_PROVIDERS.contains(&ProviderId::Copilot));
+        assert!(KEYED_WIZARD_PROVIDERS.contains(&ProviderId::OpenAI));
+        assert!(KEYED_WIZARD_PROVIDERS.contains(&ProviderId::XiaomiMimo));
+    }
+
+    #[test]
+    fn routing_eligible_providers_includes_copilot_when_no_keys() {
+        let partial = PartialConfig::default();
+        let eligible = eligible_routing_providers(&partial, &ProvidersConfig::default());
+        assert_eq!(eligible, vec![ProviderId::Copilot]);
+    }
+
+    #[test]
+    fn routing_eligible_providers_appends_copilot_after_effective_keyed_providers() {
+        let partial = PartialConfig::default();
+        let providers = ProvidersConfig {
+            openai: ProviderSettings {
+                api_key: Some(secrecy::SecretString::from("sk-test")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let eligible = eligible_routing_providers(&partial, &providers);
+        assert_eq!(eligible, vec![ProviderId::OpenAI, ProviderId::Copilot]);
+    }
+
+    #[test]
+    fn validate_step3_result_passes_with_copilot_only_flag() {
+        let partial = PartialConfig::default();
+        assert!(
+            validate_step3_result(&partial, &ProvidersConfig::default(), false).is_err()
+        );
+        assert!(
+            validate_step3_result(&partial, &ProvidersConfig::default(), true).is_ok()
+        );
+    }
+
+    #[test]
+    fn provider_key_copilot_always_returns_none() {
+        let partial = PartialConfig::default();
+        assert_eq!(provider_key(&partial, ProviderId::Copilot), None);
+    }
+
+    #[test]
+    fn provider_key_and_set_provider_key_handle_xiaomimimo() {
+        let mut partial = PartialConfig::default();
+        set_provider_key(
+            &mut partial,
+            ProviderId::XiaomiMimo,
+            Some("mimo-key".into()),
+        );
+        assert_eq!(
+            provider_key(&partial, ProviderId::XiaomiMimo),
+            Some("mimo-key")
+        );
+    }
+
+    #[test]
+    fn providers_with_keys_includes_xiaomimimo() {
+        let p = PartialConfig {
+            xiaomimimo_api_key: Some("m".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            providers_with_keys(&p, &ProvidersConfig::default()),
+            vec![ProviderId::XiaomiMimo]
+        );
+    }
+
+    #[test]
+    fn providers_with_keys_picks_up_key_from_effective_providers() {
+        let partial = PartialConfig::default();
+        let providers = ProvidersConfig {
+            anthropic: ProviderSettings {
+                api_key: Some(secrecy::SecretString::from("sk-ant")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            providers_with_keys(&partial, &providers),
+            vec![ProviderId::Anthropic]
         );
     }
 

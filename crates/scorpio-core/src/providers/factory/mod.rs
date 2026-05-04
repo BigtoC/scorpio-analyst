@@ -10,7 +10,8 @@
 //! | Submodule | Responsibility |
 //! |-----------|---------------|
 //! | [`error`]  | Internal error mapping and sanitization utilities used by the facade |
-//! | [`client`] | [`CompletionModelHandle`], [`create_completion_model`] |
+//! | [`client`] | [`CompletionModelHandle`], [`create_completion_model`], [`create_completion_model_with_copilot`], [`CopilotAuthMode`] |
+//! | [`copilot_auth`] | OAuth scope validation, identity binding, and token-cache inspection |
 //! | [`agent`]  | [`LlmAgent`], [`build_agent`], [`build_agent_with_tools`], [`prompt_typed`], mock infrastructure |
 //! | [`retry`]  | [`RetryOutcome`], all retry/budget loop functions |
 //! | [`text_retry`] | [`prompt_text_with_retry`] — tool-enabled text prompt with retry |
@@ -20,6 +21,7 @@ mod agent;
 #[cfg(test)]
 pub(crate) mod agent_test_support;
 mod client;
+pub mod copilot_auth;
 mod discovery;
 mod error;
 mod retry;
@@ -27,7 +29,10 @@ mod text_retry;
 
 // ── client submodule ─────────────────────────────────────────────────────────
 
-pub use client::{CompletionModelHandle, create_completion_model};
+pub use client::{
+    CompletionModelHandle, CopilotAuthMode, create_completion_model,
+    create_completion_model_with_copilot,
+};
 
 // ── agent submodule ──────────────────────────────────────────────────────────
 
@@ -44,7 +49,7 @@ pub use retry::{
 
 pub use text_retry::prompt_text_with_retry;
 
-pub use discovery::{ModelDiscoveryOutcome, discover_setup_models};
+pub use discovery::{COPILOT_CURATED_MODELS, ModelDiscoveryOutcome, discover_setup_models};
 pub use error::sanitize_error_summary;
 
 // ── test-only mock infrastructure ────────────────────────────────────────────

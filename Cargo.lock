@@ -3761,6 +3761,7 @@ dependencies = [
  "governor",
  "graph-flow",
  "kand",
+ "libc",
  "mockall",
  "nonzero_ext",
  "num-traits",
@@ -3782,6 +3783,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "yfinance-rs",
 ]
