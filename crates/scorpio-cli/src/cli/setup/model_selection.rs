@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use scorpio_core::config::Config;
 use scorpio_core::providers::ProviderId;
 use scorpio_core::providers::factory::{ModelDiscoveryOutcome, discover_setup_models};
 use scorpio_core::settings::PartialConfig;
@@ -185,12 +184,44 @@ fn prompt_provider_or_skip(
     }
 }
 
+fn prompt_copilot_model(
+    saved_provider: Option<&str>,
+    saved_model: Option<&str>,
+) -> Result<String, inquire::InquireError> {
+    use scorpio_core::providers::factory::COPILOT_CURATED_MODELS;
+    const MANUAL: &str = "Enter model manually";
+
+    let provider_matches = saved_provider.is_some_and(|sp| sp.eq_ignore_ascii_case("copilot"));
+    let effective_saved = if provider_matches { saved_model } else { None };
+
+    let mut options: Vec<&str> = COPILOT_CURATED_MODELS.to_vec();
+    options.push(MANUAL);
+
+    let default_index = effective_saved
+        .and_then(|s| options.iter().position(|opt| *opt == s))
+        .unwrap_or(0);
+
+    let chosen = inquire::Select::new("Copilot model:", options)
+        .with_starting_cursor(default_index)
+        .prompt()?;
+
+    if chosen == MANUAL {
+        return prompt_manual_model("Copilot model:", effective_saved.unwrap_or(""));
+    }
+
+    Ok(chosen.to_owned())
+}
+
 fn prompt_model_for_provider(
     provider: ProviderId,
     outcome: &ModelDiscoveryOutcome,
     saved_provider: Option<&str>,
     saved_model: Option<&str>,
 ) -> Result<String, inquire::InquireError> {
+    // Copilot uses a curated static list with manual-entry fallback.
+    if provider == ProviderId::Copilot {
+        return prompt_copilot_model(saved_provider, saved_model);
+    }
     let mode = prompt_mode_for_provider(provider, outcome, saved_provider, saved_model);
     match mode {
         ModelPromptMode::Select {
@@ -240,16 +271,29 @@ fn discover_provider_models_blocking(
     partial: &PartialConfig,
     provider: ProviderId,
 ) -> ModelDiscoveryOutcome {
-    let providers = Config::load_effective_runtime(partial.clone())
-        .map(|cfg| cfg.providers)
-        .ok();
+    // Copilot uses a static curated list — no network call needed.
+    if provider == ProviderId::Copilot {
+        return ModelDiscoveryOutcome::Listed(
+            scorpio_core::providers::factory::COPILOT_CURATED_MODELS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        );
+    }
 
-    let Some(providers) = providers else {
-        return bootstrap_fallback_outcome(provider);
+    let config_path = match scorpio_core::settings::user_config_path() {
+        Ok(path) => path,
+        Err(_) => return bootstrap_fallback_outcome(provider),
+    };
+    let providers_config = match scorpio_core::config::Config::load_effective_providers_config_from_user_path(
+        &config_path,
+        partial,
+    ) {
+        Ok(cfg) => cfg,
+        Err(_) => return bootstrap_fallback_outcome(provider),
     };
 
-    let settings = providers.settings_for(provider);
-    if settings.base_url.is_some() {
+    if providers_config.settings_for(provider).base_url.is_some() {
         return bootstrap_fallback_outcome(provider);
     }
 
@@ -262,7 +306,7 @@ fn discover_provider_models_blocking(
     };
 
     runtime
-        .block_on(discover_setup_models(&[provider], &providers))
+        .block_on(discover_setup_models(&[provider], &providers_config))
         .remove(&provider)
         .unwrap_or_else(|| bootstrap_fallback_outcome(provider))
 }
@@ -465,6 +509,14 @@ mod tests {
                 initial_value: String::new(),
             }
         );
+    }
+
+    #[test]
+    fn copilot_menu_contains_curated_models_plus_manual() {
+        use scorpio_core::providers::factory::COPILOT_CURATED_MODELS;
+        assert!(COPILOT_CURATED_MODELS.contains(&"gpt-4o"));
+        assert!(COPILOT_CURATED_MODELS.contains(&"claude-sonnet-4"));
+        assert!(!COPILOT_CURATED_MODELS.iter().any(|m| m.contains("codex")));
     }
 
     #[test]

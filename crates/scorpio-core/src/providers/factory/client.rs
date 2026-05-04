@@ -20,19 +20,14 @@ use crate::{
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Whether a Copilot code path may later trigger interactive OAuth/device-flow auth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CopilotAuthMode {
     /// Setup-time path: may prompt the user with a verification URI and user code.
     InteractiveSetup,
     /// Runtime path: must rely on prevalidated cached auth and never use Scorpio's
     /// interactive setup entrypoint.
+    #[default]
     NonInteractiveRuntime,
-}
-
-impl Default for CopilotAuthMode {
-    fn default() -> Self {
-        Self::NonInteractiveRuntime
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -109,7 +104,7 @@ impl CompletionModelHandle {
     /// without going through the full configuration pipeline.
     #[cfg(any(test, feature = "test-helpers"))]
     #[doc(hidden)]
-    pub fn for_test_with_client(
+    pub(crate) fn for_test_with_client(
         provider: ProviderId,
         model_id: &str,
         client: ProviderClient,
@@ -413,7 +408,7 @@ fn create_provider_client_for(
                         })?;
                     xiaomimimo::Client::builder()
                         .api_key(key.expose_secret())
-                        .base_url(parsed.to_string())
+                        .base_url(&parsed)
                         .http_client(http_client)
                         .build()
                         .map_err(|e| {
@@ -1243,6 +1238,172 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("scorpio setup"), "got: {err}");
+    }
+
+    // ── NonInteractiveRuntime validation paths ───────────────────────────────
+
+    #[test]
+    fn noninteractive_factory_rejects_when_identity_binding_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_dir = dir.path().join("github_copilot");
+        std::fs::create_dir_all(&token_dir).unwrap();
+        // Pretend rig cache exists.
+        std::fs::write(token_dir.join("access-token"), "fake-token").unwrap();
+        std::fs::write(
+            token_dir.join("api-key.json"),
+            r#"{"endpoints":{"api":"https://api.githubcopilot.com"}}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &token_dir,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("access-token"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("api-key.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        // No scorpio-identity.json.
+
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "copilot".to_owned();
+        cfg.quick_thinking_model = "gpt-4o".to_owned();
+
+        let result = create_completion_model_with_copilot(
+            ModelTier::QuickThinking,
+            &cfg,
+            &ProvidersConfig::default(),
+            &ProviderRateLimiters::default(),
+            CopilotAuthMode::NonInteractiveRuntime,
+            &token_dir,
+        );
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("identity"), "error should mention identity: {err}");
+    }
+
+    #[test]
+    fn noninteractive_factory_accepts_allowed_copilot_runtime_base() {
+        use crate::providers::factory::copilot_auth;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token_dir = dir.path().join("github_copilot");
+        std::fs::create_dir_all(&token_dir).unwrap();
+        std::fs::write(token_dir.join("access-token"), "ghu_test_token").unwrap();
+        std::fs::write(
+            token_dir.join("api-key.json"),
+            r#"{"token":"tid_test","expires_at":4102444800,"endpoints":{"api":"https://api.githubcopilot.com"}}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &token_dir,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("access-token"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("api-key.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        copilot_auth::write_binding(
+            &token_dir,
+            &copilot_auth::ScorpioIdentityBinding {
+                github_id: 42,
+                github_login: "octocat".to_owned(),
+                written_at: 0,
+            },
+        )
+        .unwrap();
+
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "copilot".to_owned();
+        cfg.quick_thinking_model = "gpt-4o".to_owned();
+
+        let result = create_completion_model_with_copilot(
+            ModelTier::QuickThinking,
+            &cfg,
+            &ProvidersConfig::default(),
+            &ProviderRateLimiters::default(),
+            CopilotAuthMode::NonInteractiveRuntime,
+            &token_dir,
+        );
+        assert!(result.is_ok(), "should accept allowed Copilot runtime base: {:?}", result.err());
+    }
+
+    #[test]
+    fn noninteractive_factory_rejects_untrusted_copilot_runtime_base() {
+        use crate::providers::factory::copilot_auth;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token_dir = dir.path().join("github_copilot");
+        std::fs::create_dir_all(&token_dir).unwrap();
+        std::fs::write(token_dir.join("access-token"), "ghu_test_token").unwrap();
+        std::fs::write(
+            token_dir.join("api-key.json"),
+            r#"{"token":"tid_test","endpoints":{"api":"https://evil.example.com"}}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &token_dir,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("access-token"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("api-key.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        copilot_auth::write_binding(
+            &token_dir,
+            &copilot_auth::ScorpioIdentityBinding {
+                github_id: 42,
+                github_login: "octocat".to_owned(),
+                written_at: 0,
+            },
+        )
+        .unwrap();
+
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "copilot".to_owned();
+        cfg.quick_thinking_model = "gpt-4o".to_owned();
+
+        let err = create_completion_model_with_copilot(
+            ModelTier::QuickThinking,
+            &cfg,
+            &ProvidersConfig::default(),
+            &ProviderRateLimiters::default(),
+            CopilotAuthMode::NonInteractiveRuntime,
+            &token_dir,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("runtime base"), "error should mention runtime base: {err}");
     }
 
     #[test]

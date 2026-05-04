@@ -880,11 +880,13 @@ rpm = 22
 
     #[test]
     fn partial_config_round_trips_xiaomimimo_secret_and_copilot_rpm() {
-        let mut p = PartialConfig::default();
-        p.xiaomimimo_api_key = Some("mimo-secret".to_owned());
-        p.xiaomimimo_base_url = Some("https://api.xiaomimimo.com/v1".to_owned());
-        p.xiaomimimo_rpm = Some(75);
-        p.copilot_rpm = Some(60);
+        let p = PartialConfig {
+            xiaomimimo_api_key: Some("mimo-secret".to_owned()),
+            xiaomimimo_base_url: Some("https://api.xiaomimimo.com/v1".to_owned()),
+            xiaomimimo_rpm: Some(75),
+            copilot_rpm: Some(60),
+            ..Default::default()
+        };
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -899,8 +901,10 @@ rpm = 22
 
     #[test]
     fn partial_config_debug_redacts_xiaomimimo_secret() {
-        let mut p = PartialConfig::default();
-        p.xiaomimimo_api_key = Some("mimo-secret-123".to_owned());
+        let p = PartialConfig {
+            xiaomimimo_api_key: Some("mimo-secret-123".to_owned()),
+            ..Default::default()
+        };
         let dbg = format!("{p:?}");
         assert!(!dbg.contains("mimo-secret-123"), "raw secret leaked: {dbg}");
         assert!(dbg.contains("xiaomimimo_api_key"));
@@ -908,9 +912,11 @@ rpm = 22
 
     #[test]
     fn partial_config_serializes_xiaomimimo_under_providers_table() {
-        let mut p = PartialConfig::default();
-        p.xiaomimimo_base_url = Some("https://api.xiaomimimo.com/v1".to_owned());
-        p.xiaomimimo_rpm = Some(75);
+        let p = PartialConfig {
+            xiaomimimo_base_url: Some("https://api.xiaomimimo.com/v1".to_owned()),
+            xiaomimimo_rpm: Some(75),
+            ..Default::default()
+        };
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
