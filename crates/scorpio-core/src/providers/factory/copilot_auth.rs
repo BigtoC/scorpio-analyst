@@ -90,6 +90,10 @@ pub struct GitHubIdentity {
     pub scopes: Vec<String>,
 }
 
+/// Parsed subset of rig's cached `api-key.json` record.
+///
+/// Scorpio reads this file only to validate the cached Copilot runtime base and
+/// related local metadata before trusting runtime auth state.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ApiKeyRecord {
     pub token: Option<String>,
@@ -98,6 +102,10 @@ pub struct ApiKeyRecord {
     pub bootstrap_token_fingerprint: Option<String>,
 }
 
+/// Nested endpoint URLs from rig's cached `api-key.json` record.
+///
+/// Only the `api` field is consumed in this slice, as part of the local
+/// Copilot runtime-base allowlist check.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ApiKeyEndpoints {
     pub api: Option<String>,
