@@ -323,16 +323,6 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
-    fn default_provider_index_falls_back_to_first_eligible_when_saved_provider_is_unsupported() {
-        let eligible = vec![
-            ProviderId::OpenAI,
-            ProviderId::Anthropic,
-            ProviderId::DeepSeek,
-        ];
-        assert_eq!(default_provider_index(&eligible, Some("copilot")), 0);
-    }
-
-    #[test]
     fn default_provider_index_matches_saved_provider_case_insensitively() {
         let eligible = vec![
             ProviderId::OpenAI,

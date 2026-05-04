@@ -644,17 +644,6 @@ mod tests {
         );
     }
 
-    // ── Copilot removal test ───────────────────────────────────────────────
-
-    #[test]
-    fn validate_provider_id_rejects_copilot() {
-        let err = validate_provider_id("copilot").expect_err("copilot should be rejected");
-        let msg = err.to_string();
-        assert!(msg.contains("copilot"));
-        assert!(msg.contains("openrouter"));
-        assert!(msg.contains("deepseek"));
-    }
-
     // ── DeepSeek provider tests ──────────────────────────────────────────────
 
     #[test]

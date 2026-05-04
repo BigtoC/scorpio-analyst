@@ -679,26 +679,6 @@ mod tests {
 
     // ── Debug redaction ───────────────────────────────────────────────────────
 
-    // ── Copilot routing preservation test ─────────────────────────────────
-
-    #[test]
-    fn load_user_config_at_preserves_stale_copilot_routing_strings() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_toml(
-            &dir,
-            r#"
-quick_thinking_provider = "copilot"
-quick_thinking_model = "claude-haiku"
-deep_thinking_provider = "openai"
-deep_thinking_model = "o3"
-"#,
-        );
-        let loaded = load_user_config_at(&path).expect("partial config should still load");
-        assert_eq!(loaded.quick_thinking_provider.as_deref(), Some("copilot"));
-        assert_eq!(loaded.quick_thinking_model.as_deref(), Some("claude-haiku"));
-        assert_eq!(loaded.deep_thinking_provider.as_deref(), Some("openai"));
-    }
-
     #[test]
     fn load_user_config_at_preserves_provider_overrides() {
         let dir = tempfile::tempdir().unwrap();
