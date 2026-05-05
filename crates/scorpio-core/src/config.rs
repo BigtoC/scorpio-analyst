@@ -1647,18 +1647,21 @@ deep_thinking_model = "o3"
 
     #[test]
     fn deserialize_provider_name_accepts_copilot_and_xiaomimimo() {
-        let copilot = serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("copilot");
+        let copilot =
+            serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("copilot");
         let result: Result<String, _> = deserialize_provider_name(copilot);
         assert_eq!(result.unwrap(), "copilot");
 
-        let mimo = serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("xiaomimimo");
+        let mimo =
+            serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("xiaomimimo");
         let result: Result<String, _> = deserialize_provider_name(mimo);
         assert_eq!(result.unwrap(), "xiaomimimo");
     }
 
     #[test]
     fn deserialize_provider_name_unknown_error_lists_new_providers() {
-        let unknown = serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("nothing");
+        let unknown =
+            serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("nothing");
         let err: serde::de::value::Error = deserialize_provider_name(unknown).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("copilot"), "missing copilot in: {msg}");
@@ -1689,7 +1692,9 @@ deep_thinking_model = "o3"
         // so providers.copilot.base_url is preserved and the rejection fires.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 [llm]
 quick_thinking_provider = "copilot"
 deep_thinking_provider = "copilot"
@@ -1698,7 +1703,9 @@ deep_thinking_model = "gpt-4o"
 
 [providers.copilot]
 base_url = "https://example.com/v1"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let err = Config::load_from(&path).expect_err("copilot base_url must be rejected");
         let msg = format!("{err:#}");
@@ -1722,8 +1729,10 @@ base_url = "https://example.com/v1"
         };
         save_user_config_at(&partial, &path).unwrap();
         let cfg = Config::load_from_user_path(&path).expect("config loads");
-        assert!(!cfg.should_warn_no_llm_key(),
-            "Copilot-only routing should not produce a missing-key warning");
+        assert!(
+            !cfg.should_warn_no_llm_key(),
+            "Copilot-only routing should not produce a missing-key warning"
+        );
     }
 
     #[test]

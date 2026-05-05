@@ -392,6 +392,10 @@ pub fn copilot_token_dir() -> anyhow::Result<PathBuf> {
 /// Ensure the Copilot token directory exists with owner-only permissions.
 pub fn ensure_copilot_token_dir() -> anyhow::Result<PathBuf> {
     let dir = copilot_token_dir()?;
+    #[cfg(not(unix))]
+    {
+        return Err(unsupported_copilot_token_dir_security_error(&dir));
+    }
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create copilot token dir at {}", dir.display()))?;
     #[cfg(unix)]
@@ -402,6 +406,14 @@ pub fn ensure_copilot_token_dir() -> anyhow::Result<PathBuf> {
             .with_context(|| format!("failed to set 0o700 on {}", dir.display()))?;
     }
     Ok(dir)
+}
+
+#[cfg(any(not(unix), test))]
+fn unsupported_copilot_token_dir_security_error(dir: &std::path::Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Copilot token-dir security verification is unsupported on this non-Unix platform for {}",
+        dir.display()
+    )
 }
 
 /// Verify the Copilot token directory is a real, non-symlink directory owned by the
@@ -437,8 +449,8 @@ pub fn verify_copilot_token_dir_secure(dir: &std::path::Path) -> anyhow::Result<
 }
 
 #[cfg(not(unix))]
-pub fn verify_copilot_token_dir_secure(_dir: &std::path::Path) -> anyhow::Result<()> {
-    Ok(())
+pub fn verify_copilot_token_dir_secure(dir: &std::path::Path) -> anyhow::Result<()> {
+    Err(unsupported_copilot_token_dir_security_error(dir))
 }
 
 /// Load [`PartialConfig`] from `path`.
@@ -894,7 +906,10 @@ rpm = 22
         let loaded = load_user_config_at(&path).expect("load");
 
         assert_eq!(loaded.xiaomimimo_api_key.as_deref(), Some("mimo-secret"));
-        assert_eq!(loaded.xiaomimimo_base_url.as_deref(), Some("https://api.xiaomimimo.com/v1"));
+        assert_eq!(
+            loaded.xiaomimimo_base_url.as_deref(),
+            Some("https://api.xiaomimimo.com/v1")
+        );
         assert_eq!(loaded.xiaomimimo_rpm, Some(75));
         assert_eq!(loaded.copilot_rpm, Some(60));
     }
@@ -922,10 +937,14 @@ rpm = 22
         let path = dir.path().join("config.toml");
         save_user_config_at(&p, &path).expect("save");
         let raw = std::fs::read_to_string(&path).expect("read");
-        assert!(raw.contains("[providers.xiaomimimo]"),
-            "expected nested table, got:\n{raw}");
-        assert!(!raw.contains("xiaomimimo_base_url ="),
-            "must not use legacy flat format");
+        assert!(
+            raw.contains("[providers.xiaomimimo]"),
+            "expected nested table, got:\n{raw}"
+        );
+        assert!(
+            !raw.contains("xiaomimimo_base_url ="),
+            "must not use legacy flat format"
+        );
     }
 
     #[test]
@@ -937,8 +956,10 @@ rpm = 22
         }
 
         let dir = copilot_token_dir().expect("token dir resolves");
-        assert!(dir.ends_with("github_copilot"),
-            "expected suffix github_copilot, got {dir:?}");
+        assert!(
+            dir.ends_with("github_copilot"),
+            "expected suffix github_copilot, got {dir:?}"
+        );
         let parent = dir.parent().expect("has parent");
         let cfg_path = user_config_path().expect("config path");
         assert_eq!(parent, cfg_path.parent().expect("config has parent"));
@@ -946,5 +967,16 @@ rpm = 22
         unsafe {
             std::env::remove_var("HOME");
         }
+    }
+
+    #[test]
+    fn verify_copilot_token_dir_secure_fails_closed_on_non_unix() {
+        let err = unsupported_copilot_token_dir_security_error(std::path::Path::new(
+            "/tmp/github_copilot",
+        ));
+        assert!(
+            err.to_string().contains("non-Unix") || err.to_string().contains("platform"),
+            "expected fail-closed unsupported-platform error, got: {err}"
+        );
     }
 }
