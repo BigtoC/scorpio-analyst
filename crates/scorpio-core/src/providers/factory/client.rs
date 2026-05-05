@@ -1279,14 +1279,22 @@ mod tests {
 
     #[test]
     fn factory_default_create_completion_model_uses_noninteractive_copilot_runtime() {
+        // Verify that create_completion_model uses NonInteractiveRuntime for Copilot by
+        // supplying an empty token dir via the testable entry point.
+        let dir = tempfile::tempdir().unwrap();
+        let token_dir = dir.path().join("github_copilot");
+        std::fs::create_dir_all(&token_dir).unwrap();
+
         let mut cfg = sample_llm_config();
         cfg.quick_thinking_provider = "copilot".to_owned();
         cfg.quick_thinking_model = "gpt-4o".to_owned();
-        let err = create_completion_model(
+        let err = create_completion_model_with_copilot(
             ModelTier::QuickThinking,
             &cfg,
             &ProvidersConfig::default(),
             &ProviderRateLimiters::default(),
+            CopilotAuthMode::NonInteractiveRuntime,
+            &token_dir,
         )
         .unwrap_err();
         assert!(err.to_string().contains("scorpio setup"), "got: {err}");

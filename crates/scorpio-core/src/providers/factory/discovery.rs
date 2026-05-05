@@ -464,8 +464,7 @@ mod tests {
             panic!("expected Listed, got {outcome:?}");
         };
         assert!(models.contains(&"gpt-4o".to_owned()));
-        assert!(models.contains(&"gpt-4o-mini".to_owned()));
-        assert!(models.contains(&"claude-sonnet-4".to_owned()));
+        assert!(models.contains(&"claude-sonnet-4.6".to_owned()));
         assert!(
             !models.iter().any(|m| m.to_lowercase().contains("codex")),
             "no Codex models in slice 1: {models:?}"

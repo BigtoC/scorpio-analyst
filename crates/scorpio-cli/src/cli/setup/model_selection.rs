@@ -612,7 +612,7 @@ mod tests {
     fn copilot_menu_contains_curated_models_plus_manual() {
         use scorpio_core::providers::factory::COPILOT_CURATED_MODELS;
         assert!(COPILOT_CURATED_MODELS.contains(&"gpt-4o"));
-        assert!(COPILOT_CURATED_MODELS.contains(&"claude-sonnet-4"));
+        assert!(COPILOT_CURATED_MODELS.contains(&"claude-sonnet-4.6"));
         assert!(!COPILOT_CURATED_MODELS.iter().any(|m| m.contains("codex")));
     }
 
