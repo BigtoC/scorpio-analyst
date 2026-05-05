@@ -14,4 +14,5 @@
 # CocoIndex Code (ccc)
 /.cocoindex_code/
 .worktrees/
+.claude/worktrees/**
 .context/

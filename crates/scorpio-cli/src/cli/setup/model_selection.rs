@@ -2,10 +2,17 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use scorpio_core::config::Config;
 use scorpio_core::providers::ProviderId;
 use scorpio_core::providers::factory::{ModelDiscoveryOutcome, discover_setup_models};
 use scorpio_core::settings::PartialConfig;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoutingDefaults {
+    pub quick_provider: Option<ProviderId>,
+    pub deep_provider: Option<ProviderId>,
+    pub keyed_providers_skipped_message: bool,
+    pub lock_same_model_across_tiers: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ModelMenuOption {
@@ -185,12 +192,53 @@ fn prompt_provider_or_skip(
     }
 }
 
+fn prompt_copilot_model(
+    saved_provider: Option<&str>,
+    saved_model: Option<&str>,
+) -> Result<String, inquire::InquireError> {
+    use scorpio_core::providers::factory::COPILOT_CURATED_MODELS;
+    const MANUAL: &str = "Enter model manually";
+
+    let provider_matches = saved_provider.is_some_and(|sp| sp.eq_ignore_ascii_case("copilot"));
+    let effective_saved = if provider_matches { saved_model } else { None };
+
+    let mut options: Vec<&str> = COPILOT_CURATED_MODELS.to_vec();
+    options.push(MANUAL);
+
+    let default_index = effective_saved
+        .and_then(|s| options.iter().position(|opt| *opt == s))
+        .unwrap_or(0);
+
+    let chosen = inquire::Select::new("Copilot model:", options)
+        .with_starting_cursor(default_index)
+        .prompt()?;
+
+    if chosen == MANUAL {
+        return prompt_manual_model(
+            ProviderId::Copilot,
+            "Copilot model:",
+            effective_saved.unwrap_or(""),
+        );
+    }
+
+    Ok(chosen.to_owned())
+}
+
 fn prompt_model_for_provider(
     provider: ProviderId,
     outcome: &ModelDiscoveryOutcome,
     saved_provider: Option<&str>,
     saved_model: Option<&str>,
 ) -> Result<String, inquire::InquireError> {
+    // Copilot uses a curated static list with manual-entry fallback.
+    if provider == ProviderId::Copilot {
+        println!(
+            "** Not all Copilot models support completions, check this PR \
+             (https://github.com/0xPlaygrounds/rig/pull/1730) for more details."
+        );
+        println!("Models below are selected and tested.");
+        return prompt_copilot_model(saved_provider, saved_model);
+    }
     let mode = prompt_mode_for_provider(provider, outcome, saved_provider, saved_model);
     match mode {
         ModelPromptMode::Select {
@@ -205,7 +253,7 @@ fn prompt_model_for_provider(
                 ModelMenuOption::Listed(name) => Ok(name),
                 ModelMenuOption::Manual => {
                     let initial = manual_initial_value(provider, saved_provider, saved_model);
-                    prompt_manual_model(&format!("{provider} model:"), &initial)
+                    prompt_manual_model(provider, &format!("{provider} model:"), &initial)
                 }
             }
         }
@@ -216,40 +264,72 @@ fn prompt_model_for_provider(
             if let Some(msg) = note {
                 println!("{msg}");
             }
-            prompt_manual_model(&format!("{provider} model:"), &initial_value)
+            prompt_manual_model(provider, &format!("{provider} model:"), &initial_value)
         }
     }
 }
 
-fn prompt_manual_model(label: &str, initial: &str) -> Result<String, inquire::InquireError> {
-    inquire::Text::new(label)
+fn validate_manual_model_id(provider: ProviderId, raw: &str) -> Result<(), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Model name must not be empty".to_owned());
+    }
+    if trimmed.len() > 128 {
+        return Err("Model name must be at most 128 characters".to_owned());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("Model name must not contain control characters".to_owned());
+    }
+    if provider == ProviderId::Copilot && trimmed.to_ascii_lowercase().contains("codex") {
+        return Err("Copilot codex-class models are not supported in this slice".to_owned());
+    }
+    Ok(())
+}
+
+fn prompt_manual_model(
+    provider: ProviderId,
+    label: &str,
+    initial: &str,
+) -> Result<String, inquire::InquireError> {
+    let input = inquire::Text::new(label)
         .with_initial_value(initial)
-        .with_validator(|s: &str| {
-            if s.trim().is_empty() {
-                Ok(inquire::validator::Validation::Invalid(
-                    "Model name must not be empty".into(),
-                ))
-            } else {
-                Ok(inquire::validator::Validation::Valid)
-            }
+        .with_validator(move |s: &str| match validate_manual_model_id(provider, s) {
+            Ok(()) => Ok(inquire::validator::Validation::Valid),
+            Err(message) => Ok(inquire::validator::Validation::Invalid(message.into())),
         })
-        .prompt()
+        .prompt()?;
+
+    Ok(input.trim().to_owned())
 }
 
 fn discover_provider_models_blocking(
     partial: &PartialConfig,
     provider: ProviderId,
 ) -> ModelDiscoveryOutcome {
-    let providers = Config::load_effective_runtime(partial.clone())
-        .map(|cfg| cfg.providers)
-        .ok();
+    // Copilot uses a static curated list — no network call needed.
+    if provider == ProviderId::Copilot {
+        return ModelDiscoveryOutcome::Listed(
+            scorpio_core::providers::factory::COPILOT_CURATED_MODELS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        );
+    }
 
-    let Some(providers) = providers else {
-        return bootstrap_fallback_outcome(provider);
+    let config_path = match scorpio_core::settings::user_config_path() {
+        Ok(path) => path,
+        Err(_) => return bootstrap_fallback_outcome(provider),
     };
+    let providers_config =
+        match scorpio_core::config::Config::load_effective_providers_config_from_user_path(
+            &config_path,
+            partial,
+        ) {
+            Ok(cfg) => cfg,
+            Err(_) => return bootstrap_fallback_outcome(provider),
+        };
 
-    let settings = providers.settings_for(provider);
-    if settings.base_url.is_some() {
+    if providers_config.settings_for(provider).base_url.is_some() {
         return bootstrap_fallback_outcome(provider);
     }
 
@@ -262,22 +342,45 @@ fn discover_provider_models_blocking(
     };
 
     runtime
-        .block_on(discover_setup_models(&[provider], &providers))
+        .block_on(discover_setup_models(&[provider], &providers_config))
         .remove(&provider)
         .unwrap_or_else(|| bootstrap_fallback_outcome(provider))
 }
 
-pub fn prompt_provider_routing(
+pub(crate) fn prompt_provider_routing(
     partial: &mut PartialConfig,
     eligible: Vec<ProviderId>,
     _config_path: &Path,
+    defaults: &RoutingDefaults,
 ) -> Result<(), inquire::InquireError> {
     let mut discovery_cache: HashMap<ProviderId, ModelDiscoveryOutcome> = HashMap::new();
+
+    if defaults.lock_same_model_across_tiers {
+        let provider = defaults
+            .quick_provider
+            .or(defaults.deep_provider)
+            .unwrap_or_else(|| eligible.first().copied().unwrap_or(ProviderId::Copilot));
+        let outcome = discovery_cache
+            .entry(provider)
+            .or_insert_with(|| discover_provider_models_blocking(partial, provider))
+            .clone();
+        let saved = locked_same_model_saved_selection(partial, provider);
+        let model =
+            prompt_model_for_provider(provider, &outcome, saved.saved_provider, saved.saved_model)?;
+        partial.quick_thinking_provider = Some(provider.as_str().to_owned());
+        partial.deep_thinking_provider = Some(provider.as_str().to_owned());
+        partial.quick_thinking_model = Some(model.clone());
+        partial.deep_thinking_model = Some(model);
+        return Ok(());
+    }
 
     if let Some(quick_provider) = prompt_provider_or_skip(
         "Quick-thinking provider (used by analyst agents):",
         &eligible,
-        partial.quick_thinking_provider.as_deref(),
+        defaults
+            .quick_provider
+            .map(ProviderId::as_str)
+            .or(partial.quick_thinking_provider.as_deref()),
     )? {
         let quick_outcome = discovery_cache
             .entry(quick_provider)
@@ -296,7 +399,10 @@ pub fn prompt_provider_routing(
     if let Some(deep_provider) = prompt_provider_or_skip(
         "Deep-thinking provider (used by researcher, trader, and risk agents):",
         &eligible,
-        partial.deep_thinking_provider.as_deref(),
+        defaults
+            .deep_provider
+            .map(ProviderId::as_str)
+            .or(partial.deep_thinking_provider.as_deref()),
     )? {
         let deep_outcome = discovery_cache
             .entry(deep_provider)
@@ -315,22 +421,47 @@ pub fn prompt_provider_routing(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LockedSameModelSavedSelection<'a> {
+    saved_provider: Option<&'a str>,
+    saved_model: Option<&'a str>,
+}
+
+fn locked_same_model_saved_selection(
+    partial: &'_ PartialConfig,
+    provider: ProviderId,
+) -> LockedSameModelSavedSelection<'_> {
+    if partial
+        .quick_thinking_provider
+        .as_deref()
+        .is_some_and(|saved| saved.eq_ignore_ascii_case(provider.as_str()))
+    {
+        return LockedSameModelSavedSelection {
+            saved_provider: partial.quick_thinking_provider.as_deref(),
+            saved_model: partial.quick_thinking_model.as_deref(),
+        };
+    }
+
+    if partial
+        .deep_thinking_provider
+        .as_deref()
+        .is_some_and(|saved| saved.eq_ignore_ascii_case(provider.as_str()))
+    {
+        return LockedSameModelSavedSelection {
+            saved_provider: partial.deep_thinking_provider.as_deref(),
+            saved_model: partial.deep_thinking_model.as_deref(),
+        };
+    }
+
+    LockedSameModelSavedSelection::default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use scorpio_core::providers::ProviderId;
     use scorpio_core::providers::factory::ModelDiscoveryOutcome;
     use std::cell::Cell;
-
-    #[test]
-    fn default_provider_index_falls_back_to_first_eligible_when_saved_provider_is_unsupported() {
-        let eligible = vec![
-            ProviderId::OpenAI,
-            ProviderId::Anthropic,
-            ProviderId::DeepSeek,
-        ];
-        assert_eq!(default_provider_index(&eligible, Some("copilot")), 0);
-    }
 
     #[test]
     fn default_provider_index_matches_saved_provider_case_insensitively() {
@@ -475,6 +606,39 @@ mod tests {
                 initial_value: String::new(),
             }
         );
+    }
+
+    #[test]
+    fn copilot_menu_contains_curated_models_plus_manual() {
+        use scorpio_core::providers::factory::COPILOT_CURATED_MODELS;
+        assert!(COPILOT_CURATED_MODELS.contains(&"gpt-4o"));
+        assert!(COPILOT_CURATED_MODELS.contains(&"claude-sonnet-4.6"));
+        assert!(!COPILOT_CURATED_MODELS.iter().any(|m| m.contains("codex")));
+    }
+
+    #[test]
+    fn validate_manual_model_id_rejects_codex_for_copilot() {
+        let err = validate_manual_model_id(ProviderId::Copilot, "gpt-5.1-codex").unwrap_err();
+        assert!(
+            err.contains("codex"),
+            "expected codex rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn locked_same_model_uses_matching_saved_tier_model() {
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("copilot".into()),
+            deep_thinking_model: Some("claude-sonnet-4".into()),
+            ..Default::default()
+        };
+
+        let saved = locked_same_model_saved_selection(&partial, ProviderId::Copilot);
+
+        assert_eq!(saved.saved_provider, Some("copilot"));
+        assert_eq!(saved.saved_model, Some("claude-sonnet-4"));
     }
 
     #[test]

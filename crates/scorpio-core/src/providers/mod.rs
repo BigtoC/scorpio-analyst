@@ -45,6 +45,10 @@ pub enum ProviderId {
     OpenRouter,
     /// DeepSeek API (deepseek-chat, deepseek-reasoner).
     DeepSeek,
+    /// GitHub Copilot via OAuth/device flow (no Scorpio-managed API key).
+    Copilot,
+    /// Xiaomi MiMo via OpenAI-compatible API.
+    XiaomiMimo,
 }
 
 impl ProviderId {
@@ -55,6 +59,8 @@ impl ProviderId {
             Self::Gemini => "gemini",
             Self::OpenRouter => "openrouter",
             Self::DeepSeek => "deepseek",
+            Self::Copilot => "copilot",
+            Self::XiaomiMimo => "xiaomimimo",
         }
     }
 
@@ -65,6 +71,9 @@ impl ProviderId {
             Self::Gemini => "SCORPIO_GEMINI_API_KEY",
             Self::OpenRouter => "SCORPIO_OPENROUTER_API_KEY",
             Self::DeepSeek => "SCORPIO_DEEPSEEK_API_KEY",
+            // Copilot has no key; callers must check the variant before invoking this.
+            Self::Copilot => "",
+            Self::XiaomiMimo => "SCORPIO_XIAOMIMIMO_API_KEY",
         }
     }
 }
@@ -205,6 +214,22 @@ mod tests {
         assert_eq!(
             ProviderId::DeepSeek.missing_key_hint(),
             "SCORPIO_DEEPSEEK_API_KEY"
+        );
+    }
+
+    #[test]
+    fn provider_id_copilot_exposes_strings() {
+        assert_eq!(ProviderId::Copilot.as_str(), "copilot");
+        assert_eq!(ProviderId::Copilot.to_string(), "copilot");
+    }
+
+    #[test]
+    fn provider_id_xiaomimimo_exposes_strings_and_missing_key_hint() {
+        assert_eq!(ProviderId::XiaomiMimo.as_str(), "xiaomimimo");
+        assert_eq!(ProviderId::XiaomiMimo.to_string(), "xiaomimimo");
+        assert_eq!(
+            ProviderId::XiaomiMimo.missing_key_hint(),
+            "SCORPIO_XIAOMIMIMO_API_KEY"
         );
     }
 }

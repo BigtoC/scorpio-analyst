@@ -101,10 +101,10 @@ pub struct LlmConfig {
 
 /// Validate and normalize an LLM provider name during deserialization.
 ///
-/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, `"openrouter"`, and `"deepseek"`
-/// (case-insensitive, leading/trailing whitespace ignored). Returns a lower-case
-/// canonical form. Unknown values produce a `serde` deserialization error at
-/// config-load time, before any provider client is constructed.
+/// Accepts `"openai"`, `"anthropic"`, `"gemini"`, `"openrouter"`, `"deepseek"`,
+/// `"copilot"`, and `"xiaomimimo"` (case-insensitive, leading/trailing whitespace
+/// ignored). Returns a lower-case canonical form. Unknown values produce a `serde`
+/// deserialization error at config-load time, before any provider client is constructed.
 fn deserialize_provider_name<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
@@ -112,18 +112,13 @@ where
     let raw = String::deserialize(deserializer)?;
     let canonical = raw.trim().to_ascii_lowercase();
     match canonical.as_str() {
-        "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek" => Ok(canonical),
+        "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek" | "copilot"
+        | "xiaomimimo" => Ok(canonical),
         _unknown => Err(serde::de::Error::custom(format!(
-            "unknown LLM provider: \"{_unknown}\" (supported: openai, anthropic, gemini, openrouter, deepseek)"
+            "unknown LLM provider: \"{_unknown}\" (supported: openai, anthropic, gemini, openrouter, deepseek, copilot, xiaomimimo)"
         ))),
     }
 }
-
-/// Marker string embedded in the deserialization error for `"copilot"`.
-///
-/// Used by [`Config::load_from_user_path`] to detect stale copilot routing
-/// and surface a friendly recovery message instead of a raw serde error.
-pub(crate) const STALE_COPILOT_PROVIDER_MARKER: &str = "unknown LLM provider: \"copilot\"";
 
 fn default_debate_rounds() -> u32 {
     3
@@ -212,6 +207,10 @@ pub struct ProvidersConfig {
     pub openrouter: ProviderSettings,
     #[serde(default = "default_deepseek_settings")]
     pub deepseek: ProviderSettings,
+    #[serde(default = "default_copilot_settings")]
+    pub copilot: ProviderSettings,
+    #[serde(default = "default_xiaomimimo_settings")]
+    pub xiaomimimo: ProviderSettings,
 }
 
 impl Default for ProvidersConfig {
@@ -222,6 +221,8 @@ impl Default for ProvidersConfig {
             gemini: default_gemini_settings(),
             openrouter: default_openrouter_settings(),
             deepseek: default_deepseek_settings(),
+            copilot: default_copilot_settings(),
+            xiaomimimo: default_xiaomimimo_settings(),
         }
     }
 }
@@ -261,6 +262,20 @@ fn default_deepseek_settings() -> ProviderSettings {
         rpm: 60,
     }
 }
+fn default_copilot_settings() -> ProviderSettings {
+    ProviderSettings {
+        api_key: None,
+        base_url: None,
+        rpm: 30,
+    }
+}
+fn default_xiaomimimo_settings() -> ProviderSettings {
+    ProviderSettings {
+        api_key: None,
+        base_url: None,
+        rpm: 50,
+    }
+}
 
 impl ProvidersConfig {
     /// Look up the settings for a given [`ProviderId`](crate::providers::ProviderId).
@@ -272,6 +287,8 @@ impl ProvidersConfig {
             ProviderId::Gemini => &self.gemini,
             ProviderId::OpenRouter => &self.openrouter,
             ProviderId::DeepSeek => &self.deepseek,
+            ProviderId::Copilot => &self.copilot,
+            ProviderId::XiaomiMimo => &self.xiaomimimo,
         }
     }
 
@@ -401,37 +418,14 @@ impl Config {
 
     /// Load configuration from the user-level config file path.
     ///
+    /// Load configuration from the user-level config file path.
+    ///
     /// Loads flat `PartialConfig` from disk, then delegates to
     /// [`Config::load_effective_runtime`] for the shared env/file/default merge.
-    ///
-    /// If the saved config still routes to the removed Copilot provider, a friendly
-    /// error message guides the user to run `scorpio setup`.
     pub fn load_from_user_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let partial = crate::settings::load_user_config_at(path)?;
-        let saved_routes_to_copilot = [
-            partial.quick_thinking_provider.as_deref(),
-            partial.deep_thinking_provider.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|provider| provider.eq_ignore_ascii_case("copilot"));
-
-        match Self::load_effective_runtime(partial) {
-            Ok(cfg) => Ok(cfg),
-            Err(err)
-                if saved_routes_to_copilot
-                    && err
-                        .chain()
-                        .any(|cause| cause.to_string().contains(STALE_COPILOT_PROVIDER_MARKER)) =>
-            {
-                Err(anyhow::anyhow!(
-                    "Your saved configuration still routes to the Copilot provider, which has been removed. \
-                     Run `scorpio setup` to update routing to a supported provider."
-                ))
-            }
-            Err(err) => Err(err),
-        }
+        Self::load_effective_runtime(partial)
     }
 
     /// Build the effective runtime config from in-memory wizard/file values.
@@ -473,6 +467,9 @@ impl Config {
         }
         if let Some(k) = &partial.deepseek_api_key {
             cfg.providers.deepseek.api_key = Some(SecretString::from(k.clone()));
+        }
+        if let Some(k) = &partial.xiaomimimo_api_key {
+            cfg.providers.xiaomimimo.api_key = Some(SecretString::from(k.clone()));
         }
         if let Some(k) = &partial.finnhub_api_key {
             cfg.api.finnhub_api_key = Some(SecretString::from(k.clone()));
@@ -522,11 +519,23 @@ impl Config {
             "deepseek"
         );
         inject_env_override!(
+            cfg.providers.xiaomimimo.api_key,
+            "SCORPIO_XIAOMIMIMO_API_KEY",
+            "xiaomimimo"
+        );
+        inject_env_override!(
             cfg.api.finnhub_api_key,
             "SCORPIO_FINNHUB_API_KEY",
             "finnhub"
         );
         inject_env_override!(cfg.api.fred_api_key, "SCORPIO_FRED_API_KEY", "fred");
+
+        if cfg.providers.copilot.base_url.is_some() {
+            return Err(anyhow::anyhow!(
+                "providers.copilot.base_url is not supported in this slice; \
+                 Copilot runtime base comes from rig's cached Copilot metadata, not a user-configured base_url"
+            ));
+        }
 
         cfg.validate()?;
         Ok(cfg)
@@ -559,7 +568,15 @@ impl Config {
         cfg.api.finnhub_api_key = secret_from_env("SCORPIO_FINNHUB_API_KEY");
         cfg.providers.openrouter.api_key = secret_from_env("SCORPIO_OPENROUTER_API_KEY");
         cfg.providers.deepseek.api_key = secret_from_env("SCORPIO_DEEPSEEK_API_KEY");
+        cfg.providers.xiaomimimo.api_key = secret_from_env("SCORPIO_XIAOMIMIMO_API_KEY");
         cfg.api.fred_api_key = secret_from_env("SCORPIO_FRED_API_KEY");
+
+        if cfg.providers.copilot.base_url.is_some() {
+            return Err(anyhow::anyhow!(
+                "providers.copilot.base_url is not supported in this slice; \
+                 Copilot runtime base comes from rig's cached Copilot metadata, not a user-configured base_url"
+            ));
+        }
 
         cfg.validate()?;
         Ok(cfg)
@@ -571,12 +588,12 @@ impl Config {
         // `#[serde(deserialize_with = "deserialize_provider_name")]`.
         // Symbol validation has moved to the `cli::analyze` handler (Unit 6).
 
-        // Check that at least one LLM key is available
-        if !self.has_any_llm_key() {
+        // Check that at least one LLM key is available (Copilot-only routing uses OAuth, no API key).
+        if self.should_warn_no_llm_key() {
             tracing::warn!(
                 "no LLM provider API key found — set SCORPIO_OPENAI_API_KEY, \
                  SCORPIO_ANTHROPIC_API_KEY, SCORPIO_GEMINI_API_KEY, SCORPIO_OPENROUTER_API_KEY, \
-                 or SCORPIO_DEEPSEEK_API_KEY"
+                 SCORPIO_DEEPSEEK_API_KEY, or SCORPIO_XIAOMIMIMO_API_KEY"
             );
         }
 
@@ -633,6 +650,19 @@ impl Config {
             || self.providers.gemini.api_key.is_some()
             || self.providers.openrouter.api_key.is_some()
             || self.providers.deepseek.api_key.is_some()
+            || self.providers.xiaomimimo.api_key.is_some()
+    }
+
+    /// Whether `validate()` should emit the "no LLM provider API key found" warning.
+    ///
+    /// Returns `false` when both routing tiers are `copilot` (which uses OAuth, not API keys).
+    pub fn should_warn_no_llm_key(&self) -> bool {
+        let copilot_only = self.llm.quick_thinking_provider == "copilot"
+            && self.llm.deep_thinking_provider == "copilot";
+        if copilot_only {
+            return false;
+        }
+        !self.has_any_llm_key()
     }
 
     /// Load only `[providers.*]` settings from a user config file path, ignoring
@@ -746,6 +776,16 @@ fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) 
             partial.deepseek_base_url.as_ref(),
             partial.deepseek_rpm,
         ),
+        (
+            "copilot",
+            None, // copilot base_url is not user-configurable
+            partial.copilot_rpm,
+        ),
+        (
+            "xiaomimimo",
+            partial.xiaomimimo_base_url.as_ref(),
+            partial.xiaomimimo_rpm,
+        ),
     ];
 
     for (name, base_url, rpm) in provider_entries {
@@ -792,6 +832,9 @@ fn apply_partial_provider_secrets(
     if let Some(k) = &partial.deepseek_api_key {
         providers.deepseek.api_key = Some(SecretString::from(k.clone()));
     }
+    if let Some(k) = &partial.xiaomimimo_api_key {
+        providers.xiaomimimo.api_key = Some(SecretString::from(k.clone()));
+    }
 }
 
 fn apply_provider_secret_env_overrides(providers: &mut ProvidersConfig) {
@@ -819,6 +862,11 @@ fn apply_provider_secret_env_overrides(providers: &mut ProvidersConfig) {
         &mut providers.deepseek.api_key,
         "SCORPIO_DEEPSEEK_API_KEY",
         "deepseek",
+    );
+    inject_provider_env_override(
+        &mut providers.xiaomimimo.api_key,
+        "SCORPIO_XIAOMIMIMO_API_KEY",
+        "xiaomimimo",
     );
 }
 
@@ -1595,122 +1643,121 @@ deep_thinking_model = "o3"
         );
     }
 
-    // ── Copilot provider removal tests ──────────────────────────────────
+    // ── Copilot and XiaomiMimo provider tests ────────────────────────────────
 
     #[test]
-    fn deserialize_provider_name_rejects_copilot() {
-        let result = deserialize_provider_name(serde::de::value::StrDeserializer::<
-            serde::de::value::Error,
-        >::new("copilot"));
-        let err = result.expect_err("copilot should no longer be accepted");
+    fn deserialize_provider_name_accepts_copilot_and_xiaomimimo() {
+        let copilot =
+            serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("copilot");
+        let result: Result<String, _> = deserialize_provider_name(copilot);
+        assert_eq!(result.unwrap(), "copilot");
+
+        let mimo =
+            serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("xiaomimimo");
+        let result: Result<String, _> = deserialize_provider_name(mimo);
+        assert_eq!(result.unwrap(), "xiaomimimo");
+    }
+
+    #[test]
+    fn deserialize_provider_name_unknown_error_lists_new_providers() {
+        let unknown =
+            serde::de::IntoDeserializer::<serde::de::value::Error>::into_deserializer("nothing");
+        let err: serde::de::value::Error = deserialize_provider_name(unknown).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("copilot"));
-        assert!(msg.contains("openrouter"));
-        assert!(msg.contains("deepseek"));
-        assert!(!msg.contains("copilot, openrouter"));
+        assert!(msg.contains("copilot"), "missing copilot in: {msg}");
+        assert!(msg.contains("xiaomimimo"), "missing xiaomimimo in: {msg}");
     }
 
     #[test]
-    fn load_from_rejects_copilot_provider_name() {
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "copilot"
-deep_thinking_provider = "openai"
-quick_thinking_model = "claude-haiku"
-deep_thinking_model = "o3"
-"#,
-        );
-        let err = Config::load_from(&path).expect_err("runtime config should reject copilot");
-        assert!(
-            err.chain().any(|c| c.to_string().contains("copilot")),
-            "error chain should mention copilot: {err:#}"
-        );
+    fn providers_config_default_includes_copilot_and_xiaomimimo() {
+        let cfg = ProvidersConfig::default();
+        assert!(cfg.copilot.api_key.is_none());
+        assert!(cfg.copilot.base_url.is_none());
+        assert_eq!(cfg.copilot.rpm, 30);
+        assert!(cfg.xiaomimimo.api_key.is_none());
+        assert!(cfg.xiaomimimo.base_url.is_none());
+        assert_eq!(cfg.xiaomimimo.rpm, 50);
     }
 
     #[test]
-    fn load_from_user_path_surfaces_friendly_error_when_saved_provider_is_copilot() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let (_dir, path) = write_config(
-            r#"
-quick_thinking_provider = "copilot"
-deep_thinking_provider = "openai"
-quick_thinking_model = "claude-haiku"
-deep_thinking_model = "o3"
-"#,
-        );
-        let err = Config::load_from_user_path(&path)
-            .expect_err("a config that still routes to copilot should fail to load at runtime");
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("Copilot") || msg.contains("copilot"),
-            "expected friendly Copilot reference; got: {msg}"
-        );
-        assert!(
-            msg.contains("scorpio setup"),
-            "expected guidance to run setup; got: {msg}"
-        );
+    fn providers_config_settings_for_resolves_new_providers() {
+        let cfg = ProvidersConfig::default();
+        assert_eq!(cfg.rpm_for(crate::providers::ProviderId::Copilot), 30);
+        assert_eq!(cfg.rpm_for(crate::providers::ProviderId::XiaomiMimo), 50);
     }
 
     #[test]
-    fn load_from_user_path_does_not_rewrite_unrelated_copilot_path_errors() {
-        let _guard = ENV_LOCK.lock().unwrap();
+    fn config_load_rejects_copilot_base_url() {
+        // Config::load_from deserializes the full Config struct directly from TOML,
+        // so providers.copilot.base_url is preserved and the rejection fires.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("copilot-config.toml");
-        std::fs::write(&path, "not valid toml = [").expect("invalid config file should be written");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[llm]
+quick_thinking_provider = "copilot"
+deep_thinking_provider = "copilot"
+quick_thinking_model = "gpt-4o"
+deep_thinking_model = "gpt-4o"
 
-        let err = Config::load_from_user_path(&path)
-            .expect_err("invalid config file should surface its original parse failure");
+[providers.copilot]
+base_url = "https://example.com/v1"
+"#,
+        )
+        .unwrap();
+
+        let err = Config::load_from(&path).expect_err("copilot base_url must be rejected");
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("failed to parse user config") || msg.contains("TOML parse error"),
-            "expected original parse failure; got: {msg}"
-        );
-        assert!(
-            !msg.contains("Run `scorpio setup`"),
-            "unrelated copilot mentions must not trigger stale-provider guidance: {msg}"
+            msg.contains("copilot") && msg.contains("base_url"),
+            "expected copilot base_url rejection, got: {msg}"
         );
     }
 
     #[test]
-    fn load_from_user_path_does_not_rewrite_env_override_copilot_errors() {
+    fn validate_does_not_warn_for_copilot_only_routing() {
+        use crate::settings::{PartialConfig, save_user_config_at};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("copilot".into()),
+            quick_thinking_model: Some("gpt-4o".into()),
+            deep_thinking_provider: Some("copilot".into()),
+            deep_thinking_model: Some("gpt-4o".into()),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+        let cfg = Config::load_from_user_path(&path).expect("config loads");
+        assert!(
+            !cfg.should_warn_no_llm_key(),
+            "Copilot-only routing should not produce a missing-key warning"
+        );
+    }
+
+    #[test]
+    fn xiaomimimo_api_key_loads_from_env() {
+        use crate::settings::{PartialConfig, save_user_config_at};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("xiaomimimo".into()),
+            quick_thinking_model: Some("mimo-v2.5".into()),
+            deep_thinking_provider: Some("xiaomimimo".into()),
+            deep_thinking_model: Some("mimo-v2.5".into()),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+
         let _guard = ENV_LOCK.lock().unwrap();
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "openai"
-deep_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_model = "o3"
-"#,
-        );
-
-        let saved_quick = std::env::var("SCORPIO__LLM__QUICK_THINKING_PROVIDER").ok();
         unsafe {
-            std::env::set_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER", "copilot");
+            std::env::set_var("SCORPIO_XIAOMIMIMO_API_KEY", "mimo-test-key");
         }
-
-        let err = Config::load_from_user_path(&path)
-            .expect_err("env override should fail without stale-file rewrite");
-
+        let cfg = Config::load_from_user_path(&path).expect("config should load");
+        assert!(cfg.providers.xiaomimimo.api_key.is_some());
         unsafe {
-            match saved_quick {
-                Some(ref value) => {
-                    std::env::set_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER", value)
-                }
-                None => std::env::remove_var("SCORPIO__LLM__QUICK_THINKING_PROVIDER"),
-            }
+            std::env::remove_var("SCORPIO_XIAOMIMIMO_API_KEY");
         }
-
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("unknown LLM provider: \"copilot\""),
-            "expected raw env override error; got: {msg}"
-        );
-        assert!(
-            !msg.contains("Run `scorpio setup`"),
-            "env override failures must not be rewritten as stale saved config: {msg}"
-        );
     }
 
     // ── Symbol validation stubs (relocated to Unit 6 — cli::analyze tests) ──
@@ -1824,61 +1871,6 @@ deep_thinking_model = "o3"
             Config::load_from(&path).expect("config should load without [providers.deepseek]");
         assert_eq!(cfg.providers.deepseek.rpm, default_deepseek_settings().rpm);
         assert!(cfg.providers.deepseek.api_key.is_none());
-    }
-
-    #[test]
-    fn load_effective_providers_config_from_user_path_preserves_file_provider_overrides_while_ignoring_stale_copilot_routing()
-     {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let (_dir, path) = write_config(
-            r#"
-[llm]
-quick_thinking_provider = "copilot"
-deep_thinking_provider = "openai"
-quick_thinking_model = "claude-haiku"
-deep_thinking_model = "o3"
-
-[providers.deepseek]
-base_url = "https://deepseek.example.com/v1"
-rpm = 45
-"#,
-        );
-        let partial = crate::settings::PartialConfig {
-            openai_api_key: Some("sk-partial-openai".into()),
-            ..Default::default()
-        };
-
-        // Pre-set the env var so dotenvy::dotenv() (called inside the helper)
-        // won't overwrite it with the .env file value.
-        let saved_openai_key = std::env::var("SCORPIO_OPENAI_API_KEY").ok();
-        unsafe {
-            std::env::set_var("SCORPIO_OPENAI_API_KEY", "sk-env-openai");
-        }
-
-        let providers = Config::load_effective_providers_config_from_user_path(&path, &partial)
-            .expect("provider settings should load without validating stale routing");
-
-        // Restore env so other tests are not affected.
-        unsafe {
-            match saved_openai_key {
-                Some(ref v) => std::env::set_var("SCORPIO_OPENAI_API_KEY", v),
-                None => std::env::remove_var("SCORPIO_OPENAI_API_KEY"),
-            }
-        }
-
-        assert_eq!(
-            providers
-                .openai
-                .api_key
-                .as_ref()
-                .map(ExposeSecret::expose_secret),
-            Some("sk-env-openai")
-        );
-        assert_eq!(
-            providers.deepseek.base_url.as_deref(),
-            Some("https://deepseek.example.com/v1")
-        );
-        assert_eq!(providers.deepseek.rpm, 45);
     }
 
     #[test]

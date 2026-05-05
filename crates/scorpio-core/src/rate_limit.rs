@@ -139,6 +139,8 @@ impl ProviderRateLimiters {
             (ProviderId::Gemini, cfg.gemini.rpm, "gemini"),
             (ProviderId::OpenRouter, cfg.openrouter.rpm, "openrouter"),
             (ProviderId::DeepSeek, cfg.deepseek.rpm, "deepseek"),
+            (ProviderId::Copilot, cfg.copilot.rpm, "copilot"),
+            (ProviderId::XiaomiMimo, cfg.xiaomimimo.rpm, "xiaomimimo"),
         ];
 
         for (provider, rpm, label) in provider_rpms {
@@ -200,6 +202,8 @@ mod tests {
                 ProviderId::Gemini => cfg.gemini.rpm = rpm,
                 ProviderId::OpenRouter => cfg.openrouter.rpm = rpm,
                 ProviderId::DeepSeek => cfg.deepseek.rpm = rpm,
+                ProviderId::Copilot => cfg.copilot.rpm = rpm,
+                ProviderId::XiaomiMimo => cfg.xiaomimimo.rpm = rpm,
             }
         }
         cfg
@@ -228,6 +232,16 @@ mod tests {
                 ..Default::default()
             },
             deepseek: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            copilot: ProviderSettings {
+                base_url: None,
+                rpm: 0,
+                ..Default::default()
+            },
+            xiaomimimo: ProviderSettings {
                 base_url: None,
                 rpm: 0,
                 ..Default::default()
@@ -380,5 +394,29 @@ mod tests {
         let cfg = providers_config_with(&[(ProviderId::DeepSeek, 0)]);
         let registry = ProviderRateLimiters::from_config(&cfg);
         assert!(registry.get(ProviderId::DeepSeek).is_none());
+    }
+
+    // ── Copilot and XiaomiMimo rate limiter tests ─────────────────────────────
+
+    #[test]
+    fn provider_rate_limiters_construction_includes_copilot() {
+        let cfg = providers_config_with(&[(ProviderId::Copilot, 30)]);
+        let registry = ProviderRateLimiters::from_config(&cfg);
+        assert!(registry.get(ProviderId::Copilot).is_some());
+        assert_eq!(
+            registry.get(ProviderId::Copilot).map(|l| l.label()),
+            Some("copilot")
+        );
+    }
+
+    #[test]
+    fn provider_rate_limiters_construction_includes_xiaomimimo() {
+        let cfg = providers_config_with(&[(ProviderId::XiaomiMimo, 50)]);
+        let registry = ProviderRateLimiters::from_config(&cfg);
+        assert!(registry.get(ProviderId::XiaomiMimo).is_some());
+        assert_eq!(
+            registry.get(ProviderId::XiaomiMimo).map(|l| l.label()),
+            Some("xiaomimimo")
+        );
     }
 }

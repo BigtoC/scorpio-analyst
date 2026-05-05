@@ -113,7 +113,8 @@ where
 /// through five steps:
 /// 1. Finnhub API key
 /// 2. FRED API key
-/// 3. LLM provider key(s)
+/// 3. LLM provider key(s) **and/or GitHub Copilot OAuth** — Copilot shows `[already set]`
+///    when previously authorized; selecting it runs the OAuth device flow inline.
 /// 4. Provider routing (quick/deep model selection)
 /// 5. LLM health check
 ///
@@ -145,8 +146,16 @@ pub fn run() -> anyhow::Result<()> {
 
     step!(step1_finnhub_api_key(&mut partial));
     step!(step2_fred_api_key(&mut partial));
-    step!(step3_llm_provider_keys(&mut partial));
-    step!(step4_provider_routing(&config_path, &mut partial));
+    let step3_outcome =
+        match handle_cancellation(step3_llm_provider_keys(&config_path, &mut partial))? {
+            Some(outcome) => outcome,
+            None => return Ok(()),
+        };
+    step!(step4_provider_routing(
+        &config_path,
+        &mut partial,
+        &step3_outcome
+    ));
 
     // Step 5: health check — manages its own confirm prompt.
     let should_save = match step5_health_check(&partial) {

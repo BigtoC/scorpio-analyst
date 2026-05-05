@@ -33,6 +33,8 @@ struct UserConfigFile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     deepseek_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    xiaomimimo_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     quick_thinking_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     quick_thinking_model: Option<String>,
@@ -76,6 +78,10 @@ struct UserConfigProviders {
     openrouter: UserConfigProvider,
     #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
     deepseek: UserConfigProvider,
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    copilot: UserConfigProvider,
+    #[serde(default, skip_serializing_if = "UserConfigProvider::is_empty")]
+    xiaomimimo: UserConfigProvider,
 }
 
 impl UserConfigProviders {
@@ -105,6 +111,8 @@ impl From<UserConfigFile> for PartialConfig {
         let gemini = value.providers.gemini;
         let openrouter = value.providers.openrouter;
         let deepseek = value.providers.deepseek;
+        let copilot = value.providers.copilot;
+        let xiaomimimo = value.providers.xiaomimimo;
 
         Self {
             finnhub_api_key: value.finnhub_api_key,
@@ -114,6 +122,7 @@ impl From<UserConfigFile> for PartialConfig {
             gemini_api_key: value.gemini_api_key,
             openrouter_api_key: value.openrouter_api_key,
             deepseek_api_key: value.deepseek_api_key,
+            xiaomimimo_api_key: value.xiaomimimo_api_key,
             quick_thinking_provider: value.quick_thinking_provider,
             quick_thinking_model: value.quick_thinking_model,
             deep_thinking_provider: value.deep_thinking_provider,
@@ -123,11 +132,14 @@ impl From<UserConfigFile> for PartialConfig {
             gemini_base_url: gemini.base_url.or(value.gemini_base_url),
             openrouter_base_url: openrouter.base_url.or(value.openrouter_base_url),
             deepseek_base_url: deepseek.base_url.or(value.deepseek_base_url),
+            xiaomimimo_base_url: xiaomimimo.base_url,
             openai_rpm: openai.rpm.or(value.openai_rpm),
             anthropic_rpm: anthropic.rpm.or(value.anthropic_rpm),
             gemini_rpm: gemini.rpm.or(value.gemini_rpm),
             openrouter_rpm: openrouter.rpm.or(value.openrouter_rpm),
             deepseek_rpm: deepseek.rpm.or(value.deepseek_rpm),
+            xiaomimimo_rpm: xiaomimimo.rpm,
+            copilot_rpm: copilot.rpm,
         }
     }
 }
@@ -142,6 +154,7 @@ impl From<&PartialConfig> for UserConfigFile {
             gemini_api_key: value.gemini_api_key.clone(),
             openrouter_api_key: value.openrouter_api_key.clone(),
             deepseek_api_key: value.deepseek_api_key.clone(),
+            xiaomimimo_api_key: value.xiaomimimo_api_key.clone(),
             quick_thinking_provider: value.quick_thinking_provider.clone(),
             quick_thinking_model: value.quick_thinking_model.clone(),
             deep_thinking_provider: value.deep_thinking_provider.clone(),
@@ -166,6 +179,14 @@ impl From<&PartialConfig> for UserConfigFile {
                 deepseek: UserConfigProvider {
                     base_url: value.deepseek_base_url.clone(),
                     rpm: value.deepseek_rpm,
+                },
+                copilot: UserConfigProvider {
+                    base_url: None,
+                    rpm: value.copilot_rpm,
+                },
+                xiaomimimo: UserConfigProvider {
+                    base_url: value.xiaomimimo_base_url.clone(),
+                    rpm: value.xiaomimimo_rpm,
                 },
             },
             openai_base_url: None,
@@ -279,6 +300,18 @@ pub struct PartialConfig {
     /// Optional DeepSeek requests-per-minute override.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub deepseek_rpm: Option<u32>,
+    /// Xiaomi MiMo API key.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub xiaomimimo_api_key: Option<String>,
+    /// Optional Xiaomi MiMo base URL override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub xiaomimimo_base_url: Option<String>,
+    /// Optional Xiaomi MiMo requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub xiaomimimo_rpm: Option<u32>,
+    /// Optional GitHub Copilot requests-per-minute override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub copilot_rpm: Option<u32>,
 }
 
 /// Redacts an `Option<String>` API-key field for `Debug` output.
@@ -299,6 +332,7 @@ impl std::fmt::Debug for PartialConfig {
             .field("gemini_api_key", &redact(&self.gemini_api_key))
             .field("openrouter_api_key", &redact(&self.openrouter_api_key))
             .field("deepseek_api_key", &redact(&self.deepseek_api_key))
+            .field("xiaomimimo_api_key", &redact(&self.xiaomimimo_api_key))
             .field("quick_thinking_provider", &self.quick_thinking_provider)
             .field("quick_thinking_model", &self.quick_thinking_model)
             .field("deep_thinking_provider", &self.deep_thinking_provider)
@@ -308,6 +342,9 @@ impl std::fmt::Debug for PartialConfig {
             .field("gemini_base_url", &self.gemini_base_url)
             .field("openrouter_base_url", &self.openrouter_base_url)
             .field("deepseek_base_url", &self.deepseek_base_url)
+            .field("xiaomimimo_base_url", &self.xiaomimimo_base_url)
+            .field("xiaomimimo_rpm", &self.xiaomimimo_rpm)
+            .field("copilot_rpm", &self.copilot_rpm)
             .field("openai_rpm", &self.openai_rpm)
             .field("anthropic_rpm", &self.anthropic_rpm)
             .field("gemini_rpm", &self.gemini_rpm)
@@ -337,6 +374,83 @@ pub fn user_config_path() -> anyhow::Result<PathBuf> {
     }
 
     Ok(home.join(".scorpio-analyst/config.toml"))
+}
+
+/// Resolve the absolute Scorpio-owned Copilot token directory.
+///
+/// Path: `<config_root>/github_copilot/`. The directory is *not* created here —
+/// callers must ensure it exists with `0o700` permissions before passing it to
+/// `rig::providers::copilot::Client::builder().token_dir(...)`.
+pub fn copilot_token_dir() -> anyhow::Result<PathBuf> {
+    let config = user_config_path()?;
+    let root = config
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("scorpio config path has no parent"))?;
+    Ok(root.join("github_copilot"))
+}
+
+/// Ensure the Copilot token directory exists with owner-only permissions.
+pub fn ensure_copilot_token_dir() -> anyhow::Result<PathBuf> {
+    let dir = copilot_token_dir()?;
+    #[cfg(not(unix))]
+    {
+        return Err(unsupported_copilot_token_dir_security_error(&dir));
+    }
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create copilot token dir at {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&dir, perms)
+            .with_context(|| format!("failed to set 0o700 on {}", dir.display()))?;
+    }
+    Ok(dir)
+}
+
+#[cfg(any(not(unix), test))]
+fn unsupported_copilot_token_dir_security_error(dir: &std::path::Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Copilot token-dir security verification is unsupported on this non-Unix platform for {}",
+        dir.display()
+    )
+}
+
+/// Verify the Copilot token directory is a real, non-symlink directory owned by the
+/// current user with mode `0o700` or stricter.
+#[cfg(unix)]
+pub fn verify_copilot_token_dir_secure(dir: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::symlink_metadata(dir)
+        .with_context(|| format!("token directory missing or unreadable: {}", dir.display()))?;
+    if !meta.file_type().is_dir() || meta.file_type().is_symlink() {
+        return Err(anyhow::anyhow!(
+            "copilot token directory at {} must be a real non-symlink directory",
+            dir.display()
+        ));
+    }
+    let uid = unsafe { libc::geteuid() };
+    if meta.uid() != uid {
+        return Err(anyhow::anyhow!(
+            "copilot token directory at {} is not owned by the current user",
+            dir.display()
+        ));
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(anyhow::anyhow!(
+            "copilot token directory at {} has insecure permissions {:o} (expected at most 0o700)",
+            dir.display(),
+            mode
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn verify_copilot_token_dir_secure(dir: &std::path::Path) -> anyhow::Result<()> {
+    Err(unsupported_copilot_token_dir_security_error(dir))
 }
 
 /// Load [`PartialConfig`] from `path`.
@@ -447,6 +561,7 @@ mod tests {
             gemini_api_key: Some("AIza_gem".into()),
             openrouter_api_key: Some("or-key".into()),
             deepseek_api_key: Some("deepseek-key".into()),
+            xiaomimimo_api_key: Some("mimo-key".into()),
             quick_thinking_provider: Some("openai".into()),
             quick_thinking_model: Some("gpt-4o-mini".into()),
             deep_thinking_provider: Some("anthropic".into()),
@@ -456,11 +571,14 @@ mod tests {
             gemini_base_url: Some("https://gemini.example.com/v1beta".into()),
             openrouter_base_url: Some("https://openrouter.example.com/api/v1".into()),
             deepseek_base_url: Some("https://deepseek.example.com/v1".into()),
+            xiaomimimo_base_url: Some("https://api.xiaomimimo.com/v1".into()),
             openai_rpm: Some(501),
             anthropic_rpm: Some(502),
             gemini_rpm: Some(503),
             openrouter_rpm: Some(21),
             deepseek_rpm: Some(61),
+            xiaomimimo_rpm: Some(75),
+            copilot_rpm: Some(30),
         }
     }
 
@@ -679,26 +797,6 @@ mod tests {
 
     // ── Debug redaction ───────────────────────────────────────────────────────
 
-    // ── Copilot routing preservation test ─────────────────────────────────
-
-    #[test]
-    fn load_user_config_at_preserves_stale_copilot_routing_strings() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_toml(
-            &dir,
-            r#"
-quick_thinking_provider = "copilot"
-quick_thinking_model = "claude-haiku"
-deep_thinking_provider = "openai"
-deep_thinking_model = "o3"
-"#,
-        );
-        let loaded = load_user_config_at(&path).expect("partial config should still load");
-        assert_eq!(loaded.quick_thinking_provider.as_deref(), Some("copilot"));
-        assert_eq!(loaded.quick_thinking_model.as_deref(), Some("claude-haiku"));
-        assert_eq!(loaded.deep_thinking_provider.as_deref(), Some("openai"));
-    }
-
     #[test]
     fn load_user_config_at_preserves_provider_overrides() {
         let dir = tempfile::tempdir().unwrap();
@@ -787,6 +885,98 @@ rpm = 22
         assert!(
             output.contains("openai"),
             "non-secret provider field should be visible"
+        );
+    }
+
+    // ── Copilot and XiaomiMimo tests ──────────────────────────────────────────
+
+    #[test]
+    fn partial_config_round_trips_xiaomimimo_secret_and_copilot_rpm() {
+        let p = PartialConfig {
+            xiaomimimo_api_key: Some("mimo-secret".to_owned()),
+            xiaomimimo_base_url: Some("https://api.xiaomimimo.com/v1".to_owned()),
+            xiaomimimo_rpm: Some(75),
+            copilot_rpm: Some(60),
+            ..Default::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_user_config_at(&p, &path).expect("save");
+        let loaded = load_user_config_at(&path).expect("load");
+
+        assert_eq!(loaded.xiaomimimo_api_key.as_deref(), Some("mimo-secret"));
+        assert_eq!(
+            loaded.xiaomimimo_base_url.as_deref(),
+            Some("https://api.xiaomimimo.com/v1")
+        );
+        assert_eq!(loaded.xiaomimimo_rpm, Some(75));
+        assert_eq!(loaded.copilot_rpm, Some(60));
+    }
+
+    #[test]
+    fn partial_config_debug_redacts_xiaomimimo_secret() {
+        let p = PartialConfig {
+            xiaomimimo_api_key: Some("mimo-secret-123".to_owned()),
+            ..Default::default()
+        };
+        let dbg = format!("{p:?}");
+        assert!(!dbg.contains("mimo-secret-123"), "raw secret leaked: {dbg}");
+        assert!(dbg.contains("xiaomimimo_api_key"));
+    }
+
+    #[test]
+    fn partial_config_serializes_xiaomimimo_under_providers_table() {
+        let p = PartialConfig {
+            xiaomimimo_base_url: Some("https://api.xiaomimimo.com/v1".to_owned()),
+            xiaomimimo_rpm: Some(75),
+            ..Default::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_user_config_at(&p, &path).expect("save");
+        let raw = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            raw.contains("[providers.xiaomimimo]"),
+            "expected nested table, got:\n{raw}"
+        );
+        assert!(
+            !raw.contains("xiaomimimo_base_url ="),
+            "must not use legacy flat format"
+        );
+    }
+
+    #[test]
+    fn copilot_token_dir_is_under_scorpio_config_root() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+
+        let dir = copilot_token_dir().expect("token dir resolves");
+        assert!(
+            dir.ends_with("github_copilot"),
+            "expected suffix github_copilot, got {dir:?}"
+        );
+        let parent = dir.parent().expect("has parent");
+        let cfg_path = user_config_path().expect("config path");
+        assert_eq!(parent, cfg_path.parent().expect("config has parent"));
+
+        unsafe {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
+    fn verify_copilot_token_dir_secure_fails_closed_on_non_unix() {
+        let err = unsupported_copilot_token_dir_security_error(std::path::Path::new(
+            "/tmp/github_copilot",
+        ));
+        assert!(
+            err.to_string().contains("non-Unix") || err.to_string().contains("platform"),
+            "expected fail-closed unsupported-platform error, got: {err}"
         );
     }
 }

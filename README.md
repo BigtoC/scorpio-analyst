@@ -161,6 +161,9 @@ SCORPIO_ANTHROPIC_API_KEY=sk-ant-your-key-here
 SCORPIO_GEMINI_API_KEY=your-gemini-key-here
 SCORPIO_OPENROUTER_API_KEY=your-openrouter-key-here
 SCORPIO_DEEPSEEK_API_KEY=your-deepseek-key-here
+SCORPIO_XIAOMIMIMO_API_KEY=your-xiaomimimo-key-here
+# GitHub Copilot uses OAuth/device flow — no API key needed here.
+# Run `scorpio setup` and select Copilot to authorize via GitHub.
 
 # Financial data APIs
 SCORPIO_FINNHUB_API_KEY=your-finnhub-key-here
@@ -229,9 +232,17 @@ The active roadmap assumes only free-tier Finnhub, yfinance, and FRED. As a resu
 
 See the active roadmap summary at [`docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md`](docs/superpowers/roadmaps/2026-04-07-financial-services-plugins-architecture-roadmap-summary.md) and the optional deferred follow-on plan at [`docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md`](docs/plans/2026-04-07-006-optional-premium-data-follow-ons-plan.md).
 
-**GitHub Copilot is temporarily unavailable in this build**
+**Supported LLM providers**
 
-The previous custom ACP-based Copilot provider was removed as part of the `rig-core 0.36.0` upgrade. A follow-up change will reintroduce Copilot through upstream `rig` support.
+- **OpenAI** — set `SCORPIO_OPENAI_API_KEY` or configure via `scorpio setup`.
+- **Anthropic** — set `SCORPIO_ANTHROPIC_API_KEY` or configure via `scorpio setup`.
+- **Google Gemini** — set `SCORPIO_GEMINI_API_KEY` or configure via `scorpio setup`.
+- **OpenRouter** — set `SCORPIO_OPENROUTER_API_KEY` or configure via `scorpio setup`. Supports 300+ models including free-tier routes.
+- **DeepSeek** — set `SCORPIO_DEEPSEEK_API_KEY` or configure via `scorpio setup`.
+- **GitHub Copilot** — OAuth/device-flow (no API key required). Run `scorpio setup` and select Copilot to authorize via GitHub. Token cache lives at `~/.scorpio-analyst/github_copilot/`.
+- **Xiaomi MiMo** — OpenAI-compatible API. Set `SCORPIO_XIAOMIMIMO_API_KEY` or configure via `scorpio setup`.
+
+Valid provider name strings (for `SCORPIO__LLM__QUICK_THINKING_PROVIDER` etc.): `"openai"`, `"anthropic"`, `"gemini"`, `"openrouter"`, `"deepseek"`, `"copilot"`, `"xiaomimimo"`.
 
 ## Spec Driven Development Workflow Shortcuts
 

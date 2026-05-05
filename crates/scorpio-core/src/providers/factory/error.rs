@@ -152,6 +152,9 @@ pub(crate) fn redact_credentials(s: &str) -> String {
     for prefix in ["sk-ant-", "sk-", "AIza", "aiza"] {
         out = mask_prefixed_token(&out, prefix);
     }
+    for prefix in ["ghu_", "gho_", "ghr_", "github_pat_"] {
+        out = mask_prefixed_token(&out, prefix);
+    }
     for key in ["api_key=", "api-key=", "apikey=", "token="] {
         out = mask_assignment(&out, key);
     }
@@ -161,6 +164,38 @@ pub(crate) fn redact_credentials(s: &str) -> String {
     out = out.replace("Authorization:", "[REDACTED]");
     out = out.replace("authorization:", "[REDACTED]");
     out = out.replace("AUTHORIZATION:", "[REDACTED]");
+    // GitHub device-flow user code (e.g. ABCD-1234).
+    out = mask_device_user_code(&out);
+    // GitHub device-flow verification URI.
+    out = out.replace("https://github.com/login/device", "[REDACTED_URL]");
+    out
+}
+
+fn mask_device_user_code(s: &str) -> String {
+    // Match 4 uppercase-alphanum chars, a hyphen, 4 uppercase-alphanum chars.
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 9 <= bytes.len() {
+            let seg = &bytes[i..i + 9];
+            if seg[4] == b'-'
+                && seg[..4]
+                    .iter()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                && seg[5..]
+                    .iter()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            {
+                out.push_str("[REDACTED]");
+                i += 9;
+                continue;
+            }
+        }
+        let ch = s[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
     out
 }
 
@@ -371,5 +406,31 @@ mod tests {
         let result = sanitize_error_summary("provider said sk-live-abc123XYZ failed");
         assert!(!result.contains("sk-live-abc123XYZ"));
         assert!(!result.contains("abc123XYZ"));
+    }
+
+    #[test]
+    fn redact_credentials_redacts_github_token_prefixes() {
+        for prefix in ["ghu_", "gho_", "ghr_", "github_pat_"] {
+            let raw = format!("token leaked {prefix}abcdef1234567890ABCDEF");
+            let cleaned = redact_credentials(&raw);
+            assert!(
+                !cleaned.contains("abcdef1234567890ABCDEF"),
+                "raw {prefix}-prefixed token leaked: {cleaned}"
+            );
+        }
+    }
+
+    #[test]
+    fn redact_credentials_redacts_device_user_code() {
+        let raw = "Enter code ABCD-1234 at the prompt";
+        let cleaned = redact_credentials(raw);
+        assert!(!cleaned.contains("ABCD-1234"));
+    }
+
+    #[test]
+    fn redact_credentials_redacts_verification_uri() {
+        let raw = "Visit https://github.com/login/device to verify";
+        let cleaned = redact_credentials(raw);
+        assert!(!cleaned.contains("https://github.com/login/device"));
     }
 }

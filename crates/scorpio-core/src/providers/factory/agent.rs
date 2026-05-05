@@ -40,6 +40,11 @@ type AnthropicModel = rig::providers::anthropic::completion::CompletionModel;
 type GeminiModel = rig::providers::gemini::completion::CompletionModel;
 type OpenRouterModel = rig::providers::openrouter::completion::CompletionModel;
 type DeepSeekModel = rig::providers::deepseek::CompletionModel;
+type CopilotModel = rig::providers::copilot::CompletionModel<reqwest::Client>;
+type XiaomiMimoModel = rig::providers::openai::completion::GenericCompletionModel<
+    rig::providers::xiaomimimo::XiaomiMimoExt,
+    reqwest::Client,
+>;
 
 macro_rules! dispatch_llm_agent {
     ($inner:expr, |$agent:ident| $body:expr, mock = |$mock:ident| $mock_body:expr) => {
@@ -49,6 +54,8 @@ macro_rules! dispatch_llm_agent {
             LlmAgentInner::Gemini($agent) => $body,
             LlmAgentInner::OpenRouter($agent) => $body,
             LlmAgentInner::DeepSeek($agent) => $body,
+            LlmAgentInner::Copilot($agent) => $body,
+            LlmAgentInner::XiaomiMimo($agent) => $body,
             #[cfg(test)]
             LlmAgentInner::Mock($mock) => $mock_body,
         }
@@ -75,6 +82,10 @@ enum LlmAgentInner {
     OpenRouter(rig::agent::Agent<OpenRouterModel>),
     /// Agent backed by DeepSeek API.
     DeepSeek(rig::agent::Agent<DeepSeekModel>),
+    /// Agent backed by GitHub Copilot via OAuth/device flow.
+    Copilot(rig::agent::Agent<CopilotModel>),
+    /// Agent backed by Xiaomi MiMo via OpenAI-compatible API.
+    XiaomiMimo(rig::agent::Agent<XiaomiMimoModel>),
     #[cfg(test)]
     Mock(MockLlmAgent),
 }
@@ -698,6 +709,16 @@ fn build_agent_inner(
             let base = c.agent(handle.model_id()).preamble(system_prompt);
             make_agent!(base, DeepSeek)
         }
+        ProviderClient::Copilot(c) => {
+            use rig::prelude::CompletionClient;
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(base, Copilot)
+        }
+        ProviderClient::XiaomiMimo(c) => {
+            use rig::prelude::CompletionClient;
+            let base = c.agent(handle.model_id()).preamble(system_prompt);
+            make_agent!(base, XiaomiMimo)
+        }
     }
 }
 
@@ -1157,6 +1178,40 @@ mod tests {
         agent.chat_details("next", &mut history).await.unwrap();
 
         assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn build_agent_supports_copilot_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_dir = dir.path().join("github_copilot");
+        std::fs::create_dir_all(&token_dir).unwrap();
+        let client = rig::providers::copilot::Client::builder()
+            .oauth()
+            .token_dir(&token_dir)
+            .build()
+            .expect("copilot client construction");
+        let handle = super::super::client::CompletionModelHandle::for_test_with_client(
+            ProviderId::Copilot,
+            "gpt-4o",
+            super::super::client::ProviderClient::Copilot(client),
+        );
+        let agent = build_agent(&handle, "test prompt");
+        assert_eq!(agent.provider_name(), "copilot");
+        assert!(matches!(&agent.inner, LlmAgentInner::Copilot(_)));
+    }
+
+    #[test]
+    fn build_agent_supports_xiaomimimo_variant() {
+        let client = rig::providers::xiaomimimo::Client::new("test-key")
+            .expect("xiaomimimo client construction");
+        let handle = super::super::client::CompletionModelHandle::for_test_with_client(
+            ProviderId::XiaomiMimo,
+            "mimo-v2.5",
+            super::super::client::ProviderClient::XiaomiMimo(client),
+        );
+        let agent = build_agent(&handle, "test prompt");
+        assert_eq!(agent.provider_name(), "xiaomimimo");
+        assert!(matches!(&agent.inner, LlmAgentInner::XiaomiMimo(_)));
     }
 
     #[tokio::test]

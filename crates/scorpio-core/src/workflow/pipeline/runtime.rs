@@ -175,6 +175,94 @@ pub(super) fn build_graph(
     )
 }
 
+/// Guard that validates Copilot authentication before the pipeline preflight task
+/// runs, using the real [`crate::providers::factory::copilot_auth::fetch_github_identity`]
+/// to verify the live GitHub identity matches the stored binding.
+///
+/// This is a thin wrapper around [`validate_copilot_auth_before_preflight_with`] that
+/// resolves `token_dir` from the user settings and passes the real identity-fetch
+/// function as the injectable seam.
+pub(super) async fn validate_copilot_auth_before_preflight_if_configured(
+    cfg: &Config,
+) -> anyhow::Result<()> {
+    if cfg.llm.quick_thinking_provider != "copilot" && cfg.llm.deep_thinking_provider != "copilot" {
+        return Ok(());
+    }
+    let token_dir = crate::settings::copilot_token_dir()
+        .map_err(|e| anyhow::anyhow!("Copilot token dir: {e}"))?;
+    validate_copilot_auth_before_preflight_with(cfg, &token_dir, |token| {
+        Box::pin(crate::providers::factory::copilot_auth::fetch_github_identity(token))
+    })
+    .await
+}
+
+/// Validate Copilot authentication before the pipeline preflight task runs.
+///
+/// The `fetch_identity` parameter is an injectable seam for testing. In production
+/// call [`validate_copilot_auth_before_preflight_if_configured`] which wires in the
+/// real [`crate::providers::factory::copilot_auth::fetch_github_identity`].
+///
+/// If neither `quick_thinking_provider` nor `deep_thinking_provider` is `"copilot"`,
+/// this returns `Ok(())` immediately without touching the token directory.
+pub(super) async fn validate_copilot_auth_before_preflight_with<F>(
+    cfg: &Config,
+    token_dir: &std::path::Path,
+    fetch_identity: F,
+) -> anyhow::Result<()>
+where
+    F: for<'a> Fn(
+        &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::providers::factory::copilot_auth::GitHubIdentity,
+                        TradingError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >,
+{
+    use crate::providers::factory::copilot_auth;
+
+    if cfg.llm.quick_thinking_provider != "copilot" && cfg.llm.deep_thinking_provider != "copilot" {
+        return Ok(());
+    }
+
+    crate::settings::verify_copilot_token_dir_secure(token_dir)
+        .map_err(|e| anyhow::anyhow!("Copilot token directory rejected: {e}"))?;
+
+    let binding = copilot_auth::read_binding(token_dir)
+        .map_err(|e| anyhow::anyhow!("Copilot identity binding: {e}"))?;
+
+    let record = copilot_auth::read_api_key_record(token_dir)
+        .map_err(|e| anyhow::anyhow!("Copilot api-key cache: {e}"))?;
+    copilot_auth::validate_copilot_runtime_base(&record)
+        .map_err(|e| anyhow::anyhow!("Copilot runtime base: {e}"))?;
+
+    let access = copilot_auth::read_access_token(token_dir)
+        .map_err(|e| anyhow::anyhow!("Copilot access token: {e}"))?;
+
+    let identity = fetch_identity(&access)
+        .await
+        .map_err(|e| anyhow::anyhow!("Copilot identity fetch: {e}"))?;
+
+    copilot_auth::validate_scope(&identity.scopes)
+        .map_err(|e| anyhow::anyhow!("Copilot scope validation: {e}"))?;
+
+    if identity.id != binding.github_id {
+        return Err(anyhow::anyhow!(
+            "Copilot live identity (id={}) does not match bound GitHub account (id={}); \
+             rerun `scorpio setup` to re-authorize",
+            identity.id,
+            binding.github_id
+        ));
+    }
+
+    Ok(())
+}
+
 #[instrument(skip(pipeline, initial_state), fields(symbol = %initial_state.asset_symbol, date = %initial_state.target_date))]
 pub(super) async fn run_analysis_cycle(
     pipeline: &TradingPipeline,
@@ -188,6 +276,10 @@ pub(super) async fn run_analysis_cycle(
     initial_state.execution_id = Uuid::new_v4();
     let canonical = canonicalize_runtime_symbol(&initial_state.asset_symbol)?;
     initial_state.set_symbol(canonical);
+
+    validate_copilot_auth_before_preflight_if_configured(&pipeline.config)
+        .await
+        .map_err(TradingError::Config)?;
 
     let runtime_policy = match pipeline.runtime_policy.clone() {
         Some(policy) => policy,
@@ -675,6 +767,184 @@ async fn run_pipeline_loop(runner: &FlowRunner, session_id: &str) -> Result<(), 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod preflight_copilot_guard_tests {
+    use super::*;
+    use crate::providers::factory::copilot_auth;
+
+    fn sample_llm_config() -> crate::config::LlmConfig {
+        crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 100,
+        }
+    }
+
+    fn sample_config_with_llm(llm: crate::config::LlmConfig) -> Config {
+        Config {
+            llm,
+            trading: crate::config::TradingConfig::default(),
+            api: Default::default(),
+            providers: Default::default(),
+            storage: Default::default(),
+            rate_limits: Default::default(),
+            enrichment: Default::default(),
+            analysis_pack: "baseline".to_owned(),
+        }
+    }
+
+    fn write_full_copilot_cache(token_dir: &std::path::Path, github_id: u64) {
+        std::fs::create_dir_all(token_dir).unwrap();
+        std::fs::write(token_dir.join("access-token"), "ghu_test_token").unwrap();
+        std::fs::write(
+            token_dir.join("api-key.json"),
+            r#"{"token":"tid_test","expires_at":4102444800,"endpoints":{"api":"https://api.githubcopilot.com"}}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                token_dir.join("access-token"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                token_dir.join("api-key.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        copilot_auth::write_binding(
+            token_dir,
+            &copilot_auth::ScorpioIdentityBinding {
+                github_id,
+                github_login: "octocat".to_owned(),
+                written_at: 0,
+            },
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn preflight_guard_skips_when_copilot_not_selected() {
+        let temp = tempfile::tempdir().unwrap();
+        let cfg = sample_config_with_llm(sample_llm_config());
+        validate_copilot_auth_before_preflight_with(&cfg, temp.path(), |_token| {
+            Box::pin(async { panic!("should not fetch identity when Copilot is not selected") })
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn preflight_guard_rejects_when_live_github_identity_mismatches_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let token_dir = temp.path().join("github_copilot");
+        write_full_copilot_cache(&token_dir, 42);
+        let mut llm = sample_llm_config();
+        llm.quick_thinking_provider = "copilot".to_owned();
+        let cfg = sample_config_with_llm(llm);
+
+        // On non-Unix the token dir security check is a no-op; set up
+        // a proper 0o700 dir on Unix so verify_copilot_token_dir_secure passes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let err = validate_copilot_auth_before_preflight_with(&cfg, &token_dir, |_token| {
+            Box::pin(async {
+                Ok(copilot_auth::GitHubIdentity {
+                    id: 99,
+                    login: "wrong-user".to_owned(),
+                    scopes: vec!["read:user".to_owned()],
+                })
+            })
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("bound GitHub account"),
+            "expected 'bound GitHub account' in: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_guard_rejects_when_live_scopes_exceed_allowed_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let token_dir = temp.path().join("github_copilot");
+        write_full_copilot_cache(&token_dir, 42);
+        let mut llm = sample_llm_config();
+        llm.quick_thinking_provider = "copilot".to_owned();
+        let cfg = sample_config_with_llm(llm);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let err = validate_copilot_auth_before_preflight_with(&cfg, &token_dir, |_token| {
+            Box::pin(async {
+                Ok(copilot_auth::GitHubIdentity {
+                    id: 42,
+                    login: "octocat".to_owned(),
+                    scopes: vec!["read:user".to_owned(), "repo".to_owned()],
+                })
+            })
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("scope"),
+            "expected 'scope' in: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_guard_calls_identity_exactly_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let token_dir = temp.path().join("github_copilot");
+        write_full_copilot_cache(&token_dir, 42);
+        let mut llm = sample_llm_config();
+        llm.quick_thinking_provider = "copilot".to_owned();
+        let cfg = sample_config_with_llm(llm);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_clone = calls.clone();
+
+        let _ = validate_copilot_auth_before_preflight_with(&cfg, &token_dir, move |_token| {
+            let c = calls_clone.clone();
+            Box::pin(async move {
+                c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(copilot_auth::GitHubIdentity {
+                    id: 42,
+                    login: "octocat".to_owned(),
+                    scopes: vec!["read:user".to_owned()],
+                })
+            })
+        })
+        .await;
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }
 
 #[cfg(test)]
