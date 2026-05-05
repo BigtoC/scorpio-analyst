@@ -137,6 +137,9 @@ pub fn read_api_key_record(token_dir: &Path) -> Result<ApiKeyRecord, TradingErro
 }
 
 /// Validate the cached Copilot runtime base from `api-key.json.endpoints.api`.
+///
+/// Allowed hosts: `api.githubcopilot.com`, `api.individual.githubcopilot.com`,
+/// `api.enterprise.githubcopilot.com`.
 pub fn validate_copilot_runtime_base(record: &ApiKeyRecord) -> Result<(), TradingError> {
     let Some(raw) = record
         .endpoints
@@ -178,7 +181,9 @@ pub fn validate_copilot_runtime_base(record: &ApiKeyRecord) -> Result<(), Tradin
     }
 
     match host {
-        "api.githubcopilot.com" | "api.individual.githubcopilot.com" => Ok(()),
+        "api.githubcopilot.com"
+        | "api.individual.githubcopilot.com"
+        | "api.enterprise.githubcopilot.com" => Ok(()),
         other => Err(TradingError::Config(anyhow::anyhow!(
             "Copilot runtime base host {other:?} is not allowed in this slice"
         ))),
@@ -239,12 +244,18 @@ pub async fn fetch_github_identity(access_token: &str) -> Result<GitHubIdentity,
     })
 }
 
-/// Reject the grant unless it contains exactly the expected scope: `read:user`.
+/// Validate the OAuth scopes returned by `GET /user`.
+///
+/// Classical consumer OAuth tokens must carry exactly `read:user`.
+/// Enterprise tokens (EMU accounts, fine-grained PATs, GitHub App installation tokens)
+/// do not use the OAuth scope model and return an empty `X-OAuth-Scopes` header.
+/// An empty scope list is accepted — the successful `/user` response already proves
+/// the token is valid and the GitHub identity is confirmed.
 pub fn validate_scope(scopes: &[String]) -> Result<(), TradingError> {
     if scopes.is_empty() {
-        return Err(TradingError::Config(anyhow::anyhow!(
-            "X-OAuth-Scopes header was empty; refusing to trust this grant"
-        )));
+        // Enterprise / fine-grained token: no OAuth scopes reported.
+        // Identity is already confirmed by the /user call succeeding.
+        return Ok(());
     }
     if !scopes.iter().any(|scope| scope == REQUIRED_SCOPE) {
         return Err(TradingError::Config(anyhow::anyhow!(
@@ -292,8 +303,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_scope_rejects_empty() {
-        assert!(validate_scope(&[]).is_err());
+    fn validate_scope_accepts_empty_for_enterprise_tokens() {
+        // EMU / fine-grained PAT / GitHub App tokens return no X-OAuth-Scopes header.
+        assert!(validate_scope(&[]).is_ok());
     }
 
     #[test]
@@ -316,6 +328,7 @@ mod tests {
         for raw in [
             "https://api.githubcopilot.com",
             "https://api.individual.githubcopilot.com",
+            "https://api.enterprise.githubcopilot.com",
         ] {
             let record = ApiKeyRecord {
                 endpoints: Some(ApiKeyEndpoints {
