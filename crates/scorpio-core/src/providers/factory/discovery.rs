@@ -15,17 +15,30 @@ const DISCOVERY_TIMEOUT_SECS: u64 = 10;
 
 /// Curated Copilot model list for setup picker (slice 1).
 ///
-/// Codex-class models are deliberately omitted because rig routes any model whose
-/// lowercase name contains "codex" to the Responses API endpoint, which uses a
-/// different request/response shape and may not interact correctly with Scorpio's
-/// structured-output and tool-calling paths.
+/// Only models confirmed to work via Copilot's `/chat/completions` endpoint are
+/// included. Two classes are deliberately excluded:
+///
+/// - **Codex-class** (`*codex*`): rig routes these to the Responses API, which uses a
+///   different request/response shape incompatible with Scorpio's structured-output paths.
+/// - **Responses-API-only or plan-restricted models**: e.g. `gpt-5.4-mini` returns
+///   `unsupported_api_for_model` on `/chat/completions`; `gpt-4.1-mini` returns
+///   `model_not_supported`. These are excluded until they are accessible via the
+///   standard chat endpoint.
+///
+/// Not all Copilot models support completions, models below are selected and tested.
+/// Check this PR (https://github.com/0xPlaygrounds/rig/pull/1730) for more details.
 pub const COPILOT_CURATED_MODELS: &[&str] = &[
+    "claude-haiku-4.5",
+    "claude-sonnet-4.6",
+    "claude-opus-4.6",
+    "claude-opus-4.7",
+    "gemini-3-flash-preview",
+    "gemini-3.1-pro-preview",
     "gpt-4o",
-    "gpt-4o-mini",
     "gpt-4.1",
-    "claude-sonnet-4",
-    "gemini-2.0-flash-001",
-    "o3-mini",
+    "gpt-5.2",
+    "gpt-5.4",
+    "grok-code-fast-1",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
