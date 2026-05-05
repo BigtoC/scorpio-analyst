@@ -423,9 +423,9 @@ struct LockedSameModelSavedSelection<'a> {
 }
 
 fn locked_same_model_saved_selection(
-    partial: &PartialConfig,
+    partial: &'_ PartialConfig,
     provider: ProviderId,
-) -> LockedSameModelSavedSelection {
+) -> LockedSameModelSavedSelection<'_> {
     if partial
         .quick_thinking_provider
         .as_deref()
