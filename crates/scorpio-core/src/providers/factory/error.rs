@@ -180,8 +180,12 @@ fn mask_device_user_code(s: &str) -> String {
         if i + 9 <= bytes.len() {
             let seg = &bytes[i..i + 9];
             if seg[4] == b'-'
-                && seg[..4].iter().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-                && seg[5..].iter().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                && seg[..4]
+                    .iter()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                && seg[5..]
+                    .iter()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
             {
                 out.push_str("[REDACTED]");
                 i += 9;

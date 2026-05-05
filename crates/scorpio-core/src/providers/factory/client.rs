@@ -168,7 +168,7 @@ pub fn create_completion_model(
     rate_limiters: &ProviderRateLimiters,
 ) -> Result<CompletionModelHandle, TradingError> {
     let provider = validate_provider_id(tier.provider_id(llm_config))?;
-    let model_id = validate_model_id(tier.model_id(llm_config))?;
+    let model_id = validate_model_id(provider, tier.model_id(llm_config))?;
     let settings = providers_config.settings_for(provider);
     let client = create_provider_client_for(provider, settings, &model_id)?;
     let rate_limiter = rate_limiters.get(provider).cloned();
@@ -195,7 +195,7 @@ pub fn create_completion_model_with_copilot(
     token_dir: &std::path::Path,
 ) -> Result<CompletionModelHandle, TradingError> {
     let provider = validate_provider_id(tier.provider_id(llm_config))?;
-    let model_id = validate_model_id(tier.model_id(llm_config))?;
+    let model_id = validate_model_id(provider, tier.model_id(llm_config))?;
     if provider != ProviderId::Copilot {
         return create_completion_model(tier, llm_config, providers_config, rate_limiters);
     }
@@ -385,11 +385,9 @@ fn create_provider_client_for(
             };
             Ok(ProviderClient::DeepSeek(client))
         }
-        ProviderId::Copilot => create_copilot_client_for(
-            settings,
-            CopilotAuthMode::NonInteractiveRuntime,
-            None,
-        ),
+        ProviderId::Copilot => {
+            create_copilot_client_for(settings, CopilotAuthMode::NonInteractiveRuntime, None)
+        }
         ProviderId::XiaomiMimo => {
             let key = settings
                 .api_key
@@ -417,8 +415,9 @@ fn create_provider_client_for(
                             ))
                         })?
                 }
-                None => xiaomimimo::Client::new(key.expose_secret())
-                    .map_err(|e| config_error(&format!("failed to create Xiaomi MiMo client: {e}")))?,
+                None => xiaomimimo::Client::new(key.expose_secret()).map_err(|e| {
+                    config_error(&format!("failed to create Xiaomi MiMo client: {e}"))
+                })?,
             };
             Ok(ProviderClient::XiaomiMimo(client))
         }
@@ -510,7 +509,7 @@ fn validate_provider_id(provider: &str) -> Result<ProviderId, TradingError> {
     }
 }
 
-fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
+fn validate_model_id(provider: ProviderId, model_id: &str) -> Result<String, TradingError> {
     let trimmed = model_id.trim();
     if trimmed.is_empty() {
         return Err(config_error("LLM model ID must not be empty"));
@@ -518,6 +517,11 @@ fn validate_model_id(model_id: &str) -> Result<String, TradingError> {
     if trimmed.chars().any(char::is_control) {
         return Err(config_error(
             "LLM model ID must not contain control characters",
+        ));
+    }
+    if provider == ProviderId::Copilot && trimmed.to_ascii_lowercase().contains("codex") {
+        return Err(config_error(
+            "Copilot codex-class models are not supported in this slice",
         ));
     }
     Ok(trimmed.to_owned())
@@ -757,6 +761,26 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("model ID"));
+    }
+
+    #[test]
+    fn validate_model_id_rejects_codex_models() {
+        let mut cfg = sample_llm_config();
+        cfg.quick_thinking_provider = "copilot".to_owned();
+        cfg.quick_thinking_model = "gpt-5.1-codex".to_owned();
+
+        let err = create_completion_model(
+            ModelTier::QuickThinking,
+            &cfg,
+            &ProvidersConfig::default(),
+            &ProviderRateLimiters::default(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().to_ascii_lowercase().contains("codex"),
+            "expected codex rejection before runtime auth path, got: {err}"
+        );
     }
 
     // ── OpenRouter provider ──────────────────────────────────────────────
@@ -1032,7 +1056,11 @@ mod tests {
 
     #[test]
     fn validate_xiaomimimo_base_url_accepts_loopback_http() {
-        for url in &["http://127.0.0.1:8080", "http://localhost", "http://[::1]:8080"] {
+        for url in &[
+            "http://127.0.0.1:8080",
+            "http://localhost",
+            "http://[::1]:8080",
+        ] {
             assert!(
                 validate_xiaomimimo_base_url(url).is_ok(),
                 "should accept loopback {url}"
@@ -1222,7 +1250,10 @@ mod tests {
         );
         let err = result.unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("scorpio setup"), "expected setup guidance: {msg}");
+        assert!(
+            msg.contains("scorpio setup"),
+            "expected setup guidance: {msg}"
+        );
     }
 
     #[test]
@@ -1257,11 +1288,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &token_dir,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .unwrap();
+            std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::set_permissions(
                 token_dir.join("access-token"),
                 std::fs::Permissions::from_mode(0o600),
@@ -1288,7 +1315,10 @@ mod tests {
             &token_dir,
         );
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("identity"), "error should mention identity: {err}");
+        assert!(
+            err.to_string().contains("identity"),
+            "error should mention identity: {err}"
+        );
     }
 
     #[test]
@@ -1307,11 +1337,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &token_dir,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .unwrap();
+            std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::set_permissions(
                 token_dir.join("access-token"),
                 std::fs::Permissions::from_mode(0o600),
@@ -1345,7 +1371,11 @@ mod tests {
             CopilotAuthMode::NonInteractiveRuntime,
             &token_dir,
         );
-        assert!(result.is_ok(), "should accept allowed Copilot runtime base: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "should accept allowed Copilot runtime base: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1364,11 +1394,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &token_dir,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .unwrap();
+            std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::set_permissions(
                 token_dir.join("access-token"),
                 std::fs::Permissions::from_mode(0o600),
@@ -1403,7 +1429,10 @@ mod tests {
             &token_dir,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("runtime base"), "error should mention runtime base: {err}");
+        assert!(
+            err.to_string().contains("runtime base"),
+            "error should mention runtime base: {err}"
+        );
     }
 
     #[test]

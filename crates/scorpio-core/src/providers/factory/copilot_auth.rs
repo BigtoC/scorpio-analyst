@@ -68,11 +68,20 @@ pub fn verify_copilot_secret_file_secure(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
         let uid = unsafe { libc::geteuid() };
         if meta.uid() != uid {
             return Err(anyhow::anyhow!(
                 "secret file at {} is not owned by the current user",
                 path.display()
+            ));
+        }
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            return Err(anyhow::anyhow!(
+                "secret file at {} has insecure permissions {:o} (expected exactly 0o600)",
+                path.display(),
+                mode
             ));
         }
     }
@@ -184,9 +193,7 @@ pub async fn fetch_github_identity(access_token: &str) -> Result<GitHubIdentity,
         .timeout(Duration::from_secs(15))
         .user_agent("scorpio-analyst")
         .build()
-        .map_err(|e| {
-            TradingError::Config(anyhow::anyhow!("reqwest client build failed: {e}"))
-        })?;
+        .map_err(|e| TradingError::Config(anyhow::anyhow!("reqwest client build failed: {e}")))?;
     let resp = client
         .get("https://api.github.com/user")
         .bearer_auth(access_token)
@@ -371,7 +378,54 @@ mod tests {
             serde_json::to_string(&binding).unwrap(),
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                dir.path().join("scorpio-identity.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
         let err = read_binding(dir.path()).unwrap_err();
         assert!(err.to_string().contains("github_id"));
+    }
+
+    #[test]
+    fn verify_copilot_secret_file_secure_rejects_group_or_world_readable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access-token");
+        std::fs::write(&path, "ghu_test_token").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let err = verify_copilot_secret_file_secure(&path).unwrap_err();
+            assert!(
+                err.to_string().contains("permissions"),
+                "expected permission rejection, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_copilot_secret_file_secure_rejects_owner_executable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access-token");
+        std::fs::write(&path, "ghu_test_token").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let err = verify_copilot_secret_file_secure(&path).unwrap_err();
+            assert!(
+                err.to_string().contains("permissions"),
+                "expected permission rejection, got: {err}"
+            );
+        }
     }
 }

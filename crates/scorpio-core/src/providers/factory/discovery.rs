@@ -61,7 +61,10 @@ pub async fn discover_setup_models(
             (
                 p,
                 ModelDiscoveryOutcome::Listed(
-                    COPILOT_CURATED_MODELS.iter().map(|s| s.to_string()).collect(),
+                    COPILOT_CURATED_MODELS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                 ),
             )
         })
@@ -250,9 +253,7 @@ fn sanitize_xiaomimimo_model_ids(list: ModelList) -> ModelList {
 }
 
 fn is_safe_model_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && !id.chars().any(|c| c.is_control() || c == '\u{7f}')
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(|c| c.is_control() || c == '\u{7f}')
 }
 
 #[cfg(test)]
@@ -462,13 +463,15 @@ mod tests {
     async fn copilot_static_list_matches_curated_constant() {
         let providers = ProvidersConfig::default();
         let outcomes = discover_setup_models(&[ProviderId::Copilot], &providers).await;
-        let ModelDiscoveryOutcome::Listed(models) = outcomes
-            .get(&ProviderId::Copilot)
-            .expect("copilot present")
+        let ModelDiscoveryOutcome::Listed(models) =
+            outcomes.get(&ProviderId::Copilot).expect("copilot present")
         else {
             panic!("expected Listed");
         };
-        let expected: Vec<String> = COPILOT_CURATED_MODELS.iter().map(|s| s.to_string()).collect();
+        let expected: Vec<String> = COPILOT_CURATED_MODELS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(models, &expected);
     }
 
@@ -511,7 +514,7 @@ mod tests {
             Model::from_id("mimo-v2.5"),
             Model::from_id("mimo-v2\x00bad"), // NUL control char
             Model::from_id("mimo-v2.5-pro"),
-            Model::from_id(""),               // empty
+            Model::from_id(""), // empty
         ]);
         let sanitized = sanitize_xiaomimimo_model_ids(list);
         let ids: Vec<&str> = sanitized.iter().map(|m| m.id.as_str()).collect();
