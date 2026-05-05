@@ -232,6 +232,11 @@ fn prompt_model_for_provider(
 ) -> Result<String, inquire::InquireError> {
     // Copilot uses a curated static list with manual-entry fallback.
     if provider == ProviderId::Copilot {
+        println!(
+            "** Not all Copilot models support completions, check this PR \
+             (https://github.com/0xPlaygrounds/rig/pull/1730) for more details."
+        );
+        println!("Models below are selected and tested.");
         return prompt_copilot_model(saved_provider, saved_model);
     }
     let mode = prompt_mode_for_provider(provider, outcome, saved_provider, saved_model);

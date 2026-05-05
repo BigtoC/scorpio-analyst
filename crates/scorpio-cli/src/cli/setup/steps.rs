@@ -140,7 +140,14 @@ pub(crate) fn step3_llm_provider_keys(
 
         match selection {
             ProviderSelectItem::Skip => {
-                if validate_step3_result(partial, &effective_providers, false, copilot_authed_in_step3).is_ok() {
+                if validate_step3_result(
+                    partial,
+                    &effective_providers,
+                    false,
+                    copilot_authed_in_step3,
+                )
+                .is_ok()
+                {
                     break;
                 }
                 println!("✗ At least one LLM provider is required.");
@@ -153,10 +160,18 @@ pub(crate) fn step3_llm_provider_keys(
                 } else {
                     handle_copilot_selection_in_step3(&mut copilot_authed_in_step3)?;
                 }
-                if validate_step3_result(partial, &effective_providers, false, copilot_authed_in_step3).is_ok() {
-                    let add_more = inquire::Confirm::new("Do you want to add another provider key?")
-                        .with_default(false)
-                        .prompt()?;
+                if validate_step3_result(
+                    partial,
+                    &effective_providers,
+                    false,
+                    copilot_authed_in_step3,
+                )
+                .is_ok()
+                {
+                    let add_more =
+                        inquire::Confirm::new("Do you want to add another provider key?")
+                            .with_default(false)
+                            .prompt()?;
                     if !add_more {
                         break;
                     }
@@ -187,7 +202,14 @@ pub(crate) fn step3_llm_provider_keys(
 
                 set_provider_key(partial, chosen, apply_optional_secret(&input, existing));
 
-                if validate_step3_result(partial, &effective_providers, false, copilot_authed_in_step3).is_err() {
+                if validate_step3_result(
+                    partial,
+                    &effective_providers,
+                    false,
+                    copilot_authed_in_step3,
+                )
+                .is_err()
+                {
                     println!("✗ At least one LLM provider is required.");
                     continue;
                 }
@@ -211,7 +233,9 @@ pub(crate) fn step3_llm_provider_keys(
                     break;
                 }
 
-                if providers_with_keys(partial, &effective_providers).len() == KEYED_WIZARD_PROVIDERS.len() {
+                if providers_with_keys(partial, &effective_providers).len()
+                    == KEYED_WIZARD_PROVIDERS.len()
+                {
                     break;
                 }
             }
@@ -219,8 +243,8 @@ pub(crate) fn step3_llm_provider_keys(
     }
 
     // copilot_only: true when Copilot was the only configured provider
-    let copilot_only = copilot_authed_in_step3
-        && providers_with_keys(partial, &effective_providers).is_empty();
+    let copilot_only =
+        copilot_authed_in_step3 && providers_with_keys(partial, &effective_providers).is_empty();
 
     Ok(StepThreeOutcome { copilot_only })
 }
@@ -280,8 +304,9 @@ pub fn step5_health_check(partial: &PartialConfig) -> anyhow::Result<bool> {
         let rate_limiters =
             scorpio_core::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
 
+        // Phase A: OAuth grant + identity validation (auth-only, no LLM call).
         let auth_completed = run_copilot_auth_loop(
-            || run_single_copilot_health_check(&copilot_tiers, &cfg, &rate_limiters, &token_dir),
+            || run_copilot_auth_only(&copilot_tiers, &cfg, &rate_limiters, &token_dir),
             |error| {
                 eprintln!(
                     "✗ Copilot authorization failed: {}",
@@ -302,6 +327,35 @@ pub fn step5_health_check(partial: &PartialConfig) -> anyhow::Result<bool> {
             },
         )?;
         if !auth_completed {
+            return Ok(false);
+        }
+
+        // Phase B: model probe — "Hello" through the configured Copilot model.
+        // A 400 here means the selected model doesn't support the Chat Completions
+        // endpoint (e.g. it requires the Responses API). Offer "Save anyway?" so the
+        // user isn't blocked from saving a config that is otherwise valid.
+        let copilot_probe_ok = run_health_check_loop(
+            || run_copilot_model_probe(&copilot_tiers, &cfg, &rate_limiters, &token_dir),
+            |error| {
+                eprintln!(
+                    "✗ Copilot model probe failed: {}",
+                    scorpio_core::providers::factory::sanitize_error_summary(&error.to_string())
+                );
+            },
+            || {
+                inquire::Confirm::new("Retry model probe?")
+                    .with_default(true)
+                    .prompt()
+                    .map_err(anyhow::Error::from)
+            },
+            || {
+                inquire::Confirm::new("Save config anyway?")
+                    .with_default(false)
+                    .prompt()
+                    .map_err(anyhow::Error::from)
+            },
+        )?;
+        if !copilot_probe_ok {
             return Ok(false);
         }
 
@@ -607,7 +661,8 @@ where
     }
 }
 
-fn run_single_copilot_health_check(
+/// Phase A of Copilot setup: OAuth grant + identity validation only, no LLM call.
+fn run_copilot_auth_only(
     tiers: &[ModelTier],
     cfg: &scorpio_core::config::Config,
     rate_limiters: &scorpio_core::rate_limit::ProviderRateLimiters,
@@ -616,7 +671,7 @@ fn run_single_copilot_health_check(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("failed to build runtime for Copilot health check")?;
+        .context("failed to build runtime for Copilot auth")?;
 
     let handles: Vec<_> = tiers
         .iter()
@@ -635,16 +690,51 @@ fn run_single_copilot_health_check(
         .collect::<anyhow::Result<_>>()?;
 
     runtime.block_on(async {
-        let first = handles.first().ok_or_else(|| {
-            anyhow::anyhow!("Copilot health check requires at least one routed tier")
-        })?;
-
+        let first = handles
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Copilot auth requires at least one routed tier"))?;
         first
             .authorize_copilot()
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        step5_validate_copilot_auth(token_dir).await?;
+        step5_validate_copilot_auth(token_dir).await
+    })
+}
 
+/// Phase B of Copilot setup: send a "Hello" probe through each configured Copilot tier.
+///
+/// Called after [`run_copilot_auth_only`] succeeds. A 400 with
+/// `unsupported_api_for_model` means the chosen model requires a different API
+/// endpoint (e.g. Responses API) — this surfaces as a model probe failure
+/// (with "Save config anyway?") rather than an auth failure.
+fn run_copilot_model_probe(
+    tiers: &[ModelTier],
+    cfg: &scorpio_core::config::Config,
+    rate_limiters: &scorpio_core::rate_limit::ProviderRateLimiters,
+    token_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build runtime for Copilot model probe")?;
+
+    let handles: Vec<_> = tiers
+        .iter()
+        .copied()
+        .map(|tier| {
+            scorpio_core::providers::factory::create_completion_model_with_copilot(
+                tier,
+                &cfg.llm,
+                &cfg.providers,
+                rate_limiters,
+                scorpio_core::providers::factory::CopilotAuthMode::InteractiveSetup,
+                token_dir,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to create Copilot completion model: {e}"))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    runtime.block_on(async {
         for handle in &handles {
             let agent = scorpio_core::providers::factory::build_agent(handle, "");
             scorpio_core::providers::factory::prompt_with_retry(
@@ -656,11 +746,8 @@ fn run_single_copilot_health_check(
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
         }
-
         Ok::<(), anyhow::Error>(())
-    })?;
-
-    Ok(())
+    })
 }
 
 async fn step5_validate_copilot_auth(token_dir: &std::path::Path) -> anyhow::Result<()> {
@@ -837,8 +924,12 @@ impl std::fmt::Display for ProviderSelectItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Provider(c) => c.fmt(f),
-            Self::Copilot { already_authed: true } => f.write_str("copilot [already set]"),
-            Self::Copilot { already_authed: false } => f.write_str("copilot"),
+            Self::Copilot {
+                already_authed: true,
+            } => f.write_str("copilot [already set]"),
+            Self::Copilot {
+                already_authed: false,
+            } => f.write_str("copilot"),
             Self::Skip => f.write_str("Skip this step"),
         }
     }
@@ -983,8 +1074,13 @@ mod tests {
     #[test]
     fn validate_step3_result_openai_key_returns_ok() {
         assert!(
-            validate_step3_result(&partial_with_openai(), &ProvidersConfig::default(), false, false)
-                .is_ok()
+            validate_step3_result(
+                &partial_with_openai(),
+                &ProvidersConfig::default(),
+                false,
+                false
+            )
+            .is_ok()
         );
     }
 
@@ -1018,8 +1114,13 @@ mod tests {
     #[test]
     fn validate_step3_result_copilot_authed_returns_ok_with_no_keys() {
         assert!(
-            validate_step3_result(&PartialConfig::default(), &ProvidersConfig::default(), false, true)
-                .is_ok()
+            validate_step3_result(
+                &PartialConfig::default(),
+                &ProvidersConfig::default(),
+                false,
+                true
+            )
+            .is_ok()
         );
     }
 
@@ -1132,7 +1233,9 @@ mod tests {
     #[test]
     fn validate_step3_result_passes_with_copilot_only_flag() {
         let partial = PartialConfig::default();
-        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), false, false).is_err());
+        assert!(
+            validate_step3_result(&partial, &ProvidersConfig::default(), false, false).is_err()
+        );
         assert!(validate_step3_result(&partial, &ProvidersConfig::default(), true, false).is_ok());
     }
 
