@@ -213,6 +213,23 @@ pub fn create_completion_model_with_copilot(
     })
 }
 
+/// Create a Copilot completion-model handle suitable for interactive OAuth setup only.
+///
+/// The returned handle is only valid for calling [`CompletionModelHandle::authorize_copilot`].
+/// Any attempt to run an actual LLM completion will fail because no routing config is wired.
+pub fn build_copilot_auth_handle(
+    token_dir: &std::path::Path,
+) -> Result<CompletionModelHandle, TradingError> {
+    let settings = crate::config::ProviderSettings::default();
+    let client = create_copilot_client_for(&settings, CopilotAuthMode::InteractiveSetup, Some(token_dir))?;
+    Ok(CompletionModelHandle {
+        provider: ProviderId::Copilot,
+        model_id: "gpt-4o".to_owned(),
+        client,
+        rate_limiter: None,
+    })
+}
+
 fn create_copilot_client_for(
     settings: &ProviderSettings,
     mode: CopilotAuthMode,

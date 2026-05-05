@@ -4,6 +4,11 @@
 //! delegates state mutations to a pure `apply_*` / `validate_*` helper so the logic
 //! can be unit-tested without touching stdin.
 //!
+//! **Step 3 — Copilot:** The provider selection list now includes `copilot`. If a valid
+//! identity binding already exists on disk the entry is labelled `[already set]`; otherwise
+//! selecting it runs the GitHub OAuth device flow and writes the binding immediately.
+//! Copilot auth in step 3 satisfies the "at least one provider" requirement on its own.
+//!
 //! **Testing note:** The `step5_health_check` function calls a real LLM via
 //! `prompt_with_retry` and cannot be driven in unit tests; it is covered by manual
 //! QA and the Unit 5 smoke test.
@@ -118,81 +123,106 @@ pub(crate) fn step3_llm_provider_keys(
         return Ok(StepThreeOutcome { copilot_only: true });
     }
 
+    let mut copilot_authed_in_step3 = is_copilot_authenticated();
+
     loop {
         let mut items: Vec<ProviderSelectItem> = provider_choices(partial)
             .into_iter()
             .map(ProviderSelectItem::Provider)
             .collect();
+        items.push(ProviderSelectItem::Copilot {
+            already_authed: copilot_authed_in_step3,
+        });
         items.push(ProviderSelectItem::Skip);
 
         let selection =
             inquire::Select::new("Select an LLM provider to configure:", items).prompt()?;
 
-        let chosen = match selection {
+        match selection {
             ProviderSelectItem::Skip => {
-                if validate_step3_result(partial, &effective_providers, false).is_ok() {
+                if validate_step3_result(partial, &effective_providers, false, copilot_authed_in_step3).is_ok() {
                     break;
                 }
                 println!("✗ At least one LLM provider is required.");
                 continue;
             }
-            ProviderSelectItem::Provider(c) => c.provider,
-        };
-        let existing = provider_key(partial, chosen).map(str::to_owned);
-
-        let prompt_label = format!("{chosen} API key:");
-        let mut prompt = inquire::Password::new(&prompt_label)
-            .with_display_mode(PasswordDisplayMode::Masked)
-            .without_confirmation();
-        if existing.is_some() {
-            prompt = prompt.with_help_message("[already set — press Enter to keep]");
-        }
-        if secret_step_requires_input(existing.as_deref(), true) {
-            prompt = prompt.with_validator(|s: &str| {
-                if s.is_empty() {
-                    Ok(Validation::Invalid("Value is required".into()))
+            ProviderSelectItem::Copilot { already_authed } => {
+                if already_authed {
+                    println!("✓ Copilot already authorized.");
+                    copilot_authed_in_step3 = true;
                 } else {
-                    Ok(Validation::Valid)
+                    handle_copilot_selection_in_step3(&mut copilot_authed_in_step3)?;
                 }
-            });
-        }
-        let input = prompt.prompt()?;
+                if validate_step3_result(partial, &effective_providers, false, copilot_authed_in_step3).is_ok() {
+                    let add_more = inquire::Confirm::new("Do you want to add another provider key?")
+                        .with_default(false)
+                        .prompt()?;
+                    if !add_more {
+                        break;
+                    }
+                }
+                continue;
+            }
+            ProviderSelectItem::Provider(c) => {
+                let chosen = c.provider;
+                let existing = provider_key(partial, chosen).map(str::to_owned);
 
-        set_provider_key(partial, chosen, apply_optional_secret(&input, existing));
+                let prompt_label = format!("{chosen} API key:");
+                let mut prompt = inquire::Password::new(&prompt_label)
+                    .with_display_mode(PasswordDisplayMode::Masked)
+                    .without_confirmation();
+                if existing.is_some() {
+                    prompt = prompt.with_help_message("[already set — press Enter to keep]");
+                }
+                if secret_step_requires_input(existing.as_deref(), true) {
+                    prompt = prompt.with_validator(|s: &str| {
+                        if s.is_empty() {
+                            Ok(Validation::Invalid("Value is required".into()))
+                        } else {
+                            Ok(Validation::Valid)
+                        }
+                    });
+                }
+                let input = prompt.prompt()?;
 
-        if validate_step3_result(partial, &effective_providers, false).is_err() {
-            // Haven't met the minimum yet — loop without asking "more?".
-            println!("✗ At least one LLM provider is required.");
-            continue;
-        }
+                set_provider_key(partial, chosen, apply_optional_secret(&input, existing));
 
-        // Minimum met. Offer to add another if unconfigured providers remain.
-        let still_available: Vec<_> = KEYED_WIZARD_PROVIDERS
-            .iter()
-            .copied()
-            .filter(|p| provider_key(partial, *p).is_none())
-            .collect();
+                if validate_step3_result(partial, &effective_providers, false, copilot_authed_in_step3).is_err() {
+                    println!("✗ At least one LLM provider is required.");
+                    continue;
+                }
 
-        if still_available.is_empty() {
-            break;
-        }
+                // Minimum met. Offer to add another if unconfigured providers remain.
+                let still_available: Vec<_> = KEYED_WIZARD_PROVIDERS
+                    .iter()
+                    .copied()
+                    .filter(|p| provider_key(partial, *p).is_none())
+                    .collect();
 
-        let add_more = inquire::Confirm::new("Do you want to add another provider key?")
-            .with_default(false)
-            .prompt()?;
+                if still_available.is_empty() {
+                    break;
+                }
 
-        if !add_more {
-            break;
-        }
+                let add_more = inquire::Confirm::new("Do you want to add another provider key?")
+                    .with_default(false)
+                    .prompt()?;
 
-        if providers_with_keys(partial, &effective_providers).len() == KEYED_WIZARD_PROVIDERS.len()
-        {
-            break;
+                if !add_more {
+                    break;
+                }
+
+                if providers_with_keys(partial, &effective_providers).len() == KEYED_WIZARD_PROVIDERS.len() {
+                    break;
+                }
+            }
         }
     }
-    Ok(StepThreeOutcome {
-        copilot_only: false,
-    })
+
+    // copilot_only: true when Copilot was the only configured provider
+    let copilot_only = copilot_authed_in_step3
+        && providers_with_keys(partial, &effective_providers).is_empty();
+
+    Ok(StepThreeOutcome { copilot_only })
 }
 
 // ── Step 4: Provider routing ──────────────────────────────────────────────────
@@ -345,13 +375,15 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
     }
 }
 
-/// Return `Err` when no LLM provider key is present (unless `copilot_only_selected`).
+/// Return `Err` when no LLM provider key is present (unless `copilot_only_selected` or
+/// `copilot_authed` — Copilot OAuth was completed during this wizard run).
 pub(super) fn validate_step3_result(
     partial: &PartialConfig,
     effective_providers: &ProvidersConfig,
     copilot_only_selected: bool,
+    copilot_authed: bool,
 ) -> Result<(), &'static str> {
-    if copilot_only_selected {
+    if copilot_only_selected || copilot_authed {
         return Ok(());
     }
     if providers_with_keys(partial, effective_providers).is_empty() {
@@ -708,6 +740,78 @@ fn best_effort_harden_copilot_cache_files(token_dir: &std::path::Path) {
     }
 }
 
+// ── Copilot step-3 helpers ────────────────────────────────────────────────────
+
+/// `true` when a valid Copilot identity binding exists on disk from a prior auth.
+fn is_copilot_authenticated() -> bool {
+    let Ok(token_dir) = scorpio_core::settings::copilot_token_dir() else {
+        return false;
+    };
+    scorpio_core::providers::factory::copilot_auth::read_binding(&token_dir).is_ok()
+}
+
+/// Handle the user selecting "copilot" (unauthenticated) in the step-3 provider list.
+///
+/// Shows the consent prompt (ESC/Ctrl-C propagates up as `InquireError`), then
+/// runs the OAuth device flow and validates identity. Auth errors are printed
+/// inline and `copilot_authed` is left unchanged so the loop can retry.
+fn handle_copilot_selection_in_step3(
+    copilot_authed: &mut bool,
+) -> Result<(), inquire::InquireError> {
+    let consent = inquire::Confirm::new(
+        "Copilot setup validates a GitHub grant with read:user only. Continue?",
+    )
+    .with_default(true)
+    .prompt()?;
+
+    if !consent {
+        return Ok(());
+    }
+
+    match run_copilot_setup_auth() {
+        Ok(()) => {
+            *copilot_authed = true;
+        }
+        Err(e) => {
+            eprintln!(
+                "✗ Copilot authorization failed: {}",
+                scorpio_core::providers::factory::sanitize_error_summary(&e.to_string())
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Run Copilot OAuth and identity validation without prompting the LLM.
+///
+/// Called from step 3 when the user selects Copilot and it is not yet auth'd.
+/// Step 5 will also run auth + a "Hello" probe if Copilot is selected as a routing
+/// provider, but `authorize_copilot()` is idempotent when the token cache is warm.
+fn run_copilot_setup_auth() -> anyhow::Result<()> {
+    let token_dir = scorpio_core::settings::ensure_copilot_token_dir()?;
+    scorpio_core::settings::verify_copilot_token_dir_secure(&token_dir)?;
+
+    let handle = scorpio_core::providers::factory::build_copilot_auth_handle(&token_dir)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime for Copilot setup auth")?;
+
+    runtime.block_on(async {
+        handle
+            .authorize_copilot()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        step5_validate_copilot_auth(&token_dir).await
+    })?;
+
+    best_effort_harden_copilot_cache_files(&token_dir);
+    Ok(())
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -725,6 +829,7 @@ impl std::fmt::Display for ProviderChoice {
 #[derive(Clone, Debug)]
 enum ProviderSelectItem {
     Provider(ProviderChoice),
+    Copilot { already_authed: bool },
     Skip,
 }
 
@@ -732,6 +837,8 @@ impl std::fmt::Display for ProviderSelectItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Provider(c) => c.fmt(f),
+            Self::Copilot { already_authed: true } => f.write_str("copilot [already set]"),
+            Self::Copilot { already_authed: false } => f.write_str("copilot"),
             Self::Skip => f.write_str("Skip this step"),
         }
     }
@@ -866,7 +973,8 @@ mod tests {
             validate_step3_result(
                 &PartialConfig::default(),
                 &ProvidersConfig::default(),
-                false
+                false,
+                false,
             )
             .is_err()
         );
@@ -875,7 +983,7 @@ mod tests {
     #[test]
     fn validate_step3_result_openai_key_returns_ok() {
         assert!(
-            validate_step3_result(&partial_with_openai(), &ProvidersConfig::default(), false)
+            validate_step3_result(&partial_with_openai(), &ProvidersConfig::default(), false, false)
                 .is_ok()
         );
     }
@@ -886,7 +994,7 @@ mod tests {
             anthropic_api_key: Some("sk-ant".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false, false).is_ok());
     }
 
     #[test]
@@ -895,7 +1003,7 @@ mod tests {
             gemini_api_key: Some("AIza".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false, false).is_ok());
     }
 
     #[test]
@@ -904,7 +1012,15 @@ mod tests {
             openrouter_api_key: Some("or-key".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false, false).is_ok());
+    }
+
+    #[test]
+    fn validate_step3_result_copilot_authed_returns_ok_with_no_keys() {
+        assert!(
+            validate_step3_result(&PartialConfig::default(), &ProvidersConfig::default(), false, true)
+                .is_ok()
+        );
     }
 
     // ── providers_with_keys ───────────────────────────────────────────────────
@@ -953,7 +1069,7 @@ mod tests {
             deepseek_api_key: Some("sk-deepseek".into()),
             ..Default::default()
         };
-        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false).is_ok());
+        assert!(validate_step3_result(&p, &ProvidersConfig::default(), false, false).is_ok());
     }
 
     #[test]
@@ -1016,8 +1132,8 @@ mod tests {
     #[test]
     fn validate_step3_result_passes_with_copilot_only_flag() {
         let partial = PartialConfig::default();
-        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), false).is_err());
-        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), true).is_ok());
+        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), false, false).is_err());
+        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), true, false).is_ok());
     }
 
     #[test]

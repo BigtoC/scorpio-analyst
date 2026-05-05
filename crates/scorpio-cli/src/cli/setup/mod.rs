@@ -113,7 +113,8 @@ where
 /// through five steps:
 /// 1. Finnhub API key
 /// 2. FRED API key
-/// 3. LLM provider key(s)
+/// 3. LLM provider key(s) **and/or GitHub Copilot OAuth** — Copilot shows `[already set]`
+///    when previously authorized; selecting it runs the OAuth device flow inline.
 /// 4. Provider routing (quick/deep model selection)
 /// 5. LLM health check
 ///

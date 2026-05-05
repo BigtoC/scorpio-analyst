@@ -30,7 +30,7 @@ mod text_retry;
 // ── client submodule ─────────────────────────────────────────────────────────
 
 pub use client::{
-    CompletionModelHandle, CopilotAuthMode, create_completion_model,
+    CompletionModelHandle, CopilotAuthMode, build_copilot_auth_handle, create_completion_model,
     create_completion_model_with_copilot,
 };
 
