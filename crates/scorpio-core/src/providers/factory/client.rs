@@ -221,7 +221,11 @@ pub fn build_copilot_auth_handle(
     token_dir: &std::path::Path,
 ) -> Result<CompletionModelHandle, TradingError> {
     let settings = crate::config::ProviderSettings::default();
-    let client = create_copilot_client_for(&settings, CopilotAuthMode::InteractiveSetup, Some(token_dir))?;
+    let client = create_copilot_client_for(
+        &settings,
+        CopilotAuthMode::InteractiveSetup,
+        Some(token_dir),
+    )?;
     Ok(CompletionModelHandle {
         provider: ProviderId::Copilot,
         model_id: "gpt-4o".to_owned(),
