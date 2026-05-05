@@ -18,75 +18,6 @@ In practice, this means the current setup can analyze corporate equities deeply 
 
 ![Project Infographic](docs/images/infographic.png)
 
-## Conceptual Foundation
-
-The system is built on two core principles from the original TradingAgents paradigm:
-
-1.  **Organizational Modeling**: Instead of a single AI trying to do everything, the system decomposes the trading lifecycle into highly specialized roles (Analysts, Researchers, a Trader, Risk Managers, and a Fund Manager). This mirrors the structure of a real-world trading firm, preventing cognitive overload and improving decision quality.
-
-2.  **Structured Communication**: To combat the "telephone effect" where data degrades in unstructured conversations, agents communicate through strictly-typed, structured data reports. This ensures that critical information is passed with perfect fidelity throughout the execution pipeline.
-
-## High-Level Execution Graph
-
-The system operates as a stateful workflow, orchestrating the collaboration between different agent teams in a 5-phase execution pipeline.
-
-```mermaid
-graph TD
-    Start((Trade Trigger)) --> Preflight
-
-    subgraph Phase_0 [Phase 0: Preflight]
-        Preflight[PreflightTask\nValidate & canonicalize symbol\nDerive provider capabilities\nSeed enrichment cache keys]
-    end
-
-    Preflight --> FanOutAnalysts
-
-    subgraph Analyst_Team [Phase 1: Analyst Team]
-        FanOutAnalysts[ ]
-        FanOutAnalysts --> Fund[Fundamental Analyst]
-        FanOutAnalysts --> Sent[Sentiment Analyst]
-        FanOutAnalysts --> News[News Analyst]
-        FanOutAnalysts --> Tech[Technical Analyst]
-    end
-
-    Fund --> SyncAnalysts
-    Sent --> SyncAnalysts
-    News --> SyncAnalysts
-    Tech --> SyncAnalysts
-
-    SyncAnalysts[AnalystSyncTask\nDual-write evidence fields\nCompute DataCoverageReport\nCompute ProvenanceSummary]
-
-    subgraph Researcher_Team [Phase 2: Research Debate]
-        SyncAnalysts --> Bull[Bullish Researcher]
-        SyncAnalysts --> Bear[Bearish Researcher]
-        Bear --> Moderator{Debate Moderator}
-        Bull --> Moderator
-        Moderator -- Max Rounds Not Reached --> Moderator
-    end
-
-    subgraph Synthesis_Execution [Phase 3: Trade Synthesis]
-        Moderator -- Max Rounds Reached --> Trader[Trader]
-    end
-
-    subgraph Risk_Team [Phase 4: Risk Discussion]
-        Trader --> RiskSeeking[Aggressive Risk]
-        Trader --> RiskConservative[Conservative Risk]
-        Trader --> RiskNeutral[Neutral Risk]
-        RiskSeeking --> RiskModerator{Risk Moderator}
-        RiskConservative --> RiskModerator
-        RiskNeutral --> RiskModerator
-        RiskModerator -- Max Rounds Not Reached --> RiskModerator
-    end
-
-    subgraph Final_Decision [Phase 5: Managerial Arbitration]
-        RiskModerator -- Max Rounds Reached --> Manager{Fund Manager}
-        Manager -- Approve --> Execute((Execute Trade))
-        Manager -- Reject --> Abort((Terminate))
-    end
-
-    Execute --> Report[Final Report\nData Quality and Coverage\nEvidence Provenance]
-    Abort --> Report
-```
-
 ## Getting Started
 
 ### Install
@@ -210,6 +141,75 @@ cargo run -p scorpio-cli -- analyze AAPL --no-terminal --json --output-dir /tmp/
 ![Final report — page 4](docs/images/report-example/final_report_4.png)
 
 > Full CLI usage and a TUI interface are planned for subsequent phases.
+
+## Conceptual Foundation
+
+The system is built on two core principles from the original TradingAgents paradigm:
+
+1.  **Organizational Modeling**: Instead of a single AI trying to do everything, the system decomposes the trading lifecycle into highly specialized roles (Analysts, Researchers, a Trader, Risk Managers, and a Fund Manager). This mirrors the structure of a real-world trading firm, preventing cognitive overload and improving decision quality.
+
+2.  **Structured Communication**: To combat the "telephone effect" where data degrades in unstructured conversations, agents communicate through strictly-typed, structured data reports. This ensures that critical information is passed with perfect fidelity throughout the execution pipeline.
+
+## High-Level Execution Graph
+
+The system operates as a stateful workflow, orchestrating the collaboration between different agent teams in a 5-phase execution pipeline.
+
+```mermaid
+graph TD
+    Start((Trade Trigger)) --> Preflight
+
+    subgraph Phase_0 [Phase 0: Preflight]
+        Preflight[PreflightTask\nValidate & canonicalize symbol\nDerive provider capabilities\nSeed enrichment cache keys]
+    end
+
+    Preflight --> FanOutAnalysts
+
+    subgraph Analyst_Team [Phase 1: Analyst Team]
+        FanOutAnalysts[ ]
+        FanOutAnalysts --> Fund[Fundamental Analyst]
+        FanOutAnalysts --> Sent[Sentiment Analyst]
+        FanOutAnalysts --> News[News Analyst]
+        FanOutAnalysts --> Tech[Technical Analyst]
+    end
+
+    Fund --> SyncAnalysts
+    Sent --> SyncAnalysts
+    News --> SyncAnalysts
+    Tech --> SyncAnalysts
+
+    SyncAnalysts[AnalystSyncTask\nDual-write evidence fields\nCompute DataCoverageReport\nCompute ProvenanceSummary]
+
+    subgraph Researcher_Team [Phase 2: Research Debate]
+        SyncAnalysts --> Bull[Bullish Researcher]
+        SyncAnalysts --> Bear[Bearish Researcher]
+        Bear --> Moderator{Debate Moderator}
+        Bull --> Moderator
+        Moderator -- Max Rounds Not Reached --> Moderator
+    end
+
+    subgraph Synthesis_Execution [Phase 3: Trade Synthesis]
+        Moderator -- Max Rounds Reached --> Trader[Trader]
+    end
+
+    subgraph Risk_Team [Phase 4: Risk Discussion]
+        Trader --> RiskSeeking[Aggressive Risk]
+        Trader --> RiskConservative[Conservative Risk]
+        Trader --> RiskNeutral[Neutral Risk]
+        RiskSeeking --> RiskModerator{Risk Moderator}
+        RiskConservative --> RiskModerator
+        RiskNeutral --> RiskModerator
+        RiskModerator -- Max Rounds Not Reached --> RiskModerator
+    end
+
+    subgraph Final_Decision [Phase 5: Managerial Arbitration]
+        RiskModerator -- Max Rounds Reached --> Manager{Fund Manager}
+        Manager -- Approve --> Execute((Execute Trade))
+        Manager -- Reject --> Abort((Terminate))
+    end
+
+    Execute --> Report[Final Report\nData Quality and Coverage\nEvidence Provenance]
+    Abort --> Report
+```
 
 ## Project Status
 
