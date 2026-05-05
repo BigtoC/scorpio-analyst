@@ -19,6 +19,11 @@ use scorpio_core::error::RetryPolicy;
 use scorpio_core::providers::{ModelTier, ProviderId};
 use scorpio_core::settings::PartialConfig;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StepThreeOutcome {
+    pub copilot_only: bool,
+}
+
 /// Step-3 keyed providers — those for which the wizard prompts for an API key.
 /// Copilot is intentionally excluded (it uses OAuth, not an API key).
 pub const KEYED_WIZARD_PROVIDERS: &[ProviderId] = &[
@@ -94,8 +99,25 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
 // ── Step 3: LLM provider keys ─────────────────────────────────────────────────
 
 /// Prompt for one or more LLM provider keys, requiring at least one configured provider.
-pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
-    let effective_providers = ProvidersConfig::default();
+pub(crate) fn step3_llm_provider_keys(
+    config_path: &std::path::Path,
+    partial: &mut PartialConfig,
+) -> Result<StepThreeOutcome, inquire::InquireError> {
+    let effective_providers =
+        scorpio_core::config::Config::load_effective_providers_config_from_user_path(
+            config_path,
+            partial,
+        )
+        .unwrap_or_default();
+
+    if providers_with_keys(partial, &effective_providers).is_empty()
+        && inquire::Confirm::new("No LLM provider keys found. Continue with GitHub Copilot only?")
+            .with_default(true)
+            .prompt()?
+    {
+        return Ok(StepThreeOutcome { copilot_only: true });
+    }
+
     loop {
         let mut items: Vec<ProviderSelectItem> = provider_choices(partial)
             .into_iter()
@@ -168,15 +190,18 @@ pub fn step3_llm_provider_keys(partial: &mut PartialConfig) -> Result<(), inquir
             break;
         }
     }
-    Ok(())
+    Ok(StepThreeOutcome {
+        copilot_only: false,
+    })
 }
 
 // ── Step 4: Provider routing ──────────────────────────────────────────────────
 
 /// Prompt for quick/deep provider routing using providers that have saved keys, plus Copilot.
-pub fn step4_provider_routing(
+pub(crate) fn step4_provider_routing(
     config_path: &std::path::Path,
     partial: &mut PartialConfig,
+    step3_outcome: &StepThreeOutcome,
 ) -> Result<(), inquire::InquireError> {
     let effective_providers =
         scorpio_core::config::Config::load_effective_providers_config_from_user_path(
@@ -185,7 +210,13 @@ pub fn step4_provider_routing(
         )
         .unwrap_or_default();
     let eligible = eligible_routing_providers(partial, &effective_providers);
-    super::model_selection::prompt_provider_routing(partial, eligible, config_path)
+    let defaults = default_routing_from_step3(step3_outcome);
+    if defaults.keyed_providers_skipped_message {
+        println!(
+            "Keyed providers were skipped for this run. Copilot is preselected for both tiers; rerun setup later to add provider keys."
+        );
+    }
+    super::model_selection::prompt_provider_routing(partial, eligible, config_path, &defaults)
 }
 
 // ── Step 5: LLM health check ──────────────────────────────────────────────────
@@ -196,11 +227,86 @@ pub fn step4_provider_routing(
 /// user confirmed "Save anyway?"). Returns `Ok(false)` when the health check
 /// failed and the user declined to save.
 pub fn step5_health_check(partial: &PartialConfig) -> anyhow::Result<bool> {
-    let deep_provider = partial.deep_thinking_provider.as_deref().unwrap_or("");
-    let deep_model = partial.deep_thinking_model.as_deref().unwrap_or("");
-    println!("Sending \"Hello\" to deep-thinking provider ({deep_provider} / {deep_model})...");
-
     let cfg = scorpio_core::config::Config::load_effective_runtime(partial.clone())?;
+    let copilot_tiers = effective_copilot_tiers(&cfg);
+
+    if !copilot_tiers.is_empty() {
+        println!(
+            "Running Copilot setup auth and provider probes for: {}",
+            describe_health_check_targets(&cfg)
+        );
+
+        let consent = inquire::Confirm::new(
+            "Copilot setup validates a GitHub grant with read:user only. Continue?",
+        )
+        .with_default(true)
+        .prompt()?;
+        if !consent {
+            return Ok(false);
+        }
+
+        let token_dir = scorpio_core::settings::ensure_copilot_token_dir()?;
+        scorpio_core::settings::verify_copilot_token_dir_secure(&token_dir)?;
+        let rate_limiters =
+            scorpio_core::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
+
+        let auth_completed = run_copilot_auth_loop(
+            || run_single_copilot_health_check(&copilot_tiers, &cfg, &rate_limiters, &token_dir),
+            |error| {
+                eprintln!(
+                    "✗ Copilot authorization failed: {}",
+                    scorpio_core::providers::factory::sanitize_error_summary(&error.to_string())
+                );
+            },
+            || {
+                inquire::Confirm::new("Retry authorization?")
+                    .with_default(true)
+                    .prompt()
+                    .map_err(anyhow::Error::from)
+            },
+            || {
+                inquire::Confirm::new("Back without saving?")
+                    .with_default(true)
+                    .prompt()
+                    .map_err(anyhow::Error::from)
+            },
+        )?;
+        if !auth_completed {
+            return Ok(false);
+        }
+
+        let non_copilot_tiers = configured_non_copilot_tiers(&cfg);
+        if non_copilot_tiers.is_empty() {
+            return Ok(true);
+        }
+
+        return run_health_check_loop(
+            || run_selected_model_tiers(&cfg, &non_copilot_tiers),
+            |error| {
+                eprintln!(
+                    "✗ Health check failed: {}",
+                    scorpio_core::providers::factory::sanitize_error_summary(&error.to_string())
+                );
+            },
+            || {
+                inquire::Confirm::new("Retry health check?")
+                    .with_default(true)
+                    .prompt()
+                    .map_err(anyhow::Error::from)
+            },
+            || {
+                inquire::Confirm::new("Save config anyway?")
+                    .with_default(false)
+                    .prompt()
+                    .map_err(anyhow::Error::from)
+            },
+        );
+    }
+
+    println!(
+        "Running provider probes for: {}",
+        describe_health_check_targets(&cfg)
+    );
 
     run_health_check_loop(
         || run_single_health_check(&cfg),
@@ -265,24 +371,21 @@ pub(super) fn providers_with_keys(
         .iter()
         .filter(|p| match **p {
             ProviderId::OpenAI => {
-                effective_providers.openai.api_key.is_some()
-                    || partial.openai_api_key.is_some()
+                effective_providers.openai.api_key.is_some() || partial.openai_api_key.is_some()
             }
             ProviderId::Anthropic => {
                 effective_providers.anthropic.api_key.is_some()
                     || partial.anthropic_api_key.is_some()
             }
             ProviderId::Gemini => {
-                effective_providers.gemini.api_key.is_some()
-                    || partial.gemini_api_key.is_some()
+                effective_providers.gemini.api_key.is_some() || partial.gemini_api_key.is_some()
             }
             ProviderId::OpenRouter => {
                 effective_providers.openrouter.api_key.is_some()
                     || partial.openrouter_api_key.is_some()
             }
             ProviderId::DeepSeek => {
-                effective_providers.deepseek.api_key.is_some()
-                    || partial.deepseek_api_key.is_some()
+                effective_providers.deepseek.api_key.is_some() || partial.deepseek_api_key.is_some()
             }
             ProviderId::XiaomiMimo => {
                 effective_providers.xiaomimimo.api_key.is_some()
@@ -355,6 +458,253 @@ where
                 should_save_anyway()
             }
         };
+    }
+}
+
+pub(super) fn default_routing_from_step3(
+    outcome: &StepThreeOutcome,
+) -> super::model_selection::RoutingDefaults {
+    if outcome.copilot_only {
+        return super::model_selection::RoutingDefaults {
+            quick_provider: Some(ProviderId::Copilot),
+            deep_provider: Some(ProviderId::Copilot),
+            keyed_providers_skipped_message: true,
+            lock_same_model_across_tiers: true,
+        };
+    }
+
+    super::model_selection::RoutingDefaults::default()
+}
+
+fn describe_health_check_targets(cfg: &scorpio_core::config::Config) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!(
+        "quick-thinking ({} / {})",
+        cfg.llm.quick_thinking_provider, cfg.llm.quick_thinking_model
+    ));
+    parts.push(format!(
+        "deep-thinking ({} / {})",
+        cfg.llm.deep_thinking_provider, cfg.llm.deep_thinking_model
+    ));
+    parts.join(", ")
+}
+
+fn run_selected_model_tiers(
+    cfg: &scorpio_core::config::Config,
+    tiers: &[ModelTier],
+) -> anyhow::Result<()> {
+    let rate_limiters = scorpio_core::rate_limit::ProviderRateLimiters::from_config(&cfg.providers);
+    cfg.is_analysis_ready()
+        .context("effective runtime config is not ready for analysis")?;
+
+    check_selected_model_tiers(tiers.iter().copied(), |tier| {
+        let handle = scorpio_core::providers::factory::create_completion_model(
+            tier,
+            &cfg.llm,
+            &cfg.providers,
+            &rate_limiters,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("failed to build runtime for health check")?;
+
+        runtime
+            .block_on(async {
+                let agent = scorpio_core::providers::factory::build_agent(&handle, "");
+                scorpio_core::providers::factory::prompt_with_retry(
+                    &agent,
+                    "Hello",
+                    Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                    &RetryPolicy::default(),
+                )
+                .await
+            })
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!(e))
+    })
+}
+
+fn effective_copilot_tiers(cfg: &scorpio_core::config::Config) -> Vec<ModelTier> {
+    let mut tiers = Vec::new();
+    if cfg.llm.quick_thinking_provider == "copilot" {
+        tiers.push(ModelTier::QuickThinking);
+    }
+    if cfg.llm.deep_thinking_provider == "copilot" {
+        tiers.push(ModelTier::DeepThinking);
+    }
+    tiers
+}
+
+fn configured_non_copilot_tiers(cfg: &scorpio_core::config::Config) -> Vec<ModelTier> {
+    let mut tiers = Vec::new();
+    if cfg.llm.quick_thinking_provider != "copilot" {
+        tiers.push(ModelTier::QuickThinking);
+    }
+    if cfg.llm.deep_thinking_provider != "copilot" {
+        tiers.push(ModelTier::DeepThinking);
+    }
+    tiers
+}
+
+fn run_copilot_auth_loop<Run, Report, Retry, Back>(
+    mut run_check: Run,
+    mut report_failure: Report,
+    mut should_retry: Retry,
+    mut should_back: Back,
+) -> anyhow::Result<bool>
+where
+    Run: FnMut() -> anyhow::Result<()>,
+    Report: FnMut(&anyhow::Error),
+    Retry: FnMut() -> anyhow::Result<bool>,
+    Back: FnMut() -> anyhow::Result<bool>,
+{
+    loop {
+        match run_check() {
+            Ok(()) => return Ok(true),
+            Err(error) => {
+                report_failure(&error);
+                if should_retry()? {
+                    continue;
+                }
+                return should_back();
+            }
+        }
+    }
+}
+
+fn run_single_copilot_health_check(
+    tiers: &[ModelTier],
+    cfg: &scorpio_core::config::Config,
+    rate_limiters: &scorpio_core::rate_limit::ProviderRateLimiters,
+    token_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build runtime for Copilot health check")?;
+
+    let handles: Vec<_> = tiers
+        .iter()
+        .copied()
+        .map(|tier| {
+            scorpio_core::providers::factory::create_completion_model_with_copilot(
+                tier,
+                &cfg.llm,
+                &cfg.providers,
+                rate_limiters,
+                scorpio_core::providers::factory::CopilotAuthMode::InteractiveSetup,
+                token_dir,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to create Copilot completion model: {e}"))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    runtime.block_on(async {
+        let first = handles.first().ok_or_else(|| {
+            anyhow::anyhow!("Copilot health check requires at least one routed tier")
+        })?;
+
+        first
+            .authorize_copilot()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        step5_validate_copilot_auth(token_dir).await?;
+
+        for handle in &handles {
+            let agent = scorpio_core::providers::factory::build_agent(handle, "");
+            scorpio_core::providers::factory::prompt_with_retry(
+                &agent,
+                "Hello",
+                Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                &RetryPolicy::default(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    Ok(())
+}
+
+async fn step5_validate_copilot_auth(token_dir: &std::path::Path) -> anyhow::Result<()> {
+    step5_validate_copilot_auth_with(token_dir, |token| {
+        Box::pin(scorpio_core::providers::factory::copilot_auth::fetch_github_identity(token))
+    })
+    .await
+}
+
+async fn step5_validate_copilot_auth_with<F>(
+    token_dir: &std::path::Path,
+    fetch_identity: F,
+) -> anyhow::Result<()>
+where
+    F: for<'a> Fn(
+        &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        scorpio_core::providers::factory::copilot_auth::GitHubIdentity,
+                        scorpio_core::error::TradingError,
+                    >,
+                > + 'a,
+        >,
+    >,
+{
+    use scorpio_core::providers::factory::copilot_auth;
+
+    best_effort_harden_copilot_cache_files(token_dir);
+
+    let access =
+        copilot_auth::read_access_token(token_dir).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let record =
+        copilot_auth::read_api_key_record(token_dir).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    copilot_auth::validate_copilot_runtime_base(&record)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let identity = fetch_identity(&access)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    copilot_auth::validate_scope(&identity.scopes).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    let binding = copilot_auth::ScorpioIdentityBinding {
+        github_id: identity.id,
+        github_login: identity.login.clone(),
+        written_at: chrono::Utc::now().timestamp(),
+    };
+    copilot_auth::write_binding(token_dir, &binding)?;
+    best_effort_harden_copilot_cache_files(token_dir);
+    eprintln!(
+        "✓ Copilot authorization validated for GitHub login {} and wrote scorpio-identity.json",
+        identity.login
+    );
+    Ok(())
+}
+
+fn best_effort_harden_copilot_cache_files(token_dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        for name in ["access-token", "api-key.json"] {
+            let path = token_dir.join(name);
+            if !path.exists() {
+                continue;
+            }
+            if let Err(error) =
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "failed to tighten Copilot cache file permissions"
+                );
+            }
+        }
     }
 }
 
@@ -513,8 +863,12 @@ mod tests {
     #[test]
     fn validate_step3_result_all_none_returns_err() {
         assert!(
-            validate_step3_result(&PartialConfig::default(), &ProvidersConfig::default(), false)
-                .is_err()
+            validate_step3_result(
+                &PartialConfig::default(),
+                &ProvidersConfig::default(),
+                false
+            )
+            .is_err()
         );
     }
 
@@ -662,12 +1016,43 @@ mod tests {
     #[test]
     fn validate_step3_result_passes_with_copilot_only_flag() {
         let partial = PartialConfig::default();
-        assert!(
-            validate_step3_result(&partial, &ProvidersConfig::default(), false).is_err()
-        );
-        assert!(
-            validate_step3_result(&partial, &ProvidersConfig::default(), true).is_ok()
-        );
+        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), false).is_err());
+        assert!(validate_step3_result(&partial, &ProvidersConfig::default(), true).is_ok());
+    }
+
+    #[test]
+    fn should_offer_copilot_only_bypass_returns_false_when_effective_env_key_exists() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "").unwrap();
+
+        unsafe {
+            std::env::set_var("SCORPIO_OPENAI_API_KEY", "test-key");
+        }
+
+        let partial = PartialConfig::default();
+        let providers =
+            scorpio_core::config::Config::load_effective_providers_config_from_user_path(
+                &config_path,
+                &partial,
+            )
+            .unwrap_or_default();
+
+        assert!(!providers_with_keys(&partial, &providers).is_empty());
+
+        unsafe {
+            std::env::remove_var("SCORPIO_OPENAI_API_KEY");
+        }
+    }
+
+    #[test]
+    fn default_routing_from_step3_copilot_only_preselects_both_tiers() {
+        let defaults = default_routing_from_step3(&StepThreeOutcome { copilot_only: true });
+
+        assert_eq!(defaults.quick_provider, Some(ProviderId::Copilot));
+        assert_eq!(defaults.deep_provider, Some(ProviderId::Copilot));
+        assert!(defaults.keyed_providers_skipped_message);
     }
 
     #[test]
@@ -929,6 +1314,65 @@ mod tests {
         .expect("abort flow should succeed");
 
         assert!(!should_save);
+    }
+
+    #[test]
+    fn run_copilot_auth_loop_returns_false_when_retry_and_back_are_declined() {
+        let should_continue = run_copilot_auth_loop(
+            || anyhow::bail!("persistent failure"),
+            |_err| {},
+            || Ok(false),
+            || Ok(false),
+        )
+        .expect("declining retry/back should not error");
+
+        assert!(!should_continue);
+    }
+
+    #[tokio::test]
+    async fn step5_validate_copilot_auth_writes_identity_binding_on_success() {
+        use scorpio_core::providers::factory::copilot_auth;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("access-token"), "ghu_test_token").unwrap();
+        std::fs::write(
+            dir.path().join("api-key.json"),
+            r#"{"endpoints":{"api":"https://api.githubcopilot.com"}}"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(
+                dir.path().join("access-token"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                dir.path().join("api-key.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+
+        step5_validate_copilot_auth_with(dir.path(), |_token| {
+            Box::pin(async {
+                Ok(copilot_auth::GitHubIdentity {
+                    id: 42,
+                    login: "octocat".to_owned(),
+                    scopes: vec!["read:user".to_owned()],
+                })
+            })
+        })
+        .await
+        .unwrap();
+
+        let binding = copilot_auth::read_binding(dir.path()).unwrap();
+        assert_eq!(binding.github_id, 42);
+        assert_eq!(binding.github_login, "octocat");
     }
 
     // ── ProviderId Display ────────────────────────────────────────────────────
