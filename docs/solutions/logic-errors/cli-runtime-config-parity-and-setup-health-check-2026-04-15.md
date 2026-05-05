@@ -1,6 +1,7 @@
 ---
 title: "CLI Runtime Config Parity and Setup Health-Check Recovery"
 date: 2026-04-15
+last_updated: 2026-05-04
 category: docs/solutions/logic-errors
 module: cli
 problem_type: logic_error
@@ -9,6 +10,8 @@ symptoms:
   - `scorpio analyze <SYMBOL>` rejected valid env-only setups as "Config not found or incomplete"
   - Setup Step 5 could pass or fail on a different effective runtime config than `analyze`
   - Setup surfaced parse and health-check failures in ways that could leak too much detail or leave users blocked on malformed config
+  - Step 3 could ignore env/file-backed keyed providers and fail to offer the intended Copilot-only path correctly
+  - Setup Step 5 still used the non-interactive Copilot runtime seam, so first-run Copilot auth could not complete in the wizard
 root_cause: config_error
 resolution_type: code_fix
 severity: high
@@ -100,11 +103,79 @@ The recovery path keeps the broken file for inspection instead of deleting it, a
 
 Setup Step 5 now reports sanitized provider failure summaries instead of dumping raw nested error text into the wizard flow.
 
+### 7. Keep Copilot setup-specific flows out of the generic runtime seam
+
+The follow-up fix on 2026-05-04 closed the remaining Copilot-specific parity gaps:
+
+- Step 3 now loads the effective provider config with `Config::load_effective_providers_config_from_user_path(config_path, partial)` instead of assuming an empty provider state.
+- The wizard threads a `StepThreeOutcome` into Step 4 so the explicit Copilot-only bypass is based on the same merged file/env/provider view the runtime uses.
+- Copilot-only routing now locks both tiers to Copilot and the same chosen model for that setup run, rather than allowing the quick/deep slots to drift immediately.
+
+```rust
+let effective_providers = Config::load_effective_providers_config_from_user_path(
+    config_path,
+    partial,
+)
+.unwrap_or_default();
+
+if should_offer_copilot_only_bypass(partial, &effective_providers) {
+    return Ok(StepThreeOutcome { copilot_only: true });
+}
+```
+
+Step 5 was also split so Copilot setup uses the interactive seam only in the wizard:
+
+```rust
+let handle = create_completion_model_with_copilot(
+    tier,
+    &cfg.llm,
+    &cfg.providers,
+    rate_limiters,
+    CopilotAuthMode::InteractiveSetup,
+    token_dir,
+)?;
+
+handle.authorize_copilot().await?;
+step5_validate_copilot_auth(token_dir).await?;
+```
+
+That keeps `create_completion_model(...)` as the non-interactive runtime seam while letting setup bootstrap the Copilot cache, validate `GET /user`, and write `scorpio-identity.json` before reporting success.
+
+### 8. Fail closed on persisted Copilot security boundaries
+
+The same 2026-05-04 pass tightened the setup/runtime boundary so saved Copilot state cannot quietly widen scope:
+
+- non-Unix Copilot token-dir verification now fails closed instead of returning success
+- manual Copilot model entry and runtime model construction both reject Codex-class models in this slice
+- Copilot secret/cache files must be regular owner-owned files with exact `0o600` permissions on Unix
+
+```rust
+if provider == ProviderId::Copilot && trimmed.to_ascii_lowercase().contains("codex") {
+    return Err(config_error(
+        "Copilot codex-class models are not supported in this slice",
+    ));
+}
+
+if mode != 0o600 {
+    return Err(anyhow::anyhow!(
+        "secret file at {} has insecure permissions {:o} (expected exactly 0o600)",
+        path.display(),
+        mode
+    ));
+}
+```
+
 ## Why This Works
 
 The underlying issue was not one isolated bug. It was a parity failure between two entrypoints that were both trying to answer the question "is this runtime config usable?" with different code paths.
 
 By moving both `analyze` and setup Step 5 onto `Config::load_effective_runtime(...)` plus `Config::is_analysis_ready()`, the repo now has one authoritative definition of the effective runtime and one authoritative readiness contract. The additional Copilot preflight and dual-tier live probing close the remaining gap between "config parses" and "this exact configured runtime can actually analyze".
+
+The follow-up Copilot fixes work for the same reason: they stop setup from inventing its own partial view of provider state or trying to reuse the runtime-only Copilot path during first-run authorization. Step 3, Step 4, Step 5, runtime model construction, and preflight now all enforce the same boundaries:
+
+- effective provider state comes from the merged file/env view
+- setup is the only place allowed to trigger interactive Copilot auth
+- saved Copilot cache state must satisfy the same model and filesystem rules before runtime trusts it
 
 The malformed-config recovery and sanitized output changes solve the adjacent DX and safety issues without weakening correctness: setup remains strict, but users can recover from a broken file safely and without secret leakage.
 
@@ -113,14 +184,18 @@ The malformed-config recovery and sanitized output changes solve the adjacent DX
 - For future CLI work, treat `analyze` and `setup` as parity surfaces. If one adds or tightens a runtime prerequisite, the other must either call the same helper or intentionally document why it differs.
 - Add new runtime checks to shared helpers first, not directly inside one command path. In this area, prefer extending `Config::load_effective_runtime(...)` or `Config::is_analysis_ready()` over duplicating logic in `src/cli/analyze.rs` or `src/cli/setup/steps.rs`.
 - When setup validates a route that `analyze` will later use, health-check every configured tier that the real command depends on. For Scorpio that means both quick-thinking and deep-thinking model routes, not just one of them.
+- When setup needs a provider-only decision before `[llm]` routing exists, load the merged provider config directly instead of inferring readiness from `PartialConfig` alone.
+- Keep Copilot setup-only behavior behind an explicit seam like `CopilotAuthMode::InteractiveSetup`; do not let runtime helpers silently grow an interactive fallback.
+- Enforce provider-specific runtime guards at both setup input time and the runtime/config seam. Manual validation alone is not enough for hand-edited config.
 - Keep config file handling fail-closed for secret-bearing paths. If `HOME` is missing or invalid, error explicitly rather than guessing a fallback path.
+- Treat Copilot token-dir and cache-file verification as a hard security boundary. Unsupported platforms or weak permissions should fail closed instead of degrading to best-effort trust.
 - When bridging flat setup state into runtime config, prefer structured serialization over hand-built TOML strings or ad hoc table shaping.
 - Preserve malformed user config by backup-and-recover rather than forcing manual cleanup first.
 - Re-run the full CLI verification sequence after cross-cutting config fixes. This solved session passed:
   - `cargo fmt -- --check`
-  - `cargo clippy --all-targets -- -D warnings`
-  - `cargo nextest run --all-features --locked`
-  - Final `nextest` result: `1148 passed, 3 skipped`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo nextest run --workspace --all-features --locked --no-fail-fast`
+  - Final `nextest` result after the 2026-05-04 update: `1655 passed, 3 skipped`
 
 ## Related Issues
 
