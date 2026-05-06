@@ -16,6 +16,7 @@ use scorpio_core::{
         EvidenceSource, ExecutionStatus, FundamentalData, ProvenanceSummary, ScenarioValuation,
         TradingState,
     },
+    workflow::run_analysis_cycle,
 };
 use workflow_pipeline_e2e_support::{
     make_pipeline, make_pipeline_from_pack, phase_from_number, run_stubbed_pipeline,
@@ -31,8 +32,7 @@ async fn run_analysis_cycle_success_path_populates_all_phases() {
     let initial_state = TradingState::new("AAPL", "2026-03-20");
     let caller_exec_id = initial_state.execution_id;
 
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must complete successfully with stubs");
 
@@ -137,8 +137,7 @@ async fn from_pack_preflight_validates_the_supplied_manifest_not_the_registry_co
         .install_stub_tasks_for_test()
         .expect("stub install must succeed");
 
-    let err = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+    let err = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect_err("preflight should validate the supplied custom manifest");
 
@@ -213,12 +212,10 @@ async fn e2e_two_invocations_produce_distinct_execution_ids() {
         .install_stub_tasks_for_test()
         .expect("stub install must succeed");
 
-    let final_1 = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+    let final_1 = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect("run #1 must succeed");
-    let final_2 = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+    let final_2 = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect("run #2 must succeed");
 
@@ -274,8 +271,7 @@ async fn from_pack_ignores_invalid_config_analysis_pack_and_runs_with_provided_p
         .install_stub_tasks_for_test()
         .expect("stub install must succeed");
 
-    let final_state = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+    let final_state = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect("from_pack should honor the provided baseline pack even when config is invalid");
 
@@ -312,8 +308,7 @@ async fn from_pack_construction_accepts_non_selectable_pack_but_preflight_reject
         .install_stub_tasks_for_test()
         .expect("stub install must succeed even for non-selectable packs");
 
-    let err = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+    let err = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect_err(
             "preflight must reject the inactive crypto stub — its empty bundle cannot render \
@@ -401,9 +396,7 @@ async fn step_ceiling_prevents_runaway_loop() {
         .replace_task_for_test(Arc::new(RunawayDebateModerator))
         .expect("runaway moderator replacement must succeed");
 
-    let result = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
-        .await;
+    let result = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20")).await;
     assert!(result.is_err());
 
     match &result.unwrap_err() {
@@ -477,8 +470,7 @@ async fn run_analysis_cycle_clears_stale_pipeline_outputs_from_reused_state() {
         suggested_position: None,
     });
 
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must succeed with reused state");
 
@@ -558,8 +550,7 @@ async fn run_analysis_cycle_clears_stale_derived_valuation_from_reused_state() {
         }),
     });
 
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must succeed with stale derived_valuation in initial state");
 

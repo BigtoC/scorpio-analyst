@@ -5,7 +5,10 @@ mod workflow_pipeline_make_pipeline;
 
 use std::sync::Arc;
 
-use scorpio_core::{state::TradingState, workflow::SnapshotStore};
+use scorpio_core::{
+    state::TradingState,
+    workflow::{SnapshotStore, run_analysis_cycle},
+};
 
 pub async fn run_stubbed_pipeline(
     max_debate_rounds: u32,
@@ -24,8 +27,7 @@ pub async fn run_stubbed_pipeline(
         .expect("stub install must succeed");
 
     let initial_state = TradingState::new("AAPL", "2026-03-20");
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must complete successfully with stubs");
 

@@ -11,7 +11,7 @@ use scorpio_core::{
     providers::factory::CompletionModelHandle,
     rate_limit::SharedRateLimiter,
     state::TradingState,
-    workflow::{SnapshotStore, TradingPipeline},
+    workflow::{SnapshotStore, TradingPipeline, run_analysis_cycle},
 };
 use tracing::subscriber::with_default;
 use tracing_subscriber::layer::SubscriberExt;
@@ -75,7 +75,7 @@ pub fn run_stubbed_pipeline_under_collector(collector: EventCollector, db_name: 
                 .expect("stub install must succeed");
 
             let state = TradingState::new("AAPL", "2026-03-20");
-            let _ = pipeline.run_analysis_cycle(state).await;
+            let _ = run_analysis_cycle(&pipeline, state).await;
         });
     });
 }
@@ -116,8 +116,7 @@ pub fn run_stubbed_pipeline_under_structured_collector(
                 .expect("stub install must succeed");
 
             let state = TradingState::new("AAPL", "2026-03-20");
-            pipeline
-                .run_analysis_cycle(state)
+            run_analysis_cycle(&pipeline, state)
                 .await
                 .expect("stubbed pipeline should succeed")
         })
