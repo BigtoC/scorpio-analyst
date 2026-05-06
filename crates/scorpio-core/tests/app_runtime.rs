@@ -15,13 +15,13 @@ use scorpio_core::config::{
     ApiConfig, Config, DataEnrichmentConfig, LlmConfig, ProvidersConfig, RateLimitConfig,
     StorageConfig, TradingConfig,
 };
-use uuid::Uuid;
 use scorpio_core::state::TradingState;
 use scorpio_core::workflow::SnapshotStore;
 use scorpio_core::workflow::test_support::{
     deserialize_state_from_context, serialize_state_to_context,
 };
 use std::sync::Arc;
+use uuid::Uuid;
 
 struct NoFinalStatusFundManagerTask {
     snapshot_store: Arc<SnapshotStore>,
