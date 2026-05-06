@@ -15,7 +15,7 @@ use scorpio_core::{
         AgentTokenUsage, FundamentalData, NewsData, SentimentData, TechnicalData, TradingState,
     },
     workflow::{
-        SnapshotPhase, SnapshotStore,
+        SnapshotPhase, SnapshotStore, run_analysis_cycle,
         test_support::{
             AnalystSyncTask, KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
             KEY_RISK_ROUND, KEY_RUNTIME_POLICY, deserialize_state_from_context,
@@ -131,8 +131,7 @@ async fn observe_runtime_surfaces_at(
         }))
         .expect("probe replacement must succeed");
 
-    pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
+    run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect("probe run should succeed");
 
@@ -630,9 +629,7 @@ async fn build_graph_returns_detached_graph_not_live_pipeline_graph() {
     let graph = pipeline.build_graph();
     graph.add_task(Arc::new(FailingDebateModerator));
 
-    let result = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
-        .await;
+    let result = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20")).await;
     assert!(result.is_ok());
 }
 

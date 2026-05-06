@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use graph_flow::{Context, NextAction, Task, TaskResult, fanout::FanOutTask};
 
-use super::{constants::TASKS, errors::map_graph_error, runtime::canonicalize_runtime_symbol};
+use super::{
+    constants::TASKS, errors::map_graph_error, runtime, runtime::canonicalize_runtime_symbol,
+};
 use crate::{
     error::TradingError,
     state::{
@@ -485,8 +487,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         providers_used: vec!["stale-provider".to_owned()],
     });
 
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = runtime::run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must succeed with one missing analyst input");
 
@@ -695,8 +696,7 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
         .to_string();
     let initial_state = TradingState::new("AAPL", &target_date);
 
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = runtime::run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must succeed with stubbed consensus enrichment");
 
@@ -809,10 +809,10 @@ async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_sto
         .format("%Y-%m-%d")
         .to_string();
 
-    let first_state = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", &target_date))
-        .await
-        .expect("first degraded cycle must succeed fail-open");
+    let first_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", &target_date))
+            .await
+            .expect("first degraded cycle must succeed fail-open");
     assert!(
         matches!(first_state.enrichment_consensus.status, crate::data::adapters::EnrichmentStatus::FetchFailed(ref reason) if reason == "provider_degraded"),
         "first cycle must classify as provider_degraded, got {:?}",
@@ -828,10 +828,10 @@ async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_sto
         "first degraded cycle must persist counter=1"
     );
 
-    let second_state = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", &target_date))
-        .await
-        .expect("fresh run must succeed fail-open");
+    let second_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", &target_date))
+            .await
+            .expect("fresh run must succeed fail-open");
     let second_payload = second_state
         .enrichment_consensus
         .payload
@@ -906,10 +906,10 @@ async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbol
         .format("%Y-%m-%d")
         .to_string();
 
-    let first_state = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", &target_date))
-        .await
-        .expect("first degraded cycle must succeed fail-open");
+    let first_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", &target_date))
+            .await
+            .expect("first degraded cycle must succeed fail-open");
     let first_payload = first_state
         .enrichment_consensus
         .payload
@@ -928,8 +928,7 @@ async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbol
     reused_state.asset_symbol = "MSFT".to_owned();
     reused_state.symbol = None;
 
-    let second_state = pipeline
-        .run_analysis_cycle(reused_state)
+    let second_state = runtime::run_analysis_cycle(&pipeline, reused_state)
         .await
         .expect("second degraded cycle must also succeed fail-open");
     let second_payload = second_state
@@ -1090,8 +1089,7 @@ async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
         options_context: None,
     });
 
-    let final_state = pipeline
-        .run_analysis_cycle(initial_state)
+    let final_state = runtime::run_analysis_cycle(&pipeline, initial_state)
         .await
         .expect("pipeline must succeed with one missing analyst input");
 
@@ -1190,10 +1188,10 @@ async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
     )
     .expect("stub install must succeed");
 
-    let final_state = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
-        .await
-        .expect("pipeline must succeed");
+    let final_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
+            .await
+            .expect("pipeline must succeed");
 
     let technical = final_state
         .technical_indicators()
@@ -1248,10 +1246,10 @@ async fn run_analysis_cycle_preserves_fetch_failed_options_context_and_coherent_
     )
     .expect("stub install must succeed");
 
-    let final_state = pipeline
-        .run_analysis_cycle(TradingState::new("AAPL", "2026-03-20"))
-        .await
-        .expect("pipeline must succeed even when options prefetch failed");
+    let final_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
+            .await
+            .expect("pipeline must succeed even when options prefetch failed");
 
     let technical = final_state
         .technical_indicators()

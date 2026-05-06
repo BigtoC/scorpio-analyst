@@ -10,6 +10,7 @@ pub mod test_support;
 
 pub use builder::{PipelineDeps, build_graph_from_pack};
 pub use pipeline::TradingPipeline;
+pub use pipeline::runtime::run_analysis_cycle;
 pub use snapshot::{LoadedSnapshot, SnapshotPhase, SnapshotStore};
 pub use tasks::KEY_ROUTING_FLAGS;
 pub use topology::{

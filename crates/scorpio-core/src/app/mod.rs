@@ -21,7 +21,8 @@
 //!
 //! let cfg = Config::load()?;
 //! let runtime = AnalysisRuntime::new(cfg).await?;
-//! let state = runtime.run("AAPL").await?;
+//! let execution_id = uuid::Uuid::new_v4();
+//! let state = runtime.run("AAPL", execution_id).await?;
 //! assert!(state.final_execution_status.is_some());
 //! # Ok(())
 //! # }
@@ -30,6 +31,7 @@
 //! [`run`]: AnalysisRuntime::run
 
 use anyhow::Context;
+use uuid::Uuid;
 
 use crate::config::Config;
 use crate::data::{FinnhubClient, FredClient, YFinanceClient, symbol::validate_symbol};
@@ -146,9 +148,9 @@ impl AnalysisRuntime {
     ///
     /// Returns `Err` if:
     /// - `symbol` fails [`validate_symbol`] (invalid format).
-    /// - The pipeline's `run_analysis_cycle` returns an error.
+    /// - `runtime::run_analysis_cycle` returns an error.
     /// - The pipeline completes without producing a final execution status.
-    pub async fn run(&self, symbol: &str) -> anyhow::Result<TradingState> {
+    pub async fn run(&self, symbol: &str, execution_id: Uuid) -> anyhow::Result<TradingState> {
         let symbol = validate_symbol(symbol)?;
         let target_date = {
             use chrono::TimeZone as _;
@@ -163,13 +165,13 @@ impl AnalysisRuntime {
             deep_provider = %self.deep_provider,
             symbol = %symbol,
             target_date = %target_date,
+            execution_id = %execution_id,
             "scorpio-analyst initialized"
         );
 
-        let initial_state = TradingState::new(symbol, &target_date);
-        let state = self
-            .pipeline
-            .run_analysis_cycle(initial_state)
+        let mut initial_state = TradingState::new(symbol, &target_date);
+        initial_state.execution_id = execution_id;
+        let state = crate::workflow::run_analysis_cycle(&self.pipeline, initial_state)
             .await
             .context("analysis cycle failed")?;
 
