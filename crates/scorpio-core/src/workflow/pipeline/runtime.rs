@@ -263,8 +263,15 @@ where
     Ok(())
 }
 
+/// Run a full analysis cycle for the given initial state.
+///
+/// 1. Resets per-cycle outputs on the provided state.
+/// 2. Canonicalizes the runtime symbol before any best-effort prefetch.
+/// 3. Seeds a fresh in-memory session with the serialized `TradingState`.
+/// 4. Runs the `FlowRunner` loop until the pipeline completes.
+/// 5. Deserializes and returns the final `TradingState`.
 #[instrument(skip(pipeline, initial_state), fields(symbol = %initial_state.asset_symbol, date = %initial_state.target_date))]
-pub(super) async fn run_analysis_cycle(
+pub async fn run_analysis_cycle(
     pipeline: &TradingPipeline,
     mut initial_state: TradingState,
 ) -> Result<TradingState, TradingError> {

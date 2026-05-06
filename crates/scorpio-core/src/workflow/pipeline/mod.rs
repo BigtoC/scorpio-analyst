@@ -1,8 +1,7 @@
 //! Trading pipeline orchestration using graph-flow.
 //!
 //! [`TradingPipeline`] wires all five agent phases into a directed graph and
-//! provides [`TradingPipeline::run_analysis_cycle`] as the single entry point
-//! for callers.
+//! [`runtime::run_analysis_cycle`] is the single entry point for callers.
 //!
 //! # Pipeline topology
 //!
@@ -62,7 +61,7 @@ use crate::{
 use constants::REPLACEABLE_TASK_IDS;
 
 /// Hard ceiling on `FlowRunner::run()` iterations inside
-/// [`TradingPipeline::run_analysis_cycle`].
+/// [`runtime::run_analysis_cycle`].
 ///
 /// The pipeline has ~12 distinct tasks. With `max_debate_rounds` and
 /// `max_risk_rounds` each allowing up to ~10 rounds, the theoretical maximum
@@ -93,8 +92,8 @@ pub enum WorkflowTestSeamError {
 /// Orchestrates the full five-phase trading analysis pipeline.
 ///
 /// The graph is built once in [`new`][Self::new] and reused across analysis
-/// cycles. Use [`run_analysis_cycle`][Self::run_analysis_cycle] as the single
-/// entry point for callers.
+/// cycles. Use [`runtime::run_analysis_cycle`] as the single entry point for
+/// callers.
 pub struct TradingPipeline {
     pub(super) config: Arc<Config>,
     pub(super) finnhub: FinnhubClient,
@@ -266,32 +265,6 @@ impl TradingPipeline {
             runtime_policy,
             graph,
         }
-    }
-
-    /// Run a full analysis cycle for the given initial state.
-    ///
-    /// 1. Resets per-cycle outputs on the provided state.
-    /// 2. Canonicalizes the runtime symbol before any best-effort prefetch.
-    /// 3. Seeds a fresh in-memory session with the serialized `TradingState`.
-    /// 4. Runs the `FlowRunner` loop until the pipeline completes.
-    /// 5. Deserializes and returns the final `TradingState`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::TradingError::SchemaViolation`] when the input
-    /// symbol is invalid, and [`crate::error::TradingError::GraphFlow`] on any
-    /// graph/session/task orchestration failure.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let final_state = pipeline.run_analysis_cycle(TradingState::new("AAPL", "2026-03-20")).await?;
-    /// ```
-    pub async fn run_analysis_cycle(
-        &self,
-        initial_state: crate::state::TradingState,
-    ) -> Result<crate::state::TradingState, crate::error::TradingError> {
-        runtime::run_analysis_cycle(self, initial_state).await
     }
 
     #[cfg(any(test, feature = "test-helpers"))]
