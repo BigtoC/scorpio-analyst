@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::Utc;
 use figlet_rs::Toilet;
+use uuid::Uuid;
 
 use scorpio_core::app::AnalysisRuntime;
 use scorpio_core::config::Config;
@@ -69,8 +70,10 @@ pub fn run(args: &AnalyzeArgs) -> anyhow::Result<()> {
             "at least one reporter must be enabled; use --json if --no-terminal is set"
         );
 
+        let execution_id = Uuid::new_v4();
+        println!("Execution ID: {execution_id}");
         let analysis = AnalysisRuntime::new(cfg).await?;
-        let state = Arc::new(analysis.run(&args.symbol).await?);
+        let state = Arc::new(analysis.run(&args.symbol, execution_id).await?);
         let ctx = Arc::new(ReportContext {
             symbol: state.asset_symbol.clone(),
             finished_at: Utc::now(),
