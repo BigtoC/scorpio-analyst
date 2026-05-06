@@ -15,6 +15,7 @@ use scorpio_core::config::{
     ApiConfig, Config, DataEnrichmentConfig, LlmConfig, ProvidersConfig, RateLimitConfig,
     StorageConfig, TradingConfig,
 };
+use uuid::Uuid;
 use scorpio_core::state::TradingState;
 use scorpio_core::workflow::SnapshotStore;
 use scorpio_core::workflow::test_support::{
@@ -91,7 +92,7 @@ async fn run_returns_state_with_final_execution_status() {
 
     let runtime = AnalysisRuntime::from_pipeline(pipeline);
     let state = runtime
-        .run("AAPL")
+        .run("AAPL", Uuid::new_v4())
         .await
         .expect("stubbed analysis cycle should succeed");
 
@@ -116,7 +117,7 @@ async fn run_rejects_invalid_symbol_before_executing_pipeline() {
     // before any pipeline task is scheduled.
     let runtime = AnalysisRuntime::from_pipeline(pipeline);
     let err = runtime
-        .run("NOT A VALID SYMBOL!!")
+        .run("NOT A VALID SYMBOL!!", Uuid::new_v4())
         .await
         .expect_err("invalid symbol must fail validation");
 
@@ -147,7 +148,7 @@ async fn run_errors_when_pipeline_finishes_without_final_execution_status() {
 
     let runtime = AnalysisRuntime::from_pipeline(pipeline);
     let err = runtime
-        .run("AAPL")
+        .run("AAPL", Uuid::new_v4())
         .await
         .expect_err("missing final execution status should fail");
 
