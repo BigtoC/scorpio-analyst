@@ -101,6 +101,123 @@ pub(crate) async fn prompt_with_retry_budget(
     .await
 }
 
+/// Send a one-shot prompt with timeout/retry and a post-call validator.
+///
+/// On each successful LLM call, `validator` is invoked with the response output.
+/// If it returns `Ok(())`, the response is returned. If it returns
+/// [`TradingError::SchemaViolation`] and retries remain, the next attempt is
+/// made with the violation message appended to the prompt as corrective
+/// feedback so the model can self-correct. Any other validator error is
+/// returned immediately.
+///
+/// Use this when the validator is checking format/contract requirements that
+/// a flaky model (e.g. DeepSeek) may fail to satisfy on a first attempt but
+/// can self-correct given a clear hint. The retry loop shares the same total
+/// budget and rate-limit accounting as [`prompt_with_retry_details`].
+///
+/// # Errors
+///
+/// - [`TradingError::Rig`] / [`TradingError::NetworkTimeout`] for LLM failures.
+/// - [`TradingError::SchemaViolation`] if the validator continues to reject
+///   responses after all retries.
+/// - Any non-`SchemaViolation` error returned by `validator` propagates
+///   without retry.
+pub async fn prompt_with_retry_validated_details<F>(
+    agent: &LlmAgent,
+    initial_prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+    validator: F,
+) -> Result<RetryOutcome<PromptResponse>, TradingError>
+where
+    F: Fn(&str) -> Result<(), TradingError>,
+{
+    let total_budget = policy.total_budget(timeout);
+    let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
+    let mut corrective_feedback: Option<String> = None;
+
+    for attempt in 0..=policy.max_retries {
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            &RetryMessages {
+                retrying: "retrying validated prompt after transient or validator error",
+                retry_budget: "validated prompt retry budget exhausted before next attempt",
+                acquire_budget: "validated prompt budget exhausted before rate-limit acquire",
+                exhausted: "validated prompt retry budget exhausted",
+            },
+        )
+        .await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
+
+        let current_prompt = match corrective_feedback.as_deref() {
+            None => initial_prompt.to_owned(),
+            Some(feedback) => format!(
+                "{initial_prompt}\n\nIMPORTANT — your previous response was rejected: {feedback}\n\nPlease re-emit a corrected response that satisfies this requirement."
+            ),
+        };
+
+        match tokio::time::timeout(
+            attempt_budget.timeout,
+            agent.prompt_details(&current_prompt),
+        )
+        .await
+        {
+            Ok(Ok(response)) => match validator(&response.output) {
+                Ok(()) => {
+                    return Ok(RetryOutcome {
+                        result: response,
+                        rate_limit_wait_ms,
+                    });
+                }
+                Err(TradingError::SchemaViolation { message }) => {
+                    if attempt < policy.max_retries {
+                        warn!(
+                            attempt,
+                            provider = agent.provider_name(),
+                            model = agent.model_id(),
+                            error = %message,
+                            "validator rejected LLM output, will retry with corrective feedback"
+                        );
+                        corrective_feedback = Some(message);
+                        continue;
+                    }
+                    return Err(TradingError::SchemaViolation { message });
+                }
+                Err(other) => return Err(other),
+            },
+            Ok(Err(err)) => {
+                if attempt < policy.max_retries
+                    && let Some(error) = transient_prompt_error_summary(&err)
+                {
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient validated-prompt error, will retry");
+                    continue;
+                }
+                return Err(map_prompt_error_with_context(
+                    agent.provider_name(),
+                    agent.model_id(),
+                    err,
+                ));
+            }
+            Err(_elapsed) => {
+                let err = attempt_timeout_error(started_at, agent, attempt, "validated prompt");
+                if attempt < policy.max_retries {
+                    warn!(attempt, "validated prompt timed out, will retry");
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
+}
+
 /// Shared retry-loop core for [`prompt_with_retry_budget`] and
 /// [`prompt_with_retry_details_budget`].
 ///
@@ -1097,5 +1214,184 @@ mod tests {
 
         assert!(matches!(err, TradingError::SchemaViolation { .. }));
         assert_eq!(agent.typed_attempts(), 1);
+    }
+
+    // ── Validator-aware retry ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn prompt_with_retry_validated_details_returns_first_valid_response() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![Ok(mock_prompt_response(
+                "good output",
+                rig::completion::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            ))],
+            vec![],
+        );
+
+        let outcome = prompt_with_retry_validated_details(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(1),
+            },
+            |_output| Ok(()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.result.output, "good output");
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_validated_details_retries_on_schema_violation_and_recovers() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![
+                Ok(mock_prompt_response(
+                    "bad",
+                    rig::completion::Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )),
+                Ok(mock_prompt_response(
+                    "good",
+                    rig::completion::Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )),
+            ],
+            vec![],
+        );
+
+        let outcome = prompt_with_retry_validated_details(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(1),
+            },
+            |output| {
+                if output == "good" {
+                    Ok(())
+                } else {
+                    Err(TradingError::SchemaViolation {
+                        message: "must say 'good'".to_owned(),
+                    })
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.result.output, "good");
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_validated_details_returns_last_violation_when_exhausted() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![
+                Ok(mock_prompt_response(
+                    "bad",
+                    rig::completion::Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )),
+                Ok(mock_prompt_response(
+                    "bad",
+                    rig::completion::Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                )),
+            ],
+            vec![],
+        );
+
+        let err = prompt_with_retry_validated_details(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            |_output| {
+                Err(TradingError::SchemaViolation {
+                    message: "always invalid".to_owned(),
+                })
+            },
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            TradingError::SchemaViolation { message } => {
+                assert_eq!(message, "always invalid");
+            }
+            other => panic!("expected SchemaViolation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_with_retry_validated_details_does_not_retry_non_schema_validator_errors() {
+        let (agent, _controller) = mock_llm_agent(
+            "o3",
+            vec![Ok(mock_prompt_response(
+                "anything",
+                rig::completion::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            ))],
+            vec![],
+        );
+
+        let err = prompt_with_retry_validated_details(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 3,
+                base_delay: Duration::from_millis(1),
+            },
+            |_output| {
+                Err(TradingError::Config(anyhow::anyhow!(
+                    "unrelated config error"
+                )))
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, TradingError::Config(_)));
     }
 }
