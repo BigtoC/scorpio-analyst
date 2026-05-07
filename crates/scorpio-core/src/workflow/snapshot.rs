@@ -29,7 +29,7 @@ use crate::{
 mod path;
 mod thesis;
 
-pub(crate) use thesis::THESIS_MEMORY_SCHEMA_VERSION;
+pub use thesis::THESIS_MEMORY_SCHEMA_VERSION;
 
 #[cfg(test)]
 mod tests;
