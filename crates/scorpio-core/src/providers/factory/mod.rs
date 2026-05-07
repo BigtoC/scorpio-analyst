@@ -47,7 +47,7 @@ pub use retry::{
 
 // ── text_retry submodule ─────────────────────────────────────────────────────
 
-pub use text_retry::prompt_text_with_retry;
+pub use text_retry::{prompt_text_with_retry, prompt_text_with_retry_validated};
 
 pub use discovery::{COPILOT_CURATED_MODELS, ModelDiscoveryOutcome, discover_setup_models};
 pub use error::sanitize_error_summary;
