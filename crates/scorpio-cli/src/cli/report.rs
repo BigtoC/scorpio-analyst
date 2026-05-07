@@ -1,17 +1,22 @@
 //! `scorpio report` subcommand handler.
 
+use std::path::PathBuf;
+
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use scorpio_core::config::Config;
+use scorpio_core::config::{Config, expand_path};
 use scorpio_core::state::{AgentTokenUsage, TradingState};
 use scorpio_core::workflow::snapshot::{SnapshotStore, THESIS_MEMORY_SCHEMA_VERSION};
 use scorpio_reporters::terminal::{render_execution_list, render_final_report};
 
 use super::{ReportArgs, ReportSubcommand};
 
-const CONFIG_LOAD_MSG: &str =
-    "✗ Failed to load configuration. Run `scorpio setup` if this is a fresh install.";
+/// Env-var override for the snapshot DB path.
+///
+/// Mirrors the field name on `StorageConfig` (`storage.snapshot_db_path`) using
+/// the project-wide `SCORPIO__` prefix + `__` separator convention.
+const SNAPSHOT_DB_PATH_ENV: &str = "SCORPIO__STORAGE__SNAPSHOT_DB_PATH";
 
 /// JSON payload emitted by `report show --json`.
 ///
@@ -42,12 +47,30 @@ pub async fn run(args: &ReportArgs) -> anyhow::Result<()> {
     }
 }
 
-/// Load only the snapshot DB path from config — report commands don't need API keys.
+/// Resolve the snapshot DB path and open the store.
+///
+/// Report commands don't need API keys, so a fresh install without a populated
+/// `~/.scorpio-analyst/config.toml` still works. Precedence:
+///   1. `SCORPIO__STORAGE__SNAPSHOT_DB_PATH` env var
+///   2. `storage.snapshot_db_path` from a loadable user config
+///   3. The compiled default (`$HOME/.scorpio-analyst/phase_snapshots.db`)
 async fn open_store() -> anyhow::Result<SnapshotStore> {
-    let cfg = Config::load().context(CONFIG_LOAD_MSG)?;
-    SnapshotStore::from_config(&cfg)
-        .await
-        .map_err(anyhow::Error::from)
+    if let Ok(raw) = std::env::var(SNAPSHOT_DB_PATH_ENV) {
+        let path: PathBuf = expand_path(&raw);
+        return SnapshotStore::new(Some(&path))
+            .await
+            .map_err(anyhow::Error::from);
+    }
+
+    match Config::load() {
+        Ok(cfg) => SnapshotStore::from_config(&cfg)
+            .await
+            .map_err(anyhow::Error::from),
+        Err(_) => SnapshotStore::new(None)
+            .await
+            .map_err(anyhow::Error::from)
+            .context("failed to open snapshot store at default path"),
+    }
 }
 
 /// List all past analysis executions.
