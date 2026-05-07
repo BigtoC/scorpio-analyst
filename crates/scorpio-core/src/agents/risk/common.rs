@@ -200,11 +200,15 @@ pub(super) fn validate_risk_text(context: &str, content: &str) -> Result<(), Tra
     Ok(())
 }
 
-/// Validate a moderator plain-text synthesis output.
-pub(super) fn validate_moderator_output(
-    content: &str,
-    status: DualRiskStatus,
-) -> Result<(), TradingError> {
+/// Validate moderator output shape: non-empty, within size, no disallowed control chars.
+///
+/// The canonical violation-status sentence is *not* checked here — it is
+/// computed deterministically from `DualRiskStatus` and prepended by the
+/// caller (see [`prepend_violation_status_if_missing`]). Strict sentence
+/// matching against LLM prose is fragile — flaky models like DeepSeek
+/// frequently paraphrase or rephrase, and there is no value in failing the
+/// pipeline over a sentence we already know the answer to.
+pub(super) fn validate_moderator_output_shape(content: &str) -> Result<(), TradingError> {
     if content.trim().is_empty() {
         return Err(TradingError::SchemaViolation {
             message: "RiskModerator: output must not be empty".to_owned(),
@@ -223,18 +227,26 @@ pub(super) fn validate_moderator_output(
             message: "RiskModerator: output contains disallowed control characters".to_owned(),
         });
     }
-    let expected_sentence = expected_moderator_violation_sentence(status);
-    if !content
-        .to_ascii_lowercase()
-        .contains(&expected_sentence.to_ascii_lowercase())
-    {
-        return Err(TradingError::SchemaViolation {
-            message: format!(
-                "RiskModerator: output must include exact violation-status sentence: \"{expected_sentence}\""
-            ),
-        });
-    }
     Ok(())
+}
+
+/// Prepend the canonical violation-status sentence to `content` unless it is
+/// already present (case-insensitive). The sentence is computed deterministically
+/// from `status`, so downstream consumers always see a normalized, machine-checkable
+/// first line regardless of how the LLM phrased the rest of its synthesis.
+pub(super) fn prepend_violation_status_if_missing(content: &str, status: DualRiskStatus) -> String {
+    let expected = expected_moderator_violation_sentence(status);
+    if content
+        .to_ascii_lowercase()
+        .contains(&expected.to_ascii_lowercase())
+    {
+        return content.to_owned();
+    }
+    let trimmed = content.trim_start();
+    if trimmed.is_empty() {
+        return expected.to_owned();
+    }
+    format!("{expected} {trimmed}")
 }
 
 /// Validate a raw model response size before local JSON parsing.
@@ -499,55 +511,34 @@ mod tests {
     }
 
     #[test]
-    fn validate_moderator_output_rejects_empty() {
+    fn validate_moderator_output_shape_rejects_empty() {
         assert!(matches!(
-            validate_moderator_output("", DualRiskStatus::Absent),
+            validate_moderator_output_shape(""),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
 
     #[test]
-    fn validate_moderator_output_rejects_control_char() {
+    fn validate_moderator_output_shape_rejects_control_char() {
         assert!(matches!(
-            validate_moderator_output("bad\x00output", DualRiskStatus::Absent),
+            validate_moderator_output_shape("bad\x00output"),
             Err(TradingError::SchemaViolation { .. })
         ));
     }
 
     #[test]
-    fn validate_moderator_output_accepts_valid() {
+    fn validate_moderator_output_shape_accepts_arbitrary_prose() {
+        // Shape validation no longer checks the violation-status sentence —
+        // the canonical sentence is prepended deterministically by the caller.
         assert!(
-            validate_moderator_output(
+            validate_moderator_output_shape("Short summary without required sentence.").is_ok()
+        );
+        assert!(
+            validate_moderator_output_shape(
                 "Violation status: dual-risk escalation present. Evidence is strong.",
-                DualRiskStatus::Present,
             )
             .is_ok()
         );
-        assert!(
-            validate_moderator_output(
-                "Violation status: dual-risk escalation absent. Only conservative flagged.",
-                DualRiskStatus::Absent,
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_moderator_output(
-                "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report. Proceeding.",
-                DualRiskStatus::Unknown,
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn validate_moderator_output_rejects_missing_required_violation_sentence() {
-        assert!(matches!(
-            validate_moderator_output(
-                "Short summary without required sentence.",
-                DualRiskStatus::Present
-            ),
-            Err(TradingError::SchemaViolation { .. })
-        ));
     }
 
     // ── DualRiskStatus tri-state tests ────────────────────────────────────
@@ -638,36 +629,56 @@ mod tests {
     }
 
     #[test]
-    fn validate_moderator_output_accepts_unknown_sentence() {
-        let content = "Violation status: dual-risk escalation unknown due to missing Conservative or Neutral report. Proceeding with reduced confidence.";
-        assert!(validate_moderator_output(content, DualRiskStatus::Unknown).is_ok());
+    fn prepend_violation_status_skips_when_already_present() {
+        let content = "Violation status: dual-risk escalation present. Evidence is strong.";
+        assert_eq!(
+            prepend_violation_status_if_missing(content, DualRiskStatus::Present),
+            content
+        );
     }
 
     #[test]
-    fn validate_moderator_output_rejects_wrong_sentence_for_present() {
-        let content = "Violation status: dual-risk escalation absent. This is wrong for Present.";
-        assert!(matches!(
-            validate_moderator_output(content, DualRiskStatus::Present),
-            Err(TradingError::SchemaViolation { .. })
-        ));
+    fn prepend_violation_status_is_case_insensitive() {
+        // LLM may emit the canonical sentence with different casing — don't double-prepend.
+        let content = "VIOLATION STATUS: DUAL-RISK ESCALATION ABSENT. Only conservative flagged.";
+        assert_eq!(
+            prepend_violation_status_if_missing(content, DualRiskStatus::Absent),
+            content
+        );
     }
 
     #[test]
-    fn validate_moderator_output_rejects_wrong_sentence_for_absent() {
-        let content = "Violation status: dual-risk escalation present. This is wrong for Absent.";
-        assert!(matches!(
-            validate_moderator_output(content, DualRiskStatus::Absent),
-            Err(TradingError::SchemaViolation { .. })
-        ));
+    fn prepend_violation_status_inserts_when_llm_paraphrased() {
+        // DeepSeek paraphrased — prepend the canonical sentence so downstream
+        // consumers always see the machine-checkable status.
+        let content = "The conservative reviewer flagged concerns; neutral did not.";
+        let result = prepend_violation_status_if_missing(content, DualRiskStatus::Absent);
+        assert!(result.starts_with("Violation status: dual-risk escalation absent."));
+        assert!(result.contains("conservative reviewer flagged concerns"));
     }
 
     #[test]
-    fn validate_moderator_output_rejects_wrong_sentence_for_unknown() {
-        let content = "Violation status: dual-risk escalation present. This is wrong for Unknown.";
-        assert!(matches!(
-            validate_moderator_output(content, DualRiskStatus::Unknown),
-            Err(TradingError::SchemaViolation { .. })
-        ));
+    fn prepend_violation_status_inserts_correct_sentence_for_present() {
+        let content = "Both reviewers raised material concerns.";
+        let result = prepend_violation_status_if_missing(content, DualRiskStatus::Present);
+        assert!(result.starts_with("Violation status: dual-risk escalation present."));
+    }
+
+    #[test]
+    fn prepend_violation_status_inserts_correct_sentence_for_unknown() {
+        let content = "Insufficient data; reduced confidence applied.";
+        let result = prepend_violation_status_if_missing(content, DualRiskStatus::Unknown);
+        assert!(
+            result.starts_with("Violation status: dual-risk escalation unknown due to missing")
+        );
+    }
+
+    #[test]
+    fn prepend_violation_status_returns_canonical_when_input_blank() {
+        // Empty/whitespace-only inputs are rejected by validate_moderator_output_shape
+        // before this helper is called, but the helper must still be total.
+        let result = prepend_violation_status_if_missing("   ", DualRiskStatus::Absent);
+        assert_eq!(result, "Violation status: dual-risk escalation absent.");
     }
 
     #[test]
