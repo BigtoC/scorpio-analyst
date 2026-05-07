@@ -1,0 +1,1 @@
+//! `scorpio report` subcommand handler.

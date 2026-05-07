@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod report;
 pub mod setup;
 pub mod update;
 
@@ -38,6 +39,32 @@ pub enum Commands {
     Setup,
     /// Upgrade scorpio to the latest release from GitHub.
     Upgrade,
+    /// Query past analysis executions.
+    Report(ReportArgs),
+}
+
+/// Arguments for `scorpio report`.
+#[derive(Debug, Clone, Args)]
+pub struct ReportArgs {
+    #[command(subcommand)]
+    pub subcommand: ReportSubcommand,
+}
+
+/// Subcommands for `scorpio report`.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ReportSubcommand {
+    /// List all past analysis executions.
+    List,
+    /// Show the full report for a specific execution.
+    Show {
+        /// Execution ID to look up.
+        #[arg(value_name = "ID")]
+        execution_id: String,
+
+        /// Output structured JSON instead of the terminal report.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Arguments for `scorpio analyze`.
@@ -84,6 +111,53 @@ mod tests {
     fn parse_upgrade_subcommand() {
         let cli = Cli::try_parse_from(["scorpio", "upgrade"]).unwrap();
         assert!(matches!(cli.command, Commands::Upgrade));
+    }
+
+    #[test]
+    fn parse_report_list_subcommand() {
+        let cli = Cli::try_parse_from(["scorpio", "report", "list"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Commands::Report(args) if matches!(args.subcommand, ReportSubcommand::List)
+        ));
+    }
+
+    #[test]
+    fn parse_report_show_with_id() {
+        let cli = Cli::try_parse_from(["scorpio", "report", "show", "abc-123"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Commands::Report(args) if matches!(
+                &args.subcommand,
+                ReportSubcommand::Show { execution_id, json: false } if execution_id == "abc-123"
+            )
+        ));
+    }
+
+    #[test]
+    fn parse_report_show_with_json_flag() {
+        let cli =
+            Cli::try_parse_from(["scorpio", "report", "show", "abc-123", "--json"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Commands::Report(args) if matches!(
+                &args.subcommand,
+                ReportSubcommand::Show { json: true, .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn parse_report_without_subcommand_yields_error() {
+        let err = Cli::try_parse_from(["scorpio", "report"]).unwrap_err();
+        assert!(
+            matches!(
+                err.kind(),
+                ErrorKind::MissingSubcommand | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            ),
+            "expected missing-subcommand-style error, got: {:?}",
+            err.kind()
+        );
     }
 
     #[test]
