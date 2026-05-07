@@ -16,7 +16,7 @@ use anyhow::Context as _;
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use self::path::resolve_db_path;
 
@@ -95,6 +95,28 @@ pub struct ExecutionSummary {
 pub struct ExecutionListing {
     pub summaries: Vec<ExecutionSummary>,
     pub stale_count: usize,
+}
+
+/// Per-phase snapshot returned by `load_full_report`.
+///
+/// Distinct from `LoadedSnapshot` because the multi-row result needs to track
+/// which phase each row corresponds to.
+#[derive(Debug, Clone)]
+pub struct LoadedReportSnapshot {
+    pub state: TradingState,
+    pub token_usage: Option<Vec<AgentTokenUsage>>,
+    pub phase_number: i64,
+}
+
+/// Result of `load_full_report` — visible per-phase snapshots plus a list of
+/// phase numbers that were soft-skipped due to deserialization failure.
+///
+/// The CLI surfaces `skipped_phases` as a stderr banner so corrupt rows are
+/// visible to users instead of only appearing in `tracing::warn!` logs.
+#[derive(Debug, Clone)]
+pub struct LoadedReport {
+    pub snapshots: Vec<LoadedReportSnapshot>,
+    pub skipped_phases: Vec<i64>,
 }
 
 /// Manages SQLite-backed phase-snapshot persistence for a trading pipeline run.
@@ -276,6 +298,81 @@ impl SnapshotStore {
         Ok(ExecutionListing {
             summaries,
             stale_count,
+        })
+    }
+
+    /// Load all phase snapshots for a given execution ID, scoped to the active schema.
+    ///
+    /// Returns visible snapshots ordered by phase_number ascending plus a list of
+    /// phase numbers that were soft-skipped due to deserialization failure. Rows
+    /// from older schema versions are filtered at the SQL boundary — they are
+    /// intentionally retired data, not "missing" data. An execution whose rows
+    /// are all stale will appear as not-found to the caller.
+    ///
+    /// A failure of `token_usage_json` degrades only that phase's `token_usage` to
+    /// `None`; the snapshot is still returned (not added to `skipped_phases`).
+    pub async fn load_full_report(
+        &self,
+        execution_id: &str,
+    ) -> Result<LoadedReport, TradingError> {
+        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+            "SELECT phase_number, trading_state_json, token_usage_json
+             FROM phase_snapshots
+             WHERE execution_id = ? AND schema_version = ?
+             ORDER BY phase_number ASC",
+        )
+        .bind(execution_id)
+        .bind(THESIS_MEMORY_SCHEMA_VERSION)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| {
+            format!("failed to load full report for execution_id={execution_id}")
+        })
+        .map_err(TradingError::Storage)?;
+
+        let mut snapshots = Vec::with_capacity(rows.len());
+        let mut skipped_phases = Vec::new();
+
+        for (phase_number, state_json, usage_json) in rows {
+            let state: TradingState = match serde_json::from_str(&state_json) {
+                Ok(s) => s,
+                Err(_err) => {
+                    warn!(
+                        execution_id,
+                        phase_number,
+                        error.kind = "deserialize",
+                        "report snapshot failed to deserialize; skipping"
+                    );
+                    skipped_phases.push(phase_number);
+                    continue;
+                }
+            };
+
+            let token_usage = usage_json.and_then(|json| {
+                match serde_json::from_str::<Vec<AgentTokenUsage>>(&json) {
+                    Ok(u) => Some(u),
+                    Err(_err) => {
+                        warn!(
+                            execution_id,
+                            phase_number,
+                            error.kind = "deserialize",
+                            "report token usage failed to deserialize; degrading to None"
+                        );
+                        None
+                    }
+                }
+            });
+
+            snapshots.push(LoadedReportSnapshot {
+                state,
+                token_usage,
+                phase_number,
+            });
+        }
+
+        Ok(LoadedReport {
+            snapshots,
+            skipped_phases,
         })
     }
 
