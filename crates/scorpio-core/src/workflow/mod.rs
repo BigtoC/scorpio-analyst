@@ -1,7 +1,7 @@
 pub mod builder;
 mod context_bridge;
 mod pipeline;
-mod snapshot;
+pub mod snapshot;
 mod tasks;
 mod topology;
 
