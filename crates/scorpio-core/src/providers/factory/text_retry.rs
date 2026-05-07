@@ -137,15 +137,13 @@ where
             attempt_budget.timeout,
             agent.prompt_text_details(&current_prompt, max_turns),
         )
-            .await
+        .await
         {
             Ok(Ok(response)) => match validator(&response.output) {
-                Ok(()) => {
-                    Ok(RetryOutcome {
-                        result: response,
-                        rate_limit_wait_ms,
-                    })
-                }
+                Ok(()) => Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                }),
                 Err(TradingError::SchemaViolation { message }) => {
                     if attempt < policy.max_retries {
                         warn!(
@@ -182,7 +180,7 @@ where
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
