@@ -10,7 +10,7 @@ use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
     error::TradingError,
-    providers::factory::{CompletionModelHandle, prompt_with_retry_details},
+    providers::factory::{CompletionModelHandle, prompt_with_retry_validated_details},
     state::{AgentTokenUsage, TradingState},
 };
 
@@ -80,11 +80,15 @@ impl DebateModerator {
         let started_at = Instant::now();
         let prompt = build_moderator_prompt(state);
 
-        let outcome = prompt_with_retry_details(
+        // Validate inside the retry loop so flaky models that omit a stance,
+        // bullish/bearish framing, or uncertainty get a corrective hint and
+        // a chance to self-correct.
+        let outcome = prompt_with_retry_validated_details(
             &self.core.agent,
             &prompt,
             self.core.timeout,
             &self.core.retry_policy,
+            validate_consensus_summary,
         )
         .await?;
 
