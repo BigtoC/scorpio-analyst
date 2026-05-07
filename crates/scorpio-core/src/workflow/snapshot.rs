@@ -75,6 +75,28 @@ pub struct LoadedSnapshot {
     pub token_usage: Option<Vec<AgentTokenUsage>>,
 }
 
+/// Summary of a single execution for list display.
+///
+/// Only includes executions whose snapshot rows match the active
+/// `THESIS_MEMORY_SCHEMA_VERSION`; runs from older schemas are not visible.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutionSummary {
+    pub execution_id: String,
+    pub symbol: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Result of `list_executions` — visible summaries plus a count of stale
+/// executions filtered out by the schema-version check.
+///
+/// The CLI surfaces `stale_count` as a stderr banner so users notice when a
+/// version bump has retired previously-visible runs.
+#[derive(Debug, Clone)]
+pub struct ExecutionListing {
+    pub summaries: Vec<ExecutionSummary>,
+    pub stale_count: usize,
+}
+
 /// Manages SQLite-backed phase-snapshot persistence for a trading pipeline run.
 #[derive(Debug)]
 pub struct SnapshotStore {
