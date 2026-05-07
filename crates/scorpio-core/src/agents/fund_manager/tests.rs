@@ -263,18 +263,34 @@ impl FundManagerInference for StubInference {
         _user_prompt: &str,
         _timeout: Duration,
         _retry_policy: &RetryPolicy,
+        validator: &(dyn Fn(&str) -> Result<(), TradingError> + Send + Sync),
     ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
-        *self.call_count.lock().unwrap() += 1;
-        self.responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| {
-                Ok(RetryOutcome {
+        // Mirror the production retry semantics: pop responses until the validator
+        // accepts one or the queue is exhausted. On `SchemaViolation`, fall through
+        // to the next queued response (simulates the corrective-feedback retry).
+        // Other validator errors propagate immediately.
+        loop {
+            *self.call_count.lock().unwrap() += 1;
+            let next = self.responses.lock().unwrap().pop_front();
+            let outcome = match next {
+                Some(Ok(outcome)) => outcome,
+                Some(Err(err)) => return Err(err),
+                None => RetryOutcome {
                     result: make_prompt_response(&approved_json(), zero_usage()),
                     rate_limit_wait_ms: 0,
-                })
-            })
+                },
+            };
+            match validator(&outcome.result.output) {
+                Ok(()) => return Ok(outcome),
+                Err(TradingError::SchemaViolation { message }) => {
+                    if self.responses.lock().unwrap().is_empty() {
+                        return Err(TradingError::SchemaViolation { message });
+                    }
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
+        }
     }
 }
 
@@ -510,6 +526,25 @@ async fn schema_violation_on_unparseable_json_from_llm() {
         "expected SchemaViolation for unparseable JSON, got {result:?}"
     );
     assert!(state.final_execution_status.is_none());
+}
+
+#[tokio::test]
+async fn validator_aware_retry_recovers_when_first_response_is_unparseable() {
+    // First LLM response is malformed JSON. The validator-aware retry feeds the
+    // schema error back to the model and the second response succeeds.
+    let mut state = populated_state();
+    let inference = StubInference::new(vec![
+        Ok(make_prompt_response("not-json-at-all", nonzero_usage())),
+        Ok(make_prompt_response(&approved_json(), nonzero_usage())),
+    ]);
+    let agent = fund_manager_for_test();
+    agent
+        .run_with_inference(&mut state, true, &inference)
+        .await
+        .expect("validator-aware retry should recover on second attempt");
+
+    assert_eq!(inference.call_count(), 2);
+    assert!(state.final_execution_status.is_some());
 }
 
 // ── 4.12: decided_at normalized to runtime timestamp ─────────────────────

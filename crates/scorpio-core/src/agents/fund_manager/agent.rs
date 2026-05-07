@@ -17,13 +17,18 @@ use crate::{
         ModelTier,
         factory::{
             CompletionModelHandle, RetryOutcome, build_agent, create_completion_model,
-            prompt_with_retry_details,
+            prompt_with_retry_validated_details,
         },
     },
     rate_limit::ProviderRateLimiters,
     state::{AgentTokenUsage, TradingState},
 };
 
+/// Inference contract used by [`FundManagerAgent`]. The `validator` closure runs
+/// inside the retry loop so flaky models that emit malformed JSON or fail
+/// content validation get a chance to self-correct with the violation message
+/// fed back as corrective feedback. Other validator errors propagate without
+/// retry.
 pub(super) trait FundManagerInference {
     async fn infer(
         &self,
@@ -32,6 +37,7 @@ pub(super) trait FundManagerInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
+        validator: &(dyn Fn(&str) -> Result<(), TradingError> + Send + Sync),
     ) -> Result<RetryOutcome<PromptResponse>, TradingError>;
 }
 
@@ -45,9 +51,11 @@ impl FundManagerInference for RigFundManagerInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
+        validator: &(dyn Fn(&str) -> Result<(), TradingError> + Send + Sync),
     ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
         let agent = build_agent(handle, system_prompt);
-        prompt_with_retry_details(&agent, user_prompt, timeout, retry_policy).await
+        prompt_with_retry_validated_details(&agent, user_prompt, timeout, retry_policy, validator)
+            .await
     }
 }
 
@@ -140,6 +148,25 @@ impl FundManagerAgent {
         let (system_prompt, user_prompt) =
             build_prompt_context(state, &self.symbol, &self.target_date, dual_risk_status);
 
+        // Validator closure runs inside the retry loop so flaky models get a
+        // chance to self-correct from malformed JSON or content-rule violations.
+        // The post-call parse below repeats the parse to produce the typed
+        // `ExecutionStatus` value — the validator only signals pass/fail.
+        let requires_missing_data_ack = state_has_missing_inputs(state, dual_risk_status);
+        let target_date = state.target_date.clone();
+        let validator_target_date = target_date.clone();
+        let trader_proposal_action_for_validator = trader_proposal_action.clone();
+        let validator = move |raw: &str| -> Result<(), TradingError> {
+            parse_and_validate_execution_status(
+                raw,
+                requires_missing_data_ack,
+                &validator_target_date,
+                dual_risk_status,
+                trader_proposal_action_for_validator.clone(),
+            )
+            .map(|_| ())
+        };
+
         let outcome = inference
             .infer(
                 &self.handle,
@@ -147,13 +174,14 @@ impl FundManagerAgent {
                 &user_prompt,
                 self.timeout,
                 &self.retry_policy,
+                &validator,
             )
             .await?;
 
         let mut status = parse_and_validate_execution_status(
             &outcome.result.output,
-            state_has_missing_inputs(state, dual_risk_status),
-            &state.target_date,
+            requires_missing_data_ack,
+            &target_date,
             dual_risk_status,
             trader_proposal_action,
         )?;

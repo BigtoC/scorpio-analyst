@@ -42,12 +42,12 @@ pub use agent::{LlmAgent, build_agent, build_agent_with_tools, prompt_typed};
 
 pub use retry::{
     RetryOutcome, chat_with_retry, chat_with_retry_details, prompt_typed_with_retry,
-    prompt_with_retry, prompt_with_retry_details,
+    prompt_with_retry, prompt_with_retry_details, prompt_with_retry_validated_details,
 };
 
 // ── text_retry submodule ─────────────────────────────────────────────────────
 
-pub use text_retry::prompt_text_with_retry;
+pub use text_retry::{prompt_text_with_retry, prompt_text_with_retry_validated};
 
 pub use discovery::{COPILOT_CURATED_MODELS, ModelDiscoveryOutcome, discover_setup_models};
 pub use error::sanitize_error_summary;

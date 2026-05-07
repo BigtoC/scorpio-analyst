@@ -28,7 +28,7 @@ use super::retry::{RetryOutcome, prepare_attempt_text, should_retry_trading_erro
 /// output and the provider-reported usage statistics.
 ///
 /// The `max_turns` parameter is forwarded to the underlying agent's tool-turn loop
-/// so multi-step tool calls are honoured on each attempt.
+/// so multistep tool calls are honored on each attempt.
 ///
 /// # Errors
 ///
@@ -75,6 +75,106 @@ pub async fn prompt_text_with_retry(
                         provider = agent.provider_name(),
                         model = agent.model_id(),
                         "text prompt timed out, will retry"
+                    );
+                    continue;
+                }
+                Err(err)
+            }
+        };
+    }
+
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
+}
+
+/// Tool-enabled text prompt with retry plus a post-call validator.
+///
+/// On each successful LLM call, `validator` is invoked with the response output.
+/// If it returns `Ok(())`, the response is returned. If it returns
+/// [`TradingError::SchemaViolation`] and retries remain, the next attempt is
+/// made with the violation message appended to the prompt as corrective
+/// feedback so the model can self-correct on its next turn. Any other
+/// validator error propagates immediately without retry.
+///
+/// Mirror of [`prompt_text_with_retry`] but with the validator hook. Used by
+/// the analyst text-fallback path so flaky JSON-emitting models (e.g.
+/// DeepSeek) get a chance to recover when their output fails parse/validation.
+///
+/// # Errors
+///
+/// - [`TradingError::NetworkTimeout`] / [`TradingError::Rig`] for LLM failures.
+/// - [`TradingError::SchemaViolation`] if the validator continues to reject
+///   responses after all retries.
+/// - Any non-`SchemaViolation` validator error propagates without retry.
+pub async fn prompt_text_with_retry_validated<F>(
+    agent: &LlmAgent,
+    initial_prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+    max_turns: usize,
+    validator: F,
+) -> Result<RetryOutcome<PromptResponse>, TradingError>
+where
+    F: Fn(&str) -> Result<(), TradingError>,
+{
+    let total_budget = policy.total_budget(timeout);
+    let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
+    let mut corrective_feedback: Option<String> = None;
+
+    for attempt in 0..=policy.max_retries {
+        let attempt_budget =
+            prepare_attempt_text(agent, started_at, timeout, total_budget, policy, attempt).await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
+
+        let current_prompt = match corrective_feedback.as_deref() {
+            None => initial_prompt.to_owned(),
+            Some(feedback) => format!(
+                "{initial_prompt}\n\nIMPORTANT — your previous response was rejected: {feedback}\n\nPlease re-emit a corrected response that satisfies this requirement."
+            ),
+        };
+
+        return match tokio::time::timeout(
+            attempt_budget.timeout,
+            agent.prompt_text_details(&current_prompt, max_turns),
+        )
+        .await
+        {
+            Ok(Ok(response)) => match validator(&response.output) {
+                Ok(()) => Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                }),
+                Err(TradingError::SchemaViolation { message }) => {
+                    if attempt < policy.max_retries {
+                        warn!(
+                            attempt,
+                            provider = agent.provider_name(),
+                            model = agent.model_id(),
+                            error = %message,
+                            "validator rejected text-fallback output, will retry with corrective feedback"
+                        );
+                        corrective_feedback = Some(message);
+                        continue;
+                    }
+                    Err(TradingError::SchemaViolation { message })
+                }
+                Err(other) => Err(other),
+            },
+            Ok(Err(err)) => {
+                if should_retry_text_error(&err) && attempt < policy.max_retries {
+                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient validated text prompt error, will retry");
+                    continue;
+                }
+                Err(err)
+            }
+            Err(_elapsed) => {
+                let err = text_timeout_error(started_at, agent, attempt);
+                if attempt < policy.max_retries {
+                    warn!(
+                        attempt,
+                        provider = agent.provider_name(),
+                        model = agent.model_id(),
+                        "validated text prompt timed out, will retry"
                     );
                     continue;
                 }

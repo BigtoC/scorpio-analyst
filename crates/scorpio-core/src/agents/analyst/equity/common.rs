@@ -17,7 +17,7 @@ use crate::{
     error::{RetryPolicy, TradingError},
     providers::{
         ProviderId,
-        factory::{LlmAgent, prompt_text_with_retry, prompt_typed_with_retry},
+        factory::{LlmAgent, prompt_text_with_retry_validated, prompt_typed_with_retry},
     },
 };
 
@@ -116,14 +116,17 @@ impl<T: std::fmt::Debug> std::fmt::Debug for AnalystInferenceOutcome<T> {
 ///
 /// - **Native typed providers**: use `prompt_typed_with_retry` (native structured-output).
 ///   The `parse` hook is NOT called. Runs `validate` on the typed output.
-/// - **OpenRouter and DeepSeek**: use `prompt_text_with_retry` (fallback text path, since
-///   these providers do not reliably support Scorpio's typed analyst output contract).
-///   Runs `parse` on the raw text, then `validate` on the parsed output.
+/// - **OpenRouter and DeepSeek**: use `prompt_text_with_retry_validated` (fallback text
+///   path, since these providers do not reliably support Scorpio's typed analyst output
+///   contract). Runs `parse` on the raw text, then `validate` on the parsed output, both
+///   inside the retry loop.
 ///
 /// # Schema failures
 ///
-/// On the text-fallback path, if either `parse` or `validate` returns an error it is
-/// returned **immediately** as a `TradingError::SchemaViolation` without retry.
+/// On the text-fallback path, if `parse` or `validate` returns a
+/// `TradingError::SchemaViolation` and retries remain, the next attempt is made
+/// with the violation message appended to the prompt as corrective feedback so
+/// the model can self-correct. Other validator errors propagate immediately.
 pub(super) async fn run_analyst_inference<T, Parse, Validate>(
     agent: &LlmAgent,
     prompt: &str,
@@ -201,23 +204,30 @@ where
     Parse: Fn(&str) -> Result<T, TradingError>,
     Validate: Fn(&T) -> Result<(), TradingError>,
 {
-    let outcome = prompt_text_with_retry(agent, prompt, timeout, retry_policy, max_turns).await?;
-    let raw = &outcome.result.output;
-    if raw.trim().is_empty() {
-        return Err(TradingError::SchemaViolation {
-            message: format!(
-                "{}: LLM returned empty response (model: {})",
-                std::any::type_name::<T>()
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or("unknown"),
-                agent.model_id(),
-            ),
-        });
-    }
+    let type_name = std::any::type_name::<T>()
+        .rsplit("::")
+        .next()
+        .unwrap_or("unknown");
+    let model_id = agent.model_id();
 
+    // Run parse + validate inside the retry loop so flaky JSON-emitting models
+    // (e.g. DeepSeek) get a chance to self-correct from a schema violation.
+    let outcome =
+        prompt_text_with_retry_validated(agent, prompt, timeout, retry_policy, max_turns, |raw| {
+            if raw.trim().is_empty() {
+                return Err(TradingError::SchemaViolation {
+                    message: format!(
+                        "{type_name}: LLM returned empty response (model: {model_id})"
+                    ),
+                });
+            }
+            let value = parse(raw)?;
+            validate(&value)
+        })
+        .await?;
+
+    let raw = &outcome.result.output;
     let output = parse(raw)?;
-    validate(&output)?;
     Ok(AnalystInferenceOutcome {
         output,
         usage: outcome.result.usage,
@@ -430,7 +440,8 @@ mod tests {
             err,
             crate::error::TradingError::SchemaViolation { .. }
         ));
-        // Confirm no retry — still exactly 1 text-turn attempt
+        // `fast_policy()` has `max_retries: 0`, so the loop runs exactly once
+        // even though schema violations are now retryable inside the loop.
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
     }
 
@@ -530,8 +541,55 @@ mod tests {
             err,
             crate::error::TradingError::SchemaViolation { .. }
         ));
-        // Terminal — no retry
+        // `fast_policy()` has `max_retries: 0`, so the loop runs exactly once.
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_recovers_when_first_text_response_fails_validation() {
+        // DeepSeek/OpenRouter often emit malformed or semantically invalid JSON
+        // on the first attempt. The validator-aware retry feeds the schema
+        // error back into the prompt and the second response succeeds.
+        use rig::agent::PromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::DeepSeek,
+            "deepseek-chat",
+            vec![],
+            vec![],
+        );
+        agent.push_text_turn_ok(PromptResponse::new("not valid json", sample_usage(5)));
+        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 42}"#, sample_usage(8)));
+
+        let policy = crate::error::RetryPolicy {
+            max_retries: 2,
+            base_delay: Duration::from_millis(1),
+        };
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &policy,
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .expect("validator-aware retry should recover on second attempt");
+
+        assert_eq!(outcome.output, Output { value: 42 });
+        assert_eq!(agent_test_support::text_turn_attempts(&agent), 2);
     }
 
     #[tokio::test]

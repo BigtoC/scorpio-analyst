@@ -10,7 +10,7 @@ use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
     error::TradingError,
-    providers::factory::{CompletionModelHandle, prompt_with_retry_details},
+    providers::factory::{CompletionModelHandle, prompt_with_retry_validated_details},
     state::{AgentTokenUsage, RiskReport, TradingState},
 };
 
@@ -19,9 +19,9 @@ use crate::providers::factory::LlmAgent;
 
 use super::common::{
     DualRiskStatus, RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context,
-    expected_moderator_violation_sentence, format_risk_history, redact_text_for_storage,
-    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
-    validate_moderator_output,
+    expected_moderator_violation_sentence, format_risk_history,
+    prepend_violation_status_if_missing, redact_text_for_storage, sanitize_date_for_prompt,
+    sanitize_prompt_context, sanitize_symbol_for_prompt, validate_moderator_output_shape,
 };
 
 /// The Risk Moderator agent.
@@ -87,11 +87,16 @@ impl RiskModerator {
         let started_at = Instant::now();
         let prompt = build_moderator_prompt(state);
 
-        let outcome = prompt_with_retry_details(
+        // Shape-only validation runs inside the retry loop so flaky models
+        // (oversize / control-char output) get a chance to self-correct.
+        // The canonical violation-status sentence is prepended deterministically
+        // by `build_moderator_result`, so it is intentionally NOT validated here.
+        let outcome = prompt_with_retry_validated_details(
             &self.core.agent,
             &prompt,
             self.core.timeout,
             &self.core.retry_policy,
+            validate_moderator_output_shape,
         )
         .await?;
 
@@ -159,11 +164,14 @@ fn build_moderator_result(
     started_at: Instant,
     rate_limit_wait_ms: u64,
 ) -> Result<(String, AgentTokenUsage), TradingError> {
+    // Shape was already validated inside the retry loop. Re-validate defensively
+    // for the unit-test path that calls `build_moderator_result` directly.
+    validate_moderator_output_shape(&output)?;
     let dual_risk_status = DualRiskStatus::from_reports(
         state.conservative_risk_report.as_ref(),
         state.neutral_risk_report.as_ref(),
     );
-    validate_moderator_output(&output, dual_risk_status)?;
+    let output = prepend_violation_status_if_missing(&output, dual_risk_status);
     let output = redact_text_for_storage(&output);
     let token_usage = agent_token_usage_from_completion(
         "Risk Moderator",
@@ -339,7 +347,9 @@ mod tests {
     // ── Task 4.7: Oversized / control-char output rejected ───────────────
 
     #[tokio::test]
-    async fn run_rejects_missing_required_violation_sentence() {
+    async fn run_prepends_violation_sentence_when_llm_omits_it() {
+        // Flaky models (e.g. DeepSeek) may paraphrase or skip the canonical
+        // sentence — we prepend it deterministically rather than failing.
         let (agent, _ctrl) = mock_llm_agent(
             "o3",
             vec![Ok(mock_prompt_response(
@@ -349,20 +359,44 @@ mod tests {
             vec![],
         );
         let moderator = RiskModerator::from_test_agent(agent, "o3");
-        let result = moderator.run(&sample_state()).await;
-        assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+        let (synthesis, _) = moderator.run(&sample_state()).await.unwrap();
+        assert!(synthesis.starts_with("Violation status: dual-risk escalation absent."));
+        assert!(synthesis.contains("Summary without the required sentence."));
     }
 
     #[tokio::test]
-    async fn run_rejects_control_char_output() {
+    async fn run_rejects_control_char_output_after_retries() {
+        // Control-char output fails shape validation. The validator-aware retry
+        // gives the model a chance to self-correct; if every attempt fails the
+        // last SchemaViolation propagates.
         let (agent, _ctrl) = mock_llm_agent(
             "o3",
-            vec![Ok(mock_prompt_response("bad\x00output", mock_usage(10)))],
+            vec![
+                Ok(mock_prompt_response("bad\x00output", mock_usage(10))),
+                Ok(mock_prompt_response("bad\x00output", mock_usage(10))),
+            ],
             vec![],
         );
         let moderator = RiskModerator::from_test_agent(agent, "o3");
         let result = moderator.run(&sample_state()).await;
         assert!(matches!(result, Err(TradingError::SchemaViolation { .. })));
+    }
+
+    #[tokio::test]
+    async fn run_recovers_when_first_response_has_control_char() {
+        // First attempt fails shape validation (control char); second attempt
+        // succeeds. The validator-aware retry recovers gracefully.
+        let (agent, _ctrl) = mock_llm_agent(
+            "o3",
+            vec![
+                Ok(mock_prompt_response("bad\x00output", mock_usage(10))),
+                Ok(mock_prompt_response(valid_synthesis(), mock_usage(40))),
+            ],
+            vec![],
+        );
+        let moderator = RiskModerator::from_test_agent(agent, "o3");
+        let (synthesis, _) = moderator.run(&sample_state()).await.unwrap();
+        assert!(synthesis.contains("Violation status: dual-risk escalation absent."));
     }
 
     #[test]
