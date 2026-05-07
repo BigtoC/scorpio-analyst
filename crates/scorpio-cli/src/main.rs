@@ -22,7 +22,10 @@ async fn main() {
     let cli = Cli::parse();
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.
-    let is_upgrade = matches!(&cli.command, Commands::Upgrade);
+    let skip_upgrade_notice = matches!(
+        &cli.command,
+        Commands::Upgrade | Commands::Report(_)
+    );
     let show_banner = should_show_analyze_banner(&cli.command);
 
     // Background update check (non-blocking, fire-and-forget). Gated by the
@@ -83,6 +86,7 @@ async fn main() {
             .map_err(|e| anyhow::anyhow!("setup task failed to join: {e}"))
             .and_then(|r| r),
         Commands::Upgrade => run_upgrade().await,
+        Commands::Report(args) => scorpio_cli::cli::report::run(&args).await,
     };
 
     let exit_code = if let Err(e) = result {
@@ -102,7 +106,7 @@ async fn main() {
     // immediately after they just did. Rendered even on the error path so
     // users notice a stale binary regardless of whether the subcommand
     // succeeded.
-    if !is_upgrade {
+    if !skip_upgrade_notice {
         let end_notice = if let Some(n) = cached_notice {
             Some(n)
         } else if let Some(rx) = update_rx {
