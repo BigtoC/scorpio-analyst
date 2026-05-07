@@ -8,6 +8,7 @@ mod core_roundtrip;
 mod path;
 mod thesis_compat;
 mod thesis_lookup;
+mod report_queries;
 
 /// Open an in-memory SQLite snapshot store for tests.
 async fn in_memory_store() -> SnapshotStore {

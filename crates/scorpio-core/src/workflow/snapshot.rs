@@ -218,6 +218,67 @@ impl SnapshotStore {
         Ok(())
     }
 
+    /// List all past executions visible to the current binary.
+    ///
+    /// Returns visible summaries plus a count of executions filtered out by the
+    /// schema-version check. Visible rows are ordered by latest activity
+    /// (`MAX(created_at)`) descending. Only rows whose `schema_version` matches the
+    /// active `THESIS_MEMORY_SCHEMA_VERSION` are returned in `summaries`; the rest
+    /// are tallied into `stale_count` so the CLI can surface a stderr banner
+    /// instead of letting the user think the database is empty.
+    ///
+    /// Ordering note: `MAX(created_at)` reflects the latest phase save. For a
+    /// completed run this is the FundManager save time; for a crashed run it is
+    /// the time of the failing phase. If "started at" semantics are needed later,
+    /// add a `started_at` field populated from `MIN(created_at)`.
+    pub async fn list_executions(&self) -> Result<ExecutionListing, TradingError> {
+        let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+            "SELECT execution_id, symbol, MAX(created_at) as latest_at
+             FROM phase_snapshots
+             WHERE schema_version = ?
+             GROUP BY execution_id
+             ORDER BY latest_at DESC",
+        )
+        .bind(THESIS_MEMORY_SCHEMA_VERSION)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| "failed to list executions")
+        .map_err(TradingError::Storage)?;
+
+        let total_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(DISTINCT execution_id) FROM phase_snapshots")
+                .fetch_one(&self.pool)
+                .await
+                .with_context(|| "failed to count executions")
+                .map_err(TradingError::Storage)?;
+
+        let visible_count = rows.len();
+        let stale_count = (total_count.0 as usize).saturating_sub(visible_count);
+
+        let summaries = rows
+            .into_iter()
+            .map(|(exec_id, symbol, latest_at)| {
+                let created_at = parse_snapshot_timestamp(&latest_at)
+                    .with_context(|| {
+                        format!(
+                            "failed to parse created_at='{latest_at}' for execution_id={exec_id}"
+                        )
+                    })
+                    .map_err(TradingError::Storage)?;
+                Ok(ExecutionSummary {
+                    execution_id: exec_id,
+                    symbol,
+                    created_at,
+                })
+            })
+            .collect::<Result<Vec<_>, TradingError>>()?;
+
+        Ok(ExecutionListing {
+            summaries,
+            stale_count,
+        })
+    }
+
     /// Close the underlying connection pool.
     ///
     /// For use in unit tests only — calling this makes all subsequent save/load
@@ -293,6 +354,21 @@ impl SnapshotStore {
             }
         }
     }
+}
+
+/// Parse a `created_at` value from `phase_snapshots`.
+///
+/// Tries RFC3339 first (the format written by current production code via
+/// `Utc::now().to_rfc3339()`), then falls back to SQLite's native
+/// `YYYY-MM-DD HH:MM:SS` format used by migration 0001's `datetime('now')`
+/// default. Returns `Err` on unrecognized formats.
+fn parse_snapshot_timestamp(s: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&chrono::Utc));
+    }
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+        .map(|naive| naive.and_utc())
+        .map_err(|e| anyhow::anyhow!("unrecognized timestamp format '{s}': {e}"))
 }
 
 fn serialize_snapshot_json<T: Serialize + ?Sized>(
