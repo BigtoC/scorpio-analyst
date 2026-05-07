@@ -66,6 +66,31 @@ scorpio analyze --help
 
 A sample JSON artifact is available at [`docs/sample-reports/NVDA-20260423T104349860Z.json`](docs/sample-reports/NVDA-20260423T104349860Z.json).
 
+#### Report commands
+
+Query past analysis executions persisted in the local SQLite snapshot DB:
+
+```bash
+# List all past executions visible to the current binary
+scorpio report list
+
+# Show the full report for a specific execution
+scorpio report show <EXECUTION_ID>
+
+# Output structured JSON (round-trippable into ReportJson)
+scorpio report show <EXECUTION_ID> --json
+```
+
+Notes:
+- After a scorpio upgrade that bumps the snapshot schema, prior runs become
+  invisible to these commands by design — re-run the analysis to produce a
+  new execution under the current schema. `scorpio report list` will print a
+  stderr banner indicating how many runs were retired so you know the DB is
+  not actually empty.
+- `scorpio report` does not require API keys — it reads only the local SQLite
+  snapshot DB. Set `SCORPIO__STORAGE__SNAPSHOT_DB_PATH` to point at an
+  alternative DB file.
+
 ---
 
 ### Prerequisites (build from source)
