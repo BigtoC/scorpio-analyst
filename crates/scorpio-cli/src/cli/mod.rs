@@ -136,8 +136,7 @@ mod tests {
 
     #[test]
     fn parse_report_show_with_json_flag() {
-        let cli =
-            Cli::try_parse_from(["scorpio", "report", "show", "abc-123", "--json"]).unwrap();
+        let cli = Cli::try_parse_from(["scorpio", "report", "show", "abc-123", "--json"]).unwrap();
         assert!(matches!(
             &cli.command,
             Commands::Report(args) if matches!(

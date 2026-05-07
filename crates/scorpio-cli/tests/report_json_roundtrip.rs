@@ -13,7 +13,9 @@ async fn report_show_json_round_trips() {
     let tmp_db = tempfile::NamedTempFile::new().expect("temp file");
     let db_path: PathBuf = tmp_db.path().to_path_buf();
 
-    let store = SnapshotStore::new(Some(&db_path)).await.expect("open store");
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("open store");
     let state = TradingState::new("AAPL", "2026-01-15");
     let exec_id = state.execution_id.to_string();
     store

@@ -311,10 +311,7 @@ impl SnapshotStore {
     ///
     /// A failure of `token_usage_json` degrades only that phase's `token_usage` to
     /// `None`; the snapshot is still returned (not added to `skipped_phases`).
-    pub async fn load_full_report(
-        &self,
-        execution_id: &str,
-    ) -> Result<LoadedReport, TradingError> {
+    pub async fn load_full_report(&self, execution_id: &str) -> Result<LoadedReport, TradingError> {
         let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
             "SELECT phase_number, trading_state_json, token_usage_json
              FROM phase_snapshots
@@ -325,9 +322,7 @@ impl SnapshotStore {
         .bind(THESIS_MEMORY_SCHEMA_VERSION)
         .fetch_all(&self.pool)
         .await
-        .with_context(|| {
-            format!("failed to load full report for execution_id={execution_id}")
-        })
+        .with_context(|| format!("failed to load full report for execution_id={execution_id}"))
         .map_err(TradingError::Storage)?;
 
         let mut snapshots = Vec::with_capacity(rows.len());

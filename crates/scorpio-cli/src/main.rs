@@ -22,10 +22,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.
-    let skip_upgrade_notice = matches!(
-        &cli.command,
-        Commands::Upgrade | Commands::Report(_)
-    );
+    let skip_upgrade_notice = matches!(&cli.command, Commands::Upgrade | Commands::Report(_));
     let show_banner = should_show_analyze_banner(&cli.command);
 
     // Background update check (non-blocking, fire-and-forget). Gated by the
