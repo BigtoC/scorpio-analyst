@@ -16,9 +16,12 @@ use anyhow::Context as _;
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use self::path::resolve_db_path;
+pub use self::report_queries::{
+    ExecutionListing, ExecutionSummary, LoadedReport, LoadedReportSnapshot,
+};
 
 use crate::{
     config::Config,
@@ -27,6 +30,7 @@ use crate::{
 };
 
 mod path;
+mod report_queries;
 mod thesis;
 
 pub use thesis::THESIS_MEMORY_SCHEMA_VERSION;
@@ -75,50 +79,6 @@ pub struct LoadedSnapshot {
     pub token_usage: Option<Vec<AgentTokenUsage>>,
 }
 
-/// Summary of a single execution for list display.
-///
-/// Only includes executions whose snapshot rows match the active
-/// `THESIS_MEMORY_SCHEMA_VERSION`; runs from older schemas are not visible.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecutionSummary {
-    pub execution_id: String,
-    pub symbol: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Result of `list_executions` — visible summaries plus a count of stale
-/// executions filtered out by the schema-version check.
-///
-/// The CLI surfaces `stale_count` as a stderr banner so users notice when a
-/// version bump has retired previously-visible runs.
-#[derive(Debug, Clone)]
-pub struct ExecutionListing {
-    pub summaries: Vec<ExecutionSummary>,
-    pub stale_count: usize,
-}
-
-/// Per-phase snapshot returned by `load_full_report`.
-///
-/// Distinct from `LoadedSnapshot` because the multi-row result needs to track
-/// which phase each row corresponds to.
-#[derive(Debug, Clone)]
-pub struct LoadedReportSnapshot {
-    pub state: TradingState,
-    pub token_usage: Option<Vec<AgentTokenUsage>>,
-    pub phase_number: i64,
-}
-
-/// Result of `load_full_report` — visible per-phase snapshots plus a list of
-/// phase numbers that were soft-skipped due to deserialization failure.
-///
-/// The CLI surfaces `skipped_phases` as a stderr banner so corrupt rows are
-/// visible to users instead of only appearing in `tracing::warn!` logs.
-#[derive(Debug, Clone)]
-pub struct LoadedReport {
-    pub snapshots: Vec<LoadedReportSnapshot>,
-    pub skipped_phases: Vec<i64>,
-}
-
 /// Manages SQLite-backed phase-snapshot persistence for a trading pipeline run.
 #[derive(Debug)]
 pub struct SnapshotStore {
@@ -136,8 +96,21 @@ impl SnapshotStore {
     /// Returns the same errors as [`SnapshotStore::new`] if path resolution,
     /// directory creation, or SQLite initialization fails.
     pub async fn from_config(config: &Config) -> Result<Self, TradingError> {
-        let db_path = crate::config::expand_path(&config.storage.snapshot_db_path);
+        Self::from_storage_config(&config.storage).await
+    }
+
+    /// Open the snapshot store from just the storage config slice.
+    pub async fn from_storage_config(
+        storage: &crate::config::StorageConfig,
+    ) -> Result<Self, TradingError> {
+        let db_path = crate::config::expand_path(&storage.snapshot_db_path);
         Self::new(Some(&db_path)).await
+    }
+
+    /// Open the snapshot store using the effective runtime storage config only.
+    pub async fn from_runtime_storage() -> Result<Self, TradingError> {
+        let storage = Config::load_storage().map_err(TradingError::Config)?;
+        Self::from_storage_config(&storage).await
     }
 
     /// Open (or create) the snapshot store at the given path.
@@ -240,137 +213,6 @@ impl SnapshotStore {
         Ok(())
     }
 
-    /// List all past executions visible to the current binary.
-    ///
-    /// Returns visible summaries plus a count of executions filtered out by the
-    /// schema-version check. Visible rows are ordered by latest activity
-    /// (`MAX(created_at)`) descending. Only rows whose `schema_version` matches the
-    /// active `THESIS_MEMORY_SCHEMA_VERSION` are returned in `summaries`; the rest
-    /// are tallied into `stale_count` so the CLI can surface a stderr banner
-    /// instead of letting the user think the database is empty.
-    ///
-    /// Ordering note: `MAX(created_at)` reflects the latest phase save. For a
-    /// completed run this is the FundManager save time; for a crashed run it is
-    /// the time of the failing phase. If "started at" semantics are needed later,
-    /// add a `started_at` field populated from `MIN(created_at)`.
-    pub async fn list_executions(&self) -> Result<ExecutionListing, TradingError> {
-        let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
-            "SELECT execution_id, symbol, MAX(created_at) as latest_at
-             FROM phase_snapshots
-             WHERE schema_version = ?
-             GROUP BY execution_id
-             ORDER BY latest_at DESC",
-        )
-        .bind(THESIS_MEMORY_SCHEMA_VERSION)
-        .fetch_all(&self.pool)
-        .await
-        .with_context(|| "failed to list executions")
-        .map_err(TradingError::Storage)?;
-
-        let total_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(DISTINCT execution_id) FROM phase_snapshots")
-                .fetch_one(&self.pool)
-                .await
-                .with_context(|| "failed to count executions")
-                .map_err(TradingError::Storage)?;
-
-        let visible_count = rows.len();
-        let stale_count = (total_count.0 as usize).saturating_sub(visible_count);
-
-        let summaries = rows
-            .into_iter()
-            .map(|(exec_id, symbol, latest_at)| {
-                let created_at = parse_snapshot_timestamp(&latest_at)
-                    .with_context(|| {
-                        format!(
-                            "failed to parse created_at='{latest_at}' for execution_id={exec_id}"
-                        )
-                    })
-                    .map_err(TradingError::Storage)?;
-                Ok(ExecutionSummary {
-                    execution_id: exec_id,
-                    symbol,
-                    created_at,
-                })
-            })
-            .collect::<Result<Vec<_>, TradingError>>()?;
-
-        Ok(ExecutionListing {
-            summaries,
-            stale_count,
-        })
-    }
-
-    /// Load all phase snapshots for a given execution ID, scoped to the active schema.
-    ///
-    /// Returns visible snapshots ordered by phase_number ascending plus a list of
-    /// phase numbers that were soft-skipped due to deserialization failure. Rows
-    /// from older schema versions are filtered at the SQL boundary — they are
-    /// intentionally retired data, not "missing" data. An execution whose rows
-    /// are all stale will appear as not-found to the caller.
-    ///
-    /// A failure of `token_usage_json` degrades only that phase's `token_usage` to
-    /// `None`; the snapshot is still returned (not added to `skipped_phases`).
-    pub async fn load_full_report(&self, execution_id: &str) -> Result<LoadedReport, TradingError> {
-        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
-            "SELECT phase_number, trading_state_json, token_usage_json
-             FROM phase_snapshots
-             WHERE execution_id = ? AND schema_version = ?
-             ORDER BY phase_number ASC",
-        )
-        .bind(execution_id)
-        .bind(THESIS_MEMORY_SCHEMA_VERSION)
-        .fetch_all(&self.pool)
-        .await
-        .with_context(|| format!("failed to load full report for execution_id={execution_id}"))
-        .map_err(TradingError::Storage)?;
-
-        let mut snapshots = Vec::with_capacity(rows.len());
-        let mut skipped_phases = Vec::new();
-
-        for (phase_number, state_json, usage_json) in rows {
-            let state: TradingState = match serde_json::from_str(&state_json) {
-                Ok(s) => s,
-                Err(_err) => {
-                    warn!(
-                        execution_id,
-                        phase_number,
-                        error.kind = "deserialize",
-                        "report snapshot failed to deserialize; skipping"
-                    );
-                    skipped_phases.push(phase_number);
-                    continue;
-                }
-            };
-
-            let token_usage = usage_json.and_then(|json| {
-                match serde_json::from_str::<Vec<AgentTokenUsage>>(&json) {
-                    Ok(u) => Some(u),
-                    Err(_err) => {
-                        warn!(
-                            execution_id,
-                            phase_number,
-                            error.kind = "deserialize",
-                            "report token usage failed to deserialize; degrading to None"
-                        );
-                        None
-                    }
-                }
-            });
-
-            snapshots.push(LoadedReportSnapshot {
-                state,
-                token_usage,
-                phase_number,
-            });
-        }
-
-        Ok(LoadedReport {
-            snapshots,
-            skipped_phases,
-        })
-    }
-
     /// Close the underlying connection pool.
     ///
     /// For use in unit tests only — calling this makes all subsequent save/load
@@ -446,21 +288,6 @@ impl SnapshotStore {
             }
         }
     }
-}
-
-/// Parse a `created_at` value from `phase_snapshots`.
-///
-/// Tries RFC3339 first (the format written by current production code via
-/// `Utc::now().to_rfc3339()`), then falls back to SQLite's native
-/// `YYYY-MM-DD HH:MM:SS` format used by migration 0001's `datetime('now')`
-/// default. Returns `Err` on unrecognized formats.
-fn parse_snapshot_timestamp(s: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&chrono::Utc));
-    }
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map(|naive| naive.and_utc())
-        .map_err(|e| anyhow::anyhow!("unrecognized timestamp format '{s}': {e}"))
 }
 
 fn serialize_snapshot_json<T: Serialize + ?Sized>(
