@@ -8,7 +8,9 @@ component: tooling
 symptoms:
   - "`scorpio report` could read a different snapshot DB contract than the rest of the runtime"
   - "A malformed `~/.scorpio-analyst/config.toml` was ignored whenever `SCORPIO__STORAGE__SNAPSHOT_DB_PATH` was set"
+  - "`scorpio report` could resolve the default snapshot path under `./.scorpio-analyst/` when `HOME` was unset but `USERPROFILE` was available"
   - "`scorpio report list` could misorder executions created within the same second"
+  - "`scorpio report list` could still show an execution using an older phase timestamp when that execution's newest row had an unreadable `created_at`"
   - "`scorpio report list` silently stopped at 100 rows even though the final plan dropped that cap"
 root_cause: logic_error
 resolution_type: code_fix
@@ -35,7 +37,9 @@ The `scorpio report list/show` follow-up fixes introduced a second storage-loadi
 ## Symptoms
 
 - `scorpio report` could succeed against an env-selected snapshot DB even while `~/.scorpio-analyst/config.toml` was syntactically broken.
+- `scorpio report` could open `./.scorpio-analyst/phase_snapshots.db` instead of the user profile path when `HOME` was unset but `USERPROFILE` was present.
 - `scorpio report list` could show executions in the wrong order when two runs were saved within the same second.
+- `scorpio report list` could keep an execution visible with stale "latest activity" metadata if one phase row had a valid older timestamp and a newer row had an unreadable timestamp.
 - The list JSON/table output stopped at 100 executions and reported truncation, even though the final plan said to return all visible executions.
 - The empty-visible-report failure path for corrupt rows was easy to regress because only the not-found and schema-mismatch branches were explicitly tested.
 
@@ -102,6 +106,7 @@ That solved both ordering problems at once:
 
 - mixed RFC3339 / `YYYY-MM-DD HH:MM:SS` rows still sort by real time
 - same-second RFC3339 rows retain their sub-second ordering
+- any execution with at least one unreadable `created_at` row is omitted entirely, so a corrupt newest phase cannot silently fall back to an older visible timestamp
 
 The timestamp parser now accepts:
 
@@ -121,15 +126,45 @@ for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
 
 The final implementation plan explicitly dropped the `LIMIT 100` behavior, so `ExecutionListing` no longer carries `truncated`, `run_list()` no longer prints `(showing 100 most recent)`, and the report-query tests now assert that 101 inserted visible executions produce 101 listed results.
 
-### 4. Lock down the edge cases with targeted regression tests
+### 4. Keep path expansion aligned with the existing snapshot-store default path rules
+
+`crates/scorpio-core/src/config.rs` now lets `expand_path()` fall back from `HOME` to `USERPROFILE` before using `.`:
+
+Before:
+
+```rust
+let home = std::env::var("HOME").unwrap_or_else(|_| {
+    tracing::warn!("HOME environment variable is not set; ...");
+    ".".to_string()
+});
+```
+
+After:
+
+```rust
+let home = std::env::var("HOME")
+    .or_else(|_| std::env::var("USERPROFILE"))
+    .unwrap_or_else(|_| {
+        tracing::warn!("HOME/USERPROFILE environment variable is not set; ...");
+        ".".to_string()
+    });
+```
+
+That restores parity with `resolve_db_path(None)`, which already treated `USERPROFILE` as the fallback home source for the default snapshot location.
+
+### 5. Lock down the edge cases with targeted regression tests
 
 This pass added/updated tests for the exact review-driven failure modes:
 
 - `load_storage_ignores_invalid_unrelated_runtime_fields`
 - `load_storage_env_override_still_fails_on_malformed_user_config`
+- `expand_path_uses_userprofile_when_home_is_unset`
 - `list_executions_preserves_subsecond_ordering_within_same_second`
+- `list_executions_omits_execution_when_any_timestamp_row_is_unreadable`
 - `list_executions_returns_all_visible_results_without_truncation`
 - `report_lookup_error_surfaces_corrupt_only_reports`
+
+It also added direct unit coverage for the human-facing render helpers so the empty-list message, execution table path, incomplete-run banner, and empty-report guard all stay exercised without relying on the disallowed `crates/scorpio-cli/tests/` location.
 
 These sit alongside the earlier report-query tests for mixed timestamp formats, invalid timestamps, stale rows, corrupt rows, JSON rendering, and malformed-config failure handling.
 
@@ -139,22 +174,26 @@ The underlying problem was contract drift in two different places.
 
 For config loading, the report commands needed a storage-only path so they would not be blocked by unrelated provider/model validation, but the first implementation accidentally changed syntax-failure behavior depending on whether the DB path came from env or file. Moving the env override behind the syntax check preserves the repo's "malformed user config is still an error" rule without re-coupling `report` to full runtime validation.
 
-For execution ordering, `unixepoch(created_at)` looked attractive because it normalized mixed timestamp formats inside SQLite, but it threw away the sub-second precision that current snapshots actually persist. Parsing timestamps once at the query boundary and sorting typed `DateTime<Utc>` values keeps mixed-format compatibility and ordering fidelity at the same time.
+For path resolution, the new storage-only path started using `expand_path()` for the default `~/.scorpio-analyst/...` value. Reintroducing the same `HOME` -> `USERPROFILE` fallback used by the lower-level snapshot path resolver keeps `report` aligned with the rest of the runtime when only the Windows-style home variable is set.
+
+For execution ordering, `unixepoch(created_at)` looked attractive because it normalized mixed timestamp formats inside SQLite, but it threw away the sub-second precision that current snapshots actually persist. Parsing timestamps once at the query boundary and sorting typed `DateTime<Utc>` values keeps mixed-format compatibility and ordering fidelity at the same time. Treating any unreadable timestamp row as execution-level corruption avoids a second subtle bug where a broken newest phase could make an execution appear older by falling back to an earlier valid phase row.
 
 Removing the 100-row cap was a contract correction: the older draft spec had that limit, but the final approved plan explicitly dropped it. Aligning the code with the final plan removed an unintended user-visible divergence.
 
 ## Prevention
 
 - When splitting a read-only config path out of the main runtime loader, preserve the existing syntax/error boundary first, then narrow validation scope. Do not let env overrides bypass malformed-config detection unless that behavior is explicitly intended and documented.
+- If a new loader path expands `~/...`, keep its home-directory fallback behavior aligned with the existing lower-level path resolver. Otherwise the same logical default path can resolve differently depending on which entry point opened the store.
 - Treat approved plans as the source of truth over earlier draft specs. This fix existed because the code had carried forward an outdated `LIMIT 100` behavior after the final plan removed it.
 - Do not sort persisted RFC3339 timestamps through second-level conversions unless second-level precision is actually the contract. If the storage format preserves sub-seconds, keep them through ordering.
+- If an execution list is defined in terms of "latest activity," do not silently fall back to an older phase timestamp when a newer row is unreadable. Either repair the data or omit that execution and count it clearly.
 - Add regression tests for both timestamp families when a SQLite query depends on date ordering: mixed persisted formats and same-second sub-second variants.
 - For CLI error classification, add one test per user-visible branch. The corrupt-only `report show` branch was easy to miss until a dedicated test covered it.
 - Re-run the repo verification sequence after cross-cutting CLI/config/query fixes. This fix passed:
   - `cargo fmt -- --check`
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo nextest run --workspace --all-features --locked --no-fail-fast`
-  - Final `nextest` result: `1692 passed`, `3 skipped`
+  - Final `nextest` result: `1693 passed`, `3 skipped`
 
 ## Related Issues
 
