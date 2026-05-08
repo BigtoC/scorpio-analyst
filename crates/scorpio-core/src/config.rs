@@ -365,23 +365,32 @@ impl Default for StorageConfig {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct StorageOnlyConfig {
+    #[serde(default)]
+    storage: StorageConfig,
+}
+
 /// Resolve `~/` and `$HOME/` prefix in a path string to the actual home directory.
 ///
-/// - `~/foo` and `$HOME/foo` both expand using the `HOME` environment variable.
-/// - If `HOME` is unset, falls back to `"."` with a warning logged via `tracing::warn!`.
+/// - `~/foo` and `$HOME/foo` both expand using `HOME`, falling back to
+///   `USERPROFILE` when `HOME` is unset.
+/// - If both are unset, falls back to `"."` with a warning logged via `tracing::warn!`.
 /// - All other paths are returned as-is (absolute and relative paths pass through unchanged).
 pub fn expand_path(s: &str) -> std::path::PathBuf {
     let suffix = s.strip_prefix("~/").or_else(|| s.strip_prefix("$HOME/"));
 
     match suffix {
         Some(rest) => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| {
-                tracing::warn!(
-                    "HOME environment variable is not set; \
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| {
+                    tracing::warn!(
+                        "HOME/USERPROFILE environment variable is not set; \
                      falling back to current directory for path expansion"
-                );
-                ".".to_string()
-            });
+                    );
+                    ".".to_string()
+                });
             std::path::PathBuf::from(format!("{home}/{rest}"))
         }
         None => std::path::PathBuf::from(s),
@@ -414,6 +423,40 @@ impl Config {
             Ok(path) => Self::load_from_user_path(path),
             Err(_) => Self::load_effective_runtime(crate::settings::PartialConfig::default()),
         }
+    }
+
+    /// Load only the storage configuration needed to resolve the snapshot DB path.
+    ///
+    /// This intentionally avoids deserializing and validating the full runtime
+    /// config so read-only commands like `scorpio report` are not coupled to
+    /// unrelated provider or analysis settings.
+    pub fn load_storage() -> Result<StorageConfig> {
+        let _ = dotenvy::dotenv();
+
+        let mut builder = config::Config::builder();
+        if let Ok(path) = crate::settings::user_config_path() {
+            let _ = crate::settings::load_user_config_at(&path)?;
+            builder = builder.add_source(config::File::from(path).required(false));
+        }
+
+        if let Ok(snapshot_db_path) = std::env::var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH") {
+            return Ok(StorageConfig { snapshot_db_path });
+        }
+
+        let settings = builder
+            .add_source(
+                config::Environment::with_prefix("SCORPIO")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()
+            .context("failed to build storage configuration")?;
+
+        let cfg: StorageOnlyConfig = settings
+            .try_deserialize()
+            .context("failed to deserialize storage configuration")?;
+
+        Ok(cfg.storage)
     }
 
     /// Load configuration from the user-level config file path.
@@ -1169,6 +1212,64 @@ valuation_fetch_timeout_secs = 12
     }
 
     #[test]
+    fn load_storage_ignores_invalid_unrelated_runtime_fields() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().expect("temp home");
+        let config_dir = home.path().join(".scorpio-analyst");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        std::fs::write(
+            config_dir.join("config.toml"),
+            r#"
+[storage]
+snapshot_db_path = "/tmp/report.db"
+
+[llm]
+quick_thinking_provider = "definitely-invalid-provider"
+"#,
+        )
+        .expect("write config");
+
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::remove_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH");
+        }
+
+        let result = Config::load_storage();
+
+        unsafe {
+            std::env::remove_var("HOME");
+        }
+
+        let storage = result.expect("storage-only loading should ignore unrelated runtime fields");
+        assert_eq!(storage.snapshot_db_path, "/tmp/report.db");
+    }
+
+    #[test]
+    fn load_storage_env_override_still_fails_on_malformed_user_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().expect("temp home");
+        let config_dir = home.path().join(".scorpio-analyst");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        std::fs::write(config_dir.join("config.toml"), "not = [valid toml")
+            .expect("write malformed config");
+
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::set_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH", "/tmp/report.db");
+        }
+
+        let result = Config::load_storage();
+
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH");
+        }
+
+        let err = result.expect_err("malformed config should still fail");
+        assert!(err.to_string().contains("failed to parse config file"));
+    }
+
+    #[test]
     fn enrichment_fetch_timeout_secs_must_be_positive() {
         let (_dir, path) = write_config(
             r#"
@@ -1278,6 +1379,36 @@ fetch_timeout_secs = 0
         }
         // Fallback home is "." so format!("{home}/{rest}") == "./foo/bar.db"
         assert_eq!(result, std::path::PathBuf::from("./foo/bar.db"));
+    }
+
+    #[test]
+    fn expand_path_uses_userprofile_when_home_is_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved_home = std::env::var_os("HOME");
+        let saved_userprofile = std::env::var_os("USERPROFILE");
+
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::set_var("USERPROFILE", "/Users/testuser");
+        }
+
+        let result = expand_path("~/.scorpio-analyst/phase_snapshots.db");
+
+        unsafe {
+            match saved_home {
+                Some(ref v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match saved_userprofile {
+                Some(ref v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+
+        assert_eq!(
+            result,
+            std::path::PathBuf::from("/Users/testuser/.scorpio-analyst/phase_snapshots.db")
+        );
     }
 
     // ── DataEnrichmentConfig tests ────────────────────────────────────────
