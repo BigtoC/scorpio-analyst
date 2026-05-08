@@ -74,6 +74,9 @@ Query past analysis executions persisted in the local SQLite snapshot DB:
 # List all past executions visible to the current binary
 scorpio report list
 
+# Emit the execution list as JSON
+scorpio report list --json
+
 # Show the full report for a specific execution
 scorpio report show <EXECUTION_ID>
 
