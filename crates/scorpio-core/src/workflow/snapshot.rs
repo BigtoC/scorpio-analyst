@@ -19,6 +19,9 @@ use sqlx::SqlitePool;
 use tracing::debug;
 
 use self::path::resolve_db_path;
+pub use self::report_queries::{
+    ExecutionListing, ExecutionSummary, LoadedReport, LoadedReportSnapshot,
+};
 
 use crate::{
     config::Config,
@@ -27,9 +30,10 @@ use crate::{
 };
 
 mod path;
+mod report_queries;
 mod thesis;
 
-pub(crate) use thesis::THESIS_MEMORY_SCHEMA_VERSION;
+pub use thesis::THESIS_MEMORY_SCHEMA_VERSION;
 
 #[cfg(test)]
 mod tests;
@@ -92,8 +96,21 @@ impl SnapshotStore {
     /// Returns the same errors as [`SnapshotStore::new`] if path resolution,
     /// directory creation, or SQLite initialization fails.
     pub async fn from_config(config: &Config) -> Result<Self, TradingError> {
-        let db_path = crate::config::expand_path(&config.storage.snapshot_db_path);
+        Self::from_storage_config(&config.storage).await
+    }
+
+    /// Open the snapshot store from just the storage config slice.
+    pub async fn from_storage_config(
+        storage: &crate::config::StorageConfig,
+    ) -> Result<Self, TradingError> {
+        let db_path = crate::config::expand_path(&storage.snapshot_db_path);
         Self::new(Some(&db_path)).await
+    }
+
+    /// Open the snapshot store using the effective runtime storage config only.
+    pub async fn from_runtime_storage() -> Result<Self, TradingError> {
+        let storage = Config::load_storage().map_err(TradingError::Config)?;
+        Self::from_storage_config(&storage).await
     }
 
     /// Open (or create) the snapshot store at the given path.

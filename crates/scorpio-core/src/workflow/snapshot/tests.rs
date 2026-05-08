@@ -6,6 +6,7 @@ use crate::state::TradingState;
 mod core_errors;
 mod core_roundtrip;
 mod path;
+mod report_queries;
 mod thesis_compat;
 mod thesis_lookup;
 

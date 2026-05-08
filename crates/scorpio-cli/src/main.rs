@@ -22,7 +22,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.
-    let is_upgrade = matches!(&cli.command, Commands::Upgrade);
+    let skip_upgrade_notice = matches!(&cli.command, Commands::Upgrade | Commands::Report(_));
     let show_banner = should_show_analyze_banner(&cli.command);
 
     // Background update check (non-blocking, fire-and-forget). Gated by the
@@ -83,6 +83,7 @@ async fn main() {
             .map_err(|e| anyhow::anyhow!("setup task failed to join: {e}"))
             .and_then(|r| r),
         Commands::Upgrade => run_upgrade().await,
+        Commands::Report(args) => scorpio_cli::cli::report::run(&args).await,
     };
 
     let exit_code = if let Err(e) = result {
@@ -102,7 +103,7 @@ async fn main() {
     // immediately after they just did. Rendered even on the error path so
     // users notice a stale binary regardless of whether the subcommand
     // succeeded.
-    if !is_upgrade {
+    if !skip_upgrade_notice {
         let end_notice = if let Some(n) = cached_notice {
             Some(n)
         } else if let Some(rx) = update_rx {
@@ -137,7 +138,7 @@ fn should_show_analyze_banner(command: &Commands) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scorpio_cli::cli::AnalyzeArgs;
+    use scorpio_cli::cli::{AnalyzeArgs, ReportArgs, ReportSubcommand};
 
     #[test]
     fn analyze_shows_banner_when_terminal_output_is_enabled() {
@@ -159,5 +160,27 @@ mod tests {
                 ..Default::default()
             }
         )));
+    }
+
+    #[test]
+    fn report_skips_upgrade_notice() {
+        let command = Commands::Report(ReportArgs {
+            subcommand: ReportSubcommand::List { json: false },
+        });
+
+        assert!(matches!(&command, Commands::Report(_)));
+        assert!(matches!(&command, Commands::Upgrade | Commands::Report(_)));
+    }
+
+    #[test]
+    fn report_never_shows_analyze_banner() {
+        let command = Commands::Report(ReportArgs {
+            subcommand: ReportSubcommand::Show {
+                execution_id: "exec-1".to_owned(),
+                json: false,
+            },
+        });
+
+        assert!(!should_show_analyze_banner(&command));
     }
 }

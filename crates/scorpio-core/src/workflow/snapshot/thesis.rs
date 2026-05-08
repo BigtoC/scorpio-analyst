@@ -30,7 +30,7 @@ use super::SnapshotStore;
 /// contains v3 rows skips them via the same `!=` check). Developers may
 /// optionally delete `~/.scorpio-analyst/phase_snapshots.db` for a clean
 /// slate or run `DELETE FROM phase_snapshots WHERE schema_version < 3`.
-pub(crate) const THESIS_MEMORY_SCHEMA_VERSION: i64 = 3;
+pub const THESIS_MEMORY_SCHEMA_VERSION: i64 = 3;
 
 impl SnapshotStore {
     /// Load the most recent prior thesis for a canonical symbol.
