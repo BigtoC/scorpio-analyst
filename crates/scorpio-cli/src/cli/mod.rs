@@ -54,7 +54,11 @@ pub struct ReportArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum ReportSubcommand {
     /// List all past analysis executions.
-    List,
+    List {
+        /// Output structured JSON instead of the terminal table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show the full report for a specific execution.
     Show {
         /// Execution ID to look up.
@@ -118,7 +122,16 @@ mod tests {
         let cli = Cli::try_parse_from(["scorpio", "report", "list"]).unwrap();
         assert!(matches!(
             &cli.command,
-            Commands::Report(args) if matches!(args.subcommand, ReportSubcommand::List)
+            Commands::Report(args) if matches!(args.subcommand, ReportSubcommand::List { json: false })
+        ));
+    }
+
+    #[test]
+    fn parse_report_list_with_json_flag() {
+        let cli = Cli::try_parse_from(["scorpio", "report", "list", "--json"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Commands::Report(args) if matches!(&args.subcommand, ReportSubcommand::List { json: true })
         ));
     }
 
