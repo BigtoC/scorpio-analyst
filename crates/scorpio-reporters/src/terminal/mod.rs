@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use comfy_table::{Cell, Table};
 use scorpio_core::state::TradingState;
-use scorpio_core::workflow::snapshot::ExecutionSummary;
+use scorpio_core::workflow::ExecutionSummary;
 
 use crate::{ReportContext, Reporter};
 
