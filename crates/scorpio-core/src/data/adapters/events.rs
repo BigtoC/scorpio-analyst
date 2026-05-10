@@ -93,7 +93,7 @@ impl EventNewsProvider for FinnhubEventNewsProvider {
             .timestamp();
 
         let evidence: Vec<EventNewsEvidence> = raw
-            .into_iter()
+            .iter()
             .filter(|n| n.datetime <= target_end_of_day)
             .map(|n| normalize_company_news(symbol, n))
             .collect::<Result<_, _>>()?;
@@ -153,7 +153,7 @@ fn classify_impact(headline: &str) -> Option<String> {
 /// Normalize a single Finnhub `CompanyNews` into an `EventNewsEvidence`.
 fn normalize_company_news(
     symbol: &str,
-    news: finnhub::models::news::CompanyNews,
+    news: &finnhub::models::news::CompanyNews,
 ) -> Result<EventNewsEvidence, TradingError> {
     let event_type = classify_event_type(&news.headline, &news.category);
     let impact = classify_impact(&news.headline);
@@ -239,7 +239,7 @@ mod tests {
             url: "https://example.com".to_owned(),
         };
 
-        let evidence = normalize_company_news("GOOGL", news).expect("timestamp should normalize");
+        let evidence = normalize_company_news("GOOGL", &news).expect("timestamp should normalize");
         assert_eq!(evidence.symbol, "GOOGL");
         assert_eq!(evidence.event_type, "earnings_release");
         assert_eq!(evidence.impact, Some("positive".to_owned()));
@@ -259,7 +259,7 @@ mod tests {
             summary: "summary".to_owned(),
             url: String::new(),
         };
-        let evidence = normalize_company_news("aapl", news).expect("timestamp should normalize");
+        let evidence = normalize_company_news("aapl", &news).expect("timestamp should normalize");
         assert_eq!(evidence.symbol, "AAPL");
     }
 
@@ -277,7 +277,7 @@ mod tests {
             url: String::new(),
         };
 
-        let err = normalize_company_news("AAPL", news).expect_err("invalid timestamp must fail");
+        let err = normalize_company_news("AAPL", &news).expect_err("invalid timestamp must fail");
         assert!(matches!(err, TradingError::AnalystError { .. }));
         assert!(err.to_string().contains("invalid Finnhub news timestamp"));
     }

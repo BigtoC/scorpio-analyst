@@ -9,10 +9,12 @@
 //! Yahoo Finance only publishes current live options data.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::TimeZone as _;
 use chrono_tz::US::Eastern;
+use futures::StreamExt as _;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
@@ -38,6 +40,23 @@ const OPTIONS_NTM_STRIKE_BAND_PCT: f64 = 0.05;
 const OPTIONS_NTM_MIN_STRIKES_PER_SIDE: usize = 2;
 const OPTIONS_NTM_MAX_BAND_EXPANSION_PCT: f64 = 0.20;
 const OPTIONS_FETCH_TIMEOUT_SECS: u64 = 30;
+const OPTIONS_FETCH_TIMEOUT: Duration = Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS);
+/// Concurrency cap for per-expiration option-chain fetches. Bounded so the
+/// shared rate limiter is the dominant pacing signal, not unbounded fan-out.
+const OPTIONS_CHAIN_FETCH_CONCURRENCY: usize = 8;
+
+async fn with_options_timeout<T, F>(label: &'static str, fut: F) -> Result<T, TradingError>
+where
+    F: std::future::Future<Output = Result<T, YfError>>,
+{
+    tokio::time::timeout(OPTIONS_FETCH_TIMEOUT, fut)
+        .await
+        .map_err(|_| TradingError::NetworkTimeout {
+            elapsed: OPTIONS_FETCH_TIMEOUT,
+            message: format!("{label} timed out"),
+        })?
+        .map_err(map_yf_options_err)
+}
 
 // ─── Provider ────────────────────────────────────────────────────────────────
 
@@ -92,16 +111,8 @@ impl YFinanceOptionsProvider {
         let yf_ticker =
             Ticker::new(self.client.session.client(), &ticker).cache_mode(CacheMode::Use);
 
-        let mut expirations = tokio::time::timeout(
-            std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
-            yf_ticker.options(),
-        )
-        .await
-        .map_err(|_| TradingError::NetworkTimeout {
-            elapsed: std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
-            message: "options expiration fetch timed out".to_owned(),
-        })?
-        .map_err(map_yf_options_err)?;
+        let mut expirations =
+            with_options_timeout("options expiration fetch", yf_ticker.options()).await?;
 
         if expirations.is_empty() {
             return Ok(OptionsOutcome::NoListedInstrument);
@@ -111,16 +122,11 @@ impl YFinanceOptionsProvider {
         let front_month_ts = expirations[0];
 
         // ── Front-month chain ────────────────────────────────────────────
-        let front_chain = tokio::time::timeout(
-            std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
+        let front_chain = with_options_timeout(
+            "options chain fetch",
             yf_ticker.option_chain(Some(front_month_ts)),
         )
-        .await
-        .map_err(|_| TradingError::NetworkTimeout {
-            elapsed: std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
-            message: "options chain fetch timed out".to_owned(),
-        })?
-        .map_err(map_yf_options_err)?;
+        .await?;
 
         // ── NTM slice ────────────────────────────────────────────────────
         let Some(near_term_strikes) = build_ntm_slice(&front_chain, spot) else {
@@ -142,23 +148,35 @@ impl YFinanceOptionsProvider {
         let max_pain_strike = compute_max_pain(&front_chain, spot);
 
         // ── All-expiration chains for ratios + term structure ────────────
+        // Per-expiration fetches are independent; fan out via buffer_unordered
+        // (capped) so the shared rate limiter remains the pacing signal.
+        // Individual failures are swallowed — partial coverage is acceptable.
         let mut all_chains: Vec<(i64, OptionChain)> = Vec::with_capacity(expirations.len());
-        // Reuse front-month chain
         all_chains.push((front_month_ts, front_chain));
 
-        for &exp_ts in &expirations[1..] {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(OPTIONS_FETCH_TIMEOUT_SECS),
-                yf_ticker.option_chain(Some(exp_ts)),
-            )
-            .await
-            {
-                Ok(Ok(chain)) => all_chains.push((exp_ts, chain)),
-                Ok(Err(_)) | Err(_) => {
-                    // Skip individual expiration fetch failures — don't propagate
-                }
-            }
-        }
+        let other_chains: Vec<(i64, OptionChain)> =
+            futures::stream::iter(expirations[1..].to_vec())
+                .map(|exp_ts| {
+                    let yf_ticker = &yf_ticker;
+                    async move {
+                        tokio::time::timeout(
+                            OPTIONS_FETCH_TIMEOUT,
+                            yf_ticker.option_chain(Some(exp_ts)),
+                        )
+                        .await
+                        .ok()
+                        .and_then(|res| res.ok())
+                        .map(|chain| (exp_ts, chain))
+                    }
+                })
+                .buffer_unordered(OPTIONS_CHAIN_FETCH_CONCURRENCY)
+                .filter_map(|opt| async move { opt })
+                .collect()
+                .await;
+        all_chains.extend(other_chains);
+        // buffer_unordered yields completion order; restore expiration order
+        // so iv_term_structure stays deterministic across runs.
+        all_chains.sort_unstable_by_key(|(ts, _)| *ts);
 
         // ── Put/call ratios over all chains ──────────────────────────────
         let (put_call_volume_ratio, put_call_oi_ratio) = compute_pc_ratios(&all_chains);
