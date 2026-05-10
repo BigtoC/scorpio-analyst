@@ -445,6 +445,18 @@ fn branching_prompts_name_all_outcome_kind_values() {
 }
 
 #[test]
+fn prompt_bundle_has_auditor_slot() {
+    let bundle = resolve_pack(PackId::Baseline).prompt_bundle;
+    assert!(!bundle.auditor.is_empty(), "auditor slot must not be empty");
+}
+
+#[test]
+fn baseline_pack_keeps_auditor_disabled_by_default() {
+    let manifest = resolve_pack(PackId::Baseline);
+    assert!(!manifest.auditor_enabled, "baseline must ship with auditor_enabled = false");
+}
+
+#[test]
 fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // Sanity: the regression gate is only meaningful if the baseline pack
     // actually populates every required slot. This is also asserted in the

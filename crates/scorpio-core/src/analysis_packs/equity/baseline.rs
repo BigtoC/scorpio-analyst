@@ -73,7 +73,7 @@ fn baseline_prompt_bundle() -> PromptBundle {
         fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/fund_manager.md"
         ))),
-        auditor: Cow::Borrowed(""),
+        auditor: Cow::Borrowed(trim_trailing_newline(include_str!("prompts/auditor.md"))),
     }
 }
 
