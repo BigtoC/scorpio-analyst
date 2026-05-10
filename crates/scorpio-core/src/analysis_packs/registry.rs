@@ -59,7 +59,8 @@ pub fn pack_diagnostics() -> Vec<CompletenessError> {
         // diagnostic answers "what would this pack need if every optional
         // stage were enabled?" That's the most useful baseline-suitable
         // signal at startup time when no per-run round-count config exists.
-        let topology = build_run_topology(&manifest.required_inputs, 1, 1, manifest.auditor_enabled);
+        let topology =
+            build_run_topology(&manifest.required_inputs, 1, 1, manifest.auditor_enabled);
         let policy = match resolve_runtime_policy_for_manifest(&manifest) {
             Ok(policy) => policy,
             Err(reason) => {

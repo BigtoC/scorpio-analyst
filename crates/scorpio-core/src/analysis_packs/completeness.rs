@@ -211,7 +211,8 @@ mod tests {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle = PromptBundle::empty();
         let policy = resolve_policy(&manifest);
-        let topology = build_run_topology(&manifest.required_inputs, 0, 0, manifest.auditor_enabled);
+        let topology =
+            build_run_topology(&manifest.required_inputs, 0, 0, manifest.auditor_enabled);
         let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("empty bundle, six required slots");
         assert_eq!(err.missing_slots.len(), 6);
@@ -240,7 +241,8 @@ mod tests {
             ..resolve_pack(PackId::Baseline)
         };
         let policy = resolve_policy(&manifest);
-        let topology = build_run_topology(&manifest.required_inputs, 0, 0, manifest.auditor_enabled);
+        let topology =
+            build_run_topology(&manifest.required_inputs, 0, 0, manifest.auditor_enabled);
         let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("unknown required_inputs must fail completeness");
         assert_eq!(err.missing_slots, Vec::<PromptSlot>::new());
