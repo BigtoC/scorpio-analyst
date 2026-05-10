@@ -110,7 +110,7 @@ pub fn baseline_pack() -> AnalysisPackManifest {
             m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
             m
         },
-        auditor_enabled: false,
+        auditor_enabled: true,
     }
 }
 
