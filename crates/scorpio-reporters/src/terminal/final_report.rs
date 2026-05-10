@@ -6,6 +6,7 @@ use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use scorpio_core::data::adapters::EnrichmentStatus;
 use scorpio_core::state::{
     AgentTokenUsage, Decision, RiskReport, TokenUsageTracker, TradeAction, TradingState,
+    auditor::{AuditStatus, Severity},
 };
 
 /// Render a comprehensive terminal report from the completed trading state.
@@ -23,6 +24,7 @@ pub(crate) fn format_final_report(state: &TradingState) -> String {
     write_research_debate(&mut out, state);
     write_risk_review(&mut out, state);
     write_safety_check(&mut out, state);
+    write_auditor_review(&mut out, state);
     write_token_usage(&mut out, &state.token_usage);
     write_disclaimer(&mut out);
 
@@ -558,6 +560,85 @@ fn write_safety_check(out: &mut String, state: &TradingState) {
     let _ = writeln!(out, "  Auto-reject rule triggered: {auto_reject_label}");
 }
 
+fn severity_colored(severity: &Severity) -> String {
+    match severity {
+        Severity::Critical => "CRITICAL".red().bold().to_string(),
+        Severity::Warning => "WARNING".yellow().bold().to_string(),
+        Severity::Info => "INFO".dimmed().to_string(),
+    }
+}
+
+fn is_quick_thinking_phase(phase_name: &str) -> bool {
+    matches!(phase_name, "Analyst Fan-Out" | "Auditor Review")
+}
+
+fn write_auditor_review(out: &mut String, state: &TradingState) {
+    match state.audit_status {
+        AuditStatus::Disabled | AuditStatus::Pending => return,
+        _ => {}
+    }
+
+    section_header(out, "Auditor Review");
+
+    match state.audit_status {
+        AuditStatus::FailedOpen => {
+            let _ = writeln!(
+                out,
+                "{}",
+                "Auditor failed — run not blocked (fail-open). Showing deterministic findings only."
+                    .yellow()
+            );
+        }
+        AuditStatus::Passed => {
+            let _ = writeln!(
+                out,
+                "{}",
+                "No findings. Proposal is internally consistent.".green()
+            );
+        }
+        AuditStatus::Findings => {}
+        AuditStatus::Disabled | AuditStatus::Pending => unreachable!(),
+    }
+
+    let Some(report) = &state.audit_report else {
+        return;
+    };
+
+    let visible_findings: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity != Severity::Info)
+        .collect();
+
+    if !visible_findings.is_empty() {
+        let mut table = Table::new();
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+        table.set_header(vec![
+            Cell::new("Severity").add_attribute(Attribute::Bold),
+            Cell::new("Location").add_attribute(Attribute::Bold),
+            Cell::new("Description").add_attribute(Attribute::Bold),
+        ]);
+
+        for finding in visible_findings.into_iter().take(5) {
+            table.add_row(vec![
+                Cell::new(severity_colored(&finding.severity)),
+                Cell::new(&finding.location),
+                Cell::new(&finding.description),
+            ]);
+        }
+        let _ = writeln!(out, "{table}");
+    }
+
+    let _ = writeln!(out, "\n{} {}", "Summary:".bold(), report.summary);
+    let _ = writeln!(
+        out,
+        "{} {} ({})",
+        "Audited at:".bold(),
+        report.audited_at.format("%Y-%m-%d %H:%M:%S UTC"),
+        report.auditor_model_id,
+    );
+}
+
 fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
     section_header(out, "Token Usage Summary");
 
@@ -568,7 +649,7 @@ fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
             tracker
                 .phase_usage
                 .iter()
-                .filter(|phase| phase.phase_name == "Analyst Fan-Out")
+                .filter(|phase| is_quick_thinking_phase(&phase.phase_name))
                 .flat_map(|phase| phase.agent_usage.iter()),
         )
     );
@@ -579,7 +660,7 @@ fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
             tracker
                 .phase_usage
                 .iter()
-                .filter(|phase| phase.phase_name != "Analyst Fan-Out")
+                .filter(|phase| !is_quick_thinking_phase(&phase.phase_name))
                 .flat_map(|phase| phase.agent_usage.iter()),
         )
     );
@@ -1075,5 +1156,126 @@ mod tests {
     fn format_duration_ms_formats_seconds() {
         assert_eq!(format_duration_ms(2500), "2.5s");
         assert_eq!(format_duration_ms(500), "500ms");
+    }
+
+    #[test]
+    fn auditor_section_absent_when_status_disabled() {
+        let state = minimal_state(); // audit_status defaults to Disabled
+        let report = format_final_report(&state);
+        assert!(
+            !report.contains("Auditor Review"),
+            "Auditor Review must not appear when audit_status = Disabled"
+        );
+    }
+
+    #[test]
+    fn auditor_section_shows_passed_when_no_findings() {
+        use scorpio_core::state::auditor::{AuditStatus, AuditorReport};
+
+        let mut state = minimal_state();
+        state.audit_status = AuditStatus::Passed;
+        state.audit_report = Some(AuditorReport {
+            findings: vec![],
+            summary: "All checks passed.".to_owned(),
+            audited_at: chrono::Utc::now(),
+            auditor_model_id: "test-model".to_owned(),
+        });
+        let report = format_final_report(&state);
+        assert!(report.contains("Auditor Review"));
+        assert!(report.contains("No findings"));
+        assert!(report.contains("All checks passed."));
+    }
+
+    #[test]
+    fn auditor_section_shows_findings_with_severity() {
+        use scorpio_core::state::auditor::{AuditStatus, AuditorReport, Finding, Severity};
+
+        let mut state = minimal_state();
+        state.audit_status = AuditStatus::Findings;
+        state.audit_report = Some(AuditorReport {
+            findings: vec![
+                Finding {
+                    severity: Severity::Critical,
+                    location: "trader_proposal.rationale".to_owned(),
+                    description: "Rationale contradicts source data.".to_owned(),
+                    excerpt: None,
+                },
+                Finding {
+                    severity: Severity::Warning,
+                    location: "trader_proposal.confidence".to_owned(),
+                    description: "Confidence score unsupported by evidence breadth.".to_owned(),
+                    excerpt: None,
+                },
+            ],
+            summary: "Two findings require attention.".to_owned(),
+            audited_at: chrono::Utc::now(),
+            auditor_model_id: "test-model".to_owned(),
+        });
+        let report = format_final_report(&state);
+        assert!(report.contains("Auditor Review"));
+        assert!(report.contains("trader_proposal.rationale"));
+        assert!(report.contains("Rationale contradicts source data."));
+        assert!(report.contains("Two findings require attention."));
+    }
+
+    #[test]
+    fn auditor_section_shows_fail_open_message() {
+        use scorpio_core::state::auditor::AuditStatus;
+
+        let mut state = minimal_state();
+        state.audit_status = AuditStatus::FailedOpen;
+        let report = format_final_report(&state);
+        assert!(report.contains("Auditor Review"));
+        assert!(report.contains("fail-open"));
+    }
+
+    #[test]
+    fn auditor_fail_open_renders_preserved_findings() {
+        use scorpio_core::state::auditor::{AuditStatus, AuditorReport, Finding, Severity};
+
+        let mut state = minimal_state();
+        state.audit_status = AuditStatus::FailedOpen;
+        state.audit_report = Some(AuditorReport {
+            findings: vec![Finding {
+                severity: Severity::Critical,
+                location: "trader_proposal.target_price".to_owned(),
+                description: "BUY target below current price.".to_owned(),
+                excerpt: None,
+            }],
+            summary: "Semantic auditor unavailable; showing deterministic checks only.".to_owned(),
+            audited_at: chrono::Utc::now(),
+            auditor_model_id: "runtime_unavailable".to_owned(),
+        });
+
+        let report = format_final_report(&state);
+        assert!(report.contains("fail-open"));
+        assert!(report.contains("trader_proposal.target_price"));
+        assert!(report.contains("BUY target below current price."));
+    }
+
+    #[test]
+    fn format_final_report_counts_auditor_review_as_quick_thinking() {
+        let mut state = minimal_state();
+        state.token_usage.push_phase_usage(PhaseTokenUsage {
+            phase_name: "Auditor Review".to_owned(),
+            agent_usage: vec![AgentTokenUsage {
+                agent_name: "Auditor".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 8,
+                completion_tokens: 4,
+                total_tokens: 12,
+                latency_ms: 80,
+                rate_limit_wait_ms: 0,
+            }],
+            phase_prompt_tokens: 8,
+            phase_completion_tokens: 4,
+            phase_total_tokens: 12,
+            phase_duration_ms: 80,
+        });
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Quick-thinking model: gpt-4o-mini"));
+        assert!(!report.contains("Deep-thinking model: gpt-4o-mini"));
     }
 }

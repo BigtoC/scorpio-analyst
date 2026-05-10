@@ -225,6 +225,7 @@ impl Task for PreflightTask {
             &runtime_policy.required_inputs,
             max_debate_rounds,
             max_risk_rounds,
+            runtime_policy.auditor_enabled,
         );
         let routing_flags = RoutingFlags::from_topology(&topology);
         // Store RoutingFlags as a typed struct so the conditional-edge

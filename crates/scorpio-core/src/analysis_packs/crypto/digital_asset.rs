@@ -57,6 +57,7 @@ pub fn digital_asset_pack() -> AnalysisPackManifest {
             m.insert(AssetShape::Stablecoin, ValuatorId::CryptoTokenomics);
             m
         },
+        auditor_enabled: true,
     }
 }
 

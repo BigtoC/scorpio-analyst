@@ -3,6 +3,7 @@ use std::sync::Arc;
 use graph_flow::Context;
 
 use crate::{
+    state::auditor::AuditStatus,
     state::{
         AgentTokenUsage, DebateMessage, Decision, ExecutionStatus, FundamentalData, NewsData,
         PhaseTokenUsage, RiskLevel, RiskReport, SentimentData, TechnicalData, ThesisMemory,
@@ -11,6 +12,7 @@ use crate::{
     workflow::{
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         snapshot::{SnapshotPhase, SnapshotStore},
+        topology::RoutingFlags,
     },
 };
 
@@ -438,7 +440,7 @@ impl graph_flow::Task for StubTraderTask {
         state.trader_proposal = Some(TradeProposal {
             action: TradeAction::Buy,
             target_price: 195.0,
-            stop_loss: 180.0,
+            stop_loss: 200.0,
             confidence: 0.75,
             rationale: "stub: buy on strong fundamentals and positive sentiment".to_owned(),
             valuation_assessment: None,
@@ -775,6 +777,47 @@ impl graph_flow::Task for StubFundManagerTask {
                 ))
             })?;
 
+        // Mirror FundManagerTask: route to auditor when auditor is enabled.
+        let skip_auditor = context
+            .get_sync::<RoutingFlags>(super::KEY_ROUTING_FLAGS)
+            .map(|f| f.skip_auditor)
+            .unwrap_or(true);
+        let next = if skip_auditor {
+            graph_flow::NextAction::End
+        } else {
+            graph_flow::NextAction::Continue
+        };
+        Ok(graph_flow::TaskResult::new(None, next))
+    }
+}
+
+pub struct StubAuditorTask;
+
+#[async_trait::async_trait]
+impl graph_flow::Task for StubAuditorTask {
+    fn id(&self) -> &str {
+        "auditor"
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+        let mut state = deserialize_state_from_context(&context)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "StubAuditorTask: state deser failed: {error}"
+                ))
+            })?;
+
+        state.audit_status = AuditStatus::Passed;
+
+        serialize_state_to_context(&state, &context)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "StubAuditorTask: state ser failed: {error}"
+                ))
+            })?;
+
         Ok(graph_flow::TaskResult::new(
             None,
             graph_flow::NextAction::End,
@@ -836,6 +879,49 @@ impl graph_flow::Task for CustomTechnicalAnalystChild {
 
 /// Replace all LLM-calling tasks in the pipeline with deterministic stubs.
 pub fn replace_with_stubs(
+    pipeline: &crate::workflow::TradingPipeline,
+    snapshot_store: Arc<SnapshotStore>,
+) -> Result<(), crate::workflow::pipeline::WorkflowTestSeamError> {
+    use graph_flow::fanout::FanOutTask;
+
+    let stub_fanout = FanOutTask::new(
+        "analyst_fanout",
+        vec![
+            StubAnalystChild::fundamental(),
+            StubAnalystChild::sentiment(),
+            StubAnalystChild::news(),
+            StubAnalystChild::technical(),
+        ],
+    );
+    pipeline.replace_task_for_test(stub_fanout)?;
+
+    pipeline.replace_task_for_test(Arc::new(StubBullishResearcherTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubBearishResearcherTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubDebateModeratorTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+
+    pipeline.replace_task_for_test(Arc::new(StubTraderTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+
+    pipeline.replace_task_for_test(Arc::new(StubAggressiveRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubConservativeRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubNeutralRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubRiskModeratorTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+
+    pipeline.replace_task_for_test(Arc::new(StubFundManagerTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+    pipeline.replace_task_for_test(Arc::new(StubAuditorTask))?;
+
+    Ok(())
+}
+
+/// Replace all LLM-calling tasks except the auditor with deterministic stubs.
+pub fn replace_with_stubs_except_auditor(
     pipeline: &crate::workflow::TradingPipeline,
     snapshot_store: Arc<SnapshotStore>,
 ) -> Result<(), crate::workflow::pipeline::WorkflowTestSeamError> {

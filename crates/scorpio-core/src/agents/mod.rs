@@ -10,3 +10,5 @@ pub mod risk;
 pub mod trader;
 // Fund manager — populated by add-fund-manager
 pub mod fund_manager;
+// Auditor — post-decision advisory audit
+pub mod auditor;

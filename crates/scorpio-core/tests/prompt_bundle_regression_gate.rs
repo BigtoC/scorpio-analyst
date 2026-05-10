@@ -33,7 +33,7 @@ use scorpio_core::{
     workflow::{Role, build_run_topology},
 };
 
-const LIVE_ROLES: [Role; 13] = [
+const LIVE_ROLES: [Role; 14] = [
     Role::FundamentalAnalyst,
     Role::SentimentAnalyst,
     Role::NewsAnalyst,
@@ -47,6 +47,7 @@ const LIVE_ROLES: [Role; 13] = [
     Role::NeutralRisk,
     Role::RiskModerator,
     Role::FundManager,
+    Role::Auditor,
 ];
 
 fn fixtures_dir() -> PathBuf {
@@ -71,6 +72,7 @@ fn fixture_path(role: Role) -> PathBuf {
         Role::NeutralRisk => "neutral_risk.txt",
         Role::RiskModerator => "risk_moderator.txt",
         Role::FundManager => "fund_manager.txt",
+        Role::Auditor => "auditor.txt",
     };
     fixtures_dir().join(filename)
 }
@@ -444,6 +446,21 @@ fn branching_prompts_name_all_outcome_kind_values() {
 }
 
 #[test]
+fn prompt_bundle_has_auditor_slot() {
+    let bundle = resolve_pack(PackId::Baseline).prompt_bundle;
+    assert!(!bundle.auditor.is_empty(), "auditor slot must not be empty");
+}
+
+#[test]
+fn baseline_pack_ships_with_auditor_enabled_by_default() {
+    let manifest = resolve_pack(PackId::Baseline);
+    assert!(
+        manifest.auditor_enabled,
+        "baseline must ship with auditor_enabled = true"
+    );
+}
+
+#[test]
 fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // Sanity: the regression gate is only meaningful if the baseline pack
     // actually populates every required slot. This is also asserted in the
@@ -451,7 +468,7 @@ fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // run still proves it.
     let manifest = resolve_pack(PackId::Baseline);
     let policy = runtime_policy_from_manifest(&manifest);
-    let topology = build_run_topology(&manifest.required_inputs, 1, 1);
+    let topology = build_run_topology(&manifest.required_inputs, 1, 1, manifest.auditor_enabled);
     let result = validate_active_pack_completeness(&policy, &topology);
     assert!(
         result.is_ok(),

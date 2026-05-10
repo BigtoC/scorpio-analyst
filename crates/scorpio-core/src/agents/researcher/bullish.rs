@@ -190,6 +190,8 @@ mod tests {
             token_usage: crate::state::TokenUsageTracker::default(),
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            audit_status: Default::default(),
+            audit_report: None,
         }
     }
 

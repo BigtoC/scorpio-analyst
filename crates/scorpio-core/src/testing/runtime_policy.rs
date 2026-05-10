@@ -83,6 +83,7 @@ pub fn baseline_pack_prompt_for_role(role: Role) -> &'static str {
         PromptSlot::NeutralRisk => bundle.neutral_risk.as_ref(),
         PromptSlot::RiskModerator => bundle.risk_moderator.as_ref(),
         PromptSlot::FundManager => bundle.fund_manager.as_ref(),
+        PromptSlot::Auditor => bundle.auditor.as_ref(),
     }
 }
 
