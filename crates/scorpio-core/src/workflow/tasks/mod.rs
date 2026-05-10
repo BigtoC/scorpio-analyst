@@ -1,10 +1,11 @@
-//! Graph-flow [`Task`] wrappers for all five pipeline phases.
+//! Graph-flow [`Task`] wrappers for all six pipeline phases.
 //!
 //! This facade preserves the workflow task API while splitting the
 //! implementation into smaller, responsibility-focused modules.
 
 mod accounting;
 mod analyst;
+mod auditor;
 mod common;
 pub mod preflight;
 mod research;
@@ -22,6 +23,7 @@ pub use analyst::{
     AnalystSyncTask, FundamentalAnalystTask, NewsAnalystTask, SentimentAnalystTask,
     TechnicalAnalystTask,
 };
+pub use auditor::AuditorTask;
 #[allow(unused_imports)]
 pub use common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS, KEY_CACHED_TRANSCRIPT,

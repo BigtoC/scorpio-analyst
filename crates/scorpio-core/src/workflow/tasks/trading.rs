@@ -11,7 +11,11 @@ use crate::{
     state::{PhaseTokenUsage, ThesisMemory},
     workflow::{
         snapshot::{SnapshotPhase, SnapshotStore},
-        tasks::runtime::{load_state, save_state, task_error},
+        tasks::{
+            KEY_ROUTING_FLAGS,
+            runtime::{load_state, save_state, task_error},
+        },
+        topology::RoutingFlags,
     },
 };
 
@@ -166,7 +170,17 @@ impl Task for FundManagerTask {
         info!(task = Self::TASK_ID, decision = %decision_label, phase = 5, "task completed");
         info!(phase = 5, phase_name = "fund_manager", "phase complete");
 
-        Ok(TaskResult::new(None, NextAction::End))
+        // Route to the auditor if it is enabled; otherwise terminate.
+        let skip_auditor = context
+            .get_sync::<RoutingFlags>(KEY_ROUTING_FLAGS)
+            .map(|f| f.skip_auditor)
+            .unwrap_or(true);
+        let next = if skip_auditor {
+            NextAction::End
+        } else {
+            NextAction::Continue
+        };
+        Ok(TaskResult::new(None, next))
     }
 }
 

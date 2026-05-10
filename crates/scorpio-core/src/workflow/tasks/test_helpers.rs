@@ -3,6 +3,7 @@ use std::sync::Arc;
 use graph_flow::Context;
 
 use crate::{
+    state::auditor::AuditStatus,
     state::{
         AgentTokenUsage, DebateMessage, Decision, ExecutionStatus, FundamentalData, NewsData,
         PhaseTokenUsage, RiskLevel, RiskReport, SentimentData, TechnicalData, ThesisMemory,
@@ -11,6 +12,7 @@ use crate::{
     workflow::{
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         snapshot::{SnapshotPhase, SnapshotStore},
+        topology::RoutingFlags,
     },
 };
 
@@ -775,6 +777,47 @@ impl graph_flow::Task for StubFundManagerTask {
                 ))
             })?;
 
+        // Mirror FundManagerTask: route to auditor when auditor is enabled.
+        let skip_auditor = context
+            .get_sync::<RoutingFlags>(super::KEY_ROUTING_FLAGS)
+            .map(|f| f.skip_auditor)
+            .unwrap_or(true);
+        let next = if skip_auditor {
+            graph_flow::NextAction::End
+        } else {
+            graph_flow::NextAction::Continue
+        };
+        Ok(graph_flow::TaskResult::new(None, next))
+    }
+}
+
+pub struct StubAuditorTask;
+
+#[async_trait::async_trait]
+impl graph_flow::Task for StubAuditorTask {
+    fn id(&self) -> &str {
+        "auditor"
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+        let mut state = deserialize_state_from_context(&context)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "StubAuditorTask: state deser failed: {error}"
+                ))
+            })?;
+
+        state.audit_status = AuditStatus::Passed;
+
+        serialize_state_to_context(&state, &context)
+            .await
+            .map_err(|error| {
+                graph_flow::GraphError::TaskExecutionFailed(format!(
+                    "StubAuditorTask: state ser failed: {error}"
+                ))
+            })?;
+
         Ok(graph_flow::TaskResult::new(
             None,
             graph_flow::NextAction::End,
@@ -869,7 +912,10 @@ pub fn replace_with_stubs(
         snapshot_store: Arc::clone(&snapshot_store),
     }))?;
 
-    pipeline.replace_task_for_test(Arc::new(StubFundManagerTask { snapshot_store }))?;
+    pipeline.replace_task_for_test(Arc::new(StubFundManagerTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+    pipeline.replace_task_for_test(Arc::new(StubAuditorTask))?;
 
     Ok(())
 }
