@@ -11,6 +11,7 @@ pub(crate) struct TaskIds {
     pub neutral_risk: &'static str,
     pub risk_moderator: &'static str,
     pub fund_manager: &'static str,
+    pub auditor: &'static str,
 }
 
 pub(crate) const TASKS: TaskIds = TaskIds {
@@ -26,10 +27,11 @@ pub(crate) const TASKS: TaskIds = TaskIds {
     neutral_risk: "neutral_risk",
     risk_moderator: "risk_moderator",
     fund_manager: "fund_manager",
+    auditor: "auditor",
 };
 
 #[cfg(any(test, feature = "test-helpers"))]
-pub(super) const REPLACEABLE_TASK_IDS: [&str; 12] = [
+pub(super) const REPLACEABLE_TASK_IDS: [&str; 13] = [
     TASKS.preflight,
     TASKS.analyst_fan_out,
     TASKS.analyst_sync,
@@ -42,4 +44,5 @@ pub(super) const REPLACEABLE_TASK_IDS: [&str; 12] = [
     TASKS.neutral_risk,
     TASKS.risk_moderator,
     TASKS.fund_manager,
+    TASKS.auditor,
 ];

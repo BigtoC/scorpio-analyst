@@ -25,7 +25,7 @@ use super::pipeline::constants::TASKS;
 use super::pipeline::runtime::build_analyst_tasks;
 use super::snapshot::SnapshotStore;
 use super::tasks::{
-    AggressiveRiskTask, AnalystSyncTask, BearishResearcherTask, BullishResearcherTask,
+    AggressiveRiskTask, AnalystSyncTask, AuditorTask, BearishResearcherTask, BullishResearcherTask,
     ConservativeRiskTask, DebateModeratorTask, FundManagerTask, KEY_DEBATE_ROUND,
     KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND, KEY_ROUTING_FLAGS, NeutralRiskTask,
     PreflightTask, RiskModeratorTask, TraderTask,
@@ -188,6 +188,15 @@ pub fn build_graph_from_pack(
         Arc::clone(&config),
         Arc::clone(&snapshot_store),
     ));
+
+    // Auditor is always registered; `AuditorTask` reads `skip_auditor` from
+    // `RoutingFlags` and becomes a no-op when `auditor_enabled = false`.
+    graph.add_task(AuditorTask::new(
+        Arc::clone(&config),
+        Arc::clone(&snapshot_store),
+    ));
+    graph.add_edge(TASKS.fund_manager, TASKS.auditor);
+
     graph.set_start_task(TASKS.preflight);
     graph
 }

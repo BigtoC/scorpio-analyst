@@ -46,6 +46,7 @@ pub enum SnapshotPhase {
     Trader,
     RiskDiscussion,
     FundManager,
+    Auditor,
 }
 
 impl SnapshotPhase {
@@ -57,6 +58,7 @@ impl SnapshotPhase {
             Self::Trader => 3,
             Self::RiskDiscussion => 4,
             Self::FundManager => 5,
+            Self::Auditor => 6,
         }
     }
 
@@ -68,6 +70,7 @@ impl SnapshotPhase {
             Self::Trader => "trader",
             Self::RiskDiscussion => "risk_discussion",
             Self::FundManager => "fund_manager",
+            Self::Auditor => "auditor",
         }
     }
 }
