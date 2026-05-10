@@ -391,7 +391,7 @@ pub fn expand_path(s: &str) -> std::path::PathBuf {
                     );
                     ".".to_string()
                 });
-            std::path::PathBuf::from(format!("{home}/{rest}"))
+            std::path::PathBuf::from(home).join(rest)
         }
         None => std::path::PathBuf::from(s),
     }
@@ -435,7 +435,7 @@ impl Config {
 
         let mut builder = config::Config::builder();
         if let Ok(path) = crate::settings::user_config_path() {
-            let _ = crate::settings::load_user_config_at(&path)?;
+            crate::settings::load_user_config_at(&path)?;
             builder = builder.add_source(config::File::from(path).required(false));
         }
 
