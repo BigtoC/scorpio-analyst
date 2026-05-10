@@ -15,6 +15,10 @@ use crate::state::{AgentTokenUsage, DataCoverageReport, TradeAction, TradingStat
 pub(crate) mod prompt;
 pub(crate) use prompt::build_system_prompt;
 
+pub(crate) const FAIL_OPEN_SUMMARY: &str =
+    "Semantic auditor unavailable; showing deterministic checks only.";
+pub(crate) const FAIL_OPEN_MODEL_ID: &str = "runtime_unavailable";
+
 // ── Untrusted text label ──────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -249,6 +253,15 @@ fn merge_with_runtime_metadata(
         summary: model_output.summary,
         audited_at: Utc::now(),
         auditor_model_id: model_id.to_owned(),
+    }
+}
+
+pub(crate) fn build_fail_open_report(deterministic: Vec<Finding>) -> AuditorReport {
+    AuditorReport {
+        findings: deterministic.into_iter().take(20).collect(),
+        summary: FAIL_OPEN_SUMMARY.to_owned(),
+        audited_at: Utc::now(),
+        auditor_model_id: FAIL_OPEN_MODEL_ID.to_owned(),
     }
 }
 
