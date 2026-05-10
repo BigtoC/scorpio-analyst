@@ -33,7 +33,7 @@ use scorpio_core::{
     workflow::{Role, build_run_topology},
 };
 
-const LIVE_ROLES: [Role; 13] = [
+const LIVE_ROLES: [Role; 14] = [
     Role::FundamentalAnalyst,
     Role::SentimentAnalyst,
     Role::NewsAnalyst,
@@ -47,6 +47,7 @@ const LIVE_ROLES: [Role; 13] = [
     Role::NeutralRisk,
     Role::RiskModerator,
     Role::FundManager,
+    Role::Auditor,
 ];
 
 fn fixtures_dir() -> PathBuf {
