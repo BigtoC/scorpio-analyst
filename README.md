@@ -281,7 +281,7 @@ Adapted material includes:
 - **Analytical frameworks** ported into the equity baseline pack prompts: valuation sanity bands (WACC, terminal-growth, multiple ranges), industry-specific KPI matrices, management-commentary red-flag taxonomies, beat/miss decision trees, falsifiable thesis structure, contrarian-needs-catalyst rule, catalyst taxonomy with H/M/L impact tiers, and the data-sourcing hierarchy with untrusted-content guidance. Source skills cited inline.
 - **Orchestration patterns** that informed the auditor task and per-agent output-schema envelope design: read-only auditor subagents (`model-builder/subagents/auditor.yaml`, `gl-reconciler/subagents/critic.yaml`) and strict subagent `output_schema` blocks (`managed-agent-cookbooks/*/subagents/*.yaml`).
 
-Where prompt content is adapted, the prompt source files include a tag of the form `# Adapted from anthropics/financial-services` (with the specific upstream skill cited) so the lineage is grep-able. The corresponding implementation plans live under [`docs/superpowers/plans/2026-05-10-anthropic-fsi-port-INDEX.md`](docs/superpowers/plans/2026-05-10-anthropic-fsi-port-INDEX.md).
+Where prompt content is adapted, the prompt source files include a tag of the form `# Adapted from anthropics/financial-services` (with the specific upstream skill cited) so the lineage is grep-able.
 
 A copy of the Apache License 2.0 governing the upstream material is available at <https://www.apache.org/licenses/LICENSE-2.0>.
 
