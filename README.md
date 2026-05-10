@@ -8,7 +8,7 @@ Scorpio-Analyst is a Rust-native reimplementation of the [TradingAgents framewor
 
 The project's primary goal is to overcome the limitations of traditional algorithmic trading and monolithic AI systems by leveraging a structured, multi-agent approach. This allows for the integration of qualitative data, enhances explainability, and achieves superior risk-adjusted returns.
 
-The evidence discipline and provenance-reporting patterns in this project are additionally inspired by Anthropic's [financial-services-plugins](https://github.com/anthropics/anthropic-quickstarts/tree/main/financial-services-plugins) architecture, which demonstrates rigorous grounding of LLM outputs in authoritative runtime evidence.
+The evidence discipline and provenance-reporting patterns in this project are additionally inspired by Anthropic's [financial-services-plugins](https://github.com/anthropics/anthropic-quickstarts/tree/main/financial-services-plugins) architecture, which demonstrates rigorous grounding of LLM outputs in authoritative runtime evidence. Selected analytical frameworks and orchestration patterns in the equity baseline pack are further adapted from [anthropics/financial-services](https://github.com/anthropics/financial-services) (Apache 2.0) — see [Attribution](#attribution) below.
 
 The current implementation track uses a free-tier data stack: Finnhub, yfinance, and FRED. This stack is highly capable and supports strict DCF, EV/EBITDA, Options flow, Consensus Estimates, thesis memory, and macro/news/technical analysis. However, it still lacks ETF-native valuation metrics and Earnings Call Transcripts.
 
@@ -271,6 +271,19 @@ See the active roadmap summary at [`docs/superpowers/roadmaps/2026-04-07-financi
 - **Xiaomi MiMo** — OpenAI-compatible API. Set `SCORPIO_XIAOMIMIMO_API_KEY` or configure via `scorpio setup`.
 
 Valid provider name strings (for `SCORPIO__LLM__QUICK_THINKING_PROVIDER` etc.): `"openai"`, `"anthropic"`, `"gemini"`, `"openrouter"`, `"deepseek"`, `"copilot"`, `"xiaomimimo"`.
+
+## Attribution
+
+Selected analytical frameworks, prompt structures, and orchestration patterns in this project are adapted from [anthropics/financial-services](https://github.com/anthropics/financial-services), licensed under Apache License 2.0.
+
+Adapted material includes:
+
+- **Analytical frameworks** ported into the equity baseline pack prompts: valuation sanity bands (WACC, terminal-growth, multiple ranges), industry-specific KPI matrices, management-commentary red-flag taxonomies, beat/miss decision trees, falsifiable thesis structure, contrarian-needs-catalyst rule, catalyst taxonomy with H/M/L impact tiers, and the data-sourcing hierarchy with untrusted-content guidance. Source skills cited inline.
+- **Orchestration patterns** that informed the auditor task and per-agent output-schema envelope design: read-only auditor subagents (`model-builder/subagents/auditor.yaml`, `gl-reconciler/subagents/critic.yaml`) and strict subagent `output_schema` blocks (`managed-agent-cookbooks/*/subagents/*.yaml`).
+
+Where prompt content is adapted, the prompt source files include a tag of the form `# Adapted from anthropics/financial-services` (with the specific upstream skill cited) so the lineage is grep-able. The corresponding implementation plans live under [`docs/superpowers/plans/2026-05-10-anthropic-fsi-port-INDEX.md`](docs/superpowers/plans/2026-05-10-anthropic-fsi-port-INDEX.md).
+
+A copy of the Apache License 2.0 governing the upstream material is available at <https://www.apache.org/licenses/LICENSE-2.0>.
 
 ## Spec Driven Development Workflow Shortcuts
 
