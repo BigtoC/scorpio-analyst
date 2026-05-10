@@ -6,14 +6,13 @@ use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::{info, warn};
 
 use crate::{
-    agents::auditor::run_auditor,
+    agents::auditor::{build_fail_open_report, run_auditor, run_deterministic_checks},
     config::Config,
     state::{PhaseTokenUsage, auditor::AuditStatus},
     workflow::{
-        snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
             KEY_ROUTING_FLAGS,
-            runtime::{load_state, save_state, task_error},
+            runtime::{load_state, save_state},
         },
         topology::RoutingFlags,
     },
@@ -23,7 +22,7 @@ use crate::{
 ///
 /// This task is always registered in the graph. When `skip_auditor = true`
 /// (the default for packs with `auditor_enabled = false`), the task is a
-/// no-op that marks [`AuditStatus::Skipped`] and terminates immediately.
+/// no-op and terminates immediately.
 /// When `skip_auditor = false`, it runs deterministic checks followed by a
 /// quick-thinker LLM pass and writes the result to `state.audit_report`.
 ///
@@ -31,18 +30,14 @@ use crate::{
 /// and returns [`NextAction::End`] so the completed run is never blocked.
 pub struct AuditorTask {
     config: Arc<Config>,
-    snapshot_store: Arc<SnapshotStore>,
 }
 
 impl AuditorTask {
     const TASK_ID: &str = "auditor";
     const TASK_NAME: &str = "AuditorTask";
 
-    pub fn new(config: Arc<Config>, snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
-        Arc::new(Self {
-            config,
-            snapshot_store,
-        })
+    pub fn new(config: Arc<Config>) -> Arc<Self> {
+        Arc::new(Self { config })
     }
 }
 
@@ -69,6 +64,7 @@ impl Task for AuditorTask {
         info!(task = Self::TASK_ID, phase = 6, "task started");
         let phase_start = Instant::now();
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let deterministic = run_deterministic_checks(&state);
 
         match run_auditor(&state, &self.config).await {
             Ok((report, usage)) => {
@@ -87,19 +83,6 @@ impl Task for AuditorTask {
                     phase_duration_ms: phase_start.elapsed().as_millis() as u64,
                 });
                 save_state(Self::TASK_NAME, &state, &context).await?;
-                let execution_id = state.execution_id.to_string();
-                self.snapshot_store
-                    .save_snapshot(
-                        &execution_id,
-                        SnapshotPhase::Auditor,
-                        &state,
-                        Some(&[usage]),
-                    )
-                    .await
-                    .map_err(|error| {
-                        task_error(Self::TASK_NAME, "failed to save phase 6 snapshot", error)
-                    })?;
-                info!(task = Self::TASK_ID, phase = 6, "snapshot saved");
                 info!(phase = 6, phase_name = "auditor", "phase complete");
                 info!(task = Self::TASK_ID, phase = 6, "task completed");
             }
@@ -110,6 +93,7 @@ impl Task for AuditorTask {
                     "auditor LLM call failed — marking fail-open; run is not blocked"
                 );
                 state.audit_status = AuditStatus::FailedOpen;
+                state.audit_report = Some(build_fail_open_report(deterministic));
                 save_state(Self::TASK_NAME, &state, &context).await?;
             }
         }

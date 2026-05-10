@@ -8,7 +8,7 @@ use tracing::info;
 use crate::{
     agents::{fund_manager::run_fund_manager, trader::run_trader},
     config::Config,
-    state::{PhaseTokenUsage, ThesisMemory},
+    state::{PhaseTokenUsage, ThesisMemory, auditor::AuditStatus},
     workflow::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
@@ -175,6 +175,11 @@ impl Task for FundManagerTask {
             .get_sync::<RoutingFlags>(KEY_ROUTING_FLAGS)
             .map(|f| f.skip_auditor)
             .unwrap_or(true);
+        if !skip_auditor {
+            state.audit_status = AuditStatus::Pending;
+            state.audit_report = None;
+            save_state(Self::TASK_NAME, &state, &context).await?;
+        }
         let next = if skip_auditor {
             NextAction::End
         } else {

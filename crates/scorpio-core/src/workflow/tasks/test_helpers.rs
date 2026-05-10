@@ -920,6 +920,46 @@ pub fn replace_with_stubs(
     Ok(())
 }
 
+/// Replace all LLM-calling tasks except the auditor with deterministic stubs.
+pub fn replace_with_stubs_except_auditor(
+    pipeline: &crate::workflow::TradingPipeline,
+    snapshot_store: Arc<SnapshotStore>,
+) -> Result<(), crate::workflow::pipeline::WorkflowTestSeamError> {
+    use graph_flow::fanout::FanOutTask;
+
+    let stub_fanout = FanOutTask::new(
+        "analyst_fanout",
+        vec![
+            StubAnalystChild::fundamental(),
+            StubAnalystChild::sentiment(),
+            StubAnalystChild::news(),
+            StubAnalystChild::technical(),
+        ],
+    );
+    pipeline.replace_task_for_test(stub_fanout)?;
+
+    pipeline.replace_task_for_test(Arc::new(StubBullishResearcherTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubBearishResearcherTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubDebateModeratorTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+
+    pipeline.replace_task_for_test(Arc::new(StubTraderTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+
+    pipeline.replace_task_for_test(Arc::new(StubAggressiveRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubConservativeRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubNeutralRiskTask))?;
+    pipeline.replace_task_for_test(Arc::new(StubRiskModeratorTask {
+        snapshot_store: Arc::clone(&snapshot_store),
+    }))?;
+
+    pipeline.replace_task_for_test(Arc::new(StubFundManagerTask { snapshot_store }))?;
+
+    Ok(())
+}
+
 /// Replace all stubs and override the technical analyst child with `data`.
 ///
 /// Calls [`replace_with_stubs`] first, then replaces the analyst fan-out with a
