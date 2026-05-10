@@ -219,6 +219,8 @@ mod tests {
             token_usage: crate::state::TokenUsageTracker::default(),
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            audit_status: Default::default(),
+            audit_report: None,
         }
     }
 
@@ -334,6 +336,8 @@ mod tests {
             token_usage: crate::state::TokenUsageTracker::default(),
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            audit_status: Default::default(),
+            audit_report: None,
         };
 
         let prompt = build_moderator_prompt(&state);
@@ -412,6 +416,8 @@ mod tests {
             token_usage: crate::state::TokenUsageTracker::default(),
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            audit_status: Default::default(),
+            audit_report: None,
         };
 
         let result = moderator.run(&state).await;
@@ -460,6 +466,8 @@ mod tests {
             token_usage: crate::state::TokenUsageTracker::default(),
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            audit_status: Default::default(),
+            audit_report: None,
         };
 
         let (summary, usage) = moderator.run(&state).await.unwrap();

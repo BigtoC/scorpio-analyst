@@ -769,6 +769,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     token_usage,
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
+                    audit_status: scorpio_core::state::auditor::AuditStatus::Disabled,
+                    audit_report: None,
                 }
             },
         )
@@ -1119,4 +1121,21 @@ fn trading_state_prefers_equity_substate_when_both_new_and_legacy_fields_are_pre
         back.fundamental_metrics().map(|data| data.summary.as_str()),
         Some("new equity payload")
     );
+}
+
+#[test]
+fn trading_state_deserializes_old_snapshot_without_audit_report() {
+    // Old snapshot JSON predates the audit_status / audit_report fields.
+    // Serialize a current state, strip the new fields, verify backward compat.
+    let state = TradingState::new("AAPL", "2026-05-10");
+    let mut json: serde_json::Value = serde_json::to_value(&state).expect("serialize");
+    let obj = json.as_object_mut().expect("json is object");
+    obj.remove("audit_status");
+    obj.remove("audit_report");
+    let back: TradingState = serde_json::from_value(json).expect("old snapshot must deserialize");
+    assert_eq!(
+        back.audit_status,
+        scorpio_core::state::auditor::AuditStatus::Disabled
+    );
+    assert!(back.audit_report.is_none());
 }

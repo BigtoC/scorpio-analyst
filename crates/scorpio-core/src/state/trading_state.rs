@@ -13,6 +13,7 @@ use super::{
     CryptoState, DataCoverageReport, DerivedValuation, EquityState, EvidenceRecord,
     ExecutionStatus, FundamentalData, MarketVolatilityData, NewsData, ProvenanceSummary,
     RiskReport, SentimentData, TechnicalData, ThesisMemory, TokenUsageTracker, TradeProposal,
+    auditor::{AuditStatus, AuditorReport},
 };
 
 /// A single message entry in a debate or risk discussion history.
@@ -147,6 +148,12 @@ pub struct TradingState {
     /// Phase 5: Final execution.
     pub final_execution_status: Option<ExecutionStatus>,
 
+    /// Advisory auditor state written after Phase 5 completes.
+    #[serde(default)]
+    pub audit_status: AuditStatus,
+    #[serde(default)]
+    pub audit_report: Option<AuditorReport>,
+
     /// Thesis memory: prior-run context + current-run capture.
     #[serde(default)]
     pub prior_thesis: Option<ThesisMemory>,
@@ -212,6 +219,10 @@ struct TradingStateWire {
     conservative_risk_report: Option<RiskReport>,
     final_execution_status: Option<ExecutionStatus>,
     #[serde(default)]
+    audit_status: AuditStatus,
+    #[serde(default)]
+    audit_report: Option<AuditorReport>,
+    #[serde(default)]
     prior_thesis: Option<ThesisMemory>,
     #[serde(default)]
     current_thesis: Option<ThesisMemory>,
@@ -257,6 +268,8 @@ impl From<TradingStateWire> for TradingState {
             neutral_risk_report: wire.neutral_risk_report,
             conservative_risk_report: wire.conservative_risk_report,
             final_execution_status: wire.final_execution_status,
+            audit_status: wire.audit_status,
+            audit_report: wire.audit_report,
             prior_thesis: wire.prior_thesis,
             current_thesis: wire.current_thesis,
             analysis_pack_name: wire.analysis_pack_name,
@@ -357,6 +370,8 @@ impl TradingState {
             neutral_risk_report: None,
             conservative_risk_report: None,
             final_execution_status: None,
+            audit_status: AuditStatus::Disabled,
+            audit_report: None,
             prior_thesis: None,
             current_thesis: None,
             analysis_pack_name: None,
