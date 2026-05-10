@@ -568,6 +568,10 @@ fn severity_colored(severity: &Severity) -> String {
     }
 }
 
+fn is_quick_thinking_phase(phase_name: &str) -> bool {
+    matches!(phase_name, "Analyst Fan-Out" | "Auditor Review")
+}
+
 fn write_auditor_review(out: &mut String, state: &TradingState) {
     match state.audit_status {
         AuditStatus::Disabled | AuditStatus::Pending => return,
@@ -581,10 +585,9 @@ fn write_auditor_review(out: &mut String, state: &TradingState) {
             let _ = writeln!(
                 out,
                 "{}",
-                "Auditor failed — run not blocked (fail-open). No advisory findings available."
+                "Auditor failed — run not blocked (fail-open). Showing deterministic findings only."
                     .yellow()
             );
-            return;
         }
         AuditStatus::Passed => {
             let _ = writeln!(
@@ -601,7 +604,13 @@ fn write_auditor_review(out: &mut String, state: &TradingState) {
         return;
     };
 
-    if !report.findings.is_empty() {
+    let visible_findings: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity != Severity::Info)
+        .collect();
+
+    if !visible_findings.is_empty() {
         let mut table = Table::new();
         table.set_content_arrangement(ContentArrangement::Dynamic);
         table.set_header(vec![
@@ -610,7 +619,7 @@ fn write_auditor_review(out: &mut String, state: &TradingState) {
             Cell::new("Description").add_attribute(Attribute::Bold),
         ]);
 
-        for finding in &report.findings {
+        for finding in visible_findings.into_iter().take(5) {
             table.add_row(vec![
                 Cell::new(severity_colored(&finding.severity)),
                 Cell::new(&finding.location),
@@ -640,7 +649,7 @@ fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
             tracker
                 .phase_usage
                 .iter()
-                .filter(|phase| phase.phase_name == "Analyst Fan-Out")
+                .filter(|phase| is_quick_thinking_phase(&phase.phase_name))
                 .flat_map(|phase| phase.agent_usage.iter()),
         )
     );
@@ -651,7 +660,7 @@ fn write_token_usage(out: &mut String, tracker: &TokenUsageTracker) {
             tracker
                 .phase_usage
                 .iter()
-                .filter(|phase| phase.phase_name != "Analyst Fan-Out")
+                .filter(|phase| !is_quick_thinking_phase(&phase.phase_name))
                 .flat_map(|phase| phase.agent_usage.iter()),
         )
     );
@@ -1218,5 +1227,55 @@ mod tests {
         let report = format_final_report(&state);
         assert!(report.contains("Auditor Review"));
         assert!(report.contains("fail-open"));
+    }
+
+    #[test]
+    fn auditor_fail_open_renders_preserved_findings() {
+        use scorpio_core::state::auditor::{AuditStatus, AuditorReport, Finding, Severity};
+
+        let mut state = minimal_state();
+        state.audit_status = AuditStatus::FailedOpen;
+        state.audit_report = Some(AuditorReport {
+            findings: vec![Finding {
+                severity: Severity::Critical,
+                location: "trader_proposal.target_price".to_owned(),
+                description: "BUY target below current price.".to_owned(),
+                excerpt: None,
+            }],
+            summary: "Semantic auditor unavailable; showing deterministic checks only.".to_owned(),
+            audited_at: chrono::Utc::now(),
+            auditor_model_id: "runtime_unavailable".to_owned(),
+        });
+
+        let report = format_final_report(&state);
+        assert!(report.contains("fail-open"));
+        assert!(report.contains("trader_proposal.target_price"));
+        assert!(report.contains("BUY target below current price."));
+    }
+
+    #[test]
+    fn format_final_report_counts_auditor_review_as_quick_thinking() {
+        let mut state = minimal_state();
+        state.token_usage.push_phase_usage(PhaseTokenUsage {
+            phase_name: "Auditor Review".to_owned(),
+            agent_usage: vec![AgentTokenUsage {
+                agent_name: "Auditor".to_owned(),
+                model_id: "gpt-4o-mini".to_owned(),
+                token_counts_available: true,
+                prompt_tokens: 8,
+                completion_tokens: 4,
+                total_tokens: 12,
+                latency_ms: 80,
+                rate_limit_wait_ms: 0,
+            }],
+            phase_prompt_tokens: 8,
+            phase_completion_tokens: 4,
+            phase_total_tokens: 12,
+            phase_duration_ms: 80,
+        });
+
+        let report = format_final_report(&state);
+        assert!(report.contains("Quick-thinking model: gpt-4o-mini"));
+        assert!(!report.contains("Deep-thinking model: gpt-4o-mini"));
     }
 }
