@@ -18,8 +18,8 @@ use super::super::{
 /// appended to each analyst slot in [`baseline_prompt_bundle`].
 const ANALYST_RUNTIME_CONTRACT: &str = include_str!("prompts/analyst_runtime_contract.md");
 
-fn include_prompt(path: &'static str) -> &'static str {
-    path.strip_suffix('\n').unwrap_or(path)
+fn trim_trailing_newline(content: &'static str) -> &'static str {
+    content.strip_suffix('\n').unwrap_or(content)
 }
 
 /// Append the analyst runtime contract to a raw analyst prompt template.
@@ -31,8 +31,8 @@ fn include_prompt(path: &'static str) -> &'static str {
 fn with_analyst_runtime_contract(raw: &'static str) -> Cow<'static, str> {
     Cow::Owned(format!(
         "{raw}\n\n{contract}",
-        raw = include_prompt(raw),
-        contract = include_prompt(ANALYST_RUNTIME_CONTRACT),
+        raw = trim_trailing_newline(raw),
+        contract = trim_trailing_newline(ANALYST_RUNTIME_CONTRACT),
     ))
 }
 
@@ -48,23 +48,31 @@ fn baseline_prompt_bundle() -> PromptBundle {
         technical_analyst: with_analyst_runtime_contract(include_str!(
             "prompts/technical_analyst.md"
         )),
-        bullish_researcher: Cow::Borrowed(include_prompt(include_str!(
+        bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/bullish_researcher.md"
         ))),
-        bearish_researcher: Cow::Borrowed(include_prompt(include_str!(
+        bearish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/bearish_researcher.md"
         ))),
-        debate_moderator: Cow::Borrowed(include_prompt(include_str!(
+        debate_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/debate_moderator.md"
         ))),
-        trader: Cow::Borrowed(include_prompt(include_str!("prompts/trader.md"))),
-        aggressive_risk: Cow::Borrowed(include_prompt(include_str!("prompts/aggressive_risk.md"))),
-        conservative_risk: Cow::Borrowed(include_prompt(include_str!(
+        trader: Cow::Borrowed(trim_trailing_newline(include_str!("prompts/trader.md"))),
+        aggressive_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
+            "prompts/aggressive_risk.md"
+        ))),
+        conservative_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/conservative_risk.md"
         ))),
-        neutral_risk: Cow::Borrowed(include_prompt(include_str!("prompts/neutral_risk.md"))),
-        risk_moderator: Cow::Borrowed(include_prompt(include_str!("prompts/risk_moderator.md"))),
-        fund_manager: Cow::Borrowed(include_prompt(include_str!("prompts/fund_manager.md"))),
+        neutral_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
+            "prompts/neutral_risk.md"
+        ))),
+        risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
+            "prompts/risk_moderator.md"
+        ))),
+        fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
+            "prompts/fund_manager.md"
+        ))),
     }
 }
 
