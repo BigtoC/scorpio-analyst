@@ -483,6 +483,7 @@ fn pipeline_graph_topology_has_correct_start_and_all_nodes() {
         "neutral_risk",
         "risk_moderator",
         "fund_manager",
+        "auditor",
     ] {
         assert!(
             graph.get_task(id).is_some(),
