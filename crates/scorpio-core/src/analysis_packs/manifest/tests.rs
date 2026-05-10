@@ -25,6 +25,7 @@ fn valid_manifest() -> AnalysisPackManifest {
             m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
             m
         },
+        auditor_enabled: false,
     }
 }
 

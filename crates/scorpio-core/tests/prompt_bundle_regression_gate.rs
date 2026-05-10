@@ -71,6 +71,7 @@ fn fixture_path(role: Role) -> PathBuf {
         Role::NeutralRisk => "neutral_risk.txt",
         Role::RiskModerator => "risk_moderator.txt",
         Role::FundManager => "fund_manager.txt",
+        Role::Auditor => "auditor.txt",
     };
     fixtures_dir().join(filename)
 }
@@ -451,7 +452,7 @@ fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     // run still proves it.
     let manifest = resolve_pack(PackId::Baseline);
     let policy = runtime_policy_from_manifest(&manifest);
-    let topology = build_run_topology(&manifest.required_inputs, 1, 1);
+    let topology = build_run_topology(&manifest.required_inputs, 1, 1, manifest.auditor_enabled);
     let result = validate_active_pack_completeness(&policy, &topology);
     assert!(
         result.is_ok(),

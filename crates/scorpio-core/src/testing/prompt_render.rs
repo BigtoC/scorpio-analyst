@@ -220,6 +220,7 @@ fn render_prompt_output(
                 user_prompt: Some(user_prompt),
             }
         }
+        Role::Auditor => unimplemented!("auditor prompt rendering not yet wired in prompt_render"),
     }
 }
 

@@ -29,10 +29,14 @@ pub struct PromptBundle {
     pub neutral_risk: Cow<'static, str>,
     pub risk_moderator: Cow<'static, str>,
     pub fund_manager: Cow<'static, str>,
+    /// Optional post-decision advisory auditor prompt. Empty when the auditor
+    /// feature is disabled; required when `auditor_enabled = true` in the manifest.
+    #[serde(default)]
+    pub auditor: Cow<'static, str>,
 }
 
 impl PromptBundle {
-    /// Build a bundle from thirteen static slot values. Useful for tests
+    /// Build a bundle from fourteen static slot values. Useful for tests
     /// and for packs that want to stay zero-alloc.
     ///
     /// The positional signature is intentional — the bundle has one
@@ -55,6 +59,7 @@ impl PromptBundle {
         neutral_risk: &'static str,
         risk_moderator: &'static str,
         fund_manager: &'static str,
+        auditor: &'static str,
     ) -> Self {
         Self {
             fundamental_analyst: Cow::Borrowed(fundamental_analyst),
@@ -70,6 +75,7 @@ impl PromptBundle {
             neutral_risk: Cow::Borrowed(neutral_risk),
             risk_moderator: Cow::Borrowed(risk_moderator),
             fund_manager: Cow::Borrowed(fund_manager),
+            auditor: Cow::Borrowed(auditor),
         }
     }
 
@@ -82,7 +88,7 @@ impl PromptBundle {
     /// `PromptBundle::empty()` until they gain real prompt content.
     #[must_use]
     pub fn empty() -> Self {
-        Self::from_static("", "", "", "", "", "", "", "", "", "", "", "", "")
+        Self::from_static("", "", "", "", "", "", "", "", "", "", "", "", "", "")
     }
 
     /// True when every slot is the literal empty string.
@@ -109,6 +115,7 @@ impl PromptBundle {
             && self.neutral_risk.is_empty()
             && self.risk_moderator.is_empty()
             && self.fund_manager.is_empty()
+            && self.auditor.is_empty()
     }
 }
 
@@ -148,15 +155,15 @@ mod tests {
             "",
             "",
             "",
+            "",
         );
         assert!(!bundle.is_empty());
     }
 
     #[test]
     fn fully_filled_bundle_is_not_empty() {
-        let bundle = PromptBundle::from_static(
-            "f", "s", "n", "t", "bull", "bear", "dm", "tr", "ag", "co", "ne", "rm", "fm",
-        );
+        let bundle =
+            PromptBundle::from_static("f", "s", "n", "t", "bull", "bear", "dm", "tr", "ag", "co", "ne", "rm", "fm", "au");
         assert!(!bundle.is_empty());
     }
 
@@ -176,7 +183,8 @@ mod tests {
             "",
             "",
             "",
-            "fund_manager template",
+            "",
+            "auditor template",
         );
         assert!(!bundle.is_empty());
     }

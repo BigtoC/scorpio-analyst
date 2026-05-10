@@ -34,6 +34,7 @@ pub enum Role {
     NeutralRisk,
     RiskModerator,
     FundManager,
+    Auditor,
 }
 
 /// Identifier for a slot inside a [`PromptBundle`].
@@ -55,6 +56,7 @@ pub enum PromptSlot {
     NeutralRisk,
     RiskModerator,
     FundManager,
+    Auditor,
 }
 
 impl Role {
@@ -78,6 +80,7 @@ impl Role {
             Role::NeutralRisk => PromptSlot::NeutralRisk,
             Role::RiskModerator => PromptSlot::RiskModerator,
             Role::FundManager => PromptSlot::FundManager,
+            Role::Auditor => PromptSlot::Auditor,
         }
     }
 
@@ -101,7 +104,8 @@ impl Role {
             | Role::ConservativeRisk
             | Role::NeutralRisk
             | Role::RiskModerator
-            | Role::FundManager => false,
+            | Role::FundManager
+            | Role::Auditor => false,
         }
     }
 }
@@ -127,6 +131,7 @@ impl PromptSlot {
             PromptSlot::NeutralRisk => &bundle.neutral_risk,
             PromptSlot::RiskModerator => &bundle.risk_moderator,
             PromptSlot::FundManager => &bundle.fund_manager,
+            PromptSlot::Auditor => &bundle.auditor,
         }
     }
 
@@ -147,6 +152,7 @@ impl PromptSlot {
             PromptSlot::NeutralRisk => "neutral_risk",
             PromptSlot::RiskModerator => "risk_moderator",
             PromptSlot::FundManager => "fund_manager",
+            PromptSlot::Auditor => "auditor",
         }
     }
 }
@@ -166,6 +172,7 @@ pub struct RunRoleTopology {
     pub unknown_inputs: Vec<String>,
     pub debate_enabled: bool,
     pub risk_enabled: bool,
+    pub auditor_enabled: bool,
 }
 
 /// Per-run routing decisions written into `Context` for graph-flow
@@ -173,11 +180,12 @@ pub struct RunRoleTopology {
 ///
 /// Loop-back conditionals (`round < max`) continue to use the existing
 /// per-iteration counters; `RoutingFlags` only governs *entry* into the
-/// debate and risk stages.
+/// debate, risk, and auditor stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoutingFlags {
     pub skip_debate: bool,
     pub skip_risk: bool,
+    pub skip_auditor: bool,
 }
 
 impl RoutingFlags {
@@ -190,6 +198,7 @@ impl RoutingFlags {
         Self {
             skip_debate: !topology.debate_enabled,
             skip_risk: !topology.risk_enabled,
+            skip_auditor: !topology.auditor_enabled,
         }
     }
 }
@@ -216,11 +225,13 @@ pub fn analyst_role_for_input(input: &str) -> Option<Role> {
 /// `max_debate_rounds == 0` means the debate stage is bypassed entirely (no
 /// researchers, no moderator). `max_risk_rounds == 0` does the same for the
 /// risk stage. The trader and fund manager are always part of the run.
+/// `auditor_enabled` gates the post-decision advisory auditor stage.
 #[must_use]
 pub fn build_run_topology(
     required_inputs: &[String],
     max_debate_rounds: u32,
     max_risk_rounds: u32,
+    auditor_enabled: bool,
 ) -> RunRoleTopology {
     let mut spawned_analysts: BTreeSet<Role> = BTreeSet::new();
     let mut unknown_inputs: Vec<String> = Vec::new();
@@ -239,6 +250,7 @@ pub fn build_run_topology(
         unknown_inputs,
         debate_enabled: max_debate_rounds > 0,
         risk_enabled: max_risk_rounds > 0,
+        auditor_enabled,
     }
 }
 
@@ -273,7 +285,33 @@ pub fn required_prompt_slots(topology: &RunRoleTopology) -> BTreeSet<PromptSlot>
         slots.insert(PromptSlot::RiskModerator);
     }
 
+    if topology.auditor_enabled {
+        slots.insert(PromptSlot::Auditor);
+    }
+
     slots
+}
+
+#[cfg(test)]
+mod auditor_role_tests {
+    use super::*;
+
+    #[test]
+    fn auditor_role_maps_to_auditor_slot() {
+        assert_eq!(Role::Auditor.prompt_slot(), PromptSlot::Auditor);
+    }
+
+    #[test]
+    fn auditor_is_not_an_analyst() {
+        assert!(!Role::Auditor.is_analyst());
+    }
+
+    #[test]
+    fn topology_carries_manifest_auditor_flag() {
+        let topology = build_run_topology(&["news".to_owned()], 0, 0, true);
+        assert!(topology.auditor_enabled);
+        assert!(!RoutingFlags::from_topology(&topology).skip_auditor);
+    }
 }
 
 #[cfg(test)]
@@ -291,7 +329,7 @@ mod tests {
 
     #[test]
     fn baseline_topology_has_four_analysts_plus_debate_and_risk() {
-        let topology = build_run_topology(&equity_inputs(), 2, 2);
+        let topology = build_run_topology(&equity_inputs(), 2, 2, false);
         assert_eq!(topology.spawned_analysts.len(), 4);
         assert!(topology.unknown_inputs.is_empty());
         assert!(
@@ -308,14 +346,14 @@ mod tests {
 
     #[test]
     fn baseline_topology_requires_thirteen_slots() {
-        let topology = build_run_topology(&equity_inputs(), 2, 2);
+        let topology = build_run_topology(&equity_inputs(), 2, 2, false);
         let slots = required_prompt_slots(&topology);
         assert_eq!(slots.len(), 13, "fully-enabled baseline requires 13 slots");
     }
 
     #[test]
     fn zero_debate_rounds_omits_researcher_and_debate_moderator() {
-        let topology = build_run_topology(&equity_inputs(), 0, 2);
+        let topology = build_run_topology(&equity_inputs(), 0, 2, false);
         assert!(!topology.debate_enabled);
         let slots = required_prompt_slots(&topology);
         assert!(!slots.contains(&PromptSlot::BullishResearcher));
@@ -329,7 +367,7 @@ mod tests {
 
     #[test]
     fn zero_risk_rounds_omits_risk_agents_and_moderator() {
-        let topology = build_run_topology(&equity_inputs(), 2, 0);
+        let topology = build_run_topology(&equity_inputs(), 2, 0, false);
         assert!(!topology.risk_enabled);
         let slots = required_prompt_slots(&topology);
         assert!(!slots.contains(&PromptSlot::AggressiveRisk));
@@ -344,7 +382,7 @@ mod tests {
 
     #[test]
     fn zero_both_rounds_keeps_only_analysts_trader_fund_manager() {
-        let topology = build_run_topology(&equity_inputs(), 0, 0);
+        let topology = build_run_topology(&equity_inputs(), 0, 0, false);
         let slots = required_prompt_slots(&topology);
         // 4 analysts + trader + fund_manager = 6 slots.
         assert_eq!(slots.len(), 6);
@@ -364,7 +402,7 @@ mod tests {
             "social".to_owned(),
             "derivatives".to_owned(),
         ];
-        let topology = build_run_topology(&inputs, 2, 2);
+        let topology = build_run_topology(&inputs, 2, 2, false);
         assert!(topology.spawned_analysts.is_empty());
         assert_eq!(
             topology.unknown_inputs,
@@ -382,7 +420,7 @@ mod tests {
         // Synthetic non-baseline pack with a single analyst role — the
         // R8 abstraction-test fixture shape.
         let inputs = vec!["news".to_owned()];
-        let topology = build_run_topology(&inputs, 0, 0);
+        let topology = build_run_topology(&inputs, 0, 0, false);
         let slots = required_prompt_slots(&topology);
         assert_eq!(slots.len(), 3); // news + trader + fund_manager
         assert!(slots.contains(&PromptSlot::NewsAnalyst));
@@ -416,25 +454,28 @@ mod tests {
 
     #[test]
     fn routing_flags_invert_topology_enables() {
-        let zero_both = build_run_topology(&equity_inputs(), 0, 0);
+        let zero_both = build_run_topology(&equity_inputs(), 0, 0, false);
         let flags = RoutingFlags::from_topology(&zero_both);
         assert!(flags.skip_debate);
         assert!(flags.skip_risk);
+        assert!(flags.skip_auditor);
 
-        let full = build_run_topology(&equity_inputs(), 2, 2);
+        let full = build_run_topology(&equity_inputs(), 2, 2, true);
         let flags = RoutingFlags::from_topology(&full);
         assert!(!flags.skip_debate);
         assert!(!flags.skip_risk);
+        assert!(!flags.skip_auditor);
     }
 
     #[test]
     fn slot_read_returns_bundle_field() {
         let bundle = PromptBundle::from_static(
-            "F", "S", "N", "T", "Bull", "Bear", "DM", "Tr", "Ag", "Co", "Ne", "RM", "FM",
+            "F", "S", "N", "T", "Bull", "Bear", "DM", "Tr", "Ag", "Co", "Ne", "RM", "FM", "Au",
         );
         assert_eq!(PromptSlot::FundamentalAnalyst.read(&bundle), "F");
         assert_eq!(PromptSlot::SentimentAnalyst.read(&bundle), "S");
         assert_eq!(PromptSlot::FundManager.read(&bundle), "FM");
+        assert_eq!(PromptSlot::Auditor.read(&bundle), "Au");
     }
 
     #[test]

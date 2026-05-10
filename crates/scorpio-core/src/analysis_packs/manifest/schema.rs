@@ -52,6 +52,12 @@ pub struct AnalysisPackManifest {
     /// `"no_valuator_selected"`. For the baseline equity pack the map
     /// holds `CorporateEquity → EquityDefault`.
     pub valuator_selection: HashMap<AssetShape, ValuatorId>,
+    /// Whether the post-decision advisory auditor stage runs for this pack.
+    ///
+    /// Default `false`; opt-in per pack. When `true`, the pack must supply a
+    /// non-empty `prompt_bundle.auditor` slot and `PreflightTask` will gate
+    /// the auditor task via `RoutingFlags::skip_auditor`.
+    pub auditor_enabled: bool,
 }
 
 impl AnalysisPackManifest {

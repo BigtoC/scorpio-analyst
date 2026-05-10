@@ -42,6 +42,9 @@ pub struct RuntimePolicy {
     /// Manifest-selected valuation strategy per asset shape.
     #[serde(default)]
     pub valuator_selection: std::collections::HashMap<AssetShape, ValuatorId>,
+    /// Whether the post-decision advisory auditor stage runs for this pack.
+    #[serde(default)]
+    pub auditor_enabled: bool,
 }
 
 /// Serializable enrichment intent (mirrors [`EnrichmentIntent`] but with serde).
@@ -91,6 +94,7 @@ pub(crate) fn resolve_runtime_policy_for_manifest(
         prompt_bundle: manifest.prompt_bundle.clone(),
         default_valuation: manifest.default_valuation,
         valuator_selection: manifest.valuator_selection.clone(),
+        auditor_enabled: manifest.auditor_enabled,
     })
 }
 

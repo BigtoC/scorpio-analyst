@@ -60,6 +60,7 @@ fn synthetic_one_role_manifest() -> AnalysisPackManifest {
         fund_manager: Cow::Borrowed(
             "Synthetic test fund manager for {ticker} on {current_date}. Approve or reject.",
         ),
+        auditor: Cow::Borrowed(""),
     };
     AnalysisPackManifest {
         // Reusing PackId::Baseline as a stand-in identifier — the manifest is
@@ -81,6 +82,7 @@ fn synthetic_one_role_manifest() -> AnalysisPackManifest {
         default_valuation: ValuationAssessment::NotAssessed,
         prompt_bundle: bundle,
         valuator_selection: HashMap::new(),
+        auditor_enabled: false,
     }
 }
 
@@ -100,7 +102,7 @@ fn resolve_policy(manifest: &AnalysisPackManifest) -> scorpio_core::analysis_pac
 fn synthetic_manifest_passes_completeness_under_zero_round_topology() {
     let manifest = synthetic_one_role_manifest();
     let policy = resolve_policy(&manifest);
-    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0, false);
     let result = validate_active_pack_completeness(&policy, &topology);
     assert!(
         result.is_ok(),
@@ -112,7 +114,7 @@ fn synthetic_manifest_passes_completeness_under_zero_round_topology() {
 fn synthetic_manifest_with_blank_required_slot_fails_completeness() {
     let manifest = synthetic_one_role_manifest_with_blank_trader();
     let policy = resolve_policy(&manifest);
-    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0, false);
     let err = validate_active_pack_completeness(&policy, &topology)
         .expect_err("blanking the trader slot must fail completeness");
     assert_eq!(err.missing_slots, vec![PromptSlot::Trader]);
@@ -124,7 +126,7 @@ fn required_prompt_slots_derives_three_slots_for_one_role_zero_rounds() {
     // risk agents (risk disabled). Exactly the subset a one-role
     // synthetic-fixture manifest needs.
     let manifest = synthetic_one_role_manifest();
-    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0, false);
     let slots = required_prompt_slots(&topology);
     assert_eq!(slots.len(), 3, "expected three slots, got {slots:?}");
     assert!(slots.contains(&PromptSlot::NewsAnalyst));
@@ -139,7 +141,7 @@ fn required_prompt_slots_omits_baseline_specific_slots_under_one_role_roster() {
     // proves required_prompt_slots subsets correctly for a non-baseline
     // analyst roster.
     let manifest = synthetic_one_role_manifest();
-    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0, false);
     let slots = required_prompt_slots(&topology);
     assert!(!slots.contains(&PromptSlot::FundamentalAnalyst));
     assert!(!slots.contains(&PromptSlot::SentimentAnalyst));
@@ -154,7 +156,7 @@ fn synthetic_manifest_completeness_scales_with_topology_enable_flags() {
     // stage-enable flags actually drive the required-slot set.
     let manifest = synthetic_one_role_manifest();
     let policy = resolve_policy(&manifest);
-    let full_topology = build_run_topology(&manifest.required_inputs, 1, 1);
+    let full_topology = build_run_topology(&manifest.required_inputs, 1, 1, false);
     let err = validate_active_pack_completeness(&policy, &full_topology)
         .expect_err("fully-enabled topology over a partial bundle must fail completeness");
     // Researchers + debate moderator + 3 risk agents + risk moderator = 7
@@ -170,7 +172,7 @@ fn synthetic_manifest_completeness_scales_with_topology_enable_flags() {
 #[test]
 fn one_role_topology_tracks_only_the_declared_spawned_analyst() {
     let manifest = synthetic_one_role_manifest();
-    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0, false);
     assert_eq!(topology.spawned_analysts.len(), 1);
     assert!(topology.spawned_analysts.contains(&Role::NewsAnalyst));
     assert!(topology.unknown_inputs.is_empty());
@@ -181,7 +183,7 @@ fn synthetic_manifest_fails_closed_when_required_inputs_include_unknown_entry() 
     let mut manifest = synthetic_one_role_manifest();
     manifest.required_inputs.push("tokenomics".to_owned());
     let policy = resolve_policy(&manifest);
-    let topology = build_run_topology(&manifest.required_inputs, 0, 0);
+    let topology = build_run_topology(&manifest.required_inputs, 0, 0, false);
     let err = validate_active_pack_completeness(&policy, &topology)
         .expect_err("unknown required_inputs must fail this API-shape contract test");
     assert_eq!(err.missing_slots, Vec::<PromptSlot>::new());

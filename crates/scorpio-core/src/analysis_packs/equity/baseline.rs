@@ -73,6 +73,7 @@ fn baseline_prompt_bundle() -> PromptBundle {
         fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/fund_manager.md"
         ))),
+        auditor: Cow::Borrowed(""),
     }
 }
 
@@ -109,6 +110,7 @@ pub fn baseline_pack() -> AnalysisPackManifest {
             m.insert(AssetShape::CorporateEquity, ValuatorId::EquityDefault);
             m
         },
+        auditor_enabled: false,
     }
 }
 
