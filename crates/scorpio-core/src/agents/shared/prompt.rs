@@ -50,6 +50,9 @@ pub(crate) fn sanitize_prompt_context(input: &str) -> String {
 
 /// Serialize an optional value for prompt inclusion using the shared prompt sanitizer.
 pub(crate) fn serialize_prompt_value<T: serde::Serialize>(value: &Option<T>) -> String {
+    if value.is_none() {
+        return "null".to_owned();
+    }
     let serialized = serde_json::to_string(value).unwrap_or_else(|_| "null".to_owned());
     sanitize_prompt_context(&serialized)
 }
