@@ -1,3 +1,4 @@
+pub mod auditor;
 mod analyst_output;
 mod crypto;
 mod derived;
