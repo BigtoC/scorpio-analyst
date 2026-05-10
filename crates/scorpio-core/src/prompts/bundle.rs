@@ -162,8 +162,9 @@ mod tests {
 
     #[test]
     fn fully_filled_bundle_is_not_empty() {
-        let bundle =
-            PromptBundle::from_static("f", "s", "n", "t", "bull", "bear", "dm", "tr", "ag", "co", "ne", "rm", "fm", "au");
+        let bundle = PromptBundle::from_static(
+            "f", "s", "n", "t", "bull", "bear", "dm", "tr", "ag", "co", "ne", "rm", "fm", "au",
+        );
         assert!(!bundle.is_empty());
     }
 
