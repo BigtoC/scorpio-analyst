@@ -191,10 +191,7 @@ pub fn build_graph_from_pack(
 
     // Auditor is always registered; `AuditorTask` reads `skip_auditor` from
     // `RoutingFlags` and becomes a no-op when `auditor_enabled = false`.
-    graph.add_task(AuditorTask::new(
-        Arc::clone(&config),
-        Arc::clone(&snapshot_store),
-    ));
+    graph.add_task(AuditorTask::new(Arc::clone(&config)));
     graph.add_edge(TASKS.fund_manager, TASKS.auditor);
 
     graph.set_start_task(TASKS.preflight);

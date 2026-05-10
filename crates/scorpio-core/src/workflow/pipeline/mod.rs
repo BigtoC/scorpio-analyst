@@ -305,4 +305,13 @@ impl TradingPipeline {
             Arc::clone(&self.snapshot_store),
         )
     }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Install deterministic workflow stubs but keep the real auditor task.
+    pub fn install_stub_tasks_except_auditor_for_test(&self) -> Result<(), WorkflowTestSeamError> {
+        crate::workflow::tasks::test_helpers::replace_with_stubs_except_auditor(
+            self,
+            Arc::clone(&self.snapshot_store),
+        )
+    }
 }
