@@ -592,16 +592,16 @@ mod tests {
     #[tokio::test]
     async fn same_start_and_end_is_valid() {
         // Dates are equal — should not return an "invalid range" error.
-        // (The network call itself is expected to fail in CI, so we only
-        // check that we do NOT get a SchemaViolation about the date range.)
+        // Seed the cache so no real HTTP call is made.
         let client = YFinanceClient::default();
+        client
+            .cache_seed("AAPL", "2024-01-15", "2024-01-15", vec![])
+            .await;
         let result = client.get_ohlcv("AAPL", "2024-01-15", "2024-01-15").await;
-        if let Err(ref e) = result {
-            assert!(
-                !matches!(e, TradingError::SchemaViolation { message } if message.contains("before start")),
-                "should not fail with date-range error, got: {e:?}"
-            );
-        }
+        assert!(
+            result.is_ok(),
+            "equal start/end should not fail with date-range error, got: {result:?}"
+        );
     }
 
     // ── Error mapping ─────────────────────────────────────────────────────
