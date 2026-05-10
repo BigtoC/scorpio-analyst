@@ -6,7 +6,7 @@
 //! downstream code (`selection::resolve_runtime_policy`,
 //! `workflow::builder::TradingPipeline::from_pack`) reaches for this
 //! function rather than the per-pack factories directly.
-use tracing::info;
+use tracing::{info, warn};
 
 use super::completeness::{CompletenessError, validate_active_pack_completeness};
 use super::{AnalysisPackManifest, PackId, crypto, equity, resolve_runtime_policy_for_manifest};
@@ -60,8 +60,17 @@ pub fn pack_diagnostics() -> Vec<CompletenessError> {
         // stage were enabled?" That's the most useful baseline-suitable
         // signal at startup time when no per-run round-count config exists.
         let topology = build_run_topology(&manifest.required_inputs, 1, 1);
-        let policy = resolve_runtime_policy_for_manifest(&manifest)
-            .expect("pack diagnostics should only inspect shape-valid manifests");
+        let policy = match resolve_runtime_policy_for_manifest(&manifest) {
+            Ok(policy) => policy,
+            Err(reason) => {
+                warn!(
+                    pack_id = %pack_id,
+                    reason = %reason,
+                    "skipping pack diagnostics: manifest failed shape validation"
+                );
+                continue;
+            }
+        };
         if let Err(err) = validate_active_pack_completeness(&policy, &topology) {
             errors.push(err);
         }

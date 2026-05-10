@@ -25,8 +25,8 @@ pub struct ExecutionSummary {
 /// Result of `list_executions` — visible summaries plus a count of stale
 /// executions filtered out by the schema-version check.
 ///
-/// The CLI surfaces `stale_count` as a stderr banner so users notice when a
-/// version bump has retired previously-visible runs.
+/// Callers should surface `stale_count` so users notice when a version bump
+/// has retired previously-visible runs.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecutionListing {
     pub summaries: Vec<ExecutionSummary>,
@@ -48,8 +48,8 @@ pub struct LoadedReportSnapshot {
 /// Result of `load_full_report` — visible per-phase snapshots plus a list of
 /// phase numbers that were soft-skipped due to deserialization failure.
 ///
-/// The CLI surfaces `skipped_phases` as a stderr banner so corrupt rows are
-/// visible to users instead of only appearing in `tracing::warn!` logs.
+/// Callers should surface `skipped_phases` so corrupt rows are visible to
+/// users instead of only appearing in `tracing::warn!` logs.
 #[derive(Debug, Clone)]
 pub struct LoadedReport {
     pub snapshots: Vec<LoadedReportSnapshot>,
@@ -80,7 +80,7 @@ impl SnapshotStore {
         .bind(THESIS_MEMORY_SCHEMA_VERSION)
         .fetch_all(&self.pool)
         .await
-        .with_context(|| "failed to list executions")
+        .context("failed to list executions")
         .map_err(TradingError::Storage)?;
 
         let stale_count: (i64,) = sqlx::query_as(
@@ -95,7 +95,7 @@ impl SnapshotStore {
         .bind(THESIS_MEMORY_SCHEMA_VERSION)
         .fetch_one(&self.pool)
         .await
-        .with_context(|| "failed to count stale executions")
+        .context("failed to count stale executions")
         .map_err(TradingError::Storage)?;
 
         let mut invalid_execution_ids = HashSet::new();
@@ -112,17 +112,15 @@ impl SnapshotStore {
                 continue;
             }
 
-            match latest_valid_by_execution.get_mut(&execution_id) {
-                Some((current_symbol, current_created_at)) => {
+            latest_valid_by_execution
+                .entry(execution_id)
+                .and_modify(|(current_symbol, current_created_at)| {
                     if created_at > *current_created_at {
-                        *current_symbol = symbol;
+                        *current_symbol = symbol.clone();
                         *current_created_at = created_at;
                     }
-                }
-                None => {
-                    latest_valid_by_execution.insert(execution_id, (symbol, created_at));
-                }
-            }
+                })
+                .or_insert((symbol, created_at));
         }
 
         let invalid_timestamp_count = invalid_execution_ids.len();
@@ -145,7 +143,7 @@ impl SnapshotStore {
 
         Ok(ExecutionListing {
             summaries,
-            stale_count: stale_count.0 as usize,
+            stale_count: usize::try_from(stale_count.0).unwrap_or(0),
             invalid_timestamp_count,
         })
     }
@@ -195,7 +193,7 @@ impl SnapshotStore {
         for (phase_number, state_json, usage_json) in rows {
             let state: TradingState = match serde_json::from_str(&state_json) {
                 Ok(s) => s,
-                Err(_err) => {
+                Err(_) => {
                     warn!(
                         execution_id,
                         phase_number,
@@ -210,7 +208,7 @@ impl SnapshotStore {
             let token_usage = usage_json.and_then(|json| {
                 match serde_json::from_str::<Vec<AgentTokenUsage>>(&json) {
                     Ok(u) => Some(u),
-                    Err(_err) => {
+                    Err(_) => {
                         warn!(
                             execution_id,
                             phase_number,

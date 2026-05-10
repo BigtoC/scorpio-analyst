@@ -45,8 +45,9 @@ pub struct FinnhubClient {
     /// Per-run company news cache.  Shared via `Arc` so cloned clients
     /// (analyst fan-out, enrichment provider) hit the same cache and avoid
     /// duplicate API calls for identical `(symbol, from, to)` queries.
-    news_cache:
-        Arc<tokio::sync::RwLock<HashMap<NewsCacheKey, Vec<finnhub::models::news::CompanyNews>>>>,
+    news_cache: Arc<
+        tokio::sync::RwLock<HashMap<NewsCacheKey, Arc<Vec<finnhub::models::news::CompanyNews>>>>,
+    >,
 }
 
 impl std::fmt::Debug for FinnhubClient {
@@ -190,7 +191,7 @@ impl FinnhubClient {
         symbol: &str,
         from: &str,
         to: &str,
-    ) -> Result<Vec<finnhub::models::news::CompanyNews>, TradingError> {
+    ) -> Result<Arc<Vec<finnhub::models::news::CompanyNews>>, TradingError> {
         let symbol = validate_symbol(symbol)?;
         let key: NewsCacheKey = (symbol.to_owned(), from.to_owned(), to.to_owned());
 
@@ -198,7 +199,7 @@ impl FinnhubClient {
         {
             let cache = self.news_cache.read().await;
             if let Some(cached) = cache.get(&key) {
-                return Ok(cached.clone());
+                return Ok(Arc::clone(cached));
             }
         }
 
@@ -212,9 +213,13 @@ impl FinnhubClient {
             .map_err(map_finnhub_err)?;
 
         // Store in cache for subsequent callers.
-        self.news_cache.write().await.insert(key, result.clone());
+        let shared = Arc::new(result);
+        self.news_cache
+            .write()
+            .await
+            .insert(key, Arc::clone(&shared));
 
-        Ok(result)
+        Ok(shared)
     }
 
     /// Fetch the last 30 days of company news and map to [`NewsData`].
@@ -226,7 +231,7 @@ impl FinnhubClient {
 
         let raw = self.fetch_company_news(symbol, &from, &to).await?;
 
-        Ok(build_news_data(symbol, raw, &from, &to))
+        Ok(build_news_data(symbol, &raw, &from, &to))
     }
 
     /// Fetch general market news and map it into the shared `NewsData` shape.
@@ -493,14 +498,11 @@ pub(crate) fn normalize_finnhub_article(n: &finnhub::models::news::CompanyNews) 
 
 fn build_news_data(
     symbol: &str,
-    raw_news: Vec<finnhub::models::news::CompanyNews>,
+    raw_news: &[finnhub::models::news::CompanyNews],
     from: &str,
     to: &str,
 ) -> NewsData {
-    let articles: Vec<NewsArticle> = raw_news
-        .into_iter()
-        .map(|n| normalize_finnhub_article(&n))
-        .collect();
+    let articles: Vec<NewsArticle> = raw_news.iter().map(normalize_finnhub_article).collect();
     let macro_events = derive_macro_events(&articles);
     let macro_count = macro_events.len();
     let article_count = articles.len();
@@ -1090,7 +1092,7 @@ mod tests {
             url: "https://example.com/news/1".to_owned(),
         }];
 
-        let news = build_news_data("AAPL", raw_news, "2024-01-01", "2024-01-31");
+        let news = build_news_data("AAPL", &raw_news, "2024-01-01", "2024-01-31");
 
         assert_eq!(news.articles.len(), 1);
         assert_eq!(news.macro_events.len(), 2);

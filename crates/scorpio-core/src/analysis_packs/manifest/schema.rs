@@ -17,11 +17,7 @@ pub struct EnrichmentIntent {
 /// Encodes coverage, enrichment intent, strategy focus, valuation policy, and
 /// metadata. Packs do not own execution, graph topology, or provider-factory
 /// routing.
-// Eq is intentionally not derived: the `valuator_selection` HashMap
-// carries runtime-only ordering and HashMap's PartialEq impl is sufficient
-// for the `assert_eq!` comparisons tests rely on. Manifests aren't used as
-// HashMap keys, so dropping `Eq` carries no behavioural impact.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisPackManifest {
     /// Unique pack identifier.
     pub id: PackId,
@@ -81,12 +77,18 @@ impl AnalysisPackManifest {
     /// Resolve the effective valuation assessment for a given asset shape.
     ///
     /// Corporate equities use the pack's `default_valuation` policy.
-    /// Fund-style and unknown shapes always resolve to `NotAssessed`.
+    /// All other shapes resolve to `NotAssessed`. The match is exhaustive so a
+    /// new `AssetShape` variant becomes a compile error here, forcing an
+    /// explicit policy decision rather than silently routing to `NotAssessed`.
     pub fn resolve_valuation(&self, shape: &AssetShape) -> ValuationAssessment {
         match shape {
             AssetShape::CorporateEquity => self.default_valuation,
-            AssetShape::Fund | AssetShape::Unknown => ValuationAssessment::NotAssessed,
-            _ => ValuationAssessment::NotAssessed,
+            AssetShape::Fund
+            | AssetShape::Unknown
+            | AssetShape::NativeChainAsset
+            | AssetShape::Erc20Token
+            | AssetShape::Stablecoin
+            | AssetShape::LpToken => ValuationAssessment::NotAssessed,
         }
     }
 }

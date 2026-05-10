@@ -121,18 +121,15 @@ impl FundManagerAgent {
     ) -> Result<AgentTokenUsage, TradingError> {
         let started_at = Instant::now();
 
-        if state.trader_proposal.is_none() {
-            return Err(TradingError::SchemaViolation {
-                message: "FundManager: trader_proposal is None — cannot render execution decision"
-                    .to_owned(),
-            });
-        }
-
         let trader_proposal_action = state
             .trader_proposal
             .as_ref()
-            .map(|p| p.action.clone())
-            .expect("checked above");
+            .ok_or_else(|| TradingError::SchemaViolation {
+                message: "FundManager: trader_proposal is None — cannot render execution decision"
+                    .to_owned(),
+            })?
+            .action
+            .clone();
         // Topology-aware dual-risk derivation: if the run was configured with
         // zero risk rounds, the risk stage was deliberately bypassed and the
         // status is `StageDisabled` rather than `Unknown`. The topology is
