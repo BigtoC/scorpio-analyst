@@ -452,11 +452,11 @@ fn prompt_bundle_has_auditor_slot() {
 }
 
 #[test]
-fn baseline_pack_keeps_auditor_disabled_by_default() {
+fn baseline_pack_ships_with_auditor_enabled_by_default() {
     let manifest = resolve_pack(PackId::Baseline);
     assert!(
-        !manifest.auditor_enabled,
-        "baseline must ship with auditor_enabled = false"
+        manifest.auditor_enabled,
+        "baseline must ship with auditor_enabled = true"
     );
 }
 

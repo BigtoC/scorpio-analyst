@@ -126,14 +126,14 @@ mod tests {
     }
 
     #[test]
-    fn fully_empty_bundle_reports_thirteen_missing_slots() {
+    fn fully_empty_bundle_reports_fourteen_missing_slots() {
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle = PromptBundle::empty();
         let policy = resolve_policy(&manifest);
         let topology = fully_enabled_baseline_topology();
         let err = validate_active_pack_completeness(&policy, &topology)
             .expect_err("empty bundle must fail completeness");
-        assert_eq!(err.missing_slots.len(), 13);
+        assert_eq!(err.missing_slots.len(), 14);
         assert!(err.unknown_inputs.is_empty());
         assert_eq!(err.pack_id, PackId::Baseline);
     }
@@ -206,16 +206,17 @@ mod tests {
 
     #[test]
     fn zero_round_topology_only_validates_required_subset() {
-        // Empty bundle with zero-rounds topology: only analyst + trader +
-        // fund_manager slots are required, so the error lists 6 slots, not 13.
+        // Empty bundle with zero-rounds topology: analyst + trader +
+        // fund_manager + auditor slots are required, so the error lists 7
+        // slots, not 14.
         let mut manifest = resolve_pack(PackId::Baseline);
         manifest.prompt_bundle = PromptBundle::empty();
         let policy = resolve_policy(&manifest);
         let topology =
             build_run_topology(&manifest.required_inputs, 0, 0, manifest.auditor_enabled);
         let err = validate_active_pack_completeness(&policy, &topology)
-            .expect_err("empty bundle, six required slots");
-        assert_eq!(err.missing_slots.len(), 6);
+            .expect_err("empty bundle, seven required slots");
+        assert_eq!(err.missing_slots.len(), 7);
         // None of the debate or risk slots should be in the error.
         assert!(!err.missing_slots.contains(&PromptSlot::BullishResearcher));
         assert!(!err.missing_slots.contains(&PromptSlot::AggressiveRisk));
