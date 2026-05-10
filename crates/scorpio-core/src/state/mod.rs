@@ -1,5 +1,5 @@
-pub mod auditor;
 mod analyst_output;
+pub mod auditor;
 mod crypto;
 mod derived;
 mod equity;
