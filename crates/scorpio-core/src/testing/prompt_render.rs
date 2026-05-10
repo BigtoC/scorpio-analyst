@@ -6,6 +6,7 @@ use crate::{
             build_fundamental_system_prompt, build_news_system_prompt,
             build_sentiment_system_prompt, build_technical_system_prompt,
         },
+        auditor::build_system_prompt as build_auditor_system_prompt,
         fund_manager::build_prompt_context as build_fund_manager_prompt_context,
         researcher::render_researcher_system_prompt,
         risk::{DualRiskStatus, render_risk_system_prompt},
@@ -220,7 +221,11 @@ fn render_prompt_output(
                 user_prompt: Some(user_prompt),
             }
         }
-        Role::Auditor => unimplemented!("auditor prompt rendering not yet wired in prompt_render"),
+        Role::Auditor => PromptRenderOutput {
+            system_prompt: build_auditor_system_prompt(&state)
+                .expect("test fixture must render auditor prompt"),
+            user_prompt: None,
+        },
     }
 }
 
