@@ -115,7 +115,13 @@ fn render_show_output(
     json: bool,
 ) -> anyhow::Result<String> {
     let phases_present = report.snapshots.len();
-    let Some(selected) = report.snapshots.last() else {
+    let Some(selected) = report
+        .snapshots
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.phase_number <= i64::from(SnapshotPhase::FundManager.number()))
+        .or_else(|| report.snapshots.last())
+    else {
         return Err(anyhow::anyhow!("cannot render empty report"));
     };
     let is_complete = selected.phase_number == i64::from(SnapshotPhase::FundManager.number());
@@ -364,6 +370,52 @@ mod tests {
         let err = render_show_output("exec-1", &report, false).expect_err("empty report");
 
         assert!(err.to_string().contains("cannot render empty report"));
+    }
+
+    #[test]
+    fn render_show_output_prefers_fund_manager_snapshot_when_later_phases_exist() {
+        let fund_manager_state = TradingState::new("AAPL", "2026-01-15");
+
+        let mut auditor_state = fund_manager_state.clone();
+        auditor_state.audit_status = scorpio_core::state::auditor::AuditStatus::Findings;
+        auditor_state.audit_report = Some(scorpio_core::state::auditor::AuditorReport {
+            findings: vec![scorpio_core::state::auditor::Finding {
+                severity: scorpio_core::state::auditor::Severity::Warning,
+                location: "trader_proposal.rationale".to_owned(),
+                description: "Unsourced claim".to_owned(),
+                excerpt: None,
+            }],
+            summary: "warning".to_owned(),
+            audited_at: chrono::Utc::now(),
+            auditor_model_id: "gpt-4o-mini".to_owned(),
+        });
+
+        let report = LoadedReport {
+            snapshots: vec![
+                LoadedReportSnapshot {
+                    state: fund_manager_state,
+                    token_usage: None,
+                    phase_number: 5,
+                },
+                LoadedReportSnapshot {
+                    state: auditor_state,
+                    token_usage: None,
+                    phase_number: 6,
+                },
+            ],
+            skipped_phases: Vec::new(),
+        };
+
+        let rendered = render_show_output("exec-1", &report, true).expect("json output");
+        let parsed: ReportJson = serde_json::from_str(&rendered).expect("report json");
+
+        assert_eq!(parsed.phase_number, 5);
+        assert!(parsed.is_complete);
+        assert_eq!(
+            parsed.state.audit_status,
+            scorpio_core::state::auditor::AuditStatus::Disabled
+        );
+        assert!(parsed.state.audit_report.is_none());
     }
 
     #[tokio::test]
