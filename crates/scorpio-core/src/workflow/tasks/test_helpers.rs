@@ -440,7 +440,7 @@ impl graph_flow::Task for StubTraderTask {
         state.trader_proposal = Some(TradeProposal {
             action: TradeAction::Buy,
             target_price: 195.0,
-            stop_loss: 180.0,
+            stop_loss: 200.0,
             confidence: 0.75,
             rationale: "stub: buy on strong fundamentals and positive sentiment".to_owned(),
             valuation_assessment: None,

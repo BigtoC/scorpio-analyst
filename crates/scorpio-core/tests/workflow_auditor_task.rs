@@ -29,10 +29,10 @@ async fn auditor_failure_is_fail_open_and_preserves_deterministic_findings() {
         .install_stub_tasks_except_auditor_for_test()
         .expect("stub install must succeed");
 
-    // StubTraderTask always sets target_price = 195.0; current_price must
-    // exceed that to trigger the BUY-target-below-current deterministic check.
-    let mut initial_state = TradingState::new("AAPL", "2026-03-20");
-    initial_state.current_price = Some(250.0);
+    // StubTraderTask sets stop_loss (200.0) > target_price (195.0), if this which
+    // triggers the BUY-stop_loss-above-target deterministic check without
+    // depending on any network-fetched current_price.
+    let initial_state = TradingState::new("AAPL", "2026-03-20");
 
     let final_state = run_analysis_cycle(&pipeline, initial_state)
         .await
@@ -47,7 +47,7 @@ async fn auditor_failure_is_fail_open_and_preserves_deterministic_findings() {
         report
             .findings
             .iter()
-            .any(|finding| finding.location == "trader_proposal.target_price")
+            .any(|finding| finding.location == "trader_proposal.stop_loss")
     );
     assert_eq!(report.auditor_model_id, "runtime_unavailable");
 
