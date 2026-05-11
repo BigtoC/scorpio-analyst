@@ -25,16 +25,16 @@
 
 ## Decision Summary
 
-| Theme                                              | Effort | Risk       | Data Dependency                                                                                                                                                                                                    | Status                                                                |
-|----------------------------------------------------|--------|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
-| **A** Sanity bands (WACC/multiples/terminal value) | XS     | Low        | None                                                                                                                                                                                                               | ✅ Ship                                                                |
-| **B** Industry KPI matrix                          | XS     | Low        | None                                                                                                                                                                                                               | ✅ Ship                                                                |
-| **C** Red-flag taxonomy                            | XS     | Low        | Partial — full power needs **call transcripts** (NOT WIRED, contract-only seam)                                                                                                                                    | ⚠️ Ship in degraded mode                                              |
-| **D** Beat/miss decision tree                      | M      | Medium     | Existing `ConsensusEvidence` provider, but the baseline pack currently disables consensus enrichment and prompt context does not yet guarantee same-period actuals                                                 | ⚠️ Ship after prerequisite audit                                      |
-| **E** Falsifiable theses                           | M      | Low–Medium | None (compounds with existing thesis memory if extended)                                                                                                                                                           | ✅ Ship                                                                |
-| **F** "Contrarian needs catalyst"                  | XS     | Low        | None                                                                                                                                                                                                               | ✅ Ship                                                                |
-| **G** Catalyst taxonomy + H/M/L                    | S      | Low        | Partial — full power needs **catalyst calendar** (NOT WIRED until Tier 1 of `2026-05-10-003-catalyst-calendar-integration.md` lands; FDA / conferences / lockup / M&A close remain deferred to that plan's Tier 3) | ⚠️ Ship in degraded mode; upgrade when catalyst-calendar Tier 1 lands |
-| **H** Sourcing hierarchy + injection defense       | XS     | Low        | None (extends existing `analysis_emphasis` sanitization)                                                                                                                                                           | ✅ Ship                                                                |
+| Theme                                              | Effort | Risk       | Data Dependency                                                                                                                                                            | Status                                                            |
+|----------------------------------------------------|--------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
+| **A** Sanity bands (WACC/multiples/terminal value) | XS     | Low        | None                                                                                                                                                                       | ✅ Ship                                                            |
+| **B** Industry KPI matrix                          | XS     | Low        | None                                                                                                                                                                       | ✅ Ship                                                            |
+| **C** Red-flag taxonomy                            | XS     | Low        | Partial — full power needs **call transcripts** (NOT WIRED, contract-only seam)                                                                                            | ⚠️ Ship in degraded mode                                          |
+| **D** Beat/miss decision tree                      | M      | Medium     | Existing `ConsensusEvidence` provider, but the baseline pack currently disables consensus enrichment and prompt context does not yet guarantee same-period actuals         | ⚠️ Ship after prerequisite audit                                  |
+| **E** Falsifiable theses                           | M      | Low–Medium | None (compounds with existing thesis memory if extended)                                                                                                                   | ✅ Ship                                                            |
+| **F** "Contrarian needs catalyst"                  | XS     | Low        | None                                                                                                                                                                       | ✅ Ship                                                            |
+| **G** Catalyst taxonomy + H/M/L                    | S      | Low        | Tier 1 of `2026-05-10-003-catalyst-calendar-integration.md` provides earnings/IPO/macro/dividend; FDA + conferences + lockup/M&A close are deferred to Tier 3 of that plan | ✅ Wired via catalyst-calendar Tier 1; Tier 3 gaps remain deferred |
+| **H** Sourcing hierarchy + injection defense       | XS     | Low        | None (extends existing `analysis_emphasis` sanitization)                                                                                                                   | ✅ Ship                                                            |
 
 **Total effort:** All eight themes combined ≈ 3–5 days. The umbrella plan closes when every theme is either shipped or explicitly deferred. Recommended rollout order for the default baseline pack is: `H` -> `E` -> `A+B` -> `C+G` (with caveats) -> `F`, while `D` runs as a separate go/no-go audit track in parallel and is added only if the audit passes.
 
@@ -69,16 +69,7 @@ Three themes need extra care. Themes C and G can ship in **degraded mode** if th
 
 ### Theme G — Catalyst taxonomy + H/M/L impact
 
-**What scorpio HAS:** Earnings dates implicit in Finnhub fundamentals. FRED has FOMC dates accessible via series IDs but not as a structured calendar. yfinance options expirations.
-**What scorpio LACKS:**
-- A unified **catalyst calendar** (FDA decisions, conferences, IPO lockup expiries, M&A close dates, regulatory deadlines).
-- Macro calendar coverage beyond FRED series (CPI/Jobs/GDP release schedules — these are public but we don't fetch them).
-
-**Full Theme G** wants the News Analyst to proactively look ahead: "AAPL has earnings on 2026-05-29 (H impact), product event on 2026-06-10 (M), Fed FOMC on 2026-06-18 (M)." **We can't do the proactive look-ahead today.**
-
-**Degraded Theme G** has the News Analyst classify events it *discovers* in news headlines into the four categories (Earnings & Financial / Corporate Events / Industry Events / Macro Events) and assign H/M/L impact. This is prompt-only in the core slice. Adds real signal even without proactive lookups, but the user-facing output must say `degraded mode: news-discovered events only` and must not invent forward-looking calendar coverage.
-
-**Recommendation: ship the degraded version now. Tier 1 of [`2026-05-10-catalyst-calendar-integration.md`](./2026-05-10-catalyst-calendar-integration.md) wires the free-tier sources (Finnhub earnings + IPO calendars, FRED `/fred/releases/dates` for macro, yfinance per-ticker dividend) and downgrades this caveat as soon as it ships. Tier 2 of that plan adds SEC EDGAR 8-K Item-coded coverage for M&A / activist / buyback / shareholder-vote signals. Tier 3 (FDA AdComm scraping, S-1 lockup parsing, DEF M14A expected-close) is explicitly out of scope of that plan and remains a future follow-up.**
+See [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) for the wiring plan. Tier 1 (earnings, IPO, macro release dates, ex-dividend) has shipped. Tier 2 (SEC EDGAR 8-K item codes) is in progress. Tier 3 (FDA AdComm, S-1 lockup, DEF M14A expected-close) remains deferred.
 
 ### Themes A, B, E, F, H
 
@@ -461,10 +452,6 @@ impact tier.
 When no catalyst-calendar source is present, explicitly include the phrase
 `degraded mode: news-discovered events only` in the summary and do not imply
 look-ahead coverage beyond fetched news.
-
-<!-- TODO(catalyst-calendar): scorpio currently does not have a catalyst
-calendar data source. We can only classify events that surface in news.
-A future plan should add a calendar adapter (FDA, FOMC, conferences). -->
 ```
 
 Do not add structured catalyst fields in this slice unless you also introduce a
