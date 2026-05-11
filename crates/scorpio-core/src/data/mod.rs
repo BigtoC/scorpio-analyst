@@ -32,6 +32,7 @@ pub mod finnhub;
 pub mod fred;
 mod provider_impls;
 pub mod routing;
+pub mod sec_edgar;
 pub mod symbol;
 pub mod traits;
 pub mod yfinance;
@@ -41,7 +42,11 @@ pub use finnhub::{
     FinnhubClient, GetCachedNews, GetEarnings, GetFundamentals, GetInsiderTransactions,
     GetMarketNews, GetNews, SymbolArgs,
 };
-pub use adapters::catalysts::{CatalystCalendarProvider, CatalystEvent, Tier1CatalystProvider};
+pub use adapters::catalysts::{
+    CatalystCalendarProvider, CatalystEvent, SecEdgar8kProvider, Tier1CatalystProvider,
+    Tier2CatalystProvider,
+};
+pub use sec_edgar::{FilingHeader, SecEdgarClient};
 pub use fred::{FredClient, GetEconomicIndicators};
 #[cfg(any(test, feature = "test-helpers"))]
 pub use yfinance::StubbedFinancialResponses;

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::data::{
     FinnhubClient, FredClient,
     fred::release_id,
+    sec_edgar::{FilingHeader, SecEdgarClient},
     yfinance::financials::TickerCalendar,
 };
 use crate::data::yfinance::ohlcv::YFinanceClient;
@@ -198,18 +199,18 @@ impl Tier1CatalystProvider {
             }
         }
 
-        if let Some(date) = cal.ex_dividend_date {
-            if date >= as_of {
-                events.push(CatalystEvent {
-                    symbol: symbol.to_ascii_uppercase(),
-                    event_date: date.format("%Y-%m-%d").to_string(),
-                    category: CatalystCategory::EarningsAndFinancial,
-                    impact: ImpactLevel::L,
-                    headline: format!("{} ex-dividend date", symbol.to_ascii_uppercase()),
-                    source_url: None,
-                    source: "yfinance".to_owned(),
-                });
-            }
+        if let Some(date) = cal.ex_dividend_date
+            && date >= as_of
+        {
+            events.push(CatalystEvent {
+                symbol: symbol.to_ascii_uppercase(),
+                event_date: date.format("%Y-%m-%d").to_string(),
+                category: CatalystCategory::EarningsAndFinancial,
+                impact: ImpactLevel::L,
+                headline: format!("{} ex-dividend date", symbol.to_ascii_uppercase()),
+                source_url: None,
+                source: "yfinance".to_owned(),
+            });
         }
 
         events
@@ -308,11 +309,244 @@ fn map_finnhub_ipo(r: &finnhub::models::calendar::IPOEvent) -> Option<CatalystEv
     })
 }
 
+// ─── Tier 2 provider ────────────────────────────────────────────────────────
+
+/// How many calendar days before `as_of_date` to include in the EDGAR window.
+///
+/// 8-K filings can arrive several days after the underlying event
+/// (e.g. shareholder-vote results, Reg FD disclosures). This lookback
+/// captures recent-but-slightly-delayed filings so they appear in the
+/// catalyst block even when the analyst runs the day after the event.
+const EDGAR_LOOKBACK_DAYS: i64 = 14;
+
+/// Fetches recent 8-K and 13D/G SEC filings for the analysed ticker and maps
+/// them to [`CatalystEvent`]s using the Item-code mapping table from the plan.
+pub struct SecEdgar8kProvider {
+    client: SecEdgarClient,
+}
+
+impl SecEdgar8kProvider {
+    pub fn new(client: SecEdgarClient) -> Self {
+        Self { client }
+    }
+
+    /// CIK lookup + filing fetch wrapped in soft-fail semantics.
+    async fn try_fetch_edgar_events(
+        &self,
+        symbol: &str,
+        from: &str,
+        to: &str,
+    ) -> Vec<CatalystEvent> {
+        let cik = match self.client.lookup_cik(symbol).await {
+            Ok(Some(cik)) => cik,
+            Ok(None) => {
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar",
+                    symbol,
+                    "CIK not found for symbol; skipping SEC EDGAR contribution"
+                );
+                return Vec::new();
+            }
+            Err(e) => {
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar",
+                    symbol,
+                    error = %e,
+                    "CIK lookup failed; skipping SEC EDGAR contribution"
+                );
+                return Vec::new();
+            }
+        };
+
+        let filings = self
+            .client
+            .fetch_recent_filings(cik, &["8-K", "SC 13D", "SC 13G"], from, to)
+            .await
+            .unwrap_or_default();
+
+        filings
+            .iter()
+            .flat_map(|f| map_edgar_filing_to_events(symbol, f))
+            .collect()
+    }
+}
+
+#[async_trait]
+impl CatalystCalendarProvider for SecEdgar8kProvider {
+    async fn fetch_catalysts(
+        &self,
+        symbol: &str,
+        as_of_date: &str,
+        horizon_days: u32,
+    ) -> Result<Vec<CatalystEvent>, TradingError> {
+        let as_of = NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d").map_err(|e| {
+            TradingError::SchemaViolation {
+                message: format!("invalid as_of_date '{as_of_date}': {e}"),
+            }
+        })?;
+        let from = (as_of - chrono::Duration::days(EDGAR_LOOKBACK_DAYS))
+            .format("%Y-%m-%d")
+            .to_string();
+        let to = (as_of + chrono::Duration::days(i64::from(horizon_days)))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let events = self.try_fetch_edgar_events(symbol, &from, &to).await;
+        Ok(events)
+    }
+}
+
+/// Provider that composes Tier 1 (Finnhub + FRED + yfinance) with SEC EDGAR
+/// 8-K / 13D/G item-coded coverage.
+///
+/// Uses `tokio::join!` (not `try_join!`) so an EDGAR outage zeros out only
+/// the EDGAR contribution while Tier 1 events still flow through.
+pub struct Tier2CatalystProvider {
+    pub(crate) tier1: Tier1CatalystProvider,
+    pub(crate) sec_edgar: SecEdgar8kProvider,
+}
+
+#[async_trait]
+impl CatalystCalendarProvider for Tier2CatalystProvider {
+    async fn fetch_catalysts(
+        &self,
+        symbol: &str,
+        as_of_date: &str,
+        horizon_days: u32,
+    ) -> Result<Vec<CatalystEvent>, TradingError> {
+        let (tier1_result, edgar_result) = tokio::join!(
+            self.tier1.fetch_catalysts(symbol, as_of_date, horizon_days),
+            self.sec_edgar.fetch_catalysts(symbol, as_of_date, horizon_days),
+        );
+
+        // Tier 1 `Err` is a date arithmetic bug — propagate.
+        let mut all = tier1_result?;
+
+        match edgar_result {
+            Ok(events) => all.extend(events),
+            Err(err) => {
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar",
+                    symbol,
+                    error = %err,
+                    "Tier 2 SEC EDGAR source failed; Tier 1 events still flow through"
+                );
+            }
+        }
+
+        all.sort_by(|a, b| {
+            (&a.event_date, &a.symbol, &a.category)
+                .cmp(&(&b.event_date, &b.symbol, &b.category))
+        });
+        all.dedup_by(|a, b| {
+            a.event_date == b.event_date
+                && a.symbol == b.symbol
+                && a.category == b.category
+        });
+
+        Ok(all)
+    }
+}
+
+// ─── EDGAR mapping helpers ───────────────────────────────────────────────────
+
+/// Map a single EDGAR `FilingHeader` to 0-N `CatalystEvent`s.
+///
+/// For 8-K filings, each tracked item code becomes a separate event.
+/// Non-8-K forms (SC 13D / SC 13G) produce exactly one event each.
+fn map_edgar_filing_to_events(symbol: &str, f: &FilingHeader) -> Vec<CatalystEvent> {
+    let form = f.form_type.as_str();
+
+    if form.eq_ignore_ascii_case("SC 13D") {
+        return vec![CatalystEvent {
+            symbol: symbol.to_ascii_uppercase(),
+            event_date: f.filing_date.clone(),
+            category: CatalystCategory::CorporateEvents,
+            impact: ImpactLevel::H,
+            headline: "Activist 13D filed".to_owned(),
+            source_url: Some(f.primary_doc_url.clone()),
+            source: "sec_edgar".to_owned(),
+        }];
+    }
+
+    if form.eq_ignore_ascii_case("SC 13G") {
+        return vec![CatalystEvent {
+            symbol: symbol.to_ascii_uppercase(),
+            event_date: f.filing_date.clone(),
+            category: CatalystCategory::CorporateEvents,
+            impact: ImpactLevel::M,
+            headline: "Passive 13G filed".to_owned(),
+            source_url: Some(f.primary_doc_url.clone()),
+            source: "sec_edgar".to_owned(),
+        }];
+    }
+
+    if !form.eq_ignore_ascii_case("8-K") {
+        return vec![];
+    }
+
+    f.item_codes
+        .split(',')
+        .map(str::trim)
+        .filter_map(|item| map_8k_item(symbol, item, f))
+        .collect()
+}
+
+fn map_8k_item(symbol: &str, item: &str, f: &FilingHeader) -> Option<CatalystEvent> {
+    let (category, impact, headline) = match item {
+        "1.01" => (
+            CatalystCategory::CorporateEvents,
+            ImpactLevel::H,
+            format!("Material agreement: {}", f.accession_number),
+        ),
+        "2.01" => (
+            CatalystCategory::CorporateEvents,
+            ImpactLevel::H,
+            format!("Acquisition / disposition: {}", f.accession_number),
+        ),
+        "2.02" => (
+            CatalystCategory::EarningsAndFinancial,
+            ImpactLevel::H,
+            "Earnings results filed (8-K 2.02)".to_owned(),
+        ),
+        "5.07" => (
+            CatalystCategory::CorporateEvents,
+            ImpactLevel::M,
+            "Shareholder vote results".to_owned(),
+        ),
+        "7.01" => (
+            CatalystCategory::CorporateEvents,
+            ImpactLevel::M,
+            "Reg FD disclosure".to_owned(),
+        ),
+        "8.01" => (
+            CatalystCategory::CorporateEvents,
+            ImpactLevel::M,
+            "Other material event".to_owned(),
+        ),
+        _ => return None,
+    };
+
+    Some(CatalystEvent {
+        symbol: symbol.to_ascii_uppercase(),
+        event_date: f.filing_date.clone(),
+        category,
+        impact,
+        headline,
+        source_url: Some(f.primary_doc_url.clone()),
+        source: "sec_edgar".to_owned(),
+    })
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::sec_edgar::FilingHeader;
 
     fn sample_event() -> CatalystEvent {
         CatalystEvent {
@@ -485,6 +719,92 @@ mod tests {
             total_shares_value: None,
         };
         assert!(map_finnhub_ipo(&r).is_none());
+    }
+
+    // ── EDGAR filing mapping ─────────────────────────────────────────────
+
+    fn filing(form_type: &str, item_codes: &str) -> FilingHeader {
+        FilingHeader {
+            cik: 320193,
+            accession_number: "0000320193-26-000123".to_owned(),
+            form_type: form_type.to_owned(),
+            filing_date: "2026-03-01".to_owned(),
+            primary_doc_url: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000123/d8k.htm".to_owned(),
+            item_codes: item_codes.to_owned(),
+        }
+    }
+
+    #[test]
+    fn map_edgar_8k_item_202_produces_earnings_h_event() {
+        let f = filing("8-K", "2.02");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].category, CatalystCategory::EarningsAndFinancial);
+        assert_eq!(events[0].impact, ImpactLevel::H);
+        assert_eq!(events[0].source, "sec_edgar");
+        assert!(events[0].source_url.is_some());
+    }
+
+    #[test]
+    fn map_edgar_8k_item_101_produces_corporate_h_event() {
+        let f = filing("8-K", "1.01");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].category, CatalystCategory::CorporateEvents);
+        assert_eq!(events[0].impact, ImpactLevel::H);
+    }
+
+    #[test]
+    fn map_edgar_8k_multi_item_expands_to_multiple_events() {
+        let f = filing("8-K", "2.02,8.01");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert_eq!(events.len(), 2, "two tracked item codes should produce two events");
+    }
+
+    #[test]
+    fn map_edgar_8k_untracked_item_produces_no_event() {
+        let f = filing("8-K", "9.01"); // financial exhibits — not tracked
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert!(events.is_empty(), "item 9.01 should produce no event");
+    }
+
+    #[test]
+    fn map_edgar_8k_empty_item_codes_produces_no_event() {
+        let f = filing("8-K", "");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn map_edgar_sc13d_produces_activist_h_event() {
+        let f = filing("SC 13D", "");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].impact, ImpactLevel::H);
+        assert!(events[0].headline.contains("Activist"));
+    }
+
+    #[test]
+    fn map_edgar_sc13g_produces_passive_m_event() {
+        let f = filing("SC 13G", "");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].impact, ImpactLevel::M);
+        assert!(events[0].headline.contains("Passive"));
+    }
+
+    #[test]
+    fn map_edgar_10k_produces_no_events() {
+        let f = filing("10-K", "");
+        let events = map_edgar_filing_to_events("AAPL", &f);
+        assert!(events.is_empty(), "non-8K non-13D/G forms should produce no events");
+    }
+
+    #[test]
+    fn map_edgar_symbol_is_uppercased() {
+        let f = filing("SC 13D", "");
+        let events = map_edgar_filing_to_events("aapl", &f);
+        assert_eq!(events[0].symbol, "AAPL");
     }
 
     // ── fetch_catalysts invalid date ─────────────────────────────────────
