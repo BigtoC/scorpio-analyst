@@ -1,6 +1,25 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Catalyst category taxonomy for forward-looking events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalystCategory {
+    EarningsAndFinancial,
+    CorporateEvents,
+    IndustryEvents,
+    MacroEvents,
+}
+
+/// Impact tier for a catalyst event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ImpactLevel {
+    H,
+    M,
+    L,
+}
+
 /// Macroeconomic news and event data for the target asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NewsData {
