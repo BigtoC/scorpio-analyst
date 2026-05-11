@@ -226,7 +226,7 @@ Use the canonical `CatalystEvent` and `CatalystCalendarProvider` shapes from the
 Run: `cargo test -p scorpio-core data::adapters::catalysts`
 Expected: pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/adapters/catalysts.rs crates/scorpio-core/src/data/adapters/mod.rs crates/scorpio-core/src/state/news.rs
@@ -284,7 +284,7 @@ The exact re-export type names (`EarningsCalendarEvent`, `ipo_calendar` field) m
 
 Mirror the existing `#[ignore = "requires API key"]` pattern in `data/finnhub.rs` tests. Local CI does not run it; the developer running the migration runs it once to confirm the response shape.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git commit -m "feat(data): expose Finnhub earnings + IPO calendars on FinnhubClient"
@@ -391,7 +391,7 @@ async fn main() -> std::process::ExitCode {
 
 The example **must** assert that every release-id constant returns at least one date within a 60-day historical window. If any release ID is wrong (the plan flags them for verification before commit), this smoke test catches it deterministically — guessing a bad ID returns 200 OK with an empty list, which would otherwise fail silently in production.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/fred.rs crates/scorpio-core/examples/fred_live_test.rs
@@ -411,7 +411,7 @@ The crate already exposes `Ticker.calendar()` returning `Calendar { earnings_dat
 
 Returns a thin domain wrapper, not the upstream type, so callers don't depend on `yfinance_rs::fundamentals::Calendar`.
 
-- [ ] **Step 2: Run + commit**
+- [x] **Step 2: Run + commit**
 
 ```bash
 git commit -m "feat(data): expose yfinance per-ticker calendar"
@@ -501,7 +501,7 @@ Map each source-specific row into `CatalystEvent`:
 
 Three test variants per source: happy path, empty response, upstream error. Use mocked clients — do not hit live APIs in unit tests. **One additional test must verify the composition invariant:** when one source's mock returns `Err`, `fetch_catalysts` still returns `Ok` with the surviving sources' events plus a `tracing::warn!` captured via a `tracing-test` subscriber.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git commit -m "feat(data): implement Tier1 catalyst calendar provider (Finnhub + FRED + yfinance)"
@@ -554,7 +554,7 @@ Sort by `event_date` ascending; tag each line with `[H]` / `[M]` / `[L]` so the 
 
 Snapshot tests for the prompt block: empty, single event, mixed `_MACRO` + per-ticker, oversize cap.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "feat(workflow): prefetch catalysts and surface in analyst-context body"
@@ -602,7 +602,7 @@ In `docs/superpowers/plans/2026-05-10-analytical-themes-port.md`:
 
 Run a real analyst cycle with `RUST_LOG=info` on a ticker close to earnings season. Verify the news analyst summary cites at least one catalyst from the rendered block (Earnings, FOMC, etc.) rather than saying `degraded mode: news-discovered events only`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(packs): wire catalyst calendar into news analyst prompt"
@@ -622,7 +622,7 @@ SEC EDGAR is free, no API key, but **mandates** a `User-Agent: <Name> <email>` h
 
 The User-Agent is hardcoded to `"Scorpio Analyst scorpio@ledgerlylab.com"` — no config field or wizard step required (Task 10 is dropped).
 
-- [ ] **Step 1: HTTP client with hardcoded UA**
+- [x] **Step 1: HTTP client with hardcoded UA**
 
 ```rust
 // crates/scorpio-core/src/data/sec_edgar.rs
@@ -652,11 +652,11 @@ impl SecEdgarClient {
 
 **Construction-time fallback contract:** if `SecEdgarClient::new(...)` returns `Err` (e.g. reqwest client build failure), preflight logs `info!("falling back to Tier 1 catalyst provider: <reason>")` and instantiates `Tier1CatalystProvider` instead. The pipeline never aborts.
 
-- [ ] **Step 2: CIK lookup**
+- [x] **Step 2: CIK lookup**
 
 SEC publishes the ticker→CIK map at `https://www.sec.gov/files/company_tickers.json`. Cache it in `Arc<RwLock<HashMap<String, u32>>>` with a single load on first use (it's small — about 12k tickers, <2MB).
 
-- [ ] **Step 3: 8-K + 13D/G filings index**
+- [x] **Step 3: 8-K + 13D/G filings index**
 
 ```rust
 pub async fn fetch_recent_filings(
@@ -680,7 +680,7 @@ pub struct FilingHeader {
 
 Use EDGAR's structured submissions JSON: `https://data.sec.gov/submissions/CIK<10-digit-padded-cik>.json` returns recent filings with item codes baked in. **Don't scrape the HTML index** — the JSON endpoint is canonical and stable.
 
-- [ ] **Step 4: Tests with explicit failure-mode coverage**
+- [x] **Step 4: Tests with explicit failure-mode coverage**
 
 Use saved fixture JSON snapshots for the canned-response tests in `data/sec_edgar.rs::tests`. Required failure-mode tests (each must assert `Ok(Vec::new())` plus a captured `tracing::warn!` event with `kind = "catalyst_fetch_failed"`):
 
@@ -695,7 +695,7 @@ Use saved fixture JSON snapshots for the canned-response tests in `data/sec_edga
 
 The canned-response harness can use `wiremock` (existing dev-dep across the repo per `Cargo.lock`); do not introduce a new mocking crate.
 
-- [ ] **Step 5: Add `crates/scorpio-core/examples/sec_edgar_live_test.rs`**
+- [x] **Step 5: Add `crates/scorpio-core/examples/sec_edgar_live_test.rs`**
 
 Mirror `finnhub_live_test.rs` structure (`Results` aggregator, env-driven config, exit non-zero on FAIL). Cover both happy-path and the failure-mode invariants:
 
@@ -772,7 +772,7 @@ git commit -m "feat(data): add SEC EDGAR client + fail-soft live smoke test"
 **Files:**
 - Modify: `crates/scorpio-core/src/data/adapters/catalysts.rs`
 
-- [ ] **Step 1: Add `SecEdgar8kProvider`**
+- [x] **Step 1: Add `SecEdgar8kProvider`**
 
 For the analysed ticker, fetch recent filings from `[as_of_date - lookback_days, as_of_date + horizon_days]`. The lookback exists because some material events file 8-Ks within a window after the event itself (e.g. shareholder votes are reported retrospectively).
 
@@ -791,7 +791,7 @@ Map filings → `CatalystEvent`:
 
 Headlines stay generic — do NOT parse the filing body. The news analyst's existing news-fetch path can pull the body if it wants to discuss specifics.
 
-- [ ] **Step 2: Compose `Tier2CatalystProvider` with fail-soft semantics**
+- [x] **Step 2: Compose `Tier2CatalystProvider` with fail-soft semantics**
 
 ```rust
 pub struct Tier2CatalystProvider {
@@ -843,7 +843,7 @@ impl CatalystCalendarProvider for Tier2CatalystProvider {
 
 **Circuit breaker:** the per-instance breaker on `SecEdgarClient` (Task 8 Step 1) is the second layer. After **5 consecutive** runtime failures within a single pipeline run, subsequent calls in the same run short-circuit to `Ok(empty)` without hitting the network. The breaker resets on each new pipeline run (a new `SecEdgarClient` instance, since clients are constructed during preflight — confirm against the actual lifetime of the catalyst-prefetch task before wiring).
 
-- [ ] **Step 3: Wire `Tier2CatalystProvider` into the runtime**
+- [x] **Step 3: Wire `Tier2CatalystProvider` into the runtime**
 
 `SecEdgarClient::new(limiter)` uses the hardcoded UA. If construction fails (e.g. reqwest build error), fall back to `Tier1CatalystProvider`. Log once at startup which provider was chosen:
 
@@ -884,7 +884,7 @@ User-Agent is hardcoded to `"Scorpio Analyst scorpio@ledgerlylab.com"`. No confi
 **Files:**
 - Create: `docs/solutions/data-sources/2026-05-10-catalyst-calendar.md`
 
-- [ ] **Step 1: Document the wiring**
+- [x] **Step 1: Document the wiring**
 
 Per `/ce:compound` discipline (CLAUDE.md "Knowledge Consolidation"), record:
 - Problem: news analyst could only classify discovered events; no forward-looking calendar.
