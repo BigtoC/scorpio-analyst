@@ -9,6 +9,7 @@
 //! - [`estimates::YFinanceEstimatesProvider`] — consensus estimates via yfinance-rs
 //! - Transcripts: contract-only seam (deferred to a future plan)
 
+pub mod catalysts;
 pub mod estimates;
 pub mod events;
 pub mod transcripts;

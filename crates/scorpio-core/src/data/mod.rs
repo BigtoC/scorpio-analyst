@@ -41,6 +41,7 @@ pub use finnhub::{
     FinnhubClient, GetCachedNews, GetEarnings, GetFundamentals, GetInsiderTransactions,
     GetMarketNews, GetNews, SymbolArgs,
 };
+pub use adapters::catalysts::{CatalystCalendarProvider, CatalystEvent, Tier1CatalystProvider};
 pub use fred::{FredClient, GetEconomicIndicators};
 #[cfg(any(test, feature = "test-helpers"))]
 pub use yfinance::StubbedFinancialResponses;
