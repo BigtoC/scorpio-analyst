@@ -52,7 +52,9 @@ use thiserror::Error;
 use crate::{
     analysis_packs::RuntimePolicy,
     config::Config,
-    data::{FinnhubClient, FredClient, YFinanceClient},
+    data::{
+        FinnhubClient, FredClient, YFinanceClient, adapters::catalysts::CatalystCalendarProvider,
+    },
     providers::factory::CompletionModelHandle,
     workflow::SnapshotStore,
 };
@@ -99,6 +101,7 @@ pub struct TradingPipeline {
     pub(super) finnhub: FinnhubClient,
     pub(super) fred: FredClient,
     pub(super) yfinance: YFinanceClient,
+    pub(super) catalyst_provider: Arc<dyn CatalystCalendarProvider>,
     pub(super) snapshot_store: Arc<SnapshotStore>,
     /// Handle for quick-thinking agents (Analyst Team - Phase 1).
     pub(super) quick_handle: CompletionModelHandle,
@@ -117,6 +120,7 @@ impl std::fmt::Debug for TradingPipeline {
             .field("finnhub", &self.finnhub)
             .field("fred", &self.fred)
             .field("yfinance", &self.yfinance)
+            .field("catalyst_provider", &"Arc<dyn CatalystCalendarProvider>")
             .field("snapshot_store", &self.snapshot_store)
             .field("quick_handle", &self.quick_handle)
             .field("deep_handle", &self.deep_handle)
@@ -155,6 +159,12 @@ impl TradingPipeline {
         let snapshot_store = Arc::new(snapshot_store);
         let runtime_policy =
             crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack).ok();
+        let catalyst_provider = runtime::build_catalyst_provider(
+            &finnhub,
+            &fred,
+            &yfinance,
+            std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
+        );
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
@@ -169,6 +179,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            catalyst_provider,
             snapshot_store,
             quick_handle,
             deep_handle,
@@ -214,6 +225,12 @@ impl TradingPipeline {
                 config.analysis_pack
             ))
         })?;
+        let catalyst_provider = runtime::build_catalyst_provider(
+            &finnhub,
+            &fred,
+            &yfinance,
+            std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
+        );
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
@@ -228,6 +245,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            catalyst_provider,
             snapshot_store,
             quick_handle,
             deep_handle,
@@ -248,6 +266,7 @@ impl TradingPipeline {
         finnhub: FinnhubClient,
         fred: FredClient,
         yfinance: YFinanceClient,
+        catalyst_provider: Arc<dyn CatalystCalendarProvider>,
         snapshot_store: Arc<SnapshotStore>,
         quick_handle: CompletionModelHandle,
         deep_handle: CompletionModelHandle,
@@ -259,6 +278,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            catalyst_provider,
             snapshot_store,
             quick_handle,
             deep_handle,
@@ -279,6 +299,14 @@ impl TradingPipeline {
             &self.quick_handle,
             &self.deep_handle,
         )
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn replace_catalyst_provider_for_test(
+        &mut self,
+        provider: Arc<dyn CatalystCalendarProvider>,
+    ) {
+        self.catalyst_provider = provider;
     }
 
     #[cfg(any(test, feature = "test-helpers"))]
