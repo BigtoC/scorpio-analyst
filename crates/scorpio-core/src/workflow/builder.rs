@@ -248,11 +248,18 @@ impl TradingPipeline {
             &quick_handle,
             &deep_handle,
         );
+        let catalyst_provider = crate::workflow::pipeline::runtime::build_catalyst_provider(
+            &finnhub,
+            &fred,
+            &yfinance,
+            Duration::from_secs(config.enrichment.fetch_timeout_secs),
+        );
         Self::__from_parts(
             config,
             finnhub,
             fred,
             yfinance,
+            catalyst_provider,
             snapshot_store,
             quick_handle,
             deep_handle,

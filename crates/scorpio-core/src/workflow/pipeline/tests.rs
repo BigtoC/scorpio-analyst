@@ -1322,13 +1322,118 @@ async fn run_analysis_cycle_hydrates_catalyst_calendar_enrichment() {
     replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
         .expect("stub install must succeed");
 
-    let final_state = runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-05-11"))
-        .await
-        .expect("pipeline must succeed");
+    let final_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-05-11"))
+            .await
+            .expect("pipeline must succeed");
 
     assert!(
         final_state.enrichment_catalysts.payload.is_some(),
         "enrichment_catalysts.payload must be Some(...) after a cycle — \
          None means the prefetch was never attempted"
     );
+}
+
+struct CountingCatalystProvider {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    events: Arc<Vec<crate::data::adapters::catalysts::CatalystEvent>>,
+}
+
+#[async_trait::async_trait]
+impl crate::data::adapters::catalysts::CatalystCalendarProvider for CountingCatalystProvider {
+    async fn fetch_catalysts(
+        &self,
+        _symbol: &str,
+        _as_of_date: &str,
+        _horizon_days: u32,
+    ) -> Result<Vec<crate::data::adapters::catalysts::CatalystEvent>, TradingError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.events.as_ref().clone())
+    }
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_reuses_injected_catalyst_provider_across_cycles() {
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-catalyst-provider-reuse.db").await;
+    let mut pipeline = crate::workflow::TradingPipeline::new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-catalyst-provider-reuse",
+            10,
+        )),
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider = Arc::new(CountingCatalystProvider {
+        calls: Arc::clone(&calls),
+        events: Arc::new(vec![crate::data::adapters::catalysts::CatalystEvent {
+            symbol: "AAPL".to_owned(),
+            event_date: "2026-05-20".to_owned(),
+            category: crate::state::CatalystCategory::EarningsAndFinancial,
+            impact: crate::state::ImpactLevel::H,
+            headline: "AAPL Q2 earnings".to_owned(),
+            source_url: None,
+            source: "test".to_owned(),
+        }]),
+    });
+    pipeline.replace_catalyst_provider_for_test(provider);
+
+    let first = runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-05-11"))
+        .await
+        .expect("first cycle must succeed");
+    let second = runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-05-11"))
+        .await
+        .expect("second cycle must succeed");
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        first
+            .enrichment_catalysts
+            .payload
+            .as_ref()
+            .expect("first cycle must hydrate catalysts")
+            .len(),
+        1
+    );
+    assert_eq!(
+        second
+            .enrichment_catalysts
+            .payload
+            .as_ref()
+            .expect("second cycle must hydrate catalysts")
+            .len(),
+        1
+    );
+    assert!(matches!(
+        second.enrichment_catalysts.status,
+        crate::data::adapters::EnrichmentStatus::Available
+    ));
 }
