@@ -457,7 +457,14 @@ pub(crate) fn build_catalyst_calendar_block(state: &TradingState) -> String {
     }
 
     let mut sorted: Vec<&CatalystEvent> = events.iter().collect();
-    sorted.sort_by_key(|e| &e.event_date);
+    let target_symbol = state.asset_symbol.to_ascii_uppercase();
+    sorted.sort_by(|a, b| {
+        catalyst_render_priority(a, &target_symbol)
+            .cmp(&catalyst_render_priority(b, &target_symbol))
+            .then_with(|| a.event_date.cmp(&b.event_date))
+            .then_with(|| a.symbol.cmp(&b.symbol))
+            .then_with(|| a.headline.cmp(&b.headline))
+    });
 
     let lines: Vec<String> = sorted
         .iter()
@@ -486,6 +493,23 @@ pub(crate) fn build_catalyst_calendar_block(state: &TradingState) -> String {
         .collect();
 
     lines.join("\n")
+}
+
+fn catalyst_render_priority(event: &CatalystEvent, target_symbol: &str) -> u8 {
+    let symbol = event.symbol.to_ascii_uppercase();
+
+    if symbol == target_symbol {
+        return 0;
+    }
+    if event.category == crate::state::CatalystCategory::MacroEvents {
+        return 1;
+    }
+    if event.category == crate::state::CatalystCategory::CorporateEvents
+        && event.headline.starts_with("IPO:")
+    {
+        return 2;
+    }
+    1
 }
 
 /// Build the common analyst-data snapshot body shared by researcher and risk prompts.
@@ -1143,6 +1167,60 @@ mod tests {
             block.lines().count(),
             25,
             "block must be capped at 25 lines"
+        );
+    }
+
+    #[test]
+    fn catalyst_block_deprioritizes_unrelated_ipos_under_prompt_cap() {
+        let mut state = empty_state();
+        let mut events: Vec<_> = (1..=25)
+            .map(|i| {
+                make_catalyst_with_category(
+                    &format!("IPO{i}"),
+                    &format!("2026-05-{i:02}"),
+                    crate::state::CatalystCategory::CorporateEvents,
+                    crate::state::ImpactLevel::M,
+                    &format!("IPO: Company {i}"),
+                )
+            })
+            .collect();
+        events.push(make_catalyst_with_category(
+            "AAPL",
+            "2026-05-30",
+            crate::state::CatalystCategory::EarningsAndFinancial,
+            crate::state::ImpactLevel::H,
+            "AAPL Q2 earnings",
+        ));
+        events.push(make_catalyst_with_category(
+            "_MACRO",
+            "2026-05-31",
+            crate::state::CatalystCategory::MacroEvents,
+            crate::state::ImpactLevel::H,
+            "FOMC rate decision",
+        ));
+        state.enrichment_catalysts = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(events),
+        };
+
+        let block = build_catalyst_calendar_block(&state);
+
+        assert_eq!(
+            block.lines().count(),
+            25,
+            "block must stay capped at 25 lines"
+        );
+        assert!(
+            block.contains("AAPL Q2 earnings"),
+            "ticker-specific catalysts must survive the cap ahead of unrelated IPOs: {block}"
+        );
+        assert!(
+            block.contains("FOMC rate decision"),
+            "macro catalysts must survive the cap ahead of unrelated IPOs: {block}"
+        );
+        assert!(
+            !block.contains("IPO: Company 25"),
+            "low-priority unrelated IPOs should be first to fall off under the cap: {block}"
         );
     }
 
