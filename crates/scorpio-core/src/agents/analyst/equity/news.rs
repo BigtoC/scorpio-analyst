@@ -11,7 +11,7 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
-    agents::shared::agent_token_usage_from_completion,
+    agents::shared::{agent_token_usage_from_completion, build_catalyst_calendar_block},
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::NEWS_ANALYST_MAX_TURNS,
@@ -34,17 +34,24 @@ use super::common::{
 /// and delegates substitution and rule appending to the shared
 /// [`render_analyst_system_prompt`] helper. Preflight's completeness gate
 /// ensures the slot is non-empty before this fires.
+///
+/// Also substitutes `{catalyst_calendar}` with the formatted catalyst block
+/// from [`build_catalyst_calendar_block`] so Theme G's forward-looking
+/// catalyst section is populated when Tier 1 enrichment ran.
 pub(crate) fn build_news_system_prompt(
     symbol: &str,
     target_date: &str,
     policy: &RuntimePolicy,
+    state: &TradingState,
 ) -> String {
+    let catalyst_block = build_catalyst_calendar_block(state);
     render_analyst_system_prompt(
         policy.prompt_bundle.news_analyst.as_ref(),
         symbol,
         target_date,
         policy,
     )
+    .replace("{catalyst_calendar}", &catalyst_block)
 }
 
 /// The News Analyst agent.
@@ -88,7 +95,8 @@ impl NewsAnalyst {
         cached_news: Option<Arc<NewsData>>,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
-        let system_prompt = build_news_system_prompt(&runtime.symbol, &runtime.target_date, policy);
+        let system_prompt =
+            build_news_system_prompt(&runtime.symbol, &runtime.target_date, policy, state);
 
         Self {
             handle,
@@ -600,7 +608,8 @@ mod tests {
 
         let policy =
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve");
-        let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy);
+        let state = crate::state::TradingState::new("AAPL", "2026-01-01");
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy, &state);
 
         for phrase in [
             "Prefer authoritative runtime evidence",
@@ -628,7 +637,8 @@ mod tests {
             "Pack news prompt for {ticker} at {current_date}. Emphasis: {analysis_emphasis}."
                 .into();
 
-        let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy);
+        let state = crate::state::TradingState::new("AAPL", "2026-01-01");
+        let prompt = build_news_system_prompt("AAPL", "2026-01-01", &policy, &state);
 
         assert!(
             prompt.contains(
