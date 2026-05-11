@@ -10,14 +10,15 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 
+use crate::data::yfinance::ohlcv::YFinanceClient;
 use crate::data::{
     FinnhubClient, FredClient,
     fred::release_id,
     sec_edgar::{FilingHeader, SecEdgarClient},
     yfinance::financials::TickerCalendar,
 };
-use crate::data::yfinance::ohlcv::YFinanceClient;
 use crate::error::TradingError;
 use crate::state::{CatalystCategory, ImpactLevel};
 
@@ -71,21 +72,35 @@ pub struct Tier1CatalystProvider {
     pub(crate) finnhub: FinnhubClient,
     pub(crate) fred: FredClient,
     pub(crate) yfinance: YFinanceClient,
+    pub(crate) source_timeout: std::time::Duration,
 }
 
 impl Tier1CatalystProvider {
     pub fn new(finnhub: FinnhubClient, fred: FredClient, yfinance: YFinanceClient) -> Self {
-        Self { finnhub, fred, yfinance }
+        Self::with_timeout(finnhub, fred, yfinance, std::time::Duration::from_secs(120))
+    }
+
+    pub fn with_timeout(
+        finnhub: FinnhubClient,
+        fred: FredClient,
+        yfinance: YFinanceClient,
+        source_timeout: std::time::Duration,
+    ) -> Self {
+        Self {
+            finnhub,
+            fred,
+            yfinance,
+            source_timeout,
+        }
     }
 
     /// Soft-fail: Finnhub earnings for a specific symbol.
-    async fn try_finnhub_earnings(
-        &self,
-        symbol: &str,
-        from: &str,
-        to: &str,
-    ) -> Vec<CatalystEvent> {
-        match self.finnhub.fetch_earnings_calendar(from, to, Some(symbol)).await {
+    async fn try_finnhub_earnings(&self, symbol: &str, from: &str, to: &str) -> Vec<CatalystEvent> {
+        match self
+            .finnhub
+            .fetch_earnings_calendar(from, to, Some(symbol))
+            .await
+        {
             Ok(rows) => rows
                 .iter()
                 .filter_map(|r| map_finnhub_earnings(symbol, r))
@@ -123,10 +138,22 @@ impl Tier1CatalystProvider {
     async fn try_fred_releases(&self, from: &str, to: &str) -> Vec<CatalystEvent> {
         let release_ids = [
             (release_id::CPI, "CPI release", ImpactLevel::H),
-            (release_id::NONFARM_PAYROLLS, "Nonfarm Payrolls", ImpactLevel::H),
-            (release_id::FOMC_DECISION, "FOMC rate decision", ImpactLevel::H),
+            (
+                release_id::NONFARM_PAYROLLS,
+                "Nonfarm Payrolls",
+                ImpactLevel::H,
+            ),
+            (
+                release_id::FOMC_DECISION,
+                "FOMC rate decision",
+                ImpactLevel::H,
+            ),
             (release_id::GDP, "GDP release", ImpactLevel::M),
-            (release_id::ISM_MANUFACTURING, "ISM Manufacturing", ImpactLevel::M),
+            (
+                release_id::ISM_MANUFACTURING,
+                "ISM Manufacturing",
+                ImpactLevel::M,
+            ),
             (release_id::RETAIL_SALES, "Retail Sales", ImpactLevel::M),
         ];
 
@@ -161,7 +188,12 @@ impl Tier1CatalystProvider {
     }
 
     /// Soft-fail: yfinance per-ticker ex-dividend date.
-    async fn try_yfinance_calendar(&self, symbol: &str, as_of_date: &str) -> Vec<CatalystEvent> {
+    async fn try_yfinance_calendar(
+        &self,
+        symbol: &str,
+        as_of_date: &str,
+        horizon_end: NaiveDate,
+    ) -> Vec<CatalystEvent> {
         let as_of = match NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d") {
             Ok(d) => d,
             Err(e) => {
@@ -186,7 +218,7 @@ impl Tier1CatalystProvider {
         let mut events = Vec::new();
 
         for date in &cal.earnings_dates {
-            if *date >= as_of {
+            if *date >= as_of && *date < horizon_end {
                 events.push(CatalystEvent {
                     symbol: symbol.to_ascii_uppercase(),
                     event_date: date.format("%Y-%m-%d").to_string(),
@@ -201,6 +233,7 @@ impl Tier1CatalystProvider {
 
         if let Some(date) = cal.ex_dividend_date
             && date >= as_of
+            && date < horizon_end
         {
             events.push(CatalystEvent {
                 symbol: symbol.to_ascii_uppercase(),
@@ -214,6 +247,29 @@ impl Tier1CatalystProvider {
         }
 
         events
+    }
+}
+
+async fn timeout_catalyst_source<F>(
+    source: &'static str,
+    symbol: &str,
+    timeout: std::time::Duration,
+    future: F,
+) -> Vec<CatalystEvent>
+where
+    F: Future<Output = Vec<CatalystEvent>>,
+{
+    match tokio::time::timeout(timeout, future).await {
+        Ok(events) => events,
+        Err(_) => {
+            tracing::warn!(
+                kind = "catalyst_fetch_failed",
+                source,
+                symbol,
+                "catalyst source timed out; continuing with empty contribution"
+            );
+            Vec::new()
+        }
     }
 }
 
@@ -233,12 +289,33 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
         let to = as_of + chrono::Duration::days(i64::from(horizon_days));
         let from_str = as_of.format("%Y-%m-%d").to_string();
         let to_str = to.format("%Y-%m-%d").to_string();
+        let source_timeout = self.source_timeout;
 
         let (earnings, ipos, macros, dividends) = tokio::join!(
-            self.try_finnhub_earnings(symbol, &from_str, &to_str),
-            self.try_finnhub_ipo(&from_str, &to_str),
-            self.try_fred_releases(&from_str, &to_str),
-            self.try_yfinance_calendar(symbol, as_of_date),
+            timeout_catalyst_source(
+                "finnhub_earnings",
+                symbol,
+                source_timeout,
+                self.try_finnhub_earnings(symbol, &from_str, &to_str),
+            ),
+            timeout_catalyst_source(
+                "finnhub_ipo",
+                symbol,
+                source_timeout,
+                self.try_finnhub_ipo(&from_str, &to_str),
+            ),
+            timeout_catalyst_source(
+                "fred",
+                symbol,
+                source_timeout,
+                self.try_fred_releases(&from_str, &to_str),
+            ),
+            timeout_catalyst_source(
+                "yfinance_calendar",
+                symbol,
+                source_timeout,
+                self.try_yfinance_calendar(symbol, as_of_date, to),
+            ),
         );
 
         let total = earnings.len() + ipos.len() + macros.len() + dividends.len();
@@ -248,18 +325,38 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
         all.extend(macros);
         all.extend(dividends);
 
-        all.sort_by(|a, b| {
-            (&a.event_date, &a.symbol, &a.category)
-                .cmp(&(&b.event_date, &b.symbol, &b.category))
-        });
-        all.dedup_by(|a, b| {
-            a.event_date == b.event_date
-                && a.symbol == b.symbol
-                && a.category == b.category
-        });
-
-        Ok(all)
+        Ok(sort_and_dedup_catalysts(all))
     }
+}
+
+fn sort_and_dedup_catalysts(mut events: Vec<CatalystEvent>) -> Vec<CatalystEvent> {
+    events.sort_by(|a, b| {
+        (
+            &a.event_date,
+            &a.symbol,
+            &a.category,
+            &a.headline,
+            &a.source,
+            &a.source_url,
+        )
+            .cmp(&(
+                &b.event_date,
+                &b.symbol,
+                &b.category,
+                &b.headline,
+                &b.source,
+                &b.source_url,
+            ))
+    });
+    events.dedup_by(|a, b| {
+        a.event_date == b.event_date
+            && a.symbol == b.symbol
+            && a.category == b.category
+            && a.headline == b.headline
+            && a.source == b.source
+            && a.source_url == b.source_url
+    });
+    events
 }
 
 // ─── Mapping helpers ─────────────────────────────────────────────────────────
@@ -406,6 +503,7 @@ impl CatalystCalendarProvider for SecEdgar8kProvider {
 pub struct Tier2CatalystProvider {
     pub(crate) tier1: Tier1CatalystProvider,
     pub(crate) sec_edgar: SecEdgar8kProvider,
+    pub(crate) source_timeout: std::time::Duration,
 }
 
 #[async_trait]
@@ -418,36 +516,19 @@ impl CatalystCalendarProvider for Tier2CatalystProvider {
     ) -> Result<Vec<CatalystEvent>, TradingError> {
         let (tier1_result, edgar_result) = tokio::join!(
             self.tier1.fetch_catalysts(symbol, as_of_date, horizon_days),
-            self.sec_edgar.fetch_catalysts(symbol, as_of_date, horizon_days),
+            timeout_catalyst_source("sec_edgar", symbol, self.source_timeout, async {
+                self.sec_edgar
+                    .fetch_catalysts(symbol, as_of_date, horizon_days)
+                    .await
+                    .unwrap_or_default()
+            },),
         );
 
         // Tier 1 `Err` is a date arithmetic bug — propagate.
         let mut all = tier1_result?;
+        all.extend(edgar_result);
 
-        match edgar_result {
-            Ok(events) => all.extend(events),
-            Err(err) => {
-                tracing::warn!(
-                    kind = "catalyst_fetch_failed",
-                    source = "sec_edgar",
-                    symbol,
-                    error = %err,
-                    "Tier 2 SEC EDGAR source failed; Tier 1 events still flow through"
-                );
-            }
-        }
-
-        all.sort_by(|a, b| {
-            (&a.event_date, &a.symbol, &a.category)
-                .cmp(&(&b.event_date, &b.symbol, &b.category))
-        });
-        all.dedup_by(|a, b| {
-            a.event_date == b.event_date
-                && a.symbol == b.symbol
-                && a.category == b.category
-        });
-
-        Ok(all)
+        Ok(sort_and_dedup_catalysts(all))
     }
 }
 
@@ -583,7 +664,10 @@ mod tests {
     fn catalyst_event_source_url_omitted_when_none() {
         let event = sample_event();
         let json = serde_json::to_string(&event).expect("serialize");
-        assert!(!json.contains("source_url"), "source_url should be absent when None");
+        assert!(
+            !json.contains("source_url"),
+            "source_url should be absent when None"
+        );
     }
 
     #[test]
@@ -649,7 +733,10 @@ mod tests {
         assert_eq!(event.event_date, "2026-07-15");
         assert_eq!(event.category, CatalystCategory::EarningsAndFinancial);
         assert_eq!(event.impact, ImpactLevel::H);
-        assert!(event.headline.contains("Q3"), "headline should include quarter");
+        assert!(
+            event.headline.contains("Q3"),
+            "headline should include quarter"
+        );
         assert_eq!(event.source, "finnhub");
     }
 
@@ -729,7 +816,9 @@ mod tests {
             accession_number: "0000320193-26-000123".to_owned(),
             form_type: form_type.to_owned(),
             filing_date: "2026-03-01".to_owned(),
-            primary_doc_url: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000123/d8k.htm".to_owned(),
+            primary_doc_url:
+                "https://www.sec.gov/Archives/edgar/data/320193/000032019326000123/d8k.htm"
+                    .to_owned(),
             item_codes: item_codes.to_owned(),
         }
     }
@@ -758,7 +847,11 @@ mod tests {
     fn map_edgar_8k_multi_item_expands_to_multiple_events() {
         let f = filing("8-K", "2.02,8.01");
         let events = map_edgar_filing_to_events("AAPL", &f);
-        assert_eq!(events.len(), 2, "two tracked item codes should produce two events");
+        assert_eq!(
+            events.len(),
+            2,
+            "two tracked item codes should produce two events"
+        );
     }
 
     #[test]
@@ -797,7 +890,10 @@ mod tests {
     fn map_edgar_10k_produces_no_events() {
         let f = filing("10-K", "");
         let events = map_edgar_filing_to_events("AAPL", &f);
-        assert!(events.is_empty(), "non-8K non-13D/G forms should produce no events");
+        assert!(
+            events.is_empty(),
+            "non-8K non-13D/G forms should produce no events"
+        );
     }
 
     #[test]
@@ -848,15 +944,130 @@ mod tests {
             },
         ];
         events.sort_by(|a, b| {
-            (&a.event_date, &a.symbol, &a.category)
-                .cmp(&(&b.event_date, &b.symbol, &b.category))
+            (&a.event_date, &a.symbol, &a.category).cmp(&(&b.event_date, &b.symbol, &b.category))
         });
         events.dedup_by(|a, b| {
-            a.event_date == b.event_date
-                && a.symbol == b.symbol
-                && a.category == b.category
+            a.event_date == b.event_date && a.symbol == b.symbol && a.category == b.category
         });
         assert_eq!(events.len(), 1, "duplicate should be removed");
         assert_eq!(events[0].headline, "first", "first occurrence kept");
+    }
+
+    #[test]
+    fn sort_and_dedup_preserves_distinct_same_day_same_category_events() {
+        let events = vec![
+            CatalystEvent {
+                symbol: "AAPL".to_owned(),
+                event_date: "2026-07-01".to_owned(),
+                category: CatalystCategory::CorporateEvents,
+                impact: ImpactLevel::H,
+                headline: "Material agreement signed".to_owned(),
+                source_url: Some("https://example.com/8k-101".to_owned()),
+                source: "sec_edgar".to_owned(),
+            },
+            CatalystEvent {
+                symbol: "AAPL".to_owned(),
+                event_date: "2026-07-01".to_owned(),
+                category: CatalystCategory::CorporateEvents,
+                impact: ImpactLevel::M,
+                headline: "Shareholder vote results".to_owned(),
+                source_url: Some("https://example.com/8k-507".to_owned()),
+                source: "sec_edgar".to_owned(),
+            },
+        ];
+
+        let deduped = sort_and_dedup_catalysts(events);
+
+        assert_eq!(
+            deduped.len(),
+            2,
+            "distinct same-day catalysts must not collapse into one event"
+        );
+    }
+
+    #[tokio::test]
+    async fn try_yfinance_calendar_excludes_events_beyond_horizon_end() {
+        use crate::data::StubbedFinancialResponses;
+        use crate::data::yfinance::financials::TickerCalendar;
+
+        let provider = Tier1CatalystProvider::new(
+            FinnhubClient::for_test(),
+            FredClient::for_test(),
+            YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+                calendar: Some(TickerCalendar {
+                    earnings_dates: vec![
+                        chrono::NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+                        chrono::NaiveDate::from_ymd_opt(2026, 2, 20).unwrap(),
+                    ],
+                    ex_dividend_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 25).unwrap()),
+                    dividend_payment_date: None,
+                }),
+                ..StubbedFinancialResponses::default()
+            }),
+        );
+
+        let events = provider
+            .fetch_catalysts("AAPL", "2026-01-15", 30)
+            .await
+            .expect("stubbed calendar fetch must succeed");
+
+        assert!(
+            events.iter().any(|event| event.event_date == "2026-01-20"),
+            "in-window earnings date must be preserved"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event_date.as_str() < "2026-02-14"),
+            "events beyond the 30-day horizon must be filtered out: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_catalyst_source_preserves_fast_results_when_peer_times_out() {
+        let fast_event = CatalystEvent {
+            symbol: "AAPL".to_owned(),
+            event_date: "2026-01-20".to_owned(),
+            category: CatalystCategory::EarningsAndFinancial,
+            impact: ImpactLevel::H,
+            headline: "AAPL Q1 earnings".to_owned(),
+            source_url: None,
+            source: "fast".to_owned(),
+        };
+
+        let (fast, slow) = tokio::join!(
+            timeout_catalyst_source(
+                "fast",
+                "AAPL",
+                std::time::Duration::from_millis(10),
+                async { vec![fast_event.clone()] },
+            ),
+            timeout_catalyst_source(
+                "slow",
+                "AAPL",
+                std::time::Duration::from_millis(10),
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    vec![CatalystEvent {
+                        symbol: "AAPL".to_owned(),
+                        event_date: "2026-01-21".to_owned(),
+                        category: CatalystCategory::CorporateEvents,
+                        impact: ImpactLevel::M,
+                        headline: "slow event".to_owned(),
+                        source_url: None,
+                        source: "slow".to_owned(),
+                    }]
+                },
+            )
+        );
+
+        let merged = sort_and_dedup_catalysts([fast, slow].concat());
+
+        assert_eq!(
+            merged.len(),
+            1,
+            "timed-out peer must not zero out fast source"
+        );
+        assert_eq!(merged[0].headline, "AAPL Q1 earnings");
     }
 }
