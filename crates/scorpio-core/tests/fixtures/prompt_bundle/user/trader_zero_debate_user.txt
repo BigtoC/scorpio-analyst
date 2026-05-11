@@ -19,5 +19,10 @@ Event-news status: not_configured
 
 Consensus estimates status: not_configured
 
+Catalyst calendar status: not_configured
+
+Catalyst calendar:
+(no upcoming catalysts: data unavailable)
+
 Analysis strategy: Balanced Institutional (baseline)
 Emphasis: Weight all data sources equally. Use DCF and multiples for valuation when available. Consider both fundamental quality and market sentiment.
