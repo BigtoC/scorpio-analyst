@@ -117,7 +117,12 @@ async fn main() {
     // ── [3] Filings fetch — happy path ────────────────────────────────────────
     section(3, "fetch_recent_filings — AAPL 8-K (2025–2026)");
     let filings = client
-        .fetch_recent_filings(320193, &["8-K", "SC 13D", "SC 13G"], "2025-01-01", "2026-12-31")
+        .fetch_recent_filings(
+            320193,
+            &["8-K", "SC 13D", "SC 13G"],
+            "2025-01-01",
+            "2026-12-31",
+        )
         .await
         .expect("fetch_recent_filings must return Ok regardless of network outcome");
 

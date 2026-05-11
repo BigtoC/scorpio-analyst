@@ -20,7 +20,7 @@
 use chrono::{Duration, Utc};
 use scorpio_core::{
     config::ApiConfig,
-    data::{fred::release_id, FredClient},
+    data::{FredClient, fred::release_id},
     rate_limit::SharedRateLimiter,
 };
 use secrecy::SecretString;
@@ -178,9 +178,7 @@ async fn main() {
     ] {
         match client.release_dates(id, &from, &to).await {
             Err(e) => {
-                eprintln!(
-                    "  FAIL  release_dates({label}, id={id}) returned error: {e}"
-                );
+                eprintln!("  FAIL  release_dates({label}, id={id}) returned error: {e}");
                 r.fail += 1;
             }
             Ok(dates) => {
