@@ -43,7 +43,11 @@ pub struct TickerCalendar {
 impl From<Calendar> for TickerCalendar {
     fn from(c: Calendar) -> Self {
         Self {
-            earnings_dates: c.earnings_dates.into_iter().map(|dt| dt.date_naive()).collect(),
+            earnings_dates: c
+                .earnings_dates
+                .into_iter()
+                .map(|dt| dt.date_naive())
+                .collect(),
             ex_dividend_date: c.ex_dividend_date.map(|dt| dt.date_naive()),
             dividend_payment_date: c.dividend_payment_date.map(|dt| dt.date_naive()),
         }
@@ -300,6 +304,11 @@ impl YFinanceClient {
     /// gracefully. The upstream type is converted to a thin [`TickerCalendar`]
     /// domain wrapper so callers don't depend on the `yfinance_rs` type directly.
     pub async fn fetch_calendar(&self, symbol: &str) -> Option<TickerCalendar> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.calendar.clone();
+        }
+
         match self
             .session
             .with_rate_limit(FundamentalsBuilder::new(self.session.client(), symbol).calendar())
@@ -496,7 +505,9 @@ mod tests {
         let upstream = yfinance_rs::fundamentals::Calendar {
             earnings_dates: vec![
                 chrono::Utc.with_ymd_and_hms(2026, 7, 15, 20, 0, 0).unwrap(),
-                chrono::Utc.with_ymd_and_hms(2026, 10, 14, 20, 0, 0).unwrap(),
+                chrono::Utc
+                    .with_ymd_and_hms(2026, 10, 14, 20, 0, 0)
+                    .unwrap(),
             ],
             ex_dividend_date: Some(chrono::Utc.with_ymd_and_hms(2026, 5, 9, 0, 0, 0).unwrap()),
             dividend_payment_date: Some(
@@ -530,5 +541,22 @@ mod tests {
         assert!(cal.earnings_dates.is_empty());
         assert!(cal.ex_dividend_date.is_none());
         assert!(cal.dividend_payment_date.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_calendar_returns_stubbed_calendar() {
+        let stubbed_calendar = TickerCalendar {
+            earnings_dates: vec![chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()],
+            ex_dividend_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
+            dividend_payment_date: None,
+        };
+        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            calendar: Some(stubbed_calendar.clone()),
+            ..StubbedFinancialResponses::default()
+        });
+
+        let calendar = client.fetch_calendar("AAPL").await;
+
+        assert_eq!(calendar, Some(stubbed_calendar));
     }
 }

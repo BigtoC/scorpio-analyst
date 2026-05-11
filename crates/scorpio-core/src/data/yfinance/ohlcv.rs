@@ -76,6 +76,7 @@ type OhlcvCacheKey = (String, String, String);
 #[derive(Debug, Clone, Default)]
 pub struct StubbedFinancialResponses {
     pub profile: Option<Profile>,
+    pub calendar: Option<super::financials::TickerCalendar>,
     pub cashflow: Option<Vec<CashflowRow>>,
     pub balance: Option<Vec<BalanceSheetRow>>,
     pub income: Option<Vec<IncomeStatementRow>>,
