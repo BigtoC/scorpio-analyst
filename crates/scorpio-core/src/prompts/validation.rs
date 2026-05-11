@@ -46,6 +46,9 @@ const KNOWN_PLACEHOLDERS: &[&str] = &[
     "{options_tool_note}",
     "{options_summary_field_note}",
     "{options_instructions_note}",
+    // News analyst catalyst calendar block (replaced at prompt-render time by
+    // `build_news_system_prompt` via `build_catalyst_calendar_block`).
+    "{catalyst_calendar}",
 ];
 
 /// True when the slot has no meaningful content for the LLM prompt.
@@ -277,7 +280,7 @@ mod tests {
     fn known_placeholder_vocabulary_is_closed() {
         // Locking the closed allowlist size so any future placeholder addition
         // forces a deliberate code change to this constant + tests.
-        assert_eq!(KNOWN_PLACEHOLDERS.len(), 28);
+        assert_eq!(KNOWN_PLACEHOLDERS.len(), 29);
         assert!(KNOWN_PLACEHOLDERS.contains(&"{ticker}"));
         assert!(KNOWN_PLACEHOLDERS.contains(&"{trader_proposal}"));
         assert!(KNOWN_PLACEHOLDERS.contains(&"{current_price}"));
