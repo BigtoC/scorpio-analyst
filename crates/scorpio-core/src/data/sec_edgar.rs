@@ -171,8 +171,7 @@ fn parse_submissions(
     from: &str,
     to: &str,
 ) -> Result<Vec<FilingHeader>, String> {
-    let resp: EdgarSubmissionsResponse =
-        serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let resp: EdgarSubmissionsResponse = serde_json::from_str(body).map_err(|e| e.to_string())?;
 
     let recent = resp.filings.recent;
     let count = recent.accession_number.len();
@@ -393,17 +392,6 @@ impl SecEdgarClient {
                 );
                 Ok(vec![])
             }
-            Ok((status, _)) if status >= 400 => {
-                self.breaker.lock().await.record_failure();
-                tracing::warn!(
-                    kind = "catalyst_fetch_failed",
-                    source = "sec_edgar",
-                    cik,
-                    http_status = status,
-                    "SEC EDGAR submissions returned error status"
-                );
-                Ok(vec![])
-            }
             Ok((status, _)) if status >= 500 => {
                 self.breaker.lock().await.record_failure();
                 tracing::warn!(
@@ -412,6 +400,17 @@ impl SecEdgarClient {
                     cik,
                     http_status = status,
                     "SEC EDGAR submissions server error"
+                );
+                Ok(vec![])
+            }
+            Ok((status, _)) if status >= 400 => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar",
+                    cik,
+                    http_status = status,
+                    "SEC EDGAR submissions returned error status"
                 );
                 Ok(vec![])
             }
@@ -461,7 +460,7 @@ mod tests {
         let json = r#"{"0": {"cik_str": 1234, "ticker": "aapl", "title": "Test"}}"#;
         let map = parse_company_tickers(json).expect("parse");
         assert_eq!(map.get("AAPL"), Some(&1234u32));
-        assert!(map.get("aapl").is_none());
+        assert!(!map.contains_key("aapl"));
     }
 
     #[test]
@@ -508,9 +507,12 @@ mod tests {
             "d123.htm",
             Some(""),
         );
-        let filings = parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01")
-            .expect("parse");
-        assert!(filings.is_empty(), "10-K should be filtered out when only 8-K requested");
+        let filings =
+            parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01").expect("parse");
+        assert!(
+            filings.is_empty(),
+            "10-K should be filtered out when only 8-K requested"
+        );
     }
 
     #[test]
@@ -522,9 +524,12 @@ mod tests {
             "d24.htm",
             Some("2.02"),
         );
-        let filings = parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01")
-            .expect("parse");
-        assert!(filings.is_empty(), "filing before window should be filtered out");
+        let filings =
+            parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01").expect("parse");
+        assert!(
+            filings.is_empty(),
+            "filing before window should be filtered out"
+        );
     }
 
     #[test]
@@ -536,8 +541,8 @@ mod tests {
             "d8k.htm",
             Some("2.02"),
         );
-        let filings = parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01")
-            .expect("parse");
+        let filings =
+            parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01").expect("parse");
         assert_eq!(filings.len(), 1);
         let f = &filings[0];
         assert_eq!(f.cik, 320193);
@@ -562,10 +567,13 @@ mod tests {
             "d8k2.htm",
             None, // no `items` field at all
         );
-        let filings = parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01")
-            .expect("parse");
+        let filings =
+            parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01").expect("parse");
         assert_eq!(filings.len(), 1);
-        assert_eq!(filings[0].item_codes, "", "missing items field should yield empty string");
+        assert_eq!(
+            filings[0].item_codes, "",
+            "missing items field should yield empty string"
+        );
     }
 
     #[test]
@@ -577,8 +585,8 @@ mod tests {
             "d8k3.htm",
             Some("1.01, 2.01"),
         );
-        let filings = parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01")
-            .expect("parse");
+        let filings =
+            parse_submissions(&json, 320193, &["8-K"], "2025-01-01", "2027-01-01").expect("parse");
         assert_eq!(filings[0].item_codes, "1.01,2.01");
     }
 
@@ -598,11 +606,12 @@ mod tests {
             .expect_get()
             .returning(move |_url| Ok((200, json.to_owned())));
 
-        let client = SecEdgarClient::with_http(
-            Arc::new(mock_http),
-            SharedRateLimiter::new("test", 100),
-        );
-        let cik = client.lookup_cik("ZZZNOTREAL").await.expect("must not error");
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
+        let cik = client
+            .lookup_cik("ZZZNOTREAL")
+            .await
+            .expect("must not error");
         assert_eq!(cik, None);
     }
 
@@ -614,10 +623,8 @@ mod tests {
             .expect_get()
             .returning(move |_url| Ok((200, json.to_owned())));
 
-        let client = SecEdgarClient::with_http(
-            Arc::new(mock_http),
-            SharedRateLimiter::new("test", 100),
-        );
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
         let cik = client.lookup_cik("AAPL").await.expect("must not error");
         assert_eq!(cik, Some(320193));
     }
@@ -630,10 +637,8 @@ mod tests {
             .expect_get()
             .returning(move |_url| Ok((200, json.to_owned())));
 
-        let client = SecEdgarClient::with_http(
-            Arc::new(mock_http),
-            SharedRateLimiter::new("test", 100),
-        );
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
         assert_eq!(client.lookup_cik("aapl").await.unwrap(), Some(320193));
     }
 
@@ -664,7 +669,10 @@ mod tests {
             .fetch_recent_filings(99_999_999, &["8-K"], "2025-01-01", "2026-12-31")
             .await
             .expect("must return Ok");
-        assert!(result.is_empty(), "HTTP 404 (bogus CIK) must yield empty filings");
+        assert!(
+            result.is_empty(),
+            "HTTP 404 (bogus CIK) must yield empty filings"
+        );
     }
 
     #[tokio::test]
@@ -700,7 +708,10 @@ mod tests {
             .fetch_recent_filings(320193, &["8-K"], "2025-01-01", "2026-12-31")
             .await
             .expect("must return Ok");
-        assert!(result.is_empty(), "transport error must yield empty filings");
+        assert!(
+            result.is_empty(),
+            "transport error must yield empty filings"
+        );
     }
 
     #[tokio::test]
@@ -716,7 +727,10 @@ mod tests {
             .fetch_recent_filings(320193, &["8-K"], "2025-01-01", "2026-12-31")
             .await
             .expect("must return Ok");
-        assert!(result.is_empty(), "malformed JSON body must yield empty filings");
+        assert!(
+            result.is_empty(),
+            "malformed JSON body must yield empty filings"
+        );
     }
 
     #[tokio::test]
@@ -732,7 +746,10 @@ mod tests {
             SharedRateLimiter::new("test", 100),
             cache,
         );
-        let cik = client.lookup_cik("ZZZNOTREAL").await.expect("must not error");
+        let cik = client
+            .lookup_cik("ZZZNOTREAL")
+            .await
+            .expect("must not error");
         assert_eq!(cik, None, "unknown ticker must return None");
     }
 
@@ -746,7 +763,10 @@ mod tests {
         for _ in 0..CIRCUIT_OPEN_THRESHOLD {
             state.record_failure();
         }
-        assert!(state.is_open(), "breaker must open after {CIRCUIT_OPEN_THRESHOLD} failures");
+        assert!(
+            state.is_open(),
+            "breaker must open after {CIRCUIT_OPEN_THRESHOLD} failures"
+        );
     }
 
     #[test]
@@ -796,7 +816,10 @@ mod tests {
     fn new_constructs_successfully_with_valid_limiter() {
         let limiter = SharedRateLimiter::new("test-edgar", 10);
         let result = SecEdgarClient::new(limiter);
-        assert!(result.is_ok(), "hardcoded UA should always produce a valid client");
+        assert!(
+            result.is_ok(),
+            "hardcoded UA should always produce a valid client"
+        );
     }
 
     // ── Live tests (require internet, not run in CI) ──────────────────────────
@@ -804,8 +827,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live SEC EDGAR connection — run manually"]
     async fn live_lookup_cik_aapl_returns_known_cik() {
-        let client =
-            SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
+        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
         let cik = client.lookup_cik("AAPL").await.expect("lookup");
         assert_eq!(cik, Some(320193));
     }
@@ -813,8 +835,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live SEC EDGAR connection — run manually"]
     async fn live_fetch_recent_8k_filings_for_aapl_returns_nonempty() {
-        let client =
-            SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
+        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
         let filings = client
             .fetch_recent_filings(320193, &["8-K"], "2025-01-01", "2026-12-31")
             .await
@@ -828,8 +849,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live SEC EDGAR connection — run manually"]
     async fn live_fetch_bogus_cik_returns_ok_empty() {
-        let client =
-            SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
+        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
         let filings = client
             .fetch_recent_filings(99_999_999, &["8-K"], "2025-01-01", "2026-12-31")
             .await
