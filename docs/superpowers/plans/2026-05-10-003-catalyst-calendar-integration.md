@@ -497,6 +497,16 @@ Map each source-specific row into `CatalystEvent`:
 - FRED release dates → `symbol: "_MACRO"`, `category: MacroEvents`. Impact map per release (CPI/NFP/FOMC = H; GDP/ISM/Retail = M).
 - yfinance ex-dividend → `category: EarningsAndFinancial`, `impact: L`.
 
+Prompt rendering priority under the 25-line cap:
+- Keep all IPO events in `enrichment_catalysts.payload`; do not drop them at fetch time.
+- When rendering `build_catalyst_calendar_block`, sort by relevance bucket first, then `event_date` ascending within each bucket.
+- Relevance buckets:
+  1. events for the analysed ticker
+  2. macro events (`symbol = "_MACRO"` / `category: MacroEvents`)
+  3. unrelated IPO events from the global Finnhub IPO window
+  4. other non-ticker events
+- This preserves Tier 1 IPO coverage while ensuring ticker-specific and macro catalysts survive the prompt cap ahead of unrelated IPO debut rows.
+
 - [x] **Step 2: Tests**
 
 Three test variants per source: happy path, empty response, upstream error. Use mocked clients — do not hit live APIs in unit tests. **One additional test must verify the composition invariant:** when one source's mock returns `Err`, `fetch_catalysts` still returns `Ok` with the surviving sources' events plus a `tracing::warn!` captured via a `tracing-test` subscriber.
