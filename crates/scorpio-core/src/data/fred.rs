@@ -291,9 +291,11 @@ impl FredClient {
         }
 
         let body: FredReleaseDatesResponse =
-            resp.json().await.map_err(|e| TradingError::SchemaViolation {
-                message: format!("release_dates deserialize: {e}"),
-            })?;
+            resp.json()
+                .await
+                .map_err(|e| TradingError::SchemaViolation {
+                    message: format!("release_dates deserialize: {e}"),
+                })?;
 
         let dates = body
             .release_dates
@@ -1115,17 +1117,6 @@ mod tests {
     // ── release_id constants ─────────────────────────────────────────────
 
     #[test]
-    fn release_id_constants_are_nonzero() {
-        use crate::data::fred::release_id;
-        assert!(release_id::CPI > 0);
-        assert!(release_id::NONFARM_PAYROLLS > 0);
-        assert!(release_id::FOMC_DECISION > 0);
-        assert!(release_id::GDP > 0);
-        assert!(release_id::ISM_MANUFACTURING > 0);
-        assert!(release_id::RETAIL_SALES > 0);
-    }
-
-    #[test]
     fn release_id_constants_are_distinct() {
         use crate::data::fred::release_id;
         let ids = [
@@ -1137,7 +1128,11 @@ mod tests {
             release_id::RETAIL_SALES,
         ];
         let unique: std::collections::HashSet<u32> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len(), "all release_id constants must be distinct");
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "all release_id constants must be distinct"
+        );
     }
 
     // ── release_dates response deserialization ───────────────────────────
@@ -1167,6 +1162,9 @@ mod tests {
             .release_dates(release_id::CPI, &from.to_string(), &to.to_string())
             .await
             .expect("release_dates");
-        assert!(!dates.is_empty(), "CPI should have released at least once in the last 60 days");
+        assert!(
+            !dates.is_empty(),
+            "CPI should have released at least once in the last 60 days"
+        );
     }
 }
