@@ -387,6 +387,21 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
         ));
     }
 
+    let catalyst_status = match &state.enrichment_catalysts.status {
+        EnrichmentStatus::Disabled => "disabled".to_owned(),
+        EnrichmentStatus::NotConfigured => "not_configured".to_owned(),
+        EnrichmentStatus::NotAvailable => "not_available".to_owned(),
+        EnrichmentStatus::FetchFailed(reason) => {
+            format!("fetch_failed ({})", sanitize_prompt_context(reason))
+        }
+        EnrichmentStatus::Available => "available".to_owned(),
+    };
+    sections.push(format!("Catalyst calendar status: {catalyst_status}"));
+    sections.push(format!(
+        "Catalyst calendar:\n{}",
+        build_catalyst_calendar_block(state)
+    ));
+
     sections.join("\n\n")
 }
 
@@ -419,6 +434,21 @@ const CATALYST_PROMPT_CAP: usize = 25;
 /// Returns a sentinel literal when the field was never fetched (`payload: None`)
 /// or when there are no events to report (`payload: Some([])`).
 pub(crate) fn build_catalyst_calendar_block(state: &TradingState) -> String {
+    if matches!(
+        state.enrichment_catalysts.status,
+        EnrichmentStatus::Disabled
+            | EnrichmentStatus::NotConfigured
+            | EnrichmentStatus::NotAvailable
+            | EnrichmentStatus::FetchFailed(_)
+    ) && state
+        .enrichment_catalysts
+        .payload
+        .as_ref()
+        .is_none_or(Vec::is_empty)
+    {
+        return "(no upcoming catalysts: data unavailable)".to_owned();
+    }
+
     let Some(events) = state.enrichment_catalysts.payload.as_ref() else {
         return "(no upcoming catalysts: data unavailable)".to_owned();
     };
@@ -438,10 +468,17 @@ pub(crate) fn build_catalyst_calendar_block(state: &TradingState) -> String {
                 ImpactLevel::M => "[M]",
                 ImpactLevel::L => "[L]",
             };
+            let category_tag = match e.category {
+                crate::state::CatalystCategory::EarningsAndFinancial => "earnings_and_financial",
+                crate::state::CatalystCategory::CorporateEvents => "corporate_events",
+                crate::state::CatalystCategory::IndustryEvents => "industry_events",
+                crate::state::CatalystCategory::MacroEvents => "macro_events",
+            };
             format!(
-                "- {} {} {}: {}",
+                "- {} {} [{}] {}: {}",
                 e.event_date,
                 impact_tag,
+                category_tag,
                 e.symbol,
                 sanitize_prompt_context(&e.headline),
             )
@@ -948,10 +985,26 @@ mod tests {
         impact: crate::state::ImpactLevel,
         headline: &str,
     ) -> crate::data::adapters::catalysts::CatalystEvent {
+        make_catalyst_with_category(
+            symbol,
+            event_date,
+            crate::state::CatalystCategory::EarningsAndFinancial,
+            impact,
+            headline,
+        )
+    }
+
+    fn make_catalyst_with_category(
+        symbol: &str,
+        event_date: &str,
+        category: crate::state::CatalystCategory,
+        impact: crate::state::ImpactLevel,
+        headline: &str,
+    ) -> crate::data::adapters::catalysts::CatalystEvent {
         crate::data::adapters::catalysts::CatalystEvent {
             symbol: symbol.to_owned(),
             event_date: event_date.to_owned(),
-            category: crate::state::CatalystCategory::EarningsAndFinancial,
+            category,
             impact,
             headline: headline.to_owned(),
             source_url: None,
@@ -979,21 +1032,51 @@ mod tests {
     }
 
     #[test]
+    fn catalyst_block_returns_unavailable_sentinel_when_fetch_failed_with_empty_payload() {
+        let mut state = empty_state();
+        state.enrichment_catalysts = EnrichmentState {
+            status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
+            payload: Some(vec![]),
+        };
+
+        let block = build_catalyst_calendar_block(&state);
+        assert_eq!(block, "(no upcoming catalysts: data unavailable)");
+    }
+
+    #[test]
     fn catalyst_block_renders_sorted_events_with_impact_tags() {
         let mut state = empty_state();
         state.enrichment_catalysts = EnrichmentState {
             status: EnrichmentStatus::Available,
             payload: Some(vec![
-                make_catalyst("_MACRO", "2026-06-15", crate::state::ImpactLevel::H, "FOMC rate decision"),
-                make_catalyst("AAPL", "2026-06-01", crate::state::ImpactLevel::H, "AAPL Q2 earnings"),
-                make_catalyst("AAPL", "2026-06-10", crate::state::ImpactLevel::L, "AAPL ex-dividend date"),
+                make_catalyst(
+                    "_MACRO",
+                    "2026-06-15",
+                    crate::state::ImpactLevel::H,
+                    "FOMC rate decision",
+                ),
+                make_catalyst(
+                    "AAPL",
+                    "2026-06-01",
+                    crate::state::ImpactLevel::H,
+                    "AAPL Q2 earnings",
+                ),
+                make_catalyst(
+                    "AAPL",
+                    "2026-06-10",
+                    crate::state::ImpactLevel::L,
+                    "AAPL ex-dividend date",
+                ),
             ]),
         };
         let block = build_catalyst_calendar_block(&state);
         let lines: Vec<&str> = block.lines().collect();
         assert_eq!(lines.len(), 3, "three events → three lines");
         // Sorted by date: 2026-06-01 first
-        assert!(lines[0].contains("2026-06-01"), "first line is earliest date");
+        assert!(
+            lines[0].contains("2026-06-01"),
+            "first line is earliest date"
+        );
         assert!(lines[0].contains("[H]"), "H-impact tagged correctly");
         assert!(lines[0].contains("AAPL Q2 earnings"));
         // ex-dividend is [L]
@@ -1004,21 +1087,97 @@ mod tests {
     }
 
     #[test]
+    fn catalyst_block_renders_category_tags() {
+        let mut state = empty_state();
+        state.enrichment_catalysts = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(vec![
+                make_catalyst_with_category(
+                    "AAPL",
+                    "2026-06-01",
+                    crate::state::CatalystCategory::EarningsAndFinancial,
+                    crate::state::ImpactLevel::H,
+                    "AAPL Q2 earnings",
+                ),
+                make_catalyst_with_category(
+                    "_MACRO",
+                    "2026-06-15",
+                    crate::state::CatalystCategory::MacroEvents,
+                    crate::state::ImpactLevel::H,
+                    "FOMC rate decision",
+                ),
+            ]),
+        };
+
+        let block = build_catalyst_calendar_block(&state);
+
+        assert!(
+            block.contains("[earnings_and_financial]"),
+            "catalyst lines must include category tags: {block}"
+        );
+        assert!(
+            block.contains("[macro_events]"),
+            "macro catalyst lines must include category tags: {block}"
+        );
+    }
+
+    #[test]
     fn catalyst_block_caps_at_25_events() {
         let mut state = empty_state();
         let events: Vec<_> = (1..=30)
-            .map(|i| make_catalyst(
-                "AAPL",
-                &format!("2026-06-{i:02}"),
-                crate::state::ImpactLevel::M,
-                &format!("event {i}"),
-            ))
+            .map(|i| {
+                make_catalyst(
+                    "AAPL",
+                    &format!("2026-06-{i:02}"),
+                    crate::state::ImpactLevel::M,
+                    &format!("event {i}"),
+                )
+            })
             .collect();
         state.enrichment_catalysts = EnrichmentState {
             status: EnrichmentStatus::Available,
             payload: Some(events),
         };
         let block = build_catalyst_calendar_block(&state);
-        assert_eq!(block.lines().count(), 25, "block must be capped at 25 lines");
+        assert_eq!(
+            block.lines().count(),
+            25,
+            "block must be capped at 25 lines"
+        );
+    }
+
+    #[test]
+    fn build_enrichment_context_includes_catalyst_calendar_when_available() {
+        let mut state = empty_state();
+        state.enrichment_catalysts = EnrichmentState {
+            status: EnrichmentStatus::Available,
+            payload: Some(vec![make_catalyst_with_category(
+                "AAPL",
+                "2026-06-01",
+                crate::state::CatalystCategory::EarningsAndFinancial,
+                crate::state::ImpactLevel::H,
+                "AAPL Q2 earnings",
+            )]),
+        };
+
+        let ctx = build_enrichment_context(&state);
+
+        assert!(ctx.contains("Catalyst calendar status: available"));
+        assert!(ctx.contains("AAPL Q2 earnings"));
+        assert!(ctx.contains("[earnings_and_financial]"));
+    }
+
+    #[test]
+    fn build_enrichment_context_marks_failed_catalyst_calendar_unavailable() {
+        let mut state = empty_state();
+        state.enrichment_catalysts = EnrichmentState {
+            status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
+            payload: Some(vec![]),
+        };
+
+        let ctx = build_enrichment_context(&state);
+
+        assert!(ctx.contains("Catalyst calendar status: fetch_failed (timeout)"));
+        assert!(ctx.contains("(no upcoming catalysts: data unavailable)"));
     }
 }
