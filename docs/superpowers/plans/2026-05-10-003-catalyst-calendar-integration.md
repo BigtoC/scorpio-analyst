@@ -203,7 +203,7 @@ The `_MACRO` sentinel symbol is intentional: FOMC and CPI releases apply to ever
 - Modify: `crates/scorpio-core/src/data/adapters/mod.rs` (add `pub mod catalysts;`)
 - Modify: `crates/scorpio-core/src/state/news.rs` (add `CatalystCategory` + `ImpactLevel`)
 
-- [ ] **Step 1: Write failing test for type roundtrip**
+- [x] **Step 1: Write failing test for type roundtrip**
 
 In `crates/scorpio-core/src/data/adapters/catalysts.rs::tests`, mirror the shape of `events.rs::tests::serialization_round_trip` for `EventNewsEvidence`:
 
@@ -217,11 +217,11 @@ fn catalyst_event_round_trip() {
 }
 ```
 
-- [ ] **Step 2: Define types and trait**
+- [x] **Step 2: Define types and trait**
 
 Use the canonical `CatalystEvent` and `CatalystCalendarProvider` shapes from the **Type Shapes** section above. Both `CatalystCategory` and `ImpactLevel` go in `state/news.rs` (not in `adapters/catalysts.rs`) so the news analyst's `NewsArticle` can later reference them without a circular import.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `cargo test -p scorpio-core data::adapters::catalysts`
 Expected: pass.
@@ -242,7 +242,7 @@ git commit -m "feat(data): add CatalystEvent contract and CatalystCalendarProvid
 
 The crate already exposes the endpoints we need (verified at `~/.cargo/registry/src/index.crates.io-*/finnhub-0.2.2/src/endpoints/calendar.rs`). The work is plumbing through `FinnhubClient` with the existing rate-limit + symbol-validation discipline.
 
-- [ ] **Step 1: Add `fetch_earnings_calendar` and `fetch_ipo_calendar`**
+- [x] **Step 1: Add `fetch_earnings_calendar` and `fetch_ipo_calendar`**
 
 ```rust
 // In crates/scorpio-core/src/data/finnhub.rs alongside the existing fetch_company_news.
@@ -280,7 +280,7 @@ pub async fn fetch_ipo_calendar(
 
 The exact re-export type names (`EarningsCalendarEvent`, `ipo_calendar` field) must be confirmed against `finnhub-0.2.2/src/models/calendar.rs` before commit.
 
-- [ ] **Step 2: Add a smoke test gated on a real API key**
+- [x] **Step 2: Add a smoke test gated on a real API key**
 
 Mirror the existing `#[ignore = "requires API key"]` pattern in `data/finnhub.rs` tests. Local CI does not run it; the developer running the migration runs it once to confirm the response shape.
 
@@ -297,7 +297,7 @@ git commit -m "feat(data): expose Finnhub earnings + IPO calendars on FinnhubCli
 **Files:**
 - Modify: `crates/scorpio-core/src/data/fred.rs`
 
-- [ ] **Step 1: Add release-id constants**
+- [x] **Step 1: Add release-id constants**
 
 ```rust
 // In crates/scorpio-core/src/data/fred.rs
@@ -318,7 +318,7 @@ pub mod release_id {
 
 (Numeric IDs **must** be verified against `https://api.stlouisfed.org/fred/releases?api_key=...` before commit. Do not guess.)
 
-- [ ] **Step 2: Add `release_dates` method**
+- [x] **Step 2: Add `release_dates` method**
 
 ```rust
 pub async fn release_dates(
@@ -335,7 +335,7 @@ pub async fn release_dates(
 
 Reuse the existing `FredClient::TOTAL_RETRY_BUDGET` retry shape. Surface the `release_id` field in the JSON envelope as the source of truth (FRED includes `release_id`/`release_name`/`date` per record).
 
-- [ ] **Step 3: Smoke test gated on real API key**
+- [x] **Step 3: Smoke test gated on real API key**
 
 Mirror the existing `#[ignore = "requires API key"]` pattern in `data/fred.rs` tests. Local CI does not run it; smoke validation belongs in the live-API example file added in Step 4.
 
@@ -407,7 +407,7 @@ git commit -m "feat(data): add FRED release-dates wrapper + live smoke test"
 
 The crate already exposes `Ticker.calendar()` returning `Calendar { earnings_dates, ex_dividend_date, dividend_date }`. Surface it through `YFinanceClient` with the same session/rate-limit discipline as other methods.
 
-- [ ] **Step 1: Add `fetch_calendar(symbol, target_date)`**
+- [x] **Step 1: Add `fetch_calendar(symbol, target_date)`**
 
 Returns a thin domain wrapper, not the upstream type, so callers don't depend on `yfinance_rs::fundamentals::Calendar`.
 
@@ -424,7 +424,7 @@ git commit -m "feat(data): expose yfinance per-ticker calendar"
 **Files:**
 - Modify: `crates/scorpio-core/src/data/adapters/catalysts.rs`
 
-- [ ] **Step 1: Compose the three sources with fail-soft semantics**
+- [x] **Step 1: Compose the three sources with fail-soft semantics**
 
 Per the **Failure-Mode Discipline** section: each per-source helper returns `Vec<CatalystEvent>` (no `Result`) and warn-logs on internal error. The composing `fetch_catalysts` uses `tokio::join!` (NOT `try_join!`) so one failed source doesn't zero out the others.
 
@@ -497,7 +497,7 @@ Map each source-specific row into `CatalystEvent`:
 - FRED release dates → `symbol: "_MACRO"`, `category: MacroEvents`. Impact map per release (CPI/NFP/FOMC = H; GDP/ISM/Retail = M).
 - yfinance ex-dividend → `category: EarningsAndFinancial`, `impact: L`.
 
-- [ ] **Step 2: Tests**
+- [x] **Step 2: Tests**
 
 Three test variants per source: happy path, empty response, upstream error. Use mocked clients — do not hit live APIs in unit tests. **One additional test must verify the composition invariant:** when one source's mock returns `Err`, `fetch_catalysts` still returns `Ok` with the surviving sources' events plus a `tracing::warn!` captured via a `tracing-test` subscriber.
 
@@ -517,7 +517,7 @@ git commit -m "feat(data): implement Tier1 catalyst calendar provider (Finnhub +
 - Modify: `crates/scorpio-core/src/workflow/pipeline/runtime.rs`
 - Modify: `crates/scorpio-core/src/agents/shared/prompt.rs`
 
-- [ ] **Step 1: Add the field**
+- [x] **Step 1: Add the field**
 
 ```rust
 // In crates/scorpio-core/src/state/trading_state.rs alongside enrichment_event_news
@@ -527,11 +527,11 @@ pub enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
 
 `#[serde(default)]` is mandatory per the CLAUDE.md TradingState schema-evolution rule. No `THESIS_MEMORY_SCHEMA_VERSION` bump required because this is purely additive.
 
-- [ ] **Step 2: Prefetch alongside existing news prefetch**
+- [x] **Step 2: Prefetch alongside existing news prefetch**
 
 In `workflow/pipeline/runtime.rs`, the existing prefetch already does `tokio::join!(price, vix, news)`. Extend to `tokio::join!(price, vix, news, catalysts)`. Catalyst horizon = 30 days from `state.target_date` (matches `NEWS_ANALYSIS_DAYS` window for symmetry).
 
-- [ ] **Step 3: Add `build_catalyst_calendar_block` renderer**
+- [x] **Step 3: Add `build_catalyst_calendar_block` renderer**
 
 ```rust
 // In crates/scorpio-core/src/agents/shared/prompt.rs
@@ -550,7 +550,7 @@ pub(crate) fn build_catalyst_calendar_block(state: &TradingState) -> String {
 
 Sort by `event_date` ascending; tag each line with `[H]` / `[M]` / `[L]` so the prompt's H/M/L tier rule has structured input.
 
-- [ ] **Step 4: Tests**
+- [x] **Step 4: Tests**
 
 Snapshot tests for the prompt block: empty, single event, mixed `_MACRO` + per-ticker, oversize cap.
 
@@ -568,7 +568,7 @@ git commit -m "feat(workflow): prefetch catalysts and surface in analyst-context
 - Modify: `crates/scorpio-core/src/analysis_packs/equity/prompts/news_analyst.md`
 - Modify: `docs/superpowers/plans/2026-05-10-analytical-themes-port.md`
 
-- [ ] **Step 1: Replace the TODO marker with a real `## Upcoming Catalysts` section**
+- [x] **Step 1: Replace the TODO marker with a real `## Upcoming Catalysts` section**
 
 In `news_analyst.md`, find the `<!-- TODO(catalyst-calendar): scorpio currently does not have a catalyst calendar data source. -->` block (referenced in `analytical-themes-port.md:436`). Replace with:
 
@@ -620,10 +620,16 @@ git commit -m "feat(packs): wire catalyst calendar into news analyst prompt"
 
 SEC EDGAR is free, no API key, but **mandates** a `User-Agent: <Name> <email>` header per their fair-use policy. Rate limit is 10 req/sec. Reuse the existing `SharedRateLimiter` for pacing.
 
-- [ ] **Step 1: HTTP client with mandatory UA**
+The User-Agent is hardcoded to `"Scorpio Analyst scorpio@ledgerlylab.com"` — no config field or wizard step required (Task 10 is dropped).
+
+- [ ] **Step 1: HTTP client with hardcoded UA**
 
 ```rust
 // crates/scorpio-core/src/data/sec_edgar.rs
+
+/// SEC EDGAR fair-use User-Agent. Hardcoded per policy — no config required.
+const SEC_EDGAR_USER_AGENT: &str = "Scorpio Analyst scorpio@ledgerlylab.com";
+
 pub struct SecEdgarClient {
     http: Arc<reqwest::Client>,
     limiter: SharedRateLimiter,
@@ -635,30 +641,16 @@ pub struct SecEdgarClient {
 }
 
 impl SecEdgarClient {
-    /// Construct a SEC EDGAR client.
-    ///
-    /// Returns `Err(TradingError::Config)` when the supplied User-Agent does
-    /// not contain `@` — SEC's fair-use policy mandates a contact email and
-    /// they will throttle/403 anonymous-style traffic. The caller (preflight)
-    /// is expected to log this and fall back to `Tier1CatalystProvider`, NOT
-    /// to abort the pipeline.
-    pub fn new(user_agent: &str, limiter: SharedRateLimiter) -> Result<Self, TradingError> {
-        if !user_agent.contains('@') {
-            return Err(TradingError::Config(anyhow::anyhow!(
-                "SEC EDGAR User-Agent must include a contact email (got {:?})",
-                user_agent
-            )));
-        }
-        // Build reqwest::Client with default-headers carrying the UA, plus
-        // a 15s request timeout (SEC EDGAR tail-latency is bounded).
+    /// Construct a SEC EDGAR client using the hardcoded Scorpio User-Agent.
+    pub fn new(limiter: SharedRateLimiter) -> Result<Self, TradingError> {
+        // Build reqwest::Client with default-headers carrying SEC_EDGAR_USER_AGENT,
+        // plus a 15s request timeout (SEC EDGAR tail-latency is bounded).
         // ...
     }
 }
 ```
 
-`user_agent` is loaded from a new config field `api.sec_edgar_user_agent` with a documented format (`"<Name> <email@example.com>"`). The setup wizard surfaces it in Task 10.
-
-**Construction-time fallback contract:** preflight calls `SecEdgarClient::new(...)` and matches the result. On `Err`, it logs `info!("falling back to Tier 1 catalyst provider: <reason>")` and instantiates `Tier1CatalystProvider` instead. The pipeline never aborts on a missing or malformed SEC EDGAR UA.
+**Construction-time fallback contract:** if `SecEdgarClient::new(...)` returns `Err` (e.g. reqwest client build failure), preflight logs `info!("falling back to Tier 1 catalyst provider: <reason>")` and instantiates `Tier1CatalystProvider` instead. The pipeline never aborts.
 
 - [ ] **Step 2: CIK lookup**
 
@@ -716,8 +708,7 @@ Mirror `finnhub_live_test.rs` structure (`Results` aggregator, env-driven config
 //! cargo run -p scorpio-core --example sec_edgar_live_test
 //! ```
 //!
-//! Requires `SCORPIO_SEC_EDGAR_USER_AGENT` in the environment, formatted as
-//! `"<Name> <email@example.com>"`. SEC EDGAR is unauthenticated — no API key.
+//! Uses the hardcoded Scorpio User-Agent. SEC EDGAR is unauthenticated — no API key.
 
 use scorpio_core::{data::SecEdgarClient, rate_limit::SharedRateLimiter};
 
@@ -726,17 +717,8 @@ async fn main() -> std::process::ExitCode {
     // Reuse the Results aggregator from finnhub_live_test.rs.
     let mut results = Results::new();
 
-    // ── Construct-time validation ────────────────────────────────────────────
-    let bad_ua = SecEdgarClient::new("Anonymous", SharedRateLimiter::new("sec-edgar-test", 10));
-    results.check(
-        "SecEdgarClient::new rejects UA without '@'",
-        bad_ua.is_err(),
-    );
-
-    let ua = std::env::var("SCORPIO_SEC_EDGAR_USER_AGENT")
-        .expect("SCORPIO_SEC_EDGAR_USER_AGENT not set");
-    let client = SecEdgarClient::new(&ua, SharedRateLimiter::new("sec-edgar-test", 10))
-        .expect("valid UA should construct");
+    let client = SecEdgarClient::new(SharedRateLimiter::new("sec-edgar-test", 10))
+        .expect("hardcoded UA should always construct");
 
     // ── Happy-path: AAPL has hundreds of filings, expect non-empty ──────────
     let aapl_cik: u32 = client.lookup_cik("AAPL").await.expect("AAPL CIK lookup");
@@ -861,29 +843,25 @@ impl CatalystCalendarProvider for Tier2CatalystProvider {
 
 **Circuit breaker:** the per-instance breaker on `SecEdgarClient` (Task 8 Step 1) is the second layer. After **5 consecutive** runtime failures within a single pipeline run, subsequent calls in the same run short-circuit to `Ok(empty)` without hitting the network. The breaker resets on each new pipeline run (a new `SecEdgarClient` instance, since clients are constructed during preflight — confirm against the actual lifetime of the catalyst-prefetch task before wiring).
 
-- [ ] **Step 3: Wire `Tier2CatalystProvider` into the runtime when `api.sec_edgar_user_agent` is set**
+- [ ] **Step 3: Wire `Tier2CatalystProvider` into the runtime**
 
-If unset OR if `SecEdgarClient::new(...)` returns `Err` (UA validation), fall back to `Tier1CatalystProvider`. Log once at startup which provider was chosen:
+`SecEdgarClient::new(limiter)` uses the hardcoded UA. If construction fails (e.g. reqwest build error), fall back to `Tier1CatalystProvider`. Log once at startup which provider was chosen:
 
 ```rust
 let catalyst_provider: Arc<dyn CatalystCalendarProvider> =
-    match (config.api.sec_edgar_user_agent.as_deref(), SecEdgarClient::new(...)) {
-        (Some(_), Ok(edgar_client)) => {
+    match SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10)) {
+        Ok(edgar_client) => {
             tracing::info!("catalyst provider: Tier 2 (Finnhub + FRED + yfinance + SEC EDGAR)");
             Arc::new(Tier2CatalystProvider { tier1, sec_edgar: SecEdgar8kProvider::new(edgar_client) })
         }
-        (Some(_), Err(reason)) => {
-            tracing::info!(reason = %reason, "falling back to Tier 1 catalyst provider: SEC EDGAR client construction failed");
-            Arc::new(tier1)
-        }
-        (None, _) => {
-            tracing::info!("catalyst provider: Tier 1 (SEC EDGAR User-Agent not configured)");
+        Err(reason) => {
+            tracing::info!(reason = %reason, "falling back to Tier 1 catalyst provider");
             Arc::new(tier1)
         }
     };
 ```
 
-Pipeline construction never aborts on a bad / missing SEC EDGAR config.
+Pipeline construction never aborts on a SEC EDGAR build failure.
 
 - [ ] **Step 4: Smoke + commit**
 
@@ -893,30 +871,9 @@ git commit -m "feat(data): add SEC EDGAR Item-coded 8-K catalyst provider"
 
 ---
 
-#### Task 10: Setup wizard support for SEC EDGAR UA
+#### ~~Task 10: Setup wizard support for SEC EDGAR UA~~ — **DROPPED**
 
-**Files:**
-- Modify: `crates/scorpio-cli/src/cli/setup/steps.rs`
-- Modify: `crates/scorpio-core/src/settings.rs`
-- Modify: `crates/scorpio-core/src/config.rs`
-
-- [ ] **Step 1: Add `sec_edgar_user_agent: Option<String>` to `PartialConfig`**
-
-Following the existing wizard-config-key pattern documented in CLAUDE.md.
-
-- [ ] **Step 2: Wizard step**
-
-Optional step (not required for analysis). Validate that the entered string contains `@` (proxy for "has email") — refuse to accept blank `Anonymous`-style values that SEC will block.
-
-- [ ] **Step 3: Document in README**
-
-Note that SEC EDGAR is optional; without it, only Tier 1 catalysts are surfaced.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git commit -m "feat(cli): wizard step for SEC EDGAR User-Agent"
-```
+User-Agent is hardcoded to `"Scorpio Analyst scorpio@ledgerlylab.com"`. No config field, no wizard step required.
 
 ---
 
