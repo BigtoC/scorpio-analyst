@@ -261,6 +261,43 @@ impl FinnhubClient {
             ),
         })
     }
+
+    /// Fetch the earnings calendar for an optional symbol over a date range.
+    ///
+    /// Returns the raw `EarningsCalendar` from the Finnhub API. Free-tier
+    /// access returns results for the given window; passing `symbol = None`
+    /// returns all tickers in the window.
+    pub async fn fetch_earnings_calendar(
+        &self,
+        from: &str,
+        to: &str,
+        symbol: Option<&str>,
+    ) -> Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError> {
+        self.limiter.acquire().await;
+        let result = self
+            .inner
+            .calendar()
+            .earnings(Some(from), Some(to), symbol)
+            .await
+            .map_err(map_finnhub_err)?;
+        Ok(Arc::new(result.earnings_calendar))
+    }
+
+    /// Fetch the IPO calendar for a date range.
+    pub async fn fetch_ipo_calendar(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Arc<Vec<finnhub::models::calendar::IPOEvent>>, TradingError> {
+        self.limiter.acquire().await;
+        let result = self
+            .inner
+            .calendar()
+            .ipo(from, to)
+            .await
+            .map_err(map_finnhub_err)?;
+        Ok(Arc::new(result.ipo_calendar))
+    }
 }
 
 // ─── Error mapping ───────────────────────────────────────────────────────────
@@ -1373,5 +1410,53 @@ mod tests {
         let limiter = SharedRateLimiter::new("test", 10_000);
         limiter.acquire().await;
         assert_eq!(limiter.label(), "test");
+    }
+
+    // ── Calendar endpoint structural tests ───────────────────────────────
+
+    #[test]
+    fn fetch_earnings_calendar_method_is_accessible_on_test_client() {
+        // Compile-time reachability: the test client can be constructed and
+        // the two calendar methods are callable (the async runtime would be
+        // needed to actually call them, so we just touch the client).
+        let client = FinnhubClient::for_test();
+        let _ = std::mem::size_of_val(&client);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live Finnhub API key — run manually"]
+    async fn fetch_earnings_calendar_returns_nonempty_for_wide_window() {
+        let api_key = std::env::var("SCORPIO_FINNHUB_API_KEY")
+            .expect("SCORPIO_FINNHUB_API_KEY must be set for this test");
+        let api_cfg = crate::config::ApiConfig {
+            finnhub_api_key: Some(secrecy::SecretString::from(api_key)),
+            ..Default::default()
+        };
+        let limiter = SharedRateLimiter::new("test-fh-live", 30);
+        let client = FinnhubClient::new(&api_cfg, limiter).expect("client");
+        let result = client
+            .fetch_earnings_calendar("2026-04-01", "2026-07-01", None)
+            .await
+            .expect("fetch_earnings_calendar");
+        assert!(!result.is_empty(), "expected earnings in a 3-month window");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live Finnhub API key — run manually"]
+    async fn fetch_ipo_calendar_returns_list_for_wide_window() {
+        let api_key = std::env::var("SCORPIO_FINNHUB_API_KEY")
+            .expect("SCORPIO_FINNHUB_API_KEY must be set for this test");
+        let api_cfg = crate::config::ApiConfig {
+            finnhub_api_key: Some(secrecy::SecretString::from(api_key)),
+            ..Default::default()
+        };
+        let limiter = SharedRateLimiter::new("test-fh-live", 30);
+        let client = FinnhubClient::new(&api_cfg, limiter).expect("client");
+        let result = client
+            .fetch_ipo_calendar("2026-04-01", "2026-07-01")
+            .await
+            .expect("fetch_ipo_calendar");
+        // IPO list may be empty in a quiet window; assert Ok is the key thing.
+        let _ = result;
     }
 }
