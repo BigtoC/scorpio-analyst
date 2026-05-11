@@ -146,10 +146,9 @@ All eight themes adapt content from `github.com/anthropics/financial-services`. 
 
 ### Optional follow-up extensions (not required for the core prompt port)
 
-| Path                                              | Theme        | Change                                                                                           |
-|---------------------------------------------------|--------------|--------------------------------------------------------------------------------------------------|
-| `crates/scorpio-core/src/agents/shared/contracts/researcher.rs` | E (follow-up) | Structured `Pillar` / `ThesisBreaker` envelopes from `2026-05-10-agent-output-schemas.md`; use only if you want runtime enforcement, not prompt steering. |
-| `crates/scorpio-core/src/state/news.rs`           | G (follow-up) | Add structured catalyst metadata only after a concrete same-slice consumer exists in reports, state, or downstream analytics. |
+| Path                                    | Theme         | Change                                                                                                                        |
+|-----------------------------------------|---------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `crates/scorpio-core/src/state/news.rs` | G (follow-up) | Add structured catalyst metadata only after a concrete same-slice consumer exists in reports, state, or downstream analytics. |
 
 ---
 
@@ -320,7 +319,7 @@ alone. Fall back to guidance language and estimate-revision direction.
 
 **Insert into:** `bullish_researcher.md`, `bearish_researcher.md`, `debate_moderator.md`, `neutral_risk.md`.
 
-This is the highest-leverage prompt port. Without the researcher envelopes from `2026-05-10-agent-output-schemas.md`, treat this as prompt steering rather than hard runtime enforcement. The current system still stores free-text debate turns, so the moderator prompt can demand structure but cannot by itself reject malformed earlier turns.
+This is the highest-leverage prompt port. The current system stores free-text debate turns, so this slice treats Theme E as prompt steering rather than hard runtime enforcement — the moderator prompt can demand structure but cannot by itself reject malformed earlier turns. That tradeoff is explicit and accepted; structural runtime enforcement is intentionally out of scope for this plan.
 
 For `bullish_researcher.md`:
 
@@ -632,11 +631,9 @@ git commit -m "feat(packs): port Theme E (falsifiable theses) into bull/bear/mod
 
 ---
 
-### Task 4: Theme E — structural enforcement (follow-up only)
+### Task 4: Theme E — structural enforcement (out of scope)
 
-This is intentionally out of the core port. If you want runtime enforcement instead of prompt steering, do it as a separate follow-up after `2026-05-10-agent-output-schemas.md` Task 5 lands.
-
-Reference path: `crates/scorpio-core/src/agents/shared/contracts/researcher.rs`
+Runtime/structural enforcement of the Theme E pillar/breaker shape is intentionally out of scope. Theme E ships as prompt steering only; if a future plan wants to reject malformed debate turns at runtime, it should be proposed separately.
 
 No code changes in this plan.
 
@@ -810,7 +807,7 @@ git commit -m "docs(solutions): record themes port + open data-source gaps"
 - [x] Every theme has exact file paths.
 - [x] Every prompt block is verbatim, ready to paste.
 - [x] No placeholders (the `TODO(transcripts)` and `TODO(catalyst-calendar)` markers are intentional seams, not abandoned tasks).
-- [x] Type names consistent: `Pillar`, `ThesisBreaker`, `CatalystCategory`, `ImpactLevel` — used identically here and in the output-schemas plan.
+- [x] Type names consistent: `Pillar`, `ThesisBreaker`, `CatalystCategory`, `ImpactLevel` — used identically across this plan's prompt blocks.
 - [x] Data dependencies: surfaced in the Decision Summary and again per-theme. Themes C and G shipped in degraded mode with explicit TODO markers.
 - [x] CLAUDE.md compliance: all struct extensions use `#[serde(default)]`; no `THESIS_MEMORY_SCHEMA_VERSION` bump required by this plan (Theme E structured-thesis-memory is explicitly out of scope).
 
