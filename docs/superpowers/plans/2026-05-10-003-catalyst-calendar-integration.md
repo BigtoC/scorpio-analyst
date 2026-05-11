@@ -339,7 +339,7 @@ Reuse the existing `FredClient::TOTAL_RETRY_BUDGET` retry shape. Surface the `re
 
 Mirror the existing `#[ignore = "requires API key"]` pattern in `data/fred.rs` tests. Local CI does not run it; smoke validation belongs in the live-API example file added in Step 4.
 
-- [ ] **Step 4: Add `crates/scorpio-core/examples/fred_live_test.rs`**
+- [x] **Step 4: Add `crates/scorpio-core/examples/fred_live_test.rs`**
 
 Mirror the structure of the existing `crates/scorpio-core/examples/finnhub_live_test.rs` (PASS/FAIL aggregator, env-driven API key, exit non-zero on any failure). Cover the existing `get_series_latest` and `get_economic_indicators` plus the **new** `release_dates(release_id, from, to)` for every entry in the `release_id::*` constant table:
 
@@ -590,7 +590,7 @@ signal — analysed name is in a quiet window.
 
 Keep the rest of the Theme G H/M/L impact-tier guidance intact (it's still the prompt's classification rule).
 
-- [ ] **Step 2: Update the dependent plan**
+- [x] **Step 2: Update the dependent plan**
 
 In `docs/superpowers/plans/2026-05-10-analytical-themes-port.md`:
 - Above the **Goal** line, add a dependency note referencing this plan.
