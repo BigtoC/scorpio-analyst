@@ -107,6 +107,7 @@ fn render_prompt_output(
                 &state.asset_symbol,
                 &state.target_date,
                 analyst_policy(),
+                &state,
             ),
             user_prompt: None,
         },

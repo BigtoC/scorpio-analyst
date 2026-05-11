@@ -12,6 +12,7 @@ use crate::{
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
+        catalysts::{CatalystCalendarProvider, CatalystEvent, Tier1CatalystProvider},
         estimates::{
             ConsensusEvidence, ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
         },
@@ -120,6 +121,7 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.clear_equity();
     state.enrichment_event_news = EnrichmentState::default();
     state.enrichment_consensus = EnrichmentState::default();
+    state.enrichment_catalysts = EnrichmentState::default();
     state.data_coverage = None;
     state.provenance_summary = None;
     state.debate_history.clear();
@@ -334,10 +336,18 @@ pub async fn run_analysis_cycle(
 
     let need_price = initial_state.current_price.is_none();
     let need_vix = initial_state.market_volatility().is_none();
-    let (price_result, vix_result, news_result) = {
+    let (price_result, vix_result, news_result, catalysts_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
         use crate::data::YFinanceNewsProvider;
         let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
+        let catalyst_provider = Tier1CatalystProvider {
+            finnhub: pipeline.finnhub.clone(),
+            fred: pipeline.fred.clone(),
+            yfinance: pipeline.yfinance.clone(),
+        };
+        let fetch_timeout = std::time::Duration::from_secs(
+            pipeline.config.enrichment.fetch_timeout_secs,
+        );
         tokio::join!(
             async {
                 if need_price {
@@ -354,6 +364,7 @@ pub async fn run_analysis_cycle(
                 }
             },
             prefetch_analyst_news(&pipeline.finnhub, &yfinance_news_provider, &symbol),
+            hydrate_catalysts(&catalyst_provider, &symbol, &date, fetch_timeout),
         )
     };
 
@@ -415,6 +426,7 @@ pub async fn run_analysis_cycle(
         payload: event_enrichment.into_option(),
     };
     initial_state.enrichment_consensus = consensus_enrichment_state;
+    initial_state.enrichment_catalysts = catalysts_result;
 
     let cached_news_json = news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
     let graph = Arc::clone(&pipeline.graph);
@@ -524,6 +536,58 @@ async fn load_prior_consensus_payload(
 }
 
 // ─── Enrichment hydration helpers ────────────────────────────────────────────
+
+/// Fetch catalyst-calendar enrichment with a timeout boundary.
+///
+/// Returns an `EnrichmentState` with:
+/// - `payload: Some(events)` when the fetch ran (even if all sources failed,
+///   returning `Some(vec![])` — distinguishable from "not attempted").
+/// - `payload: None` only when this function is never called (skipped in
+///   the join! block), which is not the case in the current wiring.
+///
+/// All per-source failures are absorbed by `Tier1CatalystProvider`'s
+/// fail-soft `try_*` helpers and emitted as `tracing::warn!`.
+async fn hydrate_catalysts(
+    provider: &Tier1CatalystProvider,
+    symbol: &str,
+    as_of_date: &str,
+    timeout: std::time::Duration,
+) -> EnrichmentState<Vec<CatalystEvent>> {
+    const HORIZON_DAYS: u32 = 30;
+    let result =
+        tokio::time::timeout(timeout, provider.fetch_catalysts(symbol, as_of_date, HORIZON_DAYS))
+            .await;
+    match result {
+        Ok(Ok(events)) if events.is_empty() => {
+            info!(symbol, "catalyst-calendar enrichment: no upcoming catalysts");
+            EnrichmentState {
+                status: EnrichmentStatus::NotAvailable,
+                payload: Some(vec![]),
+            }
+        }
+        Ok(Ok(events)) => {
+            info!(symbol, count = events.len(), "catalyst-calendar enrichment: available");
+            EnrichmentState {
+                status: EnrichmentStatus::Available,
+                payload: Some(events),
+            }
+        }
+        Ok(Err(e)) => {
+            info!(symbol, error = %e, "catalyst-calendar enrichment: date arithmetic error (fail-open)");
+            EnrichmentState {
+                status: EnrichmentStatus::FetchFailed(e.to_string()),
+                payload: Some(vec![]),
+            }
+        }
+        Err(_) => {
+            info!(symbol, "catalyst-calendar enrichment: timed out (fail-open)");
+            EnrichmentState {
+                status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
+                payload: Some(vec![]),
+            }
+        }
+    }
+}
 
 /// Fetch event-news enrichment with a timeout boundary.
 async fn hydrate_event_news(

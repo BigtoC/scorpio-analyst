@@ -1278,3 +1278,57 @@ async fn run_analysis_cycle_preserves_fetch_failed_options_context_and_coherent_
         "FetchFailed must not claim available status in the prompt"
     );
 }
+
+#[tokio::test]
+async fn run_analysis_cycle_hydrates_catalyst_calendar_enrichment() {
+    // After a full cycle, `enrichment_catalysts.payload` must be `Some(...)` —
+    // not `None` — to signal that the catalyst prefetch was attempted, even
+    // if every fail-soft source returned empty results (auth errors on for_test
+    // clients are expected and produce `Some(vec![])`).
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-hydrate-catalyst.db").await;
+    let pipeline = crate::workflow::TradingPipeline::new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        crate::data::YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new(
+            "pipeline-catalyst-test",
+            10,
+        )),
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    let final_state = runtime::run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-05-11"))
+        .await
+        .expect("pipeline must succeed");
+
+    assert!(
+        final_state.enrichment_catalysts.payload.is_some(),
+        "enrichment_catalysts.payload must be Some(...) after a cycle — \
+         None means the prefetch was never attempted"
+    );
+}
