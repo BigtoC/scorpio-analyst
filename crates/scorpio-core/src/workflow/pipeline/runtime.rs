@@ -12,13 +12,16 @@ use crate::{
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
-        catalysts::{CatalystCalendarProvider, CatalystEvent, Tier1CatalystProvider},
+        catalysts::{
+            CatalystCalendarProvider, CatalystEvent, SecEdgar8kProvider, Tier1CatalystProvider,
+            Tier2CatalystProvider,
+        },
         estimates::{
             ConsensusEvidence, ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
         },
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
-    data::{FinnhubClient, FredClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, SecEdgarClient, YFinanceClient},
     domain::Symbol,
     error::TradingError,
     providers::factory::CompletionModelHandle,
@@ -340,11 +343,25 @@ pub async fn run_analysis_cycle(
         use crate::agents::analyst::prefetch_analyst_news;
         use crate::data::YFinanceNewsProvider;
         let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
-        let catalyst_provider = Tier1CatalystProvider {
+        let tier1 = Tier1CatalystProvider {
             finnhub: pipeline.finnhub.clone(),
             fred: pipeline.fred.clone(),
             yfinance: pipeline.yfinance.clone(),
         };
+        let catalyst_provider: Arc<dyn CatalystCalendarProvider> =
+            match SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new("sec-edgar", 10)) {
+                Ok(edgar_client) => {
+                    info!("catalyst provider: Tier 2 (Finnhub + FRED + yfinance + SEC EDGAR)");
+                    Arc::new(Tier2CatalystProvider {
+                        tier1,
+                        sec_edgar: SecEdgar8kProvider::new(edgar_client),
+                    })
+                }
+                Err(reason) => {
+                    info!(reason = %reason, "falling back to Tier 1 catalyst provider");
+                    Arc::new(tier1)
+                }
+            };
         let fetch_timeout = std::time::Duration::from_secs(
             pipeline.config.enrichment.fetch_timeout_secs,
         );
@@ -364,7 +381,7 @@ pub async fn run_analysis_cycle(
                 }
             },
             prefetch_analyst_news(&pipeline.finnhub, &yfinance_news_provider, &symbol),
-            hydrate_catalysts(&catalyst_provider, &symbol, &date, fetch_timeout),
+            hydrate_catalysts(catalyst_provider.as_ref(), &symbol, &date, fetch_timeout),
         )
     };
 
@@ -548,7 +565,7 @@ async fn load_prior_consensus_payload(
 /// All per-source failures are absorbed by `Tier1CatalystProvider`'s
 /// fail-soft `try_*` helpers and emitted as `tracing::warn!`.
 async fn hydrate_catalysts(
-    provider: &Tier1CatalystProvider,
+    provider: &dyn CatalystCalendarProvider,
     symbol: &str,
     as_of_date: &str,
     timeout: std::time::Duration,
