@@ -192,18 +192,35 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    concurrently and classified into `MacroEvent` structs with impact direction and confidence scores. The client is
    rate-limited (2 requests per second, configurable via `rate_limits.fred_rps`) and implements linear-backoff retry
    logic (max 3 attempts, 45-second total budget). An API key is required via the `SCORPIO_FRED_API_KEY` environment
-   variable.
+   variable. FRED also exposes the `/fred/release/dates` endpoint used by the **forward-looking catalyst calendar** (see
+   §"Forward-Looking Catalyst Calendar"): scheduled-release dates for six high-impact macro releases — CPI (release_id
+   10), Nonfarm Payrolls (50), FOMC Decision (101), GDP (53), ISM Manufacturing (21), and Retail Sales (14) — feed
+   directly into `CatalystEvent` instances tagged `category: MacroEvents` with the sentinel `symbol: "_MACRO"`.
 
-4. **Entity Resolution**: Before any data ingestion begins, the `PreflightTask` canonicalizes the user-supplied ticker
+4. **SEC EDGAR Filings (Tier 2 Catalyst Source)**: A lightweight `SecEdgarClient` wraps the public SEC EDGAR JSON
+   submissions endpoint (`https://data.sec.gov/submissions/CIK<10-digit-padded-cik>.json`) and the canonical
+   ticker→CIK map (`https://www.sec.gov/files/company_tickers.json`). The client mandates a fair-use
+   `User-Agent: Scorpio Analyst scorpio@ledgerlylab.com` header per SEC policy, is rate-limited to 10 requests per
+   second via `SharedRateLimiter`, and carries a per-instance circuit breaker that short-circuits subsequent calls to
+   `Ok(empty)` after five consecutive runtime failures within a single pipeline run. No API key is required. The client
+   surfaces recent 8-K item codes (1.01, 2.01, 2.02, 5.07, 7.01, 8.01) plus 13D/G activist/passive filings as
+   `CatalystEvent` instances without parsing filing bodies — categorisation comes directly from the filing's own Item
+   header. Tier 3 body parsing (S-1 lockup language, DEF M14A expected-close, FDA AdComm scraping) is explicitly out
+   of scope. SEC EDGAR construction failure falls back to the Tier 1 catalyst provider; pipeline construction never
+   aborts on a SEC EDGAR build failure.
+
+5. **Entity Resolution**: Before any data ingestion begins, the `PreflightTask` canonicalizes the user-supplied ticker
    symbol via the entity resolution module (`crates/scorpio-core/src/data/entity.rs`). This module delegates ticker-format validation to the
    existing `crates/scorpio-core/src/data/symbol.rs` logic and produces a `ResolvedInstrument` containing the original input, the
    canonicalized uppercase symbol, and optional metadata fields (issuer name, exchange, instrument type, aliases). In
    the initial implementation, metadata fields default to `None`; future milestones may enrich them via API lookups.
    Invalid or empty symbols cause an immediate hard failure at preflight, preventing wasted LLM calls downstream.
 
-5. **Enrichment Adapter Contracts**: The system defines provider-agnostic trait contracts for optional enrichment data
+6. **Enrichment Adapter Contracts**: The system defines provider-agnostic trait contracts for optional enrichment data
    sources in `crates/scorpio-core/src/data/adapters/`: `TranscriptProvider` (earnings call transcripts), `EstimatesProvider` (consensus
-   revenue/EPS estimates, price targets, recommendations summary), and `EventNewsProvider` (event-driven news feeds).
+   revenue/EPS estimates, price targets, recommendations summary), `EventNewsProvider` (event-driven news feeds), and
+   `CatalystCalendarProvider` (forward-looking catalyst events — earnings, IPO debut, scheduled macro releases,
+   ex-dividend, SEC 8-K item codes, 13D/G activist filings).
    Each trait returns a normalized evidence struct (`TranscriptEvidence`, `ConsensusEvidence`, `EventNewsEvidence`) that
    can be consumed uniformly by downstream agents regardless of the upstream provider. The `ConsensusEvidence` contract
    is extended with optional `PriceTargetSummary` (mean/median/high/low + analyst count) and `RecommendationsSummary`
@@ -212,9 +229,10 @@ programming interfaces. The Rust implementation must leverage highly optimized H
    extras as `None`. A separate `OptionsProvider` trait under `data/traits/options.rs` contracts for structured equity
    options snapshots; it is distinct from the crypto-oriented `DerivativesProvider` stub (which carries an opaque
    `raw: String` payload). Under the current provider-constrained roadmap, event/news enrichment, consensus estimates
-   (with the extended fields), and yfinance options are concrete targets; transcript enrichment is intentionally
-   deferred. This seam allows future milestones to plug in alternate providers (Polygon, Tradier, additional news
-   vendors) behind the existing contracts without modifying agent or orchestration code.
+   (with the extended fields), yfinance options, and the **Tier 1 + Tier 2 catalyst calendar** are concrete targets;
+   transcript enrichment is intentionally deferred. This seam allows future milestones to plug in alternate providers
+   (Polygon, Tradier, additional news vendors) behind the existing contracts without modifying agent or orchestration
+   code.
 
 ### Technical Analysis and Quantitative Mathematics
 
@@ -280,6 +298,15 @@ parameter.
 │    Finnhub + yfinance fetched concurrently, deduped     │
 │    by normalized URL (headline fallback), shared        │
 │    across News and Sentiment Analysts                   │
+│  • CatalystCalendarProvider → enrichment_catalysts      │
+│    Tier 1: Finnhub earnings + IPO, FRED release dates,  │
+│      yfinance ex-dividend → CatalystEvent stream        │
+│    Tier 2: SEC EDGAR 8-K item codes (1.01/2.01/2.02/    │
+│      5.07/7.01/8.01) + 13D/G activist filings           │
+│    tokio::join! fan-out: one source failing zeros out   │
+│      only that source's contribution                    │
+│    Tier 3 (FDA AdComm, S-1 lockup, DEF M14A close)      │
+│      deferred to a follow-up plan                       │
 └──────────────────────────┬──────────────────────────────┘
                            │
          ┌─────────────────┼─────────────────┐─────────────────┐
@@ -349,6 +376,26 @@ parameter.
 │  Fund Manager  [Chunk 3: evidence context injected]     │
 │  → Approve / Reject  (LLM judgment informed by all      │
 │    three risk reports and dual-risk escalation status)  │
+│  Snapshot Phase 5 persists here; Fund Manager remains   │
+│    the business-final decision-maker.                   │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+                           ▼ (only when RuntimePolicy.auditor_enabled == true)
+┌─────────────────────────────────────────────────────────┐
+│  AuditorTask  [ADVISORY — fails open, never vetoes]     │
+│                                                         │
+│  • Curated AuditorInputView derived from final          │
+│    TradingState (trader_proposal, execution_status,     │
+│    analyst summaries, debate history, risk reports)     │
+│  • Deterministic checks (BUY w/ target<current,         │
+│    stop_loss>target_price, etc.) run locally first      │
+│  • Quick-thinker LLM pass for semantic consistency,     │
+│    unsourced numeric claims, valuation sanity bands     │
+│  • Writes audit_status (Disabled/Pending/Passed/        │
+│    Findings/FailedOpen) + audit_report on TradingState  │
+│  • Any failure → AuditStatus::FailedOpen; the Fund      │
+│    Manager decision still stands                        │
+│  • No new snapshot phase: Phase 5 contract preserved    │
 └──────────────────────────┬──────────────────────────────┘
                            │
                            ▼
@@ -375,6 +422,17 @@ parameter.
 │  • Research Debate Summary                              │
 │  • Risk Assessment                                      │
 │  • Trade Decision                                       │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ Auditor (advisory review)        [NEW]           │   │
+│  │  Status: clean / attention needed / unavailable  │   │
+│  │  Note: advisory only; Fund Manager is final.     │   │
+│  │  Findings (top 5, Critical → Warning, sorted by  │   │
+│  │    severity then location). Info findings hidden │   │
+│  │    in terminal output for v1.                    │   │
+│  │  Section is omitted entirely when                │   │
+│  │    AuditStatus::Disabled.                        │   │
+│  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -411,6 +469,10 @@ pub struct TradingState {
     // Phase 5: Final Execution
     pub final_execution_status: Option<ExecutionStatus>,
 
+    // Phase 5+: Advisory post-decision audit (additive; #[serde(default)])
+    pub audit_status: AuditStatus,
+    pub audit_report: Option<AuditorReport>,
+
     // Thesis memory continuity across runs
     pub prior_thesis: Option<ThesisMemory>,
     pub current_thesis: Option<ThesisMemory>,
@@ -423,9 +485,59 @@ pub struct TradingState {
     pub data_coverage: Option<DataCoverageReport>,
     pub provenance_summary: Option<ProvenanceSummary>,
 
+    // Forward-looking catalyst calendar (Tier 1 + Tier 2; #[serde(default)])
+    pub enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
+
     // Token Usage Tracking
     pub token_usage: TokenUsageTracker,
 }
+
+/// Advisory audit status produced by the post-decision `AuditorTask`.
+/// Disabled is the default for runs where `RuntimePolicy.auditor_enabled == false`.
+pub enum AuditStatus {
+    Disabled,    // auditor stage not enabled for this run
+    Pending,     // enabled but not yet executed (transient)
+    Passed,      // auditor ran and produced zero findings
+    Findings,    // auditor ran and attached one or more findings
+    FailedOpen,  // auditor failed; Fund Manager decision still stands
+}
+
+pub enum Severity { Critical, Warning, Info }
+
+pub struct Finding {
+    pub severity: Severity,
+    pub location: String,       // e.g. "trader_proposal.rationale"
+    pub description: String,    // one-sentence issue description
+    pub excerpt: Option<String>,// optional verbatim excerpt (≤512 chars)
+}
+
+pub struct AuditorReport {
+    pub findings: Vec<Finding>,     // bounded to 20
+    pub summary: String,            // ≤1024 chars
+    pub audited_at: DateTime<Utc>,  // runtime-stamped, never trusted from model
+    pub auditor_model_id: String,
+}
+
+/// Forward-looking catalyst event derived from the catalyst calendar providers.
+/// Distinct from `EventNewsEvidence` (backward-looking news that already happened).
+pub struct CatalystEvent {
+    pub symbol: String,             // canonical ticker or "_MACRO" for FRED releases
+    pub event_date: String,         // ISO-8601 YYYY-MM-DD
+    pub category: CatalystCategory, // EarningsAndFinancial / CorporateEvents / IndustryEvents / MacroEvents
+    pub impact: ImpactLevel,        // H / M / L
+    pub headline: String,           // sanitized short label
+    pub source_url: Option<String>, // canonical source (SEC primary doc, FRED release page)
+    pub source: &'static str,       // "finnhub" | "fred" | "sec_edgar" | "yfinance"
+}
+
+pub enum CatalystCategory {
+    EarningsAndFinancial,
+    CorporateEvents,
+    IndustryEvents,
+    MacroEvents,
+}
+
+pub enum ImpactLevel { H, M, L }
 
 /// Classifies the type of evidence attached to an `EvidenceRecord`.
 pub enum EvidenceKind {
@@ -583,9 +695,15 @@ execution at the entry point and routes the `TradingState` through the necessary
 5. **Risk Review**: The risk assessment phase evaluates the `TradeProposal` through the Aggressive, Conservative, and
    Neutral risk agents, then synthesizes their outputs via the Risk Moderator before handing the discussion to the Fund
    Manager.
-6. **Managerial Arbitration**: The graph terminates at the Fund Manager node, which uses LLM judgment informed by a
-   tri-state dual-risk escalation indicator derived from the Conservative and Neutral risk reports, while still reading
-   all three risk reports to approve or reject the trade.
+6. **Managerial Arbitration**: The Fund Manager node uses LLM judgment informed by a tri-state dual-risk escalation
+   indicator derived from the Conservative and Neutral risk reports, while still reading all three risk reports to
+   approve or reject the trade. Snapshot Phase 5 persists here, and the Fund Manager remains the business-final
+   decision-maker. The graph terminates here unless `RuntimePolicy.auditor_enabled == true`.
+7. **Advisory Post-Decision Audit (gated)**: When `auditor_enabled` is true on the resolved runtime policy, the graph
+   continues into an advisory `AuditorTask` that re-checks the completed `TradingState` via a curated
+   `AuditorInputView`. Deterministic checks run locally first; a quick-thinking LLM handles semantic consistency and
+   unsourced numeric claims. Any failure transitions `audit_status` to `FailedOpen` while preserving deterministic
+   findings; the auditor never alters `final_execution_status` and never adds a new snapshot phase.
 
 ## Agent Role Specifications and Implementation Directives
 
@@ -792,6 +910,122 @@ rationale line using the required prefix contract, enabling transparent override
 automatic rejection. If
 the Fund Manager approves the trade, it serializes the final order for dispatch to a brokerage API such as Alpaca; if
 it rejects, it appends a structured rationale to `ExecutionStatus` for the audit trail.
+
+### The Post-Decision Auditor (Advisory)
+
+The `AuditorTask` is a gated, advisory stage that runs **after** the Fund Manager has rendered its decision and only
+when `RuntimePolicy.auditor_enabled == true` (sourced from the active `AnalysisPackManifest`; default `false` on the
+baseline equity pack). The Fund Manager remains the business-final decision-maker — the auditor never vetoes a
+completed analysis and never alters `final_execution_status`.
+
+* **Architectural contract**: The auditor conceptually re-checks the full final `TradingState`, but the implementation
+  passes a curated `AuditorInputView` to the LLM so only semantically relevant, trust-labeled fields cross the LLM
+  boundary. Untrusted free-text (debate transcripts, analyst summaries, rationale excerpts) is wrapped in structured
+  labels so the system prompt's trust-boundary rule matches the real payload. Runtime metadata, config, secrets, token
+  usage, and snapshot internals are explicitly omitted.
+
+* **Two-layer review**: Deterministic checks run locally first (e.g., BUY with `target_price < current_price`,
+  `stop_loss > target_price`, or other obvious ordering contradictions). The quick-thinker LLM tier then handles
+  semantic consistency, sourcing of numeric claims, cross-phase contradictions, and bounded numeric heuristics such as
+  valuation sanity-band warnings (terminal value share, WACC bands).
+
+* **Output schema**: The auditor produces an `AuditorReport` containing up to 20 `Finding` entries
+  (`severity` ∈ {Critical, Warning, Info}, `location`, `description`, optional `excerpt`) plus a one-paragraph
+  `summary`. Runtime code — not the model — owns the `audited_at` timestamp and `auditor_model_id`. `AuditStatus`
+  transitions across the run: `Disabled` (default), `Pending` (set as Fund Manager hands off when enabled), `Passed`
+  (zero findings), `Findings` (one or more), `FailedOpen` (LLM/parse failure; deterministic findings are preserved and
+  a stamped report explains that semantic review was unavailable).
+
+* **Fail-open contract**: The auditor MUST NOT return `TaskExecutionFailed` for model failure, parse failure, or
+  malformed output once Phase 5 has completed successfully. Deterministic findings survive the fail-open path. The
+  persisted Phase-5 snapshot is not overwritten, and no new snapshot phase is introduced. Snapshot-backed
+  `scorpio report show` output remains Phase-5-only in v1: pre-auditor Phase-5 snapshots scrub live-only auditor state
+  from the public historical report surface so historical reports never present a misleading auditor result.
+
+* **Rollout policy**: Ships behind a manifest/runtime-policy flag (`auditor_enabled`, default `false`). Dogfooded via
+  fixture replay and temporary manifest flips before promotion. Success criteria: auditor failures never fail a
+  completed run; replay/dogfood corpus shows <5% false-positive Critical findings; at least one real contradiction or
+  unsourced claim caught during dogfooding; terminal copy is unambiguously advisory.
+
+* **Out of scope for v1**: audit-driven veto (`--strict` mode that converts Critical findings into a process veto is a
+  follow-up plan), cross-run auditor scoring, and auditing of intermediate phases (analyst phase or debate).
+
+## Forward-Looking Catalyst Calendar
+
+To replace the news-discovered-events-only degraded mode in the News Analyst's Theme G coverage, the system fetches a
+real forward-looking catalyst calendar during preflight enrichment. The calendar runs **unconditionally for the equity
+baseline pack** (no new enrichment flag) because the cost is bounded — one Finnhub earnings range call, one Finnhub IPO
+range call, one FRED release-dates call per macro release ID shared across all symbols in a run, plus one yfinance
+per-ticker calendar call and an optional SEC EDGAR submissions call. Three tiers ship independently:
+
+* **Tier 1 — Structured APIs only**: `Tier1CatalystProvider` composes Finnhub `calendar().earnings(from,to,sym)` and
+  `calendar().ipo(from,to)` (free-tier confirmed available — the paid `calendar/economic` and `misc().fda_calendar()`
+  endpoints return 403 and MUST NOT be called), FRED `/fred/release/dates` for six high-impact release IDs (CPI, NFP,
+  FOMC, GDP, ISM Manufacturing, Retail Sales), and yfinance `Ticker.calendar()` for ex-dividend dates. The composer
+  uses `tokio::join!` (not `try_join!`) so one source failing zeros out only that source's contribution. Maps each row
+  into `CatalystEvent`: Finnhub earnings → `EarningsAndFinancial`/H; Finnhub IPO → `CorporateEvents`/M (H for the
+  analysed ticker); FRED releases → `_MACRO`/`MacroEvents` (CPI/NFP/FOMC = H, GDP/ISM/Retail = M); yfinance
+  ex-dividend → `EarningsAndFinancial`/L.
+
+* **Tier 2 — SEC EDGAR 8-K monitor**: `SecEdgar8kProvider` pulls recent 8-K item codes and 13D/G filings from the
+  canonical `https://data.sec.gov/submissions/CIK<padded>.json` JSON endpoint (HTML index NOT scraped). Maps form/item
+  pairs to categories and impact tiers — 8-K 1.01/2.01 (Material agreement / Acquisition disposition) → H, 8-K 2.02
+  (Earnings results) → H, 8-K 5.07/7.01/8.01 (Shareholder vote / Reg FD / Other material) → M, SC 13D (Activist) → H,
+  SC 13G (Passive) → M. Headlines stay generic ("Acquisition / disposition: <accession>"); the news analyst's existing
+  news-fetch path can pull the body when it wants specifics. `Tier2CatalystProvider` composes Tier 1 + SEC EDGAR via
+  `tokio::join!` with the same fail-soft semantics.
+
+* **Tier 3 — Optional filing-body parsing** (deferred): S-1 lockup language → lockup expiry date, DEF M14A → expected
+  close date, FDA AdComm scraping. Explicitly out of scope. The user-facing prompt continues to say `data not wired`
+  for these specific subcategories until Tier 3 lands.
+
+* **Failure-mode discipline**: The catalyst calendar is non-blocking enrichment — the pipeline always proceeds, even
+  when every source fails. Per-source invariants: construct-time fallibility is permitted, but runtime
+  `fetch_catalysts(...)` NEVER returns `Err` — every HTTP/JSON/timeout/rate-limit failure is converted to
+  `Ok(Vec::new())` plus a `tracing::warn!` with `kind = "catalyst_fetch_failed"`. EnrichmentState semantics:
+  `payload: None` = preflight skipped the fetch; `payload: Some(Vec::new())` = fetch ran but returned zero events
+  (genuine quiet window or all-sources-failed, indistinguishable to the prompt by design); `payload: Some(events)` =
+  at least one source returned events. SEC EDGAR construction failure falls back to Tier 1 (logged once at startup).
+  A per-instance circuit breaker on `SecEdgarClient` short-circuits to `Ok(empty)` after five consecutive runtime
+  failures within a single pipeline run.
+
+* **Prompt rendering**: `build_catalyst_calendar_block(state)` renders the active catalyst window into the News
+  Analyst's `{catalyst_calendar}` slot, sorted by relevance bucket (analysed ticker → macro `_MACRO` → unrelated IPO
+  → other), then by `event_date` ascending within each bucket, capped at 25 lines. Each line is tagged `[H]`/`[M]`/
+  `[L]` so the prompt's H/M/L tier rule has structured input. Empty payload renders as
+  `(no upcoming catalysts in the next 30 days)` (genuine quiet window) or `(no upcoming catalysts: data unavailable)`
+  (preflight skipped). The renderer never branches on per-source success — debug status lives in `tracing` only.
+
+## Analytical Themes Port (Equity Baseline Pack)
+
+The equity baseline pack adapts eight portable analytical frameworks from
+[anthropics/financial-services](https://github.com/anthropics/financial-services) (Apache 2.0) into its prompt set.
+These are quality-floor improvements (not a new user-selectable strategy mode) that tighten evidentiary discipline and
+report structure for roles the baseline pack already runs:
+
+| Theme | Frame                                              | Inserted into                                                              | Status                                                                         |
+|-------|----------------------------------------------------|----------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| A     | Valuation sanity bands (WACC, multiples, terminal) | `fundamental_analyst.md`, `conservative_risk.md`                           | ✅ Ship                                                                         |
+| B     | Industry KPI matrix (sector-specific metrics)      | `fundamental_analyst.md`                                                   | ✅ Ship                                                                         |
+| C     | Management-commentary red-flag taxonomy            | `news_analyst.md`, `sentiment_analyst.md`, `conservative_risk.md`          | ⚠️ Degraded mode (full power needs `TranscriptEvidence` provider)              |
+| D     | Beat/miss decision tree (actual vs consensus)      | `news_analyst.md`, `trader.md`                                             | ⚠️ Gated on a prerequisite audit: same-period actual + consensus must be wired |
+| E     | Falsifiable theses (pillars + thesis breakers)     | `bullish_researcher.md`, `bearish_researcher.md`, `debate_moderator.md`, `neutral_risk.md` | ✅ Ship                                                        |
+| F     | "Contrarian needs a catalyst" rule                 | `bullish_researcher.md`, `aggressive_risk.md`                              | ✅ Ship                                                                         |
+| G     | Catalyst taxonomy + H/M/L impact tier              | `news_analyst.md`                                                          | ✅ Wired via the Tier 1 catalyst calendar; Tier 3 gaps remain deferred          |
+| H     | Sourcing hierarchy + injection defense             | `fundamental_analyst.md`, `news_analyst.md`, `sentiment_analyst.md`, `technical_analyst.md`, `trader.md` | ✅ Ship                                           |
+
+Acceptance is verified by deterministic checks (prompt-bundle regression fixtures + targeted
+`render_baseline_prompt_for_role(...)` string assertions) plus a single live smoke run per shipped batch. Themes C and
+G ship in degraded mode with explicit user-visible caveats (`degraded mode: headline/summary only` and
+`degraded mode: news-discovered events only`), each carrying a `<!-- TODO -->` seam comment for the future upgrade.
+Theme E ships as prompt-steering only; structural runtime enforcement of pillar/breaker shape is explicitly out of
+scope. `[UNSOURCED]` and degraded-mode disclosures are prompt-first requirements in this port — renderer/runtime
+enforcement is a separate hardening follow-up.
+
+Theme E's required output shape is consumed downstream: the Debate Moderator marks turns invalid when a pillar lacks
+an evidence anchor or a thesis breaker lacks a measurable signal, names the surviving Bull and Bear pillars at the end
+of debate, and ends the consensus summary with an explicit `Buy`, `Sell`, or `Hold` stance. The Neutral Risk agent
+runs a falsifiability check against the surviving pillars.
 
 ## User Interaction Interface
 
@@ -1058,13 +1292,28 @@ pub struct LLMConfig {
 /// concrete enrichment providers are implemented. In the active roadmap,
 /// event news is the first concrete target, consensus estimates are
 /// conditional on free-tier provider verification, and transcripts remain
-/// deferred.
+/// deferred. The forward-looking catalyst calendar is intentionally NOT
+/// gated by a config flag — it runs unconditionally for the equity baseline
+/// pack because per-run cost is bounded (shared range calls across the
+/// run).
 #[derive(serde::Deserialize)]
 pub struct DataEnrichmentConfig {
     pub enable_transcripts: bool,           // default: false
     pub enable_consensus_estimates: bool,   // default: false
     pub enable_event_news: bool,            // default: false
     pub max_evidence_age_hours: u64,        // default: 48
+}
+
+/// Per-pack manifest flag gating the advisory post-decision auditor stage.
+/// Default `false` on the baseline equity pack; promoted only after dogfooding
+/// shows acceptable false-positive Critical rate and clearly advisory copy.
+/// When `true`, preflight requires a populated `PromptBundle.auditor` slot,
+/// builds run topology with `auditor_enabled = true`, and seeds
+/// `RoutingFlags.skip_auditor = false` so the graph continues into the
+/// `AuditorTask` after `FundManagerTask`.
+pub struct AnalysisPackManifest {
+    // ... existing fields ...
+    pub auditor_enabled: bool,              // default: false
 }
 ```
 
@@ -1129,6 +1378,7 @@ Each phase of the execution graph records its own `PhaseTokenUsage` entry:
 | Phase 3: Trader Synthesis  | Trader Agent                                                         |
 | Phase 4: Risk Discussion   | Aggressive, Conservative, Neutral (per round), Risk Moderator        |
 | Phase 5: Fund Manager      | Fund Manager                                                         |
+| Phase 5+: Auditor (advisory, gated on `auditor_enabled`) | Auditor (quick-thinking tier; attributed to quick-thinking model usage in the token-summary breakdown) |
 
 Within each phase, individual `AgentTokenUsage` entries capture the model used, prompt/completion token counts, and
 wall-clock latency for that specific invocation. For cyclic phases (debate and risk rounds), each round produces a
@@ -1180,11 +1430,15 @@ Phase 4: Risk Discussion        9,800       3,600    13,400      6.5s
   │   └─ Neutral Risk           1,600         600     2,200      1.1s  (o3)
   └─ Risk Moderator             1,500         500     2,000      0.8s  (o3)
 Phase 5: Fund Manager           3,200       1,200     4,400      2.1s  (o3)
+Phase 5+: Auditor (advisory)    1,800         400     2,200      1.3s  (gpt-4o-mini)
 ──────────────────────────────────────────────────────────────────────────────────────
-TOTAL                          38,220      15,610    53,830     24.1s
-LLM calls:                     14
+TOTAL                          40,020      16,010    56,030     25.4s
+LLM calls:                     15
 ══════════════════════════════════════════════════════════════════════════════════════
 ```
+
+The `Phase 5+: Auditor (advisory)` row is omitted entirely when `auditor_enabled = false` (the default on the baseline
+equity pack).
 
 In JSON output mode (`--output json`), the `token_usage` field is included as a top-level key in the serialized
 `TradingState`, containing the full `TokenUsageTracker` structure.

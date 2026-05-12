@@ -12,15 +12,20 @@ use crate::{
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
+        catalysts::{
+            CatalystCalendarProvider, CatalystEvent, SecEdgar8kProvider, Tier1CatalystProvider,
+            Tier2CatalystProvider,
+        },
         estimates::{
             ConsensusEvidence, ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
         },
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
-    data::{FinnhubClient, FredClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, SecEdgarClient, YFinanceClient},
     domain::Symbol,
     error::TradingError,
     providers::factory::CompletionModelHandle,
+    rate_limit::SharedRateLimiter,
     state::{EnrichmentState, TradingState},
     workflow::{
         SnapshotStore,
@@ -45,6 +50,35 @@ use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
 
 pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
     Ok(crate::data::resolve_symbol(symbol)?.symbol)
+}
+
+pub(crate) fn build_catalyst_provider(
+    finnhub: &FinnhubClient,
+    fred: &FredClient,
+    yfinance: &YFinanceClient,
+    source_timeout: std::time::Duration,
+) -> Arc<dyn CatalystCalendarProvider> {
+    let tier1 = Tier1CatalystProvider::with_timeout(
+        finnhub.clone(),
+        fred.clone(),
+        yfinance.clone(),
+        source_timeout,
+    );
+
+    match SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10)) {
+        Ok(edgar_client) => {
+            info!("catalyst provider: Tier 2 (Finnhub + FRED + yfinance + SEC EDGAR)");
+            Arc::new(Tier2CatalystProvider {
+                tier1,
+                sec_edgar: SecEdgar8kProvider::new(edgar_client),
+                source_timeout,
+            })
+        }
+        Err(reason) => {
+            info!(reason = %reason, "falling back to Tier 1 catalyst provider");
+            Arc::new(tier1)
+        }
+    }
 }
 
 /// Construct the ordered list of analyst fan-out tasks for `required_inputs`.
@@ -120,6 +154,7 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.clear_equity();
     state.enrichment_event_news = EnrichmentState::default();
     state.enrichment_consensus = EnrichmentState::default();
+    state.enrichment_catalysts = EnrichmentState::default();
     state.data_coverage = None;
     state.provenance_summary = None;
     state.debate_history.clear();
@@ -334,10 +369,12 @@ pub async fn run_analysis_cycle(
 
     let need_price = initial_state.current_price.is_none();
     let need_vix = initial_state.market_volatility().is_none();
-    let (price_result, vix_result, news_result) = {
+    let (price_result, vix_result, news_result, catalysts_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
         use crate::data::YFinanceNewsProvider;
         let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
+        let fetch_timeout =
+            std::time::Duration::from_secs(pipeline.config.enrichment.fetch_timeout_secs);
         tokio::join!(
             async {
                 if need_price {
@@ -354,6 +391,12 @@ pub async fn run_analysis_cycle(
                 }
             },
             prefetch_analyst_news(&pipeline.finnhub, &yfinance_news_provider, &symbol),
+            hydrate_catalysts(
+                pipeline.catalyst_provider.as_ref(),
+                &symbol,
+                &date,
+                fetch_timeout
+            ),
         )
     };
 
@@ -415,6 +458,7 @@ pub async fn run_analysis_cycle(
         payload: event_enrichment.into_option(),
     };
     initial_state.enrichment_consensus = consensus_enrichment_state;
+    initial_state.enrichment_catalysts = catalysts_result;
 
     let cached_news_json = news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
     let graph = Arc::clone(&pipeline.graph);
@@ -524,6 +568,58 @@ async fn load_prior_consensus_payload(
 }
 
 // ─── Enrichment hydration helpers ────────────────────────────────────────────
+
+/// Fetch catalyst-calendar enrichment with a timeout boundary.
+///
+/// Returns an `EnrichmentState` with:
+/// - `payload: Some(events)` when the fetch ran (even if all sources failed,
+///   returning `Some(vec![])` — distinguishable from "not attempted").
+/// - `payload: None` only when this function is never called (skipped in
+///   the join! block), which is not the case in the current wiring.
+///
+/// All per-source failures are absorbed by `Tier1CatalystProvider`'s
+/// fail-soft `try_*` helpers and emitted as `tracing::warn!`.
+async fn hydrate_catalysts(
+    provider: &dyn CatalystCalendarProvider,
+    symbol: &str,
+    as_of_date: &str,
+    _timeout: std::time::Duration,
+) -> EnrichmentState<Vec<CatalystEvent>> {
+    const HORIZON_DAYS: u32 = 30;
+    match provider
+        .fetch_catalysts(symbol, as_of_date, HORIZON_DAYS)
+        .await
+    {
+        Ok(events) if events.is_empty() => {
+            info!(
+                symbol,
+                "catalyst-calendar enrichment: no upcoming catalysts"
+            );
+            EnrichmentState {
+                status: EnrichmentStatus::Available,
+                payload: Some(vec![]),
+            }
+        }
+        Ok(events) => {
+            info!(
+                symbol,
+                count = events.len(),
+                "catalyst-calendar enrichment: available"
+            );
+            EnrichmentState {
+                status: EnrichmentStatus::Available,
+                payload: Some(events),
+            }
+        }
+        Err(e) => {
+            info!(symbol, error = %e, "catalyst-calendar enrichment: date arithmetic error (fail-open)");
+            EnrichmentState {
+                status: EnrichmentStatus::FetchFailed(e.to_string()),
+                payload: Some(vec![]),
+            }
+        }
+    }
+}
 
 /// Fetch event-news enrichment with a timeout boundary.
 async fn hydrate_event_news(
@@ -1113,5 +1209,45 @@ mod consensus_half_life_tests {
             Some(&prior),
             "timeout must preserve the prior payload so the degraded counter does not reset"
         );
+    }
+}
+
+#[cfg(test)]
+mod catalyst_hydration_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct StaticCatalystProvider {
+        result: Arc<Vec<CatalystEvent>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CatalystCalendarProvider for StaticCatalystProvider {
+        async fn fetch_catalysts(
+            &self,
+            _symbol: &str,
+            _as_of_date: &str,
+            _horizon_days: u32,
+        ) -> Result<Vec<CatalystEvent>, TradingError> {
+            Ok(self.result.as_ref().clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn hydrate_catalysts_empty_success_marks_quiet_window_as_available() {
+        let provider = StaticCatalystProvider {
+            result: Arc::new(vec![]),
+        };
+
+        let state = hydrate_catalysts(
+            &provider,
+            "AAPL",
+            "2026-01-15",
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+
+        assert_eq!(state.status, EnrichmentStatus::Available);
+        assert_eq!(state.payload, Some(vec![]));
     }
 }

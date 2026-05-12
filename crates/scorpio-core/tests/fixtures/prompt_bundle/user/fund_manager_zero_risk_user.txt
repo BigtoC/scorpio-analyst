@@ -26,3 +26,8 @@ Emphasis: Weight all data sources equally. Use DCF and multiples for valuation w
 Event-news status: not_configured
 
 Consensus estimates status: not_configured
+
+Catalyst calendar status: not_configured
+
+Catalyst calendar:
+(no upcoming catalysts: data unavailable)

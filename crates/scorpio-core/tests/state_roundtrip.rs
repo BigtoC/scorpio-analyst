@@ -754,6 +754,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     crypto: None,
                     enrichment_event_news,
                     enrichment_consensus,
+                    enrichment_catalysts: Default::default(),
                     data_coverage,
                     provenance_summary,
                     debate_history,

@@ -17,13 +17,42 @@
 //! data was unavailable or could not be parsed — not that the pipeline should
 //! abort. Callers are responsible for deciding whether to emit `NotAssessed`.
 
+use chrono::NaiveDate;
 use tracing::warn;
 use yfinance_rs::{
     FundamentalsBuilder,
     analysis::{AnalysisBuilder, EarningsTrendRow, PriceTarget, RecommendationSummary},
-    fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
+    fundamentals::{BalanceSheetRow, Calendar, CashflowRow, IncomeStatementRow, ShareCount},
     profile::{self, Profile},
 };
+
+/// Thin domain wrapper over the upstream yfinance `Calendar` type.
+///
+/// Uses `NaiveDate` (date-only) because providers disagree on time-of-day and
+/// the catalyst calendar only needs the day.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TickerCalendar {
+    /// Upcoming or historical earnings dates (UTC).
+    pub earnings_dates: Vec<NaiveDate>,
+    /// Ex-dividend date, if declared.
+    pub ex_dividend_date: Option<NaiveDate>,
+    /// Dividend payment date, if declared.
+    pub dividend_payment_date: Option<NaiveDate>,
+}
+
+impl From<Calendar> for TickerCalendar {
+    fn from(c: Calendar) -> Self {
+        Self {
+            earnings_dates: c
+                .earnings_dates
+                .into_iter()
+                .map(|dt| dt.date_naive())
+                .collect(),
+            ex_dividend_date: c.ex_dividend_date.map(|dt| dt.date_naive()),
+            dividend_payment_date: c.dividend_payment_date.map(|dt| dt.date_naive()),
+        }
+    }
+}
 
 use super::ohlcv::YFinanceClient;
 
@@ -265,6 +294,33 @@ impl YFinanceClient {
             }
         }
     }
+
+    // ── Calendar ─────────────────────────────────────────────────────────
+
+    /// Fetch the corporate calendar for `symbol` (earnings dates, ex-dividend,
+    /// dividend payment date).
+    ///
+    /// Returns `None` on network or parsing failures so the caller can degrade
+    /// gracefully. The upstream type is converted to a thin [`TickerCalendar`]
+    /// domain wrapper so callers don't depend on the `yfinance_rs` type directly.
+    pub async fn fetch_calendar(&self, symbol: &str) -> Option<TickerCalendar> {
+        #[cfg(test)]
+        if let Some(stubbed) = &self.stubbed_financials {
+            return stubbed.calendar.clone();
+        }
+
+        match self
+            .session
+            .with_rate_limit(FundamentalsBuilder::new(self.session.client(), symbol).calendar())
+            .await
+        {
+            Ok(cal) => Some(TickerCalendar::from(cal)),
+            Err(e) => {
+                warn!(error = %e, symbol, "failed to fetch yfinance calendar");
+                None
+            }
+        }
+    }
 }
 
 /// Collapse a fully-empty Yahoo `PriceTarget` payload into `None`.
@@ -439,5 +495,68 @@ mod tests {
             result.is_none(),
             "expected Ok(None) for all-empty RecommendationSummary upstream payload, got {result:?}"
         );
+    }
+
+    // ── TickerCalendar conversion tests ──────────────────────────────────
+
+    #[test]
+    fn ticker_calendar_from_upstream_with_all_fields() {
+        use chrono::TimeZone;
+        let upstream = yfinance_rs::fundamentals::Calendar {
+            earnings_dates: vec![
+                chrono::Utc.with_ymd_and_hms(2026, 7, 15, 20, 0, 0).unwrap(),
+                chrono::Utc
+                    .with_ymd_and_hms(2026, 10, 14, 20, 0, 0)
+                    .unwrap(),
+            ],
+            ex_dividend_date: Some(chrono::Utc.with_ymd_and_hms(2026, 5, 9, 0, 0, 0).unwrap()),
+            dividend_payment_date: Some(
+                chrono::Utc.with_ymd_and_hms(2026, 5, 15, 0, 0, 0).unwrap(),
+            ),
+        };
+        let cal = TickerCalendar::from(upstream);
+        assert_eq!(cal.earnings_dates.len(), 2);
+        assert_eq!(
+            cal.earnings_dates[0],
+            chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()
+        );
+        assert_eq!(
+            cal.ex_dividend_date,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 9).unwrap())
+        );
+        assert_eq!(
+            cal.dividend_payment_date,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap())
+        );
+    }
+
+    #[test]
+    fn ticker_calendar_from_upstream_with_empty_fields() {
+        let upstream = yfinance_rs::fundamentals::Calendar {
+            earnings_dates: vec![],
+            ex_dividend_date: None,
+            dividend_payment_date: None,
+        };
+        let cal = TickerCalendar::from(upstream);
+        assert!(cal.earnings_dates.is_empty());
+        assert!(cal.ex_dividend_date.is_none());
+        assert!(cal.dividend_payment_date.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_calendar_returns_stubbed_calendar() {
+        let stubbed_calendar = TickerCalendar {
+            earnings_dates: vec![chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()],
+            ex_dividend_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
+            dividend_payment_date: None,
+        };
+        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            calendar: Some(stubbed_calendar.clone()),
+            ..StubbedFinancialResponses::default()
+        });
+
+        let calendar = client.fetch_calendar("AAPL").await;
+
+        assert_eq!(calendar, Some(stubbed_calendar));
     }
 }

@@ -27,12 +27,26 @@ use super::finnhub::EmptyObjectArgs;
 
 const FRED_BASE_URL: &str = "https://api.stlouisfed.org";
 const FRED_V1_SERIES_OBSERVATIONS_PATH: &str = "/fred/series/observations";
+const FRED_RELEASE_DATES_PATH: &str = "/fred/release/dates";
 const FRED_USER_AGENT: &str = "curl/8.7.1";
 
 /// FRED series ID for the Federal Funds Effective Rate.
 const SERIES_FEDFUNDS: &str = "FEDFUNDS";
 /// Consumer Price Index: All Items: Total for United States
 const SERIES_CPALTT01: &str = "CPALTT01USM657N";
+
+/// FRED release IDs for high-impact macro events.
+///
+/// These are the H-impact releases from the Theme G impact-tier table.
+/// IDs are stable — verified at <https://fred.stlouisfed.org/releases/>.
+pub mod release_id {
+    pub const CPI: u32 = 10;
+    pub const NONFARM_PAYROLLS: u32 = 50;
+    pub const FOMC_DECISION: u32 = 101;
+    pub const GDP: u32 = 53;
+    pub const ISM_MANUFACTURING: u32 = 21;
+    pub const RETAIL_SALES: u32 = 14;
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct FredSeriesQuery<'a> {
@@ -235,6 +249,78 @@ impl FredClient {
 
         collect_macro_events_from_series_results(interest_result, inflation_result)
     }
+
+    /// Fetch the scheduled release dates for a FRED release in a date window.
+    ///
+    /// Returns the dates (UTC `NaiveDate`) on which this release was or is
+    /// scheduled to publish within `[from, to]`. The endpoint returns
+    /// historical and future dates for the given release ID.
+    ///
+    /// Returns `Ok(Vec::new())` when the window contains no dates — not an error.
+    pub async fn release_dates(
+        &self,
+        release_id: u32,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<chrono::NaiveDate>, TradingError> {
+        self.limiter.acquire().await;
+        let resp = self
+            .http
+            .get(format!("{FRED_BASE_URL}{FRED_RELEASE_DATES_PATH}"))
+            .query(&[
+                ("release_id", release_id.to_string().as_str()),
+                ("realtime_start", from),
+                ("realtime_end", to),
+                ("file_type", "json"),
+                ("sort_order", "asc"),
+            ])
+            .query(&[("api_key", self.api_key.expose_secret())])
+            .send()
+            .await
+            .map_err(|e| TradingError::AnalystError {
+                agent: "fred".to_owned(),
+                message: format!("release_dates request failed: {e}"),
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(TradingError::AnalystError {
+                agent: "fred".to_owned(),
+                message: format!("release_dates HTTP {status} for release_id={release_id}"),
+            });
+        }
+
+        let body: FredReleaseDatesResponse =
+            resp.json()
+                .await
+                .map_err(|e| TradingError::SchemaViolation {
+                    message: format!("release_dates deserialize: {e}"),
+                })?;
+
+        let dates = body
+            .release_dates
+            .into_iter()
+            .filter_map(|rd| {
+                chrono::NaiveDate::parse_from_str(&rd.date, "%Y-%m-%d")
+                    .inspect_err(|e| {
+                        tracing::warn!(date = rd.date, error = %e, "skipping unparseable release date");
+                    })
+                    .ok()
+            })
+            .collect();
+
+        Ok(dates)
+    }
+}
+
+#[derive(Deserialize)]
+struct FredReleaseDatesResponse {
+    release_dates: Vec<FredReleaseDate>,
+}
+
+#[derive(Deserialize)]
+struct FredReleaseDate {
+    date: String,
 }
 
 fn collect_macro_events_from_series_results(
@@ -1026,5 +1112,59 @@ mod tests {
         );
 
         assert!(matches!(result, Err(TradingError::AnalystError { .. })));
+    }
+
+    // ── release_id constants ─────────────────────────────────────────────
+
+    #[test]
+    fn release_id_constants_are_distinct() {
+        use crate::data::fred::release_id;
+        let ids = [
+            release_id::CPI,
+            release_id::NONFARM_PAYROLLS,
+            release_id::FOMC_DECISION,
+            release_id::GDP,
+            release_id::ISM_MANUFACTURING,
+            release_id::RETAIL_SALES,
+        ];
+        let unique: std::collections::HashSet<u32> = ids.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "all release_id constants must be distinct"
+        );
+    }
+
+    // ── release_dates response deserialization ───────────────────────────
+
+    #[test]
+    fn fred_release_dates_response_deserializes() {
+        let json = r#"{"release_dates":[{"release_id":10,"date":"2026-01-14"},{"release_id":10,"date":"2026-02-12"}]}"#;
+        let resp: FredReleaseDatesResponse = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(resp.release_dates.len(), 2);
+        assert_eq!(resp.release_dates[0].date, "2026-01-14");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live FRED API key — run manually"]
+    async fn release_dates_returns_nonempty_for_cpi_in_60_day_window() {
+        let api_key = std::env::var("SCORPIO_FRED_API_KEY")
+            .expect("SCORPIO_FRED_API_KEY must be set for this test");
+        let api_cfg = crate::config::ApiConfig {
+            fred_api_key: Some(secrecy::SecretString::from(api_key)),
+            ..Default::default()
+        };
+        let limiter = SharedRateLimiter::new("test-fred-live", 30);
+        let client = FredClient::new(&api_cfg, limiter).expect("client");
+        let to = chrono::Utc::now().date_naive();
+        let from = to - chrono::Duration::days(60);
+        let dates = client
+            .release_dates(release_id::CPI, &from.to_string(), &to.to_string())
+            .await
+            .expect("release_dates");
+        assert!(
+            !dates.is_empty(),
+            "CPI should have released at least once in the last 60 days"
+        );
     }
 }

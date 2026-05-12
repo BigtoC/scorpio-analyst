@@ -23,3 +23,17 @@ Instructions:
 7. Return exactly one JSON object required by `NewsData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.
+
+## Upcoming Catalysts
+
+The following confirmed forward-looking catalysts apply to {ticker} or the
+broader macro calendar in the analysis window. Each line is tagged with an
+impact tier [H/M/L] and source category. Reason impact decisions against
+this list rather than inventing forward dates from training-data recall.
+
+{catalyst_calendar}
+
+If the block above says `(no upcoming catalysts: data unavailable)`, fall back
+to news-discovered events only and say so explicitly in your summary. If it
+says `(no upcoming catalysts in the next 30 days)`, that is a domain-valid
+signal — the analysed name is in a quiet window.

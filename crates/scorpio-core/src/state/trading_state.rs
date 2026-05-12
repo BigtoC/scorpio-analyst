@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::analysis_packs::RuntimePolicy;
 use crate::data::adapters::{
-    EnrichmentStatus, estimates::ConsensusEvidence, events::EventNewsEvidence,
+    EnrichmentStatus, catalysts::CatalystEvent, estimates::ConsensusEvidence,
+    events::EventNewsEvidence,
 };
 use crate::domain::Symbol;
 
@@ -128,6 +129,8 @@ pub struct TradingState {
     pub enrichment_event_news: EnrichmentState<Vec<EventNewsEvidence>>,
     #[serde(default)]
     pub enrichment_consensus: EnrichmentState<ConsensusEvidence>,
+    #[serde(default)]
+    pub enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
 
     /// Run-level coverage and provenance reporting — shared reporting
     /// concerns independent of asset class.
@@ -208,6 +211,8 @@ struct TradingStateWire {
     enrichment_event_news: EnrichmentState<Vec<EventNewsEvidence>>,
     #[serde(default)]
     enrichment_consensus: EnrichmentState<ConsensusEvidence>,
+    #[serde(default)]
+    enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
     data_coverage: Option<DataCoverageReport>,
     provenance_summary: Option<ProvenanceSummary>,
     debate_history: Vec<DebateMessage>,
@@ -258,6 +263,7 @@ impl From<TradingStateWire> for TradingState {
             crypto: wire.crypto,
             enrichment_event_news: wire.enrichment_event_news,
             enrichment_consensus: wire.enrichment_consensus,
+            enrichment_catalysts: wire.enrichment_catalysts,
             data_coverage: wire.data_coverage,
             provenance_summary: wire.provenance_summary,
             debate_history: wire.debate_history,
@@ -360,6 +366,7 @@ impl TradingState {
             crypto: None,
             enrichment_event_news: EnrichmentState::default(),
             enrichment_consensus: EnrichmentState::default(),
+            enrichment_catalysts: EnrichmentState::default(),
             data_coverage: None,
             provenance_summary: None,
             debate_history: Vec::new(),

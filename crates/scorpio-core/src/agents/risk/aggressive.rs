@@ -253,6 +253,7 @@ mod tests {
             final_execution_status: None,
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
+            enrichment_catalysts: Default::default(),
             data_coverage: None,
             provenance_summary: None,
             prior_thesis: None,
