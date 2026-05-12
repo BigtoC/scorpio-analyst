@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Plan dependencies:**
-> - Theme G's full power depends on Tier 1 of `2026-05-10-catalyst-calendar-integration.md`. Until that ships, Theme G runs in the "degraded mode: news-discovered events only" path described below. Tier 2 of that plan extends coverage to SEC EDGAR 8-K item codes (M&A, activist, buyback). Tier 3 (FDA AdComm, IPO lockup, DEF M14A expected-close) remains deferred.
+> - Theme G's core rollout depends on Tier 1 of `2026-05-10-003-catalyst-calendar-integration.md`, which has shipped. The baseline prompt now uses the wired `{catalyst_calendar}` block when available and falls back to the `degraded mode: news-discovered events only` path only when catalyst-calendar data is unavailable. Tier 2 of that plan extends coverage to SEC EDGAR 8-K item codes (M&A, activist, buyback). Tier 3 (FDA AdComm, IPO lockup, DEF M14A expected-close) remains deferred.
 > - Theme C's full power depends on a future transcripts plan (not yet written). Degraded mode is shippable today.
 > - All other themes have no plan dependencies.
 
@@ -715,7 +715,7 @@ git commit -m "feat(packs): port Theme C (management red flags), degraded mode w
 
 **Files:** `news_analyst.md`.
 
-> **Upgrade path:** the `<!-- TODO(catalyst-calendar) -->` block this task inserts is replaced by [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) Task 7. Do NOT remove the TODO marker in this task — that plan's Task 7 owns the swap.
+> **Upgrade path:** Tier 1 of [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) has already shipped the `## Upcoming Catalysts` / `{catalyst_calendar}` block. This task layers Theme G's taxonomy guidance on top of that existing section. Tier 2 and Tier 3 of that plan remain follow-up extensions.
 
 - [x] **Step 1: Insert the prompt block**
 
@@ -727,7 +727,7 @@ Use `render_baseline_prompt_for_role(...)` to assert that the rendered News anal
 
 - [ ] **Step 3: Smoke test**
 
-Inspect the news analyst summary on a name in earnings season. It should categorize events explicitly and say `degraded mode: news-discovered events only` until the catalyst-calendar plan's Tier 1 ships.
+Inspect the news analyst summary on a name in earnings season. It should categorize events explicitly and say `degraded mode: news-discovered events only` only when the runtime reports `(no upcoming catalysts: data unavailable)`.
 
 - [ ] **Step 4: Commit**
 
@@ -769,7 +769,7 @@ Only when closing the umbrella plan, create `docs/solutions/prompts/2026-05-10-a
 - Problem: prior Bull/Bear debate produced unfalsifiable theses; analyst valuations drifted.
 - Fix: shipped the final baseline rollout from `anthropics/financial-services` with prompt-first enforcement for sourcing and degraded-mode caveats.
 - Tags: `prompts`, `analysts`, `researchers`, `theme-port`, `attribution`.
-- Open: note any themes intentionally deferred. Record that Theme C ships degraded pending a future transcripts plan, that Theme G ships degraded pending Tier 1 of `2026-05-10-catalyst-calendar-integration.md` (with Tier 3 of that plan tracking the FDA / lockup / M&A-close gaps), and whether Theme D was deferred or moved to a later runtime slice.
+- Open: note any themes intentionally deferred. Record that Theme C ships degraded pending a future transcripts plan, that Theme G now rides on Tier 1 of `2026-05-10-003-catalyst-calendar-integration.md` (with Tier 2 tracking SEC EDGAR corporate-event coverage such as M&A / activist / buyback signals, and Tier 3 tracking FDA AdComm / S-1 lockup / DEF M14A expected-close gaps), and whether Theme D was deferred or moved to a later runtime slice.
 
 - [ ] **Step 2: Commit**
 
@@ -782,7 +782,7 @@ git commit -m "docs(solutions): record themes port + open data-source gaps"
 ## Out of Scope (explicitly)
 
 - **Wiring a transcript provider.** Theme C is shipped degraded; full mode tracked separately as the existing Milestone 7 work on `TranscriptEvidence`.
-- **Wiring a catalyst calendar.** Theme G is shipped degraded; full mode is tracked in [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md). That plan's Task 7 patches Theme G's prompt and downgrades the caveat in this document once Tier 1 lands.
+- **Wiring a catalyst calendar.** Theme G still depends on [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) for broader event coverage. Tier 1 has already landed; Tier 2 and Tier 3 remain follow-up work.
 - **Pillar/Falsifier as durable thesis-memory state.** Today's `ThesisMemory` keeps free-form action/decision/rationale. Extending it to store surviving pillars across runs is a follow-up plan ("structured thesis memory") that bumps `THESIS_MEMORY_SCHEMA_VERSION`.
 - **Renderer/runtime enforcement of `[UNSOURCED]` and degraded-mode caveats.** This plan keeps those requirements prompt-first and verification-backed; hard runtime guarantees are a separate hardening follow-up.
 - **Porting non-portable skills.** LBO modeling, Excel-cell hygiene, deck-refresh — these don't map to scorpio's deliverable shape and are explicitly skipped.
@@ -793,9 +793,9 @@ git commit -m "docs(solutions): record themes port + open data-source gaps"
 
 - [x] Every theme has exact file paths.
 - [x] Every prompt block is verbatim, ready to paste.
-- [x] No placeholders (the `TODO(transcripts)` and `TODO(catalyst-calendar)` markers are intentional seams, not abandoned tasks).
+- [x] No placeholders (the `TODO(transcripts)` markers are intentional seams, not abandoned tasks).
 - [x] Type names consistent: `Pillar`, `ThesisBreaker`, `CatalystCategory`, `ImpactLevel` — used identically across this plan's prompt blocks.
-- [x] Data dependencies: surfaced in the Decision Summary and again per-theme. Themes C and G shipped in degraded mode with explicit TODO markers.
+- [x] Data dependencies: surfaced in the Decision Summary and again per-theme. Theme C ships degraded with explicit TODO markers; Theme G depends on the wired catalyst-calendar block and still degrades when catalyst data is unavailable.
 - [x] CLAUDE.md compliance: all struct extensions use `#[serde(default)]`; no `THESIS_MEMORY_SCHEMA_VERSION` bump required by this plan (Theme E structured-thesis-memory is explicitly out of scope).
 
 ---

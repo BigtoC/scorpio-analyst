@@ -37,6 +37,14 @@ Numeric claims in analyst outputs had no provenance tags, making hallucinated
 training-data recall indistinguishable from tool-backed facts. Injection defense was
 present in some analyst prompts but not consistently structured across all roles.
 
+## Root cause
+
+The baseline pack's prompts evolved role-by-role without a shared framework for
+falsifiability, sourcing discipline, or degraded-mode caveats. That left the
+same analytical standards implemented unevenly across analysts, researchers,
+and risk roles, and it made prompt-test coverage easy to scope too narrowly to
+the primary role that received a new block.
+
 ## Fix
 
 Ported eight analytical frameworks from `anthropics/financial-services` (Apache 2.0)
@@ -99,9 +107,10 @@ before the exact-threshold classification rules are inserted.
 ## Verification
 
 All themes were verified deterministically:
-- 23 `#[test]` functions total in `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`
-  assert the exact required strings in each rendered role prompt (9 initial + 3 added by
-  code review to close secondary-role coverage gaps — see lesson below).
+- 23 `#[test]` functions total live in `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`.
+- 11 theme-port assertions in that file verify the exact required strings in each rendered
+  role prompt (8 initial + 3 added by code review to close secondary-role coverage gaps —
+  see lesson below).
 - Golden fixtures regenerated with `UPDATE_FIXTURES=1` after all inserts.
 - Full workspace test suite: 1803/1803 tests pass.
 
