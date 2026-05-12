@@ -715,7 +715,7 @@ git commit -m "feat(packs): port Theme C (management red flags), degraded mode w
 
 **Files:** `news_analyst.md`.
 
-> **Upgrade path:** the `<!-- TODO(catalyst-calendar) -->` block this task inserts is replaced by [`2026-05-10-catalyst-calendar-integration.md`](./2026-05-10-catalyst-calendar-integration.md) Task 7. Do NOT remove the TODO marker in this task — that plan's Task 7 owns the swap.
+> **Upgrade path:** the `<!-- TODO(catalyst-calendar) -->` block this task inserts is replaced by [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) Task 7. Do NOT remove the TODO marker in this task — that plan's Task 7 owns the swap.
 
 - [ ] **Step 1: Insert the prompt block**
 
@@ -782,7 +782,7 @@ git commit -m "docs(solutions): record themes port + open data-source gaps"
 ## Out of Scope (explicitly)
 
 - **Wiring a transcript provider.** Theme C is shipped degraded; full mode tracked separately as the existing Milestone 7 work on `TranscriptEvidence`.
-- **Wiring a catalyst calendar.** Theme G is shipped degraded; full mode is tracked in [`2026-05-10-catalyst-calendar-integration.md`](./2026-05-10-catalyst-calendar-integration.md). That plan's Task 7 patches Theme G's prompt and downgrades the caveat in this document once Tier 1 lands.
+- **Wiring a catalyst calendar.** Theme G is shipped degraded; full mode is tracked in [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md). That plan's Task 7 patches Theme G's prompt and downgrades the caveat in this document once Tier 1 lands.
 - **Pillar/Falsifier as durable thesis-memory state.** Today's `ThesisMemory` keeps free-form action/decision/rationale. Extending it to store surviving pillars across runs is a follow-up plan ("structured thesis memory") that bumps `THESIS_MEMORY_SCHEMA_VERSION`.
 - **Renderer/runtime enforcement of `[UNSOURCED]` and degraded-mode caveats.** This plan keeps those requirements prompt-first and verification-backed; hard runtime guarantees are a separate hardening follow-up.
 - **Porting non-portable skills.** LBO modeling, Excel-cell hygiene, deck-refresh — these don't map to scorpio's deliverable shape and are explicitly skipped.
