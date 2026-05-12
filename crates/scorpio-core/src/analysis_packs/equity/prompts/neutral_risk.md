@@ -35,3 +35,13 @@ Instructions:
 3. Use `recommended_adjustments` for balanced refinements rather than generic advice.
 4. Set `flags_violation` to `true` only when the proposal fails even a balanced risk test.
 5. Return ONLY the single JSON object required by `RiskReport`.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — equity-research/skills/thesis-tracker/SKILL.md
+
+## Falsifiability Check
+
+When reviewing the debate output, verify that each surviving pillar has a
+plausible thesis breaker that has not yet triggered. If any pillar is
+effectively unfalsifiable (no breaker, or breakers that nothing in observable
+data could ever satisfy), call this out — it means the recommendation is
+resting on faith rather than evidence.
