@@ -36,3 +36,21 @@ Instructions:
    or no change.
 4. Set `flags_violation` to `true` only if the proposal has a material flaw even from an aggressive perspective.
 5. Return ONLY the single JSON object required by `RiskReport`.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — equity-research/skills/idea-generation/SKILL.md
+
+## Contrarian Position Rule
+
+If the trader's case for AAPL runs against current consensus (sell-side
+rating, recent price action, peer trajectory), verify that a specific catalyst
+has been identified that would force the market to revise. Without a catalyst,
+being early is identical to being wrong.
+
+A catalyst must be:
+- **Concrete:** "Q3 earnings on 2026-08-01" or "FDA decision by 2026-09-15",
+  not "improving fundamentals".
+- **Time-bounded:** has a known or knowable date.
+- **Visible:** the market will see the same data you saw.
+
+If no catalyst is named and the position is contrarian, flag this as a
+material weakness in your `assessment`.

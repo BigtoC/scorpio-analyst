@@ -475,3 +475,176 @@ fn baseline_manifest_is_complete_under_fully_enabled_topology() {
         "baseline pack must be complete or the gate is meaningless: {result:?}"
     );
 }
+
+// --- Analytical Themes Port assertions (Tasks 2-9 of 2026-05-10-004) ---
+
+#[test]
+fn analyst_and_trader_prompts_include_sourcing_hierarchy_and_injection_defense() {
+    for role in [
+        Role::FundamentalAnalyst,
+        Role::NewsAnalyst,
+        Role::SentimentAnalyst,
+        Role::TechnicalAnalyst,
+        Role::Trader,
+    ] {
+        let p = render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
+        assert!(
+            p.contains("Data Sourcing Hierarchy"),
+            "Theme H sourcing hierarchy missing from {role:?}"
+        );
+        assert!(
+            p.contains("[UNSOURCED]"),
+            "Theme H [UNSOURCED] tag missing from {role:?}"
+        );
+        assert!(
+            p.contains("Untrusted External Content"),
+            "Theme H injection defense section missing from {role:?}"
+        );
+    }
+}
+
+#[test]
+fn bullish_researcher_prompt_requires_pillars_and_breakers() {
+    let p = render_baseline_prompt_for_role(
+        Role::BullishResearcher,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Pillars (3\u{2013}5)"),
+        "Theme E pillars block missing from BullishResearcher"
+    );
+    assert!(
+        p.contains("Thesis breakers (3\u{2013}5)"),
+        "Theme E breakers block missing from BullishResearcher"
+    );
+}
+
+#[test]
+fn bearish_researcher_prompt_requires_pillars_and_breakers() {
+    let p = render_baseline_prompt_for_role(
+        Role::BearishResearcher,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Pillars (3\u{2013}5)"),
+        "Theme E pillars block missing from BearishResearcher"
+    );
+    assert!(
+        p.contains("Thesis breakers (3\u{2013}5)"),
+        "Theme E breakers block missing from BearishResearcher"
+    );
+}
+
+#[test]
+fn debate_moderator_prompt_enforces_falsifiability() {
+    let p = render_baseline_prompt_for_role(
+        Role::DebateModerator,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("falsifiability") || p.contains("falsifiable"),
+        "Theme E falsifiability requirement missing from DebateModerator"
+    );
+    assert!(
+        p.contains("Surviving pillars"),
+        "Theme E surviving pillars missing from DebateModerator"
+    );
+    assert!(
+        p.contains("unresolved uncertainty"),
+        "Theme E unresolved uncertainty missing from DebateModerator"
+    );
+}
+
+#[test]
+fn neutral_risk_prompt_includes_falsifiability_check() {
+    let p = render_baseline_prompt_for_role(
+        Role::NeutralRisk,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Falsifiability Check"),
+        "Theme E falsifiability check section missing from NeutralRisk"
+    );
+}
+
+#[test]
+fn fundamental_analyst_prompt_includes_valuation_sanity_bands_and_kpi_matrix() {
+    let p = render_baseline_prompt_for_role(
+        Role::FundamentalAnalyst,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Valuation Sanity Bands"),
+        "Theme A valuation sanity bands missing from FundamentalAnalyst"
+    );
+    assert!(
+        p.contains("Industry KPI Matrix"),
+        "Theme B industry KPI matrix missing from FundamentalAnalyst"
+    );
+}
+
+#[test]
+fn conservative_risk_prompt_includes_valuation_sanity_bands() {
+    let p = render_baseline_prompt_for_role(
+        Role::ConservativeRisk,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Valuation Sanity Bands"),
+        "Theme A valuation sanity bands missing from ConservativeRisk"
+    );
+}
+
+#[test]
+fn news_analyst_prompt_includes_management_red_flags_degraded_mode() {
+    let p = render_baseline_prompt_for_role(
+        Role::NewsAnalyst,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Management Commentary Red Flags"),
+        "Theme C management red flags missing from NewsAnalyst"
+    );
+    assert!(
+        p.contains("degraded mode: headline/summary only"),
+        "Theme C degraded mode caveat missing from NewsAnalyst"
+    );
+}
+
+#[test]
+fn sentiment_analyst_and_conservative_risk_prompts_include_management_red_flags() {
+    for role in [Role::SentimentAnalyst, Role::ConservativeRisk] {
+        let p = render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
+        assert!(
+            p.contains("Management Commentary Red Flags"),
+            "Theme C management red flags missing from {role:?}"
+        );
+    }
+}
+
+#[test]
+fn news_analyst_prompt_includes_catalyst_taxonomy_degraded_mode() {
+    let p = render_baseline_prompt_for_role(
+        Role::NewsAnalyst,
+        PromptRenderScenario::AllInputsPresent,
+    );
+    assert!(
+        p.contains("Catalyst Taxonomy"),
+        "Theme G catalyst taxonomy missing from NewsAnalyst"
+    );
+    assert!(
+        p.contains("degraded mode: news-discovered events only"),
+        "Theme G degraded mode caveat missing from NewsAnalyst"
+    );
+}
+
+#[test]
+fn bullish_researcher_and_aggressive_risk_prompts_include_contrarian_catalyst_rule() {
+    for role in [Role::BullishResearcher, Role::AggressiveRisk] {
+        let p = render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
+        assert!(
+            p.contains("Contrarian Position Rule"),
+            "Theme F contrarian position rule missing from {role:?}"
+        );
+    }
+}

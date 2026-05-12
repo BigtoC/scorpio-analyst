@@ -36,3 +36,52 @@ Instructions:
 4. Use `recommended_adjustments` for explicit risk reductions or avoidance steps.
 5. Set `flags_violation` to `true` when the proposal has a material risk-control flaw or unjustified exposure.
 6. Return ONLY the single JSON object required by `RiskReport`.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — financial-analysis/skills/dcf-model/SKILL.md, financial-analysis/skills/comps-analysis/SKILL.md
+
+## Valuation Sanity Bands
+
+When evaluating any valuation claim in the proposal or analyst data, use these
+ranges as plausibility filters. A value outside the band is not automatically
+wrong, but it requires explicit justification or it should be flagged.
+
+**WACC:**
+- Large cap, stable: 7–9%
+- Growth: 9–12%
+- High growth/risk: 12–15%
+
+**Terminal growth:**
+- Conservative: 2.0–2.5%
+- Moderate: 2.5–3.5%
+- Aggressive: 3.5–5.0% (only justified for category leaders)
+
+**Multiple ranges (industry-dependent):**
+- EV/Revenue: 0.5–20x
+- EV/EBITDA: 8–25x
+- P/E: 10–50x (growth-dependent)
+
+**Terminal value as % of enterprise value:** 50–70% is normal. Above 75%
+means the model is over-reliant on terminal assumptions; flag this as a
+weakness.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — equity-research/skills/earnings-analysis/SKILL.md, financial-analysis/skills/comps-analysis/SKILL.md
+
+## Management Commentary Red Flags
+
+When you see any of these in the news or sentiment data, flag it explicitly in
+your risk assessment:
+
+- "Macro headwinds" or "demand softness" language without specifics
+- Customer concentration increasing or major customer loss
+- Competitive intensity commentary ("pricing pressure", "share losses")
+- Margin pressure or "investments" reducing near-term profitability
+- Guidance pulled, reduced, or replaced with broader ranges
+- Unusual one-time items inflating reported results
+- Change in key operating metrics (churn, retention, win rates)
+
+When transcripts are unavailable, note `degraded mode: headline/summary only`
+for any commentary-based risk factors.
+
+<!-- TODO(transcripts): once call transcripts are wired (TranscriptEvidence
+provider), add tone-shift detection between press release and earnings call.
+Currently we only see press releases and headlines. -->
