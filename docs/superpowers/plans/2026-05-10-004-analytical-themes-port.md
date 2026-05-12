@@ -507,7 +507,7 @@ Ship the default baseline pack in batches, not one theme per mini-release. Recom
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Add attribution**
+- [x] **Step 1: Add attribution**
 
 In `README.md`, add a `## Attribution` section:
 
@@ -535,7 +535,7 @@ git commit -m "docs(packs): add anthropics financial-services attribution"
 
 **Files:** `fundamental_analyst.md`, `news_analyst.md`, `sentiment_analyst.md`, `technical_analyst.md`, `trader.md`.
 
-- [ ] **Step 1: Insert the Theme H block**
+- [x] **Step 1: Insert the Theme H block**
 
 Paste the **Theme H** block (from above) into each of:
 - `fundamental_analyst.md`
@@ -546,7 +546,7 @@ Paste the **Theme H** block (from above) into each of:
 
 Position: at the end of the existing prompt, after role-specific instructions. The injection rule and `[UNSOURCED]` tag work universally.
 
-- [ ] **Step 2: Run the prompt-bundle regression test**
+- [x] **Step 2: Run the prompt-bundle regression test**
 
 Run: `UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 Then rerun: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
@@ -570,11 +570,11 @@ git commit -m "feat(packs): port Theme H (sourcing hierarchy + injection defense
 
 **Files:** `bullish_researcher.md`, `bearish_researcher.md`, `debate_moderator.md`, `neutral_risk.md`.
 
-- [ ] **Step 1: Insert prompt blocks**
+- [x] **Step 1: Insert prompt blocks**
 
 Paste each block (from the **Theme E** section above) into the corresponding `.md` file. For `bullish_researcher.md`, position it under the existing role description. For the bearish file, mirror with bear language.
 
-- [ ] **Step 2: Add a regression test on prompt content**
+- [x] **Step 2: Add a regression test on prompt content**
 
 In `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` or a new integration test using the public test helpers:
 
@@ -630,11 +630,11 @@ No code changes in this plan.
 
 **Files:** `fundamental_analyst.md`, `conservative_risk.md`.
 
-- [ ] **Step 1: Insert prompt blocks**
+- [x] **Step 1: Insert prompt blocks**
 
 Paste **Theme A** into `fundamental_analyst.md` and `conservative_risk.md`. Paste **Theme B** into `fundamental_analyst.md` only.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that:
 - the Fundamental analyst prompt contains `Valuation Sanity Bands`, and
@@ -656,15 +656,15 @@ git commit -m "feat(packs): port Themes A+B (sanity bands + industry KPI matrix)
 
 **Files:** audit notes only unless the audit explicitly passes.
 
-- [ ] **Step 1: Audit the prerequisite data path**
+- [x] **Step 1: Audit the prerequisite data path**
 
 Trace: baseline pack `enrichment_intent.consensus_estimates` -> runtime hydration -> prompt context rendering -> trader/news prompts. Confirm whether the default pack should enable consensus at all.
 
-- [ ] **Step 2: Verify same-period actuals**
+- [x] **Step 2: Verify same-period actuals**
 
 Confirm that actual revenue/EPS for the same reporting period are available beside the consensus snapshot at render time. If they are not, do not ship the exact threshold-based beat/miss rules in this plan.
 
-- [ ] **Step 3: Make the go/no-go decision**
+- [x] **Step 3: Make the go/no-go decision**
 
 If both prerequisite checks pass:
 - open a follow-up implementation task for baseline enablement + prompt changes,
@@ -675,7 +675,7 @@ If either prerequisite check fails:
 - record the missing plumbing as a follow-up,
 - do not insert partial Theme D logic into the baseline prompts.
 
-- [ ] **Step 4: Record the decision**
+- [x] **Step 4: Record the decision**
 
 Write down whether Theme D is deferred or cleared for a separate implementation step. The audit is complete only when that decision is explicit.
 
@@ -691,11 +691,11 @@ git commit -m "docs(packs): record Theme D audit decision"
 
 **Files:** `news_analyst.md`, `sentiment_analyst.md`, `conservative_risk.md`.
 
-- [ ] **Step 1: Insert the Theme C block** into all three.
+- [x] **Step 1: Insert the Theme C block** into all three.
 
 Note the `<!-- TODO(transcripts) -->` marker — leave it in. It's the seam for when transcripts are wired.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that the rendered News analyst prompt contains `Management Commentary Red Flags` and `degraded mode: headline/summary only`.
 
@@ -717,11 +717,11 @@ git commit -m "feat(packs): port Theme C (management red flags), degraded mode w
 
 > **Upgrade path:** the `<!-- TODO(catalyst-calendar) -->` block this task inserts is replaced by [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) Task 7. Do NOT remove the TODO marker in this task — that plan's Task 7 owns the swap.
 
-- [ ] **Step 1: Insert the prompt block**
+- [x] **Step 1: Insert the prompt block**
 
 Paste **Theme G** into `news_analyst.md`.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that the rendered News analyst prompt contains `Catalyst Taxonomy` and `degraded mode: news-discovered events only`.
 
@@ -741,9 +741,9 @@ git commit -m "feat(packs): port Theme G (catalyst taxonomy + H/M/L), degraded m
 
 **Files:** `bullish_researcher.md`, `aggressive_risk.md`.
 
-- [ ] **Step 1: Insert the Theme F block** into both.
+- [x] **Step 1: Insert the Theme F block** into both.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that the rendered Bullish Researcher prompt contains `Contrarian Position Rule`.
 
@@ -763,7 +763,7 @@ git commit -m "feat(packs): port Theme F (contrarian-needs-catalyst rule)"
 
 **Files:** `docs/solutions/`
 
-- [ ] **Step 1: Document the port**
+- [x] **Step 1: Document the port**
 
 Only when closing the umbrella plan, create `docs/solutions/prompts/2026-05-10-anthropic-fsi-themes-port.md` with:
 - Problem: prior Bull/Bear debate produced unfalsifiable theses; analyst valuations drifted.
