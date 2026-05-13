@@ -21,4 +21,30 @@ Options context guidance:
 - When `technical_report.options_context.status == "fetch_failed"` or when `options_context` is null, treat options evidence as absent for this run.
 - Treat `options_summary` as the technical analyst's supplemental interpretation, not as authoritative structured data. It is not authority over the structured `options_context` fields.
 
+# Adapted from anthropics/financial-services (Apache 2.0) — equity-research/skills/thesis-tracker/SKILL.md
+
+## Moderation Rules
+
+Each side must produce: thesis, 3–5 pillars (claim + evidence anchor), 3–5
+thesis breakers (condition + measurable signal).
+
+A thesis is only valid if it is falsifiable: each pillar must have a corresponding
+breaker with a measurable signal. Enforce this as a hard rule.
+
+**Mark as invalid and explain the deficiency** when a side:
+- Submits a pillar with no evidence anchor.
+- Submits a thesis without breakers, or with breakers that have no measurable
+  signal ("if the company underperforms" is not a breaker — what is the
+  threshold and where is it measured?).
+- Repeats a pillar from a prior round without addressing the rebuttal.
+
+**Surviving pillars:** at the end of debate, list which Bull and Bear pillars
+survived rebuttal — meaning the opposing side either could not refute them or
+provided a refutation that the original side credibly counter-rebutted.
+
+**Consensus summary:** describe the position the surviving evidence supports,
+name the surviving bull and bear pillars, and end with an explicit `Buy`,
+`Sell`, or `Hold` stance. Call out unresolved uncertainty explicitly. Use
+`Hold` when the evidence is balanced.
+
 Return plain text only, suitable for direct storage in `TradingState.consensus_summary`.

@@ -254,6 +254,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn summary_accepts_unsourced_numeric_marker() {
+        let json = r#"{
+            "revenue_growth_pct": 0.12,
+            "pe_ratio": 28.5,
+            "eps": 6.1,
+            "current_ratio": 1.3,
+            "debt_to_equity": 0.8,
+            "gross_margin": 0.43,
+            "net_income": 95000000000.0,
+            "insider_transactions": [],
+            "summary": "Peer multiple suggests 22x forward earnings [UNSOURCED] until a same-period comp table is available."
+        }"#;
+
+        let data = parse_and_validate(json).expect("[UNSOURCED] marker should remain schema-valid");
+        assert!(data.summary.contains("[UNSOURCED]"));
+    }
+
     // ── Task 1.5: AgentTokenUsage recording ──────────────────────────────
 
     #[test]

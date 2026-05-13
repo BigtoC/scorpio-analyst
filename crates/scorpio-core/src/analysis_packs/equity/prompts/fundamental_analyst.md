@@ -28,3 +28,59 @@ Instructions:
 6. Return exactly one JSON object required by `FundamentalData`. No prose, no markdown fences — output exactly one JSON object, no prose, no markdown fences.
 
 Do not include any trade recommendation, target price, or final transaction proposal.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — financial-analysis/skills/dcf-model/SKILL.md, financial-analysis/skills/comps-analysis/SKILL.md
+
+## Valuation Sanity Bands
+
+When evaluating any valuation claim — your own or another agent's — use these
+ranges as plausibility filters. A value outside the band is not automatically
+wrong, but it requires explicit justification or it should be flagged.
+
+**WACC:**
+- Large cap, stable: 7–9%
+- Growth: 9–12%
+- High growth/risk: 12–15%
+
+**Terminal growth:**
+- Conservative: 2.0–2.5%
+- Moderate: 2.5–3.5%
+- Aggressive: 3.5–5.0% (only justified for category leaders)
+
+**Multiple ranges (industry-dependent):**
+- EV/Revenue: 0.5–20x
+- EV/EBITDA: 8–25x
+- P/E: 10–50x (growth-dependent)
+
+**Operating expense as % of revenue:**
+- S&M: 15–40% (varies by GTM)
+- R&D: 10–30% (technology)
+- G&A: 8–15% (scales with revenue)
+
+**Working capital change:** -2% to +2% of revenue change is typical.
+
+**Tax rate:** 21–28% (US baseline).
+
+**Terminal value as % of enterprise value:** 50–70% is normal. Above 75%
+means the model is over-reliant on terminal assumptions; flag this as a
+weakness. Below 40% means the terminal is being too conservative.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — financial-analysis/skills/comps-analysis/SKILL.md
+
+## Industry KPI Matrix
+
+Different sectors require different metrics. Use the wrong ones and your
+analysis is meaningless. Reference this table when reporting on {ticker}:
+
+| Sector               | Must Have                                         | Optional                                 | Skip                                                 |
+|----------------------|---------------------------------------------------|------------------------------------------|------------------------------------------------------|
+| SaaS / Software      | Revenue Growth, Gross Margin, Rule of 40          | ARR, Net Dollar Retention, CAC Payback   | Asset Turnover, Inventory metrics                    |
+| Manufacturing        | EBITDA Margin, Asset Turnover, CapEx/Revenue      | ROA, Inventory Turns, Backlog            | Rule of 40, SaaS metrics                             |
+| Financial Services   | ROE, ROA, Efficiency Ratio, P/E                   | Net Interest Margin, Loan Loss Reserves  | Gross Margin, EBITDA (not meaningful for financials) |
+| Retail / E-commerce  | Revenue Growth, Gross Margin, Inventory Turnover  | Same-Store Sales, CAC                    | Heavy R&D metrics                                    |
+| Energy / Commodities | EBITDA Margin, Reserves, Production Cost per Unit | Free Cash Flow Yield, Decline Rates      | SaaS metrics                                         |
+| Healthcare / Biotech | Pipeline Stage, Cash Runway, R&D Productivity     | Reimbursement Rates, Trial Success Rates | Asset Turnover                                       |
+
+**Critical rule: do not apply EBITDA-based valuation to financial services
+companies.** Their economics make EBITDA non-meaningful. Use ROE / P/B / P/E
+instead. Equally, do not apply SaaS metrics to a manufacturer.

@@ -17,37 +17,62 @@ use super::super::{
 /// equity analyst's system prompt enforces. Loaded once at compile time and
 /// appended to each analyst slot in [`baseline_prompt_bundle`].
 const ANALYST_RUNTIME_CONTRACT: &str = include_str!("prompts/analyst_runtime_contract.md");
+const THEME_C_MANAGEMENT_RED_FLAGS: &str = include_str!("prompts/theme_c_management_red_flags.md");
+const THEME_H_SOURCING_AND_UNTRUSTED: &str =
+    include_str!("prompts/theme_h_sourcing_and_untrusted.md");
 
-fn trim_trailing_newline(content: &'static str) -> &'static str {
+fn trim_trailing_newline(content: &str) -> &str {
     content.strip_suffix('\n').unwrap_or(content)
 }
 
-/// Append the analyst runtime contract to a raw analyst prompt template.
-///
-/// The contract — the three evidence-discipline rules and the analyst
-/// unsupported-inference guards — is cross-cutting and identical for every
-/// equity analyst, so each pack injects it once at load time rather than
-/// having every renderer re-append it on every call.
-fn with_analyst_runtime_contract(raw: &'static str) -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{raw}\n\n{contract}",
-        raw = trim_trailing_newline(raw),
-        contract = trim_trailing_newline(ANALYST_RUNTIME_CONTRACT),
-    ))
+fn theme_h_sourcing_and_untrusted(output_field: &str) -> String {
+    THEME_H_SOURCING_AND_UNTRUSTED.replace("{output_field}", output_field)
+}
+
+fn compose_prompt_sections(raw: &str, sections: &[&str]) -> String {
+    let mut composed = trim_trailing_newline(raw).to_owned();
+    for section in sections {
+        composed.push_str("\n\n");
+        composed.push_str(trim_trailing_newline(section));
+    }
+    composed
+}
+
+fn with_sections(raw: &'static str, sections: &[&str]) -> Cow<'static, str> {
+    Cow::Owned(compose_prompt_sections(raw, sections))
+}
+
+fn with_analyst_runtime_contract_sections(
+    raw: &'static str,
+    sections: &[&str],
+) -> Cow<'static, str> {
+    let mut composed = compose_prompt_sections(raw, sections);
+    composed.push_str("\n\n");
+    composed.push_str(trim_trailing_newline(ANALYST_RUNTIME_CONTRACT));
+    Cow::Owned(composed)
 }
 
 fn baseline_prompt_bundle() -> PromptBundle {
+    let theme_h_summary = theme_h_sourcing_and_untrusted("summary");
+    let theme_h_rationale = theme_h_sourcing_and_untrusted("`rationale`");
+
     PromptBundle {
-        fundamental_analyst: with_analyst_runtime_contract(include_str!(
-            "prompts/fundamental_analyst.md"
-        )),
-        sentiment_analyst: with_analyst_runtime_contract(include_str!(
-            "prompts/sentiment_analyst.md"
-        )),
-        news_analyst: with_analyst_runtime_contract(include_str!("prompts/news_analyst.md")),
-        technical_analyst: with_analyst_runtime_contract(include_str!(
-            "prompts/technical_analyst.md"
-        )),
+        fundamental_analyst: with_analyst_runtime_contract_sections(
+            include_str!("prompts/fundamental_analyst.md"),
+            &[theme_h_summary.as_str()],
+        ),
+        sentiment_analyst: with_analyst_runtime_contract_sections(
+            include_str!("prompts/sentiment_analyst.md"),
+            &[THEME_C_MANAGEMENT_RED_FLAGS, theme_h_summary.as_str()],
+        ),
+        news_analyst: with_analyst_runtime_contract_sections(
+            include_str!("prompts/news_analyst.md"),
+            &[THEME_C_MANAGEMENT_RED_FLAGS, theme_h_summary.as_str()],
+        ),
+        technical_analyst: with_analyst_runtime_contract_sections(
+            include_str!("prompts/technical_analyst.md"),
+            &[theme_h_summary.as_str()],
+        ),
         bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/bullish_researcher.md"
         ))),
@@ -57,7 +82,10 @@ fn baseline_prompt_bundle() -> PromptBundle {
         debate_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/debate_moderator.md"
         ))),
-        trader: Cow::Borrowed(trim_trailing_newline(include_str!("prompts/trader.md"))),
+        trader: with_sections(
+            include_str!("prompts/trader.md"),
+            &[theme_h_rationale.as_str()],
+        ),
         aggressive_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/aggressive_risk.md"
         ))),

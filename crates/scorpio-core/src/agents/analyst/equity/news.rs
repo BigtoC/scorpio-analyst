@@ -289,6 +289,38 @@ mod tests {
         assert!((data.macro_events[1].confidence - 0.75).abs() < 1e-9);
     }
 
+    #[test]
+    fn summary_preserves_transcript_degraded_mode_notice() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [],
+            "summary": "degraded mode: headline/summary only; no transcript tone comparison is available for this run."
+        }"#;
+
+        let data = parse_and_validate(json)
+            .expect("degraded transcript notice should remain schema-valid");
+        assert!(
+            data.summary
+                .contains("degraded mode: headline/summary only")
+        );
+    }
+
+    #[test]
+    fn summary_preserves_news_discovered_catalyst_degraded_mode_notice() {
+        let json = r#"{
+            "articles": [],
+            "macro_events": [],
+            "summary": "degraded mode: news-discovered events only; no catalyst calendar source was available for forward-dated coverage."
+        }"#;
+
+        let data = parse_and_validate(json)
+            .expect("catalyst degraded-mode notice should remain schema-valid");
+        assert!(
+            data.summary
+                .contains("degraded mode: news-discovered events only")
+        );
+    }
+
     // ── Task 3.5: AgentTokenUsage recording ──────────────────────────────
 
     #[test]

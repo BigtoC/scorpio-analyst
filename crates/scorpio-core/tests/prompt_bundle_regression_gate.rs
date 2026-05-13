@@ -50,6 +50,80 @@ const LIVE_ROLES: [Role; 14] = [
     Role::Auditor,
 ];
 
+struct ThemeCoverageCase {
+    theme: &'static str,
+    roles: &'static [Role],
+    required_markers: &'static [&'static str],
+}
+
+const ANALYTICAL_THEME_PORT_COVERAGE: &[ThemeCoverageCase] = &[
+    ThemeCoverageCase {
+        theme: "Theme H sourcing hierarchy + injection defense",
+        roles: &[
+            Role::FundamentalAnalyst,
+            Role::NewsAnalyst,
+            Role::SentimentAnalyst,
+            Role::TechnicalAnalyst,
+            Role::Trader,
+        ],
+        required_markers: &[
+            "Data Sourcing Hierarchy",
+            "[UNSOURCED]",
+            "Untrusted External Content",
+        ],
+    },
+    ThemeCoverageCase {
+        theme: "Theme E researcher falsifiable structure",
+        roles: &[Role::BullishResearcher, Role::BearishResearcher],
+        required_markers: &["Pillars (3", "Thesis breakers (3"],
+    },
+    ThemeCoverageCase {
+        theme: "Theme E moderator falsifiability synthesis",
+        roles: &[Role::DebateModerator],
+        required_markers: &["falsifi", "Surviving pillars", "unresolved uncertainty"],
+    },
+    ThemeCoverageCase {
+        theme: "Theme E neutral risk falsifiability check",
+        roles: &[Role::NeutralRisk],
+        required_markers: &["Falsifiability Check"],
+    },
+    ThemeCoverageCase {
+        theme: "Theme A valuation sanity bands",
+        roles: &[Role::FundamentalAnalyst, Role::ConservativeRisk],
+        required_markers: &["Valuation Sanity Bands"],
+    },
+    ThemeCoverageCase {
+        theme: "Theme B industry KPI matrix",
+        roles: &[Role::FundamentalAnalyst],
+        required_markers: &["Industry KPI Matrix"],
+    },
+    ThemeCoverageCase {
+        theme: "Theme C management red flags degraded mode",
+        roles: &[
+            Role::NewsAnalyst,
+            Role::SentimentAnalyst,
+            Role::ConservativeRisk,
+        ],
+        required_markers: &[
+            "Management Commentary Red Flags",
+            "degraded mode: headline/summary only",
+        ],
+    },
+    ThemeCoverageCase {
+        theme: "Theme G catalyst taxonomy degraded mode",
+        roles: &[Role::NewsAnalyst],
+        required_markers: &[
+            "Catalyst Taxonomy",
+            "degraded mode: news-discovered events only",
+        ],
+    },
+    ThemeCoverageCase {
+        theme: "Theme F contrarian catalyst rule",
+        roles: &[Role::BullishResearcher, Role::AggressiveRisk],
+        required_markers: &["Contrarian Position Rule"],
+    },
+];
+
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -474,4 +548,25 @@ fn baseline_manifest_is_complete_under_fully_enabled_topology() {
         result.is_ok(),
         "baseline pack must be complete or the gate is meaningless: {result:?}"
     );
+}
+
+// --- Analytical Themes Port assertions (Tasks 2-9 of 2026-05-10-004) ---
+
+#[test]
+fn analytical_theme_port_coverage_matrix_remains_intact() {
+    for case in ANALYTICAL_THEME_PORT_COVERAGE {
+        for role in case.roles {
+            let rendered =
+                render_baseline_prompt_for_role(*role, PromptRenderScenario::AllInputsPresent);
+            for marker in case.required_markers {
+                assert!(
+                    rendered.contains(marker),
+                    "{} marker {:?} missing from {:?}",
+                    case.theme,
+                    marker,
+                    role
+                );
+            }
+        }
+    }
 }

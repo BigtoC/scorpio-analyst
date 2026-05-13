@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Plan dependencies:**
-> - Theme G's full power depends on Tier 1 of `2026-05-10-catalyst-calendar-integration.md`. Until that ships, Theme G runs in the "degraded mode: news-discovered events only" path described below. Tier 2 of that plan extends coverage to SEC EDGAR 8-K item codes (M&A, activist, buyback). Tier 3 (FDA AdComm, IPO lockup, DEF M14A expected-close) remains deferred.
+> - Theme G's core rollout depends on Tier 1 of `2026-05-10-003-catalyst-calendar-integration.md`, which has shipped. The baseline prompt now uses the wired `{catalyst_calendar}` block when available and falls back to the `degraded mode: news-discovered events only` path only when catalyst-calendar data is unavailable. Tier 2 of that plan extends coverage to SEC EDGAR 8-K item codes (M&A, activist, buyback). Tier 3 (FDA AdComm, IPO lockup, DEF M14A expected-close) remains deferred.
 > - Theme C's full power depends on a future transcripts plan (not yet written). Degraded mode is shippable today.
 > - All other themes have no plan dependencies.
 
@@ -507,7 +507,7 @@ Ship the default baseline pack in batches, not one theme per mini-release. Recom
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Add attribution**
+- [x] **Step 1: Add attribution**
 
 In `README.md`, add a `## Attribution` section:
 
@@ -535,7 +535,7 @@ git commit -m "docs(packs): add anthropics financial-services attribution"
 
 **Files:** `fundamental_analyst.md`, `news_analyst.md`, `sentiment_analyst.md`, `technical_analyst.md`, `trader.md`.
 
-- [ ] **Step 1: Insert the Theme H block**
+- [x] **Step 1: Insert the Theme H block**
 
 Paste the **Theme H** block (from above) into each of:
 - `fundamental_analyst.md`
@@ -546,7 +546,7 @@ Paste the **Theme H** block (from above) into each of:
 
 Position: at the end of the existing prompt, after role-specific instructions. The injection rule and `[UNSOURCED]` tag work universally.
 
-- [ ] **Step 2: Run the prompt-bundle regression test**
+- [x] **Step 2: Run the prompt-bundle regression test**
 
 Run: `UPDATE_FIXTURES=1 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 Then rerun: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
@@ -570,11 +570,11 @@ git commit -m "feat(packs): port Theme H (sourcing hierarchy + injection defense
 
 **Files:** `bullish_researcher.md`, `bearish_researcher.md`, `debate_moderator.md`, `neutral_risk.md`.
 
-- [ ] **Step 1: Insert prompt blocks**
+- [x] **Step 1: Insert prompt blocks**
 
 Paste each block (from the **Theme E** section above) into the corresponding `.md` file. For `bullish_researcher.md`, position it under the existing role description. For the bearish file, mirror with bear language.
 
-- [ ] **Step 2: Add a regression test on prompt content**
+- [x] **Step 2: Add a regression test on prompt content**
 
 In `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` or a new integration test using the public test helpers:
 
@@ -630,11 +630,11 @@ No code changes in this plan.
 
 **Files:** `fundamental_analyst.md`, `conservative_risk.md`.
 
-- [ ] **Step 1: Insert prompt blocks**
+- [x] **Step 1: Insert prompt blocks**
 
 Paste **Theme A** into `fundamental_analyst.md` and `conservative_risk.md`. Paste **Theme B** into `fundamental_analyst.md` only.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that:
 - the Fundamental analyst prompt contains `Valuation Sanity Bands`, and
@@ -656,15 +656,15 @@ git commit -m "feat(packs): port Themes A+B (sanity bands + industry KPI matrix)
 
 **Files:** audit notes only unless the audit explicitly passes.
 
-- [ ] **Step 1: Audit the prerequisite data path**
+- [x] **Step 1: Audit the prerequisite data path**
 
 Trace: baseline pack `enrichment_intent.consensus_estimates` -> runtime hydration -> prompt context rendering -> trader/news prompts. Confirm whether the default pack should enable consensus at all.
 
-- [ ] **Step 2: Verify same-period actuals**
+- [x] **Step 2: Verify same-period actuals**
 
 Confirm that actual revenue/EPS for the same reporting period are available beside the consensus snapshot at render time. If they are not, do not ship the exact threshold-based beat/miss rules in this plan.
 
-- [ ] **Step 3: Make the go/no-go decision**
+- [x] **Step 3: Make the go/no-go decision**
 
 If both prerequisite checks pass:
 - open a follow-up implementation task for baseline enablement + prompt changes,
@@ -675,7 +675,7 @@ If either prerequisite check fails:
 - record the missing plumbing as a follow-up,
 - do not insert partial Theme D logic into the baseline prompts.
 
-- [ ] **Step 4: Record the decision**
+- [x] **Step 4: Record the decision**
 
 Write down whether Theme D is deferred or cleared for a separate implementation step. The audit is complete only when that decision is explicit.
 
@@ -691,11 +691,11 @@ git commit -m "docs(packs): record Theme D audit decision"
 
 **Files:** `news_analyst.md`, `sentiment_analyst.md`, `conservative_risk.md`.
 
-- [ ] **Step 1: Insert the Theme C block** into all three.
+- [x] **Step 1: Insert the Theme C block** into all three.
 
 Note the `<!-- TODO(transcripts) -->` marker — leave it in. It's the seam for when transcripts are wired.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that the rendered News analyst prompt contains `Management Commentary Red Flags` and `degraded mode: headline/summary only`.
 
@@ -715,19 +715,19 @@ git commit -m "feat(packs): port Theme C (management red flags), degraded mode w
 
 **Files:** `news_analyst.md`.
 
-> **Upgrade path:** the `<!-- TODO(catalyst-calendar) -->` block this task inserts is replaced by [`2026-05-10-catalyst-calendar-integration.md`](./2026-05-10-catalyst-calendar-integration.md) Task 7. Do NOT remove the TODO marker in this task — that plan's Task 7 owns the swap.
+> **Upgrade path:** Tier 1 of [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) has already shipped the `## Upcoming Catalysts` / `{catalyst_calendar}` block. This task layers Theme G's taxonomy guidance on top of that existing section. Tier 2 and Tier 3 of that plan remain follow-up extensions.
 
-- [ ] **Step 1: Insert the prompt block**
+- [x] **Step 1: Insert the prompt block**
 
 Paste **Theme G** into `news_analyst.md`.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that the rendered News analyst prompt contains `Catalyst Taxonomy` and `degraded mode: news-discovered events only`.
 
 - [ ] **Step 3: Smoke test**
 
-Inspect the news analyst summary on a name in earnings season. It should categorize events explicitly and say `degraded mode: news-discovered events only` until the catalyst-calendar plan's Tier 1 ships.
+Inspect the news analyst summary on a name in earnings season. It should categorize events explicitly and say `degraded mode: news-discovered events only` only when the runtime reports `(no upcoming catalysts: data unavailable)`.
 
 - [ ] **Step 4: Commit**
 
@@ -741,9 +741,9 @@ git commit -m "feat(packs): port Theme G (catalyst taxonomy + H/M/L), degraded m
 
 **Files:** `bullish_researcher.md`, `aggressive_risk.md`.
 
-- [ ] **Step 1: Insert the Theme F block** into both.
+- [x] **Step 1: Insert the Theme F block** into both.
 
-- [ ] **Step 2: Add deterministic prompt assertions**
+- [x] **Step 2: Add deterministic prompt assertions**
 
 Use `render_baseline_prompt_for_role(...)` to assert that the rendered Bullish Researcher prompt contains `Contrarian Position Rule`.
 
@@ -763,13 +763,13 @@ git commit -m "feat(packs): port Theme F (contrarian-needs-catalyst rule)"
 
 **Files:** `docs/solutions/`
 
-- [ ] **Step 1: Document the port**
+- [x] **Step 1: Document the port**
 
 Only when closing the umbrella plan, create `docs/solutions/prompts/2026-05-10-anthropic-fsi-themes-port.md` with:
 - Problem: prior Bull/Bear debate produced unfalsifiable theses; analyst valuations drifted.
 - Fix: shipped the final baseline rollout from `anthropics/financial-services` with prompt-first enforcement for sourcing and degraded-mode caveats.
 - Tags: `prompts`, `analysts`, `researchers`, `theme-port`, `attribution`.
-- Open: note any themes intentionally deferred. Record that Theme C ships degraded pending a future transcripts plan, that Theme G ships degraded pending Tier 1 of `2026-05-10-catalyst-calendar-integration.md` (with Tier 3 of that plan tracking the FDA / lockup / M&A-close gaps), and whether Theme D was deferred or moved to a later runtime slice.
+- Open: note any themes intentionally deferred. Record that Theme C ships degraded pending a future transcripts plan, that Theme G now rides on Tier 1 of `2026-05-10-003-catalyst-calendar-integration.md` (with Tier 2 tracking SEC EDGAR corporate-event coverage such as M&A / activist / buyback signals, and Tier 3 tracking FDA AdComm / S-1 lockup / DEF M14A expected-close gaps), and whether Theme D was deferred or moved to a later runtime slice.
 
 - [ ] **Step 2: Commit**
 
@@ -782,7 +782,7 @@ git commit -m "docs(solutions): record themes port + open data-source gaps"
 ## Out of Scope (explicitly)
 
 - **Wiring a transcript provider.** Theme C is shipped degraded; full mode tracked separately as the existing Milestone 7 work on `TranscriptEvidence`.
-- **Wiring a catalyst calendar.** Theme G is shipped degraded; full mode is tracked in [`2026-05-10-catalyst-calendar-integration.md`](./2026-05-10-catalyst-calendar-integration.md). That plan's Task 7 patches Theme G's prompt and downgrades the caveat in this document once Tier 1 lands.
+- **Wiring a catalyst calendar.** Theme G still depends on [`2026-05-10-003-catalyst-calendar-integration.md`](./2026-05-10-003-catalyst-calendar-integration.md) for broader event coverage. Tier 1 has already landed; Tier 2 and Tier 3 remain follow-up work.
 - **Pillar/Falsifier as durable thesis-memory state.** Today's `ThesisMemory` keeps free-form action/decision/rationale. Extending it to store surviving pillars across runs is a follow-up plan ("structured thesis memory") that bumps `THESIS_MEMORY_SCHEMA_VERSION`.
 - **Renderer/runtime enforcement of `[UNSOURCED]` and degraded-mode caveats.** This plan keeps those requirements prompt-first and verification-backed; hard runtime guarantees are a separate hardening follow-up.
 - **Porting non-portable skills.** LBO modeling, Excel-cell hygiene, deck-refresh — these don't map to scorpio's deliverable shape and are explicitly skipped.
@@ -793,9 +793,9 @@ git commit -m "docs(solutions): record themes port + open data-source gaps"
 
 - [x] Every theme has exact file paths.
 - [x] Every prompt block is verbatim, ready to paste.
-- [x] No placeholders (the `TODO(transcripts)` and `TODO(catalyst-calendar)` markers are intentional seams, not abandoned tasks).
+- [x] No placeholders (the `TODO(transcripts)` markers are intentional seams, not abandoned tasks).
 - [x] Type names consistent: `Pillar`, `ThesisBreaker`, `CatalystCategory`, `ImpactLevel` — used identically across this plan's prompt blocks.
-- [x] Data dependencies: surfaced in the Decision Summary and again per-theme. Themes C and G shipped in degraded mode with explicit TODO markers.
+- [x] Data dependencies: surfaced in the Decision Summary and again per-theme. Theme C ships degraded with explicit TODO markers; Theme G depends on the wired catalyst-calendar block and still degrades when catalyst data is unavailable.
 - [x] CLAUDE.md compliance: all struct extensions use `#[serde(default)]`; no `THESIS_MEMORY_SCHEMA_VERSION` bump required by this plan (Theme E structured-thesis-memory is explicitly out of scope).
 
 ---

@@ -37,3 +37,32 @@ If the block above says `(no upcoming catalysts: data unavailable)`, fall back
 to news-discovered events only and say so explicitly in your summary. If it
 says `(no upcoming catalysts in the next 30 days)`, that is a domain-valid
 signal — the analysed name is in a quiet window.
+
+# Adapted from anthropics/financial-services (Apache 2.0) — equity-research/skills/catalyst-calendar/SKILL.md
+
+## Catalyst Taxonomy
+
+For each material event you discover in news (or that's already known like
+the next earnings date), classify into one of four categories and assign an
+impact tier.
+
+**Categories:**
+- **Earnings & Financial:** quarterly earnings dates and times (pre/post
+  market), guidance updates, dividend announcements.
+- **Corporate Events:** product launches, FDA approvals, regulatory
+  decisions, executive changes, M&A close, share-buyback announcements.
+- **Industry Events:** major conferences (which companies presenting),
+  industry-wide regulatory rulings.
+- **Macro Events:** Fed FOMC meetings, jobs reports, CPI, GDP releases.
+
+**Impact tiers (H/M/L):**
+- **H (High):** likely to move the stock 5%+ on the day. Earnings, FDA
+  decisions, M&A, major guidance updates, FOMC for rate-sensitive names.
+- **M (Medium):** likely 1–5% move. Conferences with material announcements,
+  CPI/Jobs, secondary regulatory news.
+- **L (Low):** unlikely to move materially. Sector conferences without
+  guidance, peripheral macro data.
+
+When no catalyst-calendar source is present, explicitly include the phrase
+`degraded mode: news-discovered events only` in the summary and do not imply
+look-ahead coverage beyond fetched news.
