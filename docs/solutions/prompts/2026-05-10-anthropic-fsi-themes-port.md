@@ -1,7 +1,7 @@
 ---
 title: Analytical frameworks port from anthropics/financial-services
 date: 2026-05-12
-last_updated: 2026-05-12
+last_updated: 2026-05-13
 category: prompts
 module: analysis_packs/equity/prompts
 problem_type: best_practice
@@ -51,6 +51,35 @@ Ported eight analytical frameworks from `anthropics/financial-services` (Apache 
 as prompt-only inserts into the equity baseline pack. Shipped in the recommended
 rollout order (H → E → A+B → C+G → F) with Theme D explicitly deferred after an
 audit.
+
+### Review hardening follow-up (2026-05-13)
+
+Code review surfaced a second problem: the initial port was shipped, but the
+proof and maintenance surfaces were still too easy to drift.
+
+- The Trader prompt still said to flag injection attempts in a `summary` field
+  that does not exist on `TradeProposal`; the correct field is `rationale`.
+- Theme-to-role coverage lived in bespoke assertions, which made it too easy to
+  miss a secondary receiving role when a theme was inserted into multiple files.
+- The repeated Theme H sourcing / untrusted-content doctrine and the shared
+  Theme C analyst degraded-mode block were duplicated inline across prompt files,
+  so wording fixes required touching several assets by hand.
+- The original solution doc overstated verification by describing broader proof
+  than the tests actually supplied.
+
+The follow-up hardening fixed those review findings by:
+
+- replacing the one-off analytical-theme assertions with a single
+  `ANALYTICAL_THEME_PORT_COVERAGE` matrix in
+  `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`
+- extracting the repeated Theme H prompt doctrine into shared partials composed
+  from `crates/scorpio-core/src/analysis_packs/equity/baseline.rs`
+- extracting the shared analyst Theme C degraded-mode block for News and
+  Sentiment into `theme_c_management_red_flags.md`
+- adding deterministic validator-seam tests for `[UNSOURCED]`, degraded-mode
+  phrases, and explicit `Buy` / `Sell` / `Hold` consensus wording
+- correcting this document so its verification section matches the proof that
+  actually exists in the repo
 
 ### Themes shipped
 
@@ -107,14 +136,29 @@ before the exact-threshold classification rules are inserted.
 ## Verification
 
 All themes were verified deterministically:
-- 23 `#[test]` functions total live in `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`.
-- 11 theme-port assertions in that file verify the exact required strings in each rendered
-  role prompt (8 initial + 3 added by code review to close secondary-role coverage gaps —
-  see lesson below).
-- Golden fixtures regenerated with `UPDATE_FIXTURES=1` after all inserts.
-- Full workspace test suite: 1803/1803 tests pass.
+- `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` covers the
+  analytical themes port with the table-driven assertion
+  `analytical_theme_port_coverage_matrix_remains_intact`, which proves the
+  intended theme-to-role mapping across every receiving prompt.
+- Output-shape proof lives at validator seams rather than in the prompt-byte
+  gate. The specific deterministic tests are:
+  `summary_accepts_unsourced_numeric_marker`,
+  `summary_preserves_transcript_degraded_mode_notice`,
+  `summary_preserves_news_discovered_catalyst_degraded_mode_notice`,
+  `rationale_accepts_unsourced_numeric_marker`,
+  `consensus_containing_buy_is_valid_content`,
+  `validate_consensus_summary_accepts_hold`, and
+  `consensus_containing_sell_is_valid_content`.
+- Shared prompt partial extraction preserved rendered prompt bytes everywhere
+  except the intentional Trader wording fix from `summary` to `rationale`; the
+  only regenerated golden fixture in this follow-up was
+  `crates/scorpio-core/tests/fixtures/prompt_bundle/trader.txt`.
+- Fresh workspace verification for the review-hardening follow-up completed with:
+  `cargo fmt -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `cargo nextest run --workspace --all-features --locked --no-fail-fast`.
 
-### Lesson: assert in every receiving role, not just the primary file
+### Lesson: encode multi-role coverage once as a matrix
 
 Three themes were inserted into multiple files, but the initial tests only covered the
 primary role for each. Code review (ce:review) surfaced these as P1/P2 gaps:
@@ -126,26 +170,59 @@ primary role for each. Code review (ce:review) surfaced these as P1/P2 gaps:
 | F (Contrarian Position Rule) | `bullish_researcher.md`, `aggressive_risk.md` | BullishResearcher only | AggressiveRisk uncovered |
 
 **Rule:** when a plan entry specifies "insert X into file A AND file B", the test suite must
-assert all receiving roles. Use a loop over all target roles to make coverage explicit and
-easy to extend:
+assert all receiving roles. Encode the mapping once as a coverage matrix so the plan remains
+the authoritative checklist and new receiving roles extend one table instead of one-off tests:
 
 ```rust
-#[test]
-fn sentiment_analyst_and_conservative_risk_prompts_include_management_red_flags() {
-    for role in [Role::SentimentAnalyst, Role::ConservativeRisk] {
-        let p = render_baseline_prompt_for_role(role, PromptRenderScenario::AllInputsPresent);
-        assert!(
-            p.contains("Management Commentary Red Flags"),
-            "Theme C management red flags missing from {role:?}",
-        );
-    }
-}
+const ANALYTICAL_THEME_PORT_COVERAGE: &[ThemeCoverageCase] = &[
+    ThemeCoverageCase {
+        theme: "Theme C management red flags degraded mode",
+        roles: &[
+            Role::NewsAnalyst,
+            Role::SentimentAnalyst,
+            Role::ConservativeRisk,
+        ],
+        required_markers: &[
+            "Management Commentary Red Flags",
+            "degraded mode: headline/summary only",
+        ],
+    },
+];
 ```
 
 A missing insertion into a secondary file is a **silent defect**: the build passes, tests
 pass, and the agent simply runs with an incomplete system prompt — no compile-time or
 runtime signal. The plan document is the authoritative mapping from theme to target files;
 treat it as the test coverage checklist.
+
+### Lesson: split prompt-byte proof from output-shape proof
+
+Prompt-byte coverage and output-shape coverage are different failure surfaces.
+
+- The prompt regression gate should answer: "did every receiving role get the
+  required doctrine or taxonomy text?"
+- Validator-seam tests should answer: "does downstream parsing and validation
+  still accept the policy-required output phrases?"
+
+That split keeps the prompt gate stable and cheap while still giving explicit
+proof for phrases that matter at runtime, such as `[UNSOURCED]`, degraded-mode
+disclosures, and `Buy` / `Sell` / `Hold` moderator summaries.
+
+### Lesson: extract repeated doctrine into shared prompt partials
+
+If the same prompt doctrine block is copied into multiple prompt files, pull it
+into a shared partial and compose it from the pack builder.
+
+In this slice:
+
+- `theme_h_sourcing_and_untrusted.md` holds the shared Theme H doctrine, and
+  `baseline.rs` substitutes the role-specific output field (`summary` vs
+  `rationale`) at composition time
+- `theme_c_management_red_flags.md` feeds News and Sentiment because those two
+  prompts shared the exact same degraded-mode analyst wording
+
+This keeps future wording fixes local to one file and prevents prompt doctrine
+from drifting across roles that are supposed to stay identical.
 
 See also: `docs/solutions/logic-errors/shared-options-evidence-regression-2026-04-29.md`
 for the related fixture-regeneration mechanics.
