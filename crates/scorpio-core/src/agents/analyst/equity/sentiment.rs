@@ -248,6 +248,23 @@ mod tests {
         assert!(data.engagement_peaks.is_empty());
     }
 
+    #[test]
+    fn summary_preserves_transcript_degraded_mode_notice() {
+        let json = r#"{
+            "overall_score": -0.1,
+            "source_breakdown": [],
+            "engagement_peaks": [],
+            "summary": "degraded mode: headline/summary only; management tone is inferred from headlines rather than transcripts."
+        }"#;
+
+        let data = parse_and_validate(json)
+            .expect("degraded transcript notice should remain schema-valid");
+        assert!(
+            data.summary
+                .contains("degraded mode: headline/summary only")
+        );
+    }
+
     // ── Task 2.5: Agent does not attempt social-platform access ──────────
 
     fn baseline_sentiment_prompt() -> &'static str {
