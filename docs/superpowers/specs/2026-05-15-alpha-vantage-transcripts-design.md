@@ -18,7 +18,7 @@ Wire Alpha Vantage's `EARNINGS_CALL_TRANSCRIPT` API as a live `TranscriptProvide
 | API key pattern | `SCORPIO_ALPHA_VANTAGE_API_KEY` env var, same as Finnhub/FRED | Consistent with existing data-source key management |
 | Multiple keys | Comma-separated in single config field, round-robin on rate limit | Free tier is 25 req/day; multiple keys multiply quota |
 | `call_date` format | `"YYYY-QN"` (e.g., `"2024Q1"`) | Preserves the actual quarter; API returns quarter, not exact date |
-| Transcript fetching | Single API call using earnings calendar to determine exact quarter | Avoids wasteful backward walk; earnings calendar already available |
+| Transcript fetching | Single API call; caller determines exact quarter from earnings calendar | Avoids wasteful backward walk; earnings calendar already available |
 | Content mapping | Concatenate all segments with `"{speaker} ({title}): "` prefix | Preserves speaker attribution for LLM context |
 | Sentiment mapping | Average all per-segment scores; `None` if no segments have scores | Simple, deterministic |
 | Enablement | Explicit opt-in via `enable_transcripts` flag | Consistent with `enable_consensus_estimates` / `enable_event_news` |
@@ -51,7 +51,8 @@ User config / env vars
                     │  symbol: String       │
                     │  call_date: "2024Q1"  │  ← YYYY-QN directly
                     │  content: String      │  ← all segments concatenated
-                    │  sentiment: f64       │  ← averaged from segments
+                    │  sentiment_score:     │
+                    │    Option<f64>        │  ← averaged from segments
                     └──────────┬───────────┘
                                │
                     ┌──────────▼───────────┐
@@ -78,8 +79,11 @@ pub struct AlphaVantageClient {
     rate_limiter: SharedRateLimiter,
     http: reqwest::Client,
     base_url: String,  // default: "https://www.alphavantage.co/query"
+    key_cooldowns: Vec<Mutex<Option<Instant>>>,  // per-key rate-limit cooldown tracker
 }
 ```
+
+**Key cooldown:** `key_cooldowns` is a `Vec<Mutex<Option<Instant>>>` with one entry per key. When a key hits a rate limit, the current `Instant` is stored. On the next call, keys with a cooldown `Instant` within the last 60 seconds are skipped.
 
 **Constructor:** Splits `ApiConfig.alpha_vantage_api_key` on commas, trims whitespace, collects into `Vec<SecretString>`. Returns `Err(TradingError::Config)` if key is missing.
 
@@ -87,24 +91,27 @@ pub struct AlphaVantageClient {
 
 **`TranscriptProvider` implementation:**
 
+The client does NOT depend on the earnings calendar. The caller (enrichment pipeline) determines the quarter from the earnings calendar and passes it as `as_of_date` in `"YYYY-QN"` format. The client fetches that exact quarter.
+
 ```rust
 #[async_trait]
 impl TranscriptProvider for AlphaVantageClient {
     async fn fetch_transcript(
         &self,
         symbol: &str,
-        as_of_date: &str,  // "YYYY-MM-DD" analysis date
+        as_of_date: &str,  // "YYYY-QN" format, e.g., "2025Q1"
     ) -> Result<Option<TranscriptEvidence>, TradingError> {
-        // 1. Look up earnings calendar for symbol
-        //    → find most recent call date ≤ as_of_date
-        //    → convert to quarter: "2025Q1"
-        // 2. If no earnings calendar data, derive quarter from as_of_date
-        // 3. Single API call for that quarter
-        // 4. Map response to TranscriptEvidence
-        // 5. Ok(None) if no transcript exists
+        // 1. Call Alpha Vantage API with symbol + as_of_date as quarter
+        // 2. On rate limit: rotate key, retry (up to keys.len() attempts)
+        // 3. Map response to TranscriptEvidence
+        // 4. Ok(None) if no transcript exists or all keys exhausted
     }
 }
 ```
+
+**Caller responsibility:** The enrichment pipeline resolves the quarter before calling `fetch_transcript`:
+- If earnings calendar data available → use most recent call date ≤ analysis date, convert to `"YYYY-QN"`
+- If no earnings calendar data → derive quarter from analysis date (e.g., `"2025-05-15"` → `"2025Q2"`)
 
 ### Response Mapping
 
@@ -159,6 +166,8 @@ struct TranscriptSegment {
 - Empty `transcript` array → `Ok(None)`
 - Missing `sentiment` on some segments → average only present values; `None` if all missing
 - `"Note"` in response → rate-limit detected, triggers key rotation
+- Non-rate-limit HTTP errors (network failures, 4xx/5xx) → `Err(TradingError)` propagated to caller; enrichment pipeline handles gracefully (transcript absent, degraded mode)
+- `SharedRateLimiter` is an existing type used by `FinnhubClient` and `FredClient`; constructed via `SharedRateLimiter::alpha_vantage_from_config(&rate_limits)`
 
 ### Config Changes
 
@@ -211,8 +220,9 @@ SCORPIO_ALPHA_VANTAGE_API_KEY=your-key-here
 
 **Phase 1 hydration:**
 1. Earnings calendar already resolved (catalyst-calendar Tier 1)
-2. `client.fetch_transcript(symbol, most_recent_call_date)` → `Ok(Some(evidence))` or `Ok(None)`
-3. Store in `TradingState.transcript_evidence: Arc<RwLock<Option<TranscriptEvidence>>>`
+2. Pipeline determines most recent call date ≤ analysis date, converts to `"YYYY-QN"` quarter string
+3. `client.fetch_transcript(symbol, quarter)` → `Ok(Some(evidence))` or `Ok(None)`
+4. Store in `TradingState.transcript_evidence: Arc<RwLock<Option<TranscriptEvidence>>>`
 
 **Phase 2 prompt rendering:**
 - Transcript present → inject `{transcript}` block into news_analyst, sentiment_analyst prompts
@@ -232,8 +242,9 @@ pub transcript_evidence: Arc<RwLock<Option<TranscriptEvidence>>>,
 | `crates/scorpio-core/src/data/alpha_vantage.rs` | **NEW** — `AlphaVantageClient` struct, `TranscriptProvider` impl, serde structs, tests |
 | `crates/scorpio-core/src/data/mod.rs` | Add `pub mod alpha_vantage;` |
 | `crates/scorpio-core/src/config.rs` | Add `alpha_vantage_api_key` to `ApiConfig`, `alpha_vantage_rps` to `RateLimitConfig`, env injection, debug redaction |
+| `crates/scorpio-core/src/rate_limit.rs` | Add `SharedRateLimiter::alpha_vantage_from_config` constructor (new variant) |
 | `crates/scorpio-core/src/settings.rs` | Add `alpha_vantage_api_key` to `PartialConfig` + `UserConfigFile`, round-trip |
-| `crates/scorpio-core/src/data/adapters/transcripts.rs` | Update `call_date` doc comment to note `"YYYY-QN"` format |
+| `crates/scorpio-core/src/data/adapters/transcripts.rs` | Update `call_date` doc comment to note `"YYYY-QN"` format; update `as_of_date` doc comment to note `"YYYY-QN"` format |
 | `crates/scorpio-cli/src/cli/setup/steps.rs` | Add Alpha Vantage API key input step |
 | `.env.example` | Add `SCORPIO_ALPHA_VANTAGE_API_KEY` |
 
