@@ -11,12 +11,16 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
-    agents::shared::{agent_token_usage_from_completion, build_catalyst_calendar_block},
+    agents::shared::{
+        UNTRUSTED_CONTEXT_NOTICE, agent_token_usage_from_completion, build_catalyst_calendar_block,
+        build_transcript_context,
+    },
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::NEWS_ANALYST_MAX_TURNS,
     data::{
         FinnhubClient, FredClient, GetCachedNews, GetEconomicIndicators, GetMarketNews, GetNews,
+        adapters::transcripts::TranscriptFetch,
     },
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
@@ -72,6 +76,11 @@ pub struct NewsAnalyst {
     /// [`GetCachedNews`] tool is bound instead of the live [`GetNews`] tool,
     /// saving one Finnhub API call per cycle.
     cached_news: Option<Arc<NewsData>>,
+    /// Earnings-call transcript fetch outcome loaded by the analyst task
+    /// from `KEY_TRANSCRIPT_FETCH_STATUS`. Rendered into the user prompt as
+    /// untrusted context so the LLM can ground the Theme C management
+    /// red-flags rules with a real "status: Found / Unavailable" signal.
+    transcript_fetch: Option<TranscriptFetch>,
 }
 
 impl NewsAnalyst {
@@ -85,6 +94,10 @@ impl NewsAnalyst {
     /// - `llm_config` – LLM configuration, used for timeout.
     /// - `cached_news` – optional pre-fetched news; when `Some`, the live
     ///   [`GetNews`] tool is replaced with a zero-cost [`GetCachedNews`] tool.
+    /// - `transcript_fetch` – outcome of the per-cycle Alpha Vantage transcript
+    ///   fetch; rendered into the user prompt so the LLM can satisfy the
+    ///   Theme C "status: Found / Unavailable" contract.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
@@ -93,6 +106,7 @@ impl NewsAnalyst {
         policy: &RuntimePolicy,
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
+        transcript_fetch: Option<TranscriptFetch>,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
         let system_prompt =
@@ -108,6 +122,7 @@ impl NewsAnalyst {
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
             cached_news,
+            transcript_fetch,
         }
     }
 
@@ -133,10 +148,17 @@ impl NewsAnalyst {
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
-        let prompt = format!(
+        let base_prompt = format!(
             "Analyse {} as of {}. Use get_news for company-specific developments, get_market_news for broader market context, and get_economic_indicators for macro data, then produce a NewsData JSON object.",
             self.symbol, self.target_date
         );
+        let prompt = match &self.transcript_fetch {
+            Some(fetch) => format!(
+                "{base_prompt}\n\n{UNTRUSTED_CONTEXT_NOTICE}\n\n{}",
+                build_transcript_context(fetch),
+            ),
+            None => base_prompt,
+        };
 
         let outcome = run_analyst_inference(
             &agent,

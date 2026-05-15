@@ -376,6 +376,7 @@ pub async fn run_analyst_team(
             policy,
             llm_config,
             cached_news.clone(),
+            None,
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
@@ -389,6 +390,7 @@ pub async fn run_analyst_team(
             policy,
             llm_config,
             cached_news,
+            None,
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
     };
