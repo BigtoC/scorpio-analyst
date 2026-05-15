@@ -786,8 +786,20 @@ impl Config {
 /// fields carry `#[serde(skip)]` and would be silently dropped by the pipeline anyway.
 fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) -> Result<String> {
     let mut root = toml::map::Map::new();
+    let mut enrichment = toml::map::Map::new();
     let mut llm = toml::map::Map::new();
     let mut providers = toml::map::Map::new();
+
+    if let Some(enable_transcripts) = partial.enable_transcripts {
+        enrichment.insert(
+            "enable_transcripts".to_owned(),
+            toml::Value::Boolean(enable_transcripts),
+        );
+    }
+
+    if !enrichment.is_empty() {
+        root.insert("enrichment".to_owned(), toml::Value::Table(enrichment));
+    }
 
     if let Some(p) = &partial.quick_thinking_provider {
         llm.insert(
@@ -1771,6 +1783,25 @@ deep_thinking_model = "o3"
     }
 
     #[test]
+    fn load_from_user_path_reads_enable_transcripts_from_partial_config() {
+        use crate::settings::{PartialConfig, save_user_config_at};
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let partial = PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            enable_transcripts: Some(true),
+            ..Default::default()
+        };
+        save_user_config_at(&partial, &path).unwrap();
+        let cfg = Config::load_from_user_path(&path).expect("config should load");
+        assert!(cfg.enrichment.enable_transcripts);
+    }
+
+    #[test]
     fn partial_to_nested_toml_non_secrets_escapes_quotes_and_newlines() {
         let partial = crate::settings::PartialConfig {
             quick_thinking_provider: Some("openai".into()),
@@ -1825,6 +1856,23 @@ deep_thinking_model = "o3"
         assert_eq!(
             parsed["providers"]["deepseek"]["rpm"].as_integer(),
             Some(45)
+        );
+    }
+
+    #[test]
+    fn partial_to_nested_toml_non_secrets_includes_enrichment_flags() {
+        let partial = crate::settings::PartialConfig {
+            enable_transcripts: Some(true),
+            ..Default::default()
+        };
+
+        let nested = partial_to_nested_toml_non_secrets(&partial)
+            .expect("non-secret partial config should serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("generated TOML should parse");
+
+        assert_eq!(
+            parsed["enrichment"]["enable_transcripts"].as_bool(),
+            Some(true)
         );
     }
 
