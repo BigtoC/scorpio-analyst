@@ -860,6 +860,7 @@ async fn resolve_transcript_quarter(
     finnhub: &FinnhubClient,
     symbol: &str,
     as_of_date: &str,
+    timeout: std::time::Duration,
 ) -> Option<String> {
     // Look back ~120 days to ensure we catch the most recent earnings release
     // even with reporting-lag variance.
@@ -870,19 +871,58 @@ async fn resolve_transcript_quarter(
         .format("%Y-%m-%d")
         .to_string();
 
-    let releases = finnhub
-        .fetch_earnings_calendar(&from, as_of_date, Some(symbol))
-        .await
-        .ok()?;
+    resolve_transcript_quarter_from_fetch(
+        symbol,
+        timeout,
+        finnhub.fetch_earnings_calendar(&from, as_of_date, Some(symbol)),
+    )
+    .await
+}
 
-    let recent = releases
+fn select_transcript_quarter(
+    releases: &[finnhub::models::calendar::EarningsRelease],
+) -> Option<String> {
+    releases
         .iter()
         .filter_map(|r| match (r.year, r.quarter, r.date.as_deref()) {
             (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => Some((d.to_owned(), y, q)),
             _ => None,
         })
         .max_by(|(da, ..), (db, ..)| da.cmp(db))
-        .map(|(_d, y, q)| format!("{y}Q{q}"));
+        .map(|(_d, y, q)| format!("{y}Q{q}"))
+}
+
+async fn resolve_transcript_quarter_from_fetch<F>(
+    symbol: &str,
+    timeout: std::time::Duration,
+    fetch: F,
+) -> Option<String>
+where
+    F: std::future::Future<
+            Output = Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
+        >,
+{
+    let releases = match tokio::time::timeout(timeout, fetch).await {
+        Ok(Ok(releases)) => releases,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                symbol,
+                error = %error,
+                "transcript quarter resolution failed (fail-open)"
+            );
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(
+                symbol,
+                timeout_secs = timeout.as_secs_f64(),
+                "transcript quarter resolution timed out (fail-open)"
+            );
+            return None;
+        }
+    };
+
+    let recent = select_transcript_quarter(releases.as_ref());
 
     if let Some(q) = &recent {
         tracing::info!(
@@ -911,7 +951,8 @@ async fn hydrate_transcript(
     use crate::data::adapters::transcripts::TranscriptFetch;
     use crate::data::adapters::transcripts::TranscriptProvider;
 
-    let Some(quarter) = resolve_transcript_quarter(finnhub, symbol, as_of_date).await else {
+    let Some(quarter) = resolve_transcript_quarter(finnhub, symbol, as_of_date, timeout).await
+    else {
         return TranscriptFetch::Unavailable;
     };
 
@@ -1373,5 +1414,84 @@ mod catalyst_hydration_tests {
 
         assert_eq!(state.status, EnrichmentStatus::Available);
         assert_eq!(state.payload, Some(vec![]));
+    }
+}
+
+#[cfg(test)]
+mod transcript_quarter_tests {
+    use std::{future, sync::Arc, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn select_transcript_quarter_prefers_latest_release_with_year_and_quarter() {
+        let releases = vec![
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("AAPL".to_owned()),
+                date: Some("2026-04-25".to_owned()),
+                hour: None,
+                year: Some(2026),
+                quarter: Some(1),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("AAPL".to_owned()),
+                date: Some("2026-07-25".to_owned()),
+                hour: None,
+                year: Some(2026),
+                quarter: Some(2),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("AAPL".to_owned()),
+                date: Some("2026-08-01".to_owned()),
+                hour: None,
+                year: None,
+                quarter: None,
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+        ];
+
+        assert_eq!(
+            select_transcript_quarter(&releases),
+            Some("2026Q2".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_transcript_quarter_from_fetch_returns_none_on_fetch_error() {
+        let result = resolve_transcript_quarter_from_fetch(
+            "AAPL",
+            Duration::from_secs(1),
+            future::ready(Err(TradingError::RateLimitExceeded {
+                provider: "finnhub".to_owned(),
+            })),
+        )
+        .await;
+
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_transcript_quarter_from_fetch_times_out() {
+        let result = resolve_transcript_quarter_from_fetch(
+            "AAPL",
+            Duration::from_millis(1),
+            future::pending::<
+                Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
+            >(),
+        )
+        .await;
+
+        assert_eq!(result, None);
     }
 }
