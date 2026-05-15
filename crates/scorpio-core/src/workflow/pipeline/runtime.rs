@@ -853,6 +853,10 @@ pub(super) fn apply_consensus_half_life_policy(
 /// Resolve the target fiscal quarter for transcript fetching from Finnhub's
 /// earnings-calendar endpoint queried backward.
 ///
+/// The returned `"YYYYQN"` is the **reported** quarter — i.e., one quarter
+/// before Finnhub's announcement `year`/`quarter` (see
+/// [`select_transcript_quarter`]).
+///
 /// Returns `None` when Finnhub returns no recent earnings releases for
 /// the symbol, or all releases lack `year`/`quarter` fields. The caller
 /// writes `TranscriptFetch::Unavailable` in that case rather than guessing.
@@ -889,7 +893,17 @@ fn select_transcript_quarter(
             _ => None,
         })
         .max_by(|(da, ..), (db, ..)| da.cmp(db))
-        .map(|(_d, y, q)| format!("{y}Q{q}"))
+        .map(|(_d, y, q)| {
+            // Finnhub's `year`/`quarter` describe the *announcement* period —
+            // the calendar quarter the release falls in. Alpha Vantage's
+            // transcript endpoint is keyed by the *reported* period, which is
+            // the previous quarter. E.g., a release on 2026-05-05 comes back
+            // from Finnhub as `quarter = 2`, but the published transcript is
+            // "2026Q1". Step back one quarter, wrapping into the prior year
+            // when crossing Q1 → Q4.
+            let (year, quarter) = if q == 1 { (y - 1, 4) } else { (y, q - 1) };
+            format!("{year}Q{quarter}")
+        })
 }
 
 async fn resolve_transcript_quarter_from_fetch<F>(
@@ -1424,7 +1438,7 @@ mod transcript_quarter_tests {
     use super::*;
 
     #[test]
-    fn select_transcript_quarter_prefers_latest_release_with_year_and_quarter() {
+    fn select_transcript_quarter_maps_announcement_quarter_to_reported_quarter() {
         let releases = vec![
             finnhub::models::calendar::EarningsRelease {
                 symbol: Some("AAPL".to_owned()),
@@ -1461,9 +1475,32 @@ mod transcript_quarter_tests {
             },
         ];
 
+        // Latest valid release: 2026-07-25 with announcement quarter Q2 →
+        // reported quarter is Q1 of the same year.
         assert_eq!(
             select_transcript_quarter(&releases),
-            Some("2026Q2".to_owned())
+            Some("2026Q1".to_owned())
+        );
+    }
+
+    #[test]
+    fn select_transcript_quarter_wraps_q1_to_prior_year_q4() {
+        let releases = vec![finnhub::models::calendar::EarningsRelease {
+            symbol: Some("AAPL".to_owned()),
+            date: Some("2026-02-01".to_owned()),
+            hour: None,
+            year: Some(2026),
+            quarter: Some(1),
+            eps_estimate: None,
+            eps_actual: None,
+            revenue_estimate: None,
+            revenue_actual: None,
+        }];
+
+        // Announcement quarter Q1 wraps to the prior year's Q4.
+        assert_eq!(
+            select_transcript_quarter(&releases),
+            Some("2025Q4".to_owned())
         );
     }
 
