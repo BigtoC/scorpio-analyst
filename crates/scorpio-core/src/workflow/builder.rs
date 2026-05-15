@@ -66,6 +66,7 @@ pub fn build_graph_from_pack(
 
     let preflight = PreflightTask::with_runtime_policy(
         config.enrichment.clone(),
+        config.api.alpha_vantage_api_key.is_some(),
         Arc::clone(&snapshot_store),
         runtime_policy,
     );
