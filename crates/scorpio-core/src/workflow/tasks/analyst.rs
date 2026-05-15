@@ -36,8 +36,8 @@ use crate::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::common::{
             ANALYST_FUNDAMENTAL, ANALYST_NEWS, ANALYST_PREFIX, ANALYST_SENTIMENT,
-            ANALYST_TECHNICAL, OK_SUFFIX, read_analyst_usage, write_analyst_usage, write_err,
-            write_flag,
+            ANALYST_TECHNICAL, OK_SUFFIX, load_transcript_fetch, read_analyst_usage,
+            write_analyst_usage, write_err, write_flag,
         },
     },
 };
@@ -261,6 +261,13 @@ impl Task for SentimentAnalystTask {
             )
         })?;
 
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "SentimentAnalystTask: orchestration corruption: \
+                 transcript fetch status unreadable: {error}"
+            ))
+        })?;
+
         let analyst = SentimentAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
@@ -268,6 +275,7 @@ impl Task for SentimentAnalystTask {
             policy,
             &self.llm_config,
             cached_news_opt,
+            Some(transcript_fetch),
         );
 
         match analyst.run().await {
@@ -360,6 +368,13 @@ impl Task for NewsAnalystTask {
             )
         })?;
 
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "NewsAnalystTask: orchestration corruption: \
+                 transcript fetch status unreadable: {error}"
+            ))
+        })?;
+
         let analyst = NewsAnalyst::new(
             self.handle.clone(),
             self.finnhub.clone(),
@@ -368,6 +383,7 @@ impl Task for NewsAnalystTask {
             policy,
             &self.llm_config,
             cached_news_opt,
+            Some(transcript_fetch),
         );
 
         match analyst.run().await {
