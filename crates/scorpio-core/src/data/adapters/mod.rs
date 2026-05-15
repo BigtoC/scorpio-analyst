@@ -73,15 +73,15 @@ impl<T> EnrichmentResult<T> {
     }
 }
 
-/// Runtime enrichment capabilities derived from [`DataEnrichmentConfig`].
+/// Runtime enrichment capabilities derived from config and credential presence.
 ///
 /// Constructed once during preflight via [`ProviderCapabilities::from_config`]
 /// and written to workflow context so all downstream tasks can read it without
 /// having to re-inspect the config themselves.
 ///
-/// Stage 1: all flags are boolean projections from the config.  No live API
-/// call is needed — the spec is explicit that "capability discovery itself
-/// cannot fail in the first slice because it is config-derived only."
+/// Stage 1: all flags are boolean projections from config or credentials. No
+/// live API call is needed — the spec is explicit that "capability discovery
+/// itself cannot fail in the first slice because it is config-derived only."
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCapabilities {
     /// Whether transcript evidence is enabled for this run.
@@ -93,13 +93,18 @@ pub struct ProviderCapabilities {
 }
 
 impl ProviderCapabilities {
-    /// Derive capabilities from the checked-in enrichment configuration.
+    /// Derive capabilities from the checked-in enrichment configuration plus
+    /// the runtime presence of provider credentials.
+    ///
+    /// `transcripts_enabled` is derived at the call site from the presence of
+    /// an Alpha Vantage API key — the key is the sole gate for transcript
+    /// enrichment now that the explicit `enable_transcripts` flag is gone.
     ///
     /// This constructor is infallible: reading from a fully-loaded
     /// `DataEnrichmentConfig` cannot fail.
-    pub fn from_config(cfg: &DataEnrichmentConfig) -> Self {
+    pub fn from_config(cfg: &DataEnrichmentConfig, transcripts_enabled: bool) -> Self {
         Self {
-            transcripts: cfg.enable_transcripts,
+            transcripts: transcripts_enabled,
             consensus_estimates: cfg.enable_consensus_estimates,
             event_news: cfg.enable_event_news,
         }
@@ -160,7 +165,7 @@ mod tests {
     #[test]
     fn from_config_all_disabled_produces_all_false() {
         let cfg = DataEnrichmentConfig::default();
-        let caps = ProviderCapabilities::from_config(&cfg);
+        let caps = ProviderCapabilities::from_config(&cfg, false);
         assert!(!caps.transcripts);
         assert!(!caps.consensus_estimates);
         assert!(!caps.event_news);
@@ -168,11 +173,8 @@ mod tests {
 
     #[test]
     fn from_config_transcripts_only() {
-        let cfg = DataEnrichmentConfig {
-            enable_transcripts: true,
-            ..DataEnrichmentConfig::default()
-        };
-        let caps = ProviderCapabilities::from_config(&cfg);
+        let cfg = DataEnrichmentConfig::default();
+        let caps = ProviderCapabilities::from_config(&cfg, true);
         assert!(caps.transcripts);
         assert!(!caps.consensus_estimates);
         assert!(!caps.event_news);
@@ -181,13 +183,12 @@ mod tests {
     #[test]
     fn from_config_all_enabled() {
         let cfg = DataEnrichmentConfig {
-            enable_transcripts: true,
             enable_consensus_estimates: true,
             enable_event_news: true,
             max_evidence_age_hours: 12,
             ..DataEnrichmentConfig::default()
         };
-        let caps = ProviderCapabilities::from_config(&cfg);
+        let caps = ProviderCapabilities::from_config(&cfg, true);
         assert!(caps.transcripts);
         assert!(caps.consensus_estimates);
         assert!(caps.event_news);
