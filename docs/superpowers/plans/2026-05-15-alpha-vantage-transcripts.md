@@ -8,7 +8,7 @@
 
 **Why Alpha Vantage (vs. the already-integrated Finnhub):** Alpha Vantage provides structured per-speaker segments with optional pre-computed sentiment; Finnhub's transcript endpoints (where available on paid plans) return free-form text. The per-speaker structure is load-bearing for Theme C's tone-divergence comparison. Tradeoffs accepted: 25-req/day free-tier quota (mitigated by `tokio::time::timeout` + fail-open); no key-rotation (single-key v1 — see Out of Scope).
 
-**Prompt-injection defenses (structural only):** transcript fields are run through `sanitize_prompt_context` (strips control chars, redacts secret-prefix tokens) then `strip_angle_brackets` (removes `<` and `>` so tag-like injections can't fragment the prompt envelope), then the aggregate rendered output is capped at `MAX_TRANSCRIPT_RENDERED_BYTES` (16 KiB ≈ 4k tokens). Semantic detection of tag-free role-prompt strings (e.g., `"System: ignore prior instructions"`) is deferred — `TODO(transcripts-injection-scan)`.
+**Prompt-injection defenses (narrow, ASCII-only):** transcript fields are run through `sanitize_prompt_context` (strips control chars, redacts secret-prefix tokens), then `strip_angle_brackets` (removes ASCII `<`/`>` only — does **not** handle Unicode lookalikes or non-tag patterns), then the aggregate rendered output is byte-capped at `MAX_TRANSCRIPT_RENDERED_BYTES` (16 KiB). Detection of Unicode-lookalike brackets, markdown fences, and tag-free role-prompt strings is deferred — `TODO(transcripts-injection-scan)`.
 
 **Out-of-pipeline observability:** `AlphaVantageClient` carries atomic counters (`found`, `not_published`, `throttled`, `unavailable`, `schema_errors`, `auth_failures`) exposed via `Debug`. Auth failures (HTTP 401/403) additionally emit a one-shot `error!`-level log on first occurrence — auth is user-correctable and should not silently degrade.
 
@@ -968,22 +968,48 @@ impl AlphaVantageClient {
         self.schema_error_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Escalate an authentication failure (HTTP 401/403). Increments the
-    /// auth-failure counter and emits a single `error!`-level log on the
-    /// first occurrence of the process lifetime — auth failures are
-    /// user-correctable (rotate the key) and should not silently degrade.
+    /// Escalate an authentication/authorization failure (HTTP 401/403).
+    /// Increments the auth-failure counter and emits a single `error!`-level
+    /// log on the first occurrence of the process lifetime — these failures
+    /// are user-correctable and should not silently degrade.
+    ///
+    /// Concurrency note: under simultaneous failures, `swap` may return
+    /// `false` on more than one thread, so up to a handful of duplicate logs
+    /// is possible during a parallel fan-out. The flag remains correct after
+    /// the burst (no third log fires). For a fully race-free one-shot,
+    /// `compare_exchange` could be used, but the duplicate-log cost is minor
+    /// and `swap` keeps the intent legible.
+    ///
+    /// 401 and 403 have different remediation paths and the message reflects:
+    /// - 401: bad/expired key — rotate `SCORPIO_ALPHA_VANTAGE_API_KEY`.
+    /// - 403: usually a plan/region/edge-policy issue (free-tier hitting a
+    ///   premium endpoint, geo-block, abusive-IP block) — the key itself is
+    ///   likely fine.
     fn escalate_auth_failure(&self, status: reqwest::StatusCode) {
         self.auth_failure_count.fetch_add(1, Ordering::Relaxed);
         let already_logged = self
             .auth_failure_logged
             .swap(true, Ordering::Relaxed);
         if !already_logged {
-            tracing::error!(
-                provider = "alpha_vantage",
-                %status,
-                "Alpha Vantage authentication failed — verify SCORPIO_ALPHA_VANTAGE_API_KEY. \
-                 Transcripts will fail-open to degraded mode until the key is corrected."
-            );
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                tracing::error!(
+                    provider = "alpha_vantage",
+                    %status,
+                    "Alpha Vantage rejected the API key (401) — rotate \
+                     SCORPIO_ALPHA_VANTAGE_API_KEY. Transcripts will fail-open \
+                     to degraded mode until the key is corrected."
+                );
+            } else {
+                // FORBIDDEN (403) and anything else routed here.
+                tracing::error!(
+                    provider = "alpha_vantage",
+                    %status,
+                    "Alpha Vantage refused the request (403) — likely a plan, \
+                     region, or edge-policy restriction; verify the account \
+                     tier and source IP. The key itself may be valid. \
+                     Transcripts will fail-open to degraded mode."
+                );
+            }
         }
     }
 }
@@ -1051,10 +1077,13 @@ impl TranscriptProvider for AlphaVantageClient {
             }
             Err(e) if e.is_timeout() || e.is_connect() => TranscriptFetch::Unavailable,
             Err(e) => {
-                // Use Display (%e) not Debug ({e:?}) — reqwest::Error's Debug
-                // can include URL, which carries the apikey query param.
+                // `reqwest::Error`'s Display can include the URL (and therefore
+                // the `apikey` query param) for request-sending failures. Use
+                // `.without_url()` to scrub before embedding in TradingError or
+                // letting it flow into any tracing macro.
+                let scrubbed = e.without_url();
                 return Err(TradingError::Config(anyhow::anyhow!(
-                    "Alpha Vantage request error: {e}"
+                    "Alpha Vantage request error: {scrubbed}"
                 )));
             }
         };
@@ -1595,9 +1624,11 @@ let transcript_fetch: TranscriptFetch = if enrichment_intent.transcripts {
 };
 ```
 
-- [ ] **Step 3: Write the context key (single source of truth)**
+- [ ] **Step 3: Write the new context key + migrate the existing `KEY_CACHED_TRANSCRIPT` consumers**
 
-This plan writes **one** context key, `KEY_TRANSCRIPT_FETCH_STATUS`, holding the serde-serialized `TranscriptFetch` enum. The previous draft also wrote `KEY_CACHED_TRANSCRIPT` (just the `Option<TranscriptEvidence>` projection); that key has been **dropped** — the enum carries the same payload, and dual-writing produced an unenforced invariant + duplicated transcript bytes in context.
+This plan writes **one** context key, `KEY_TRANSCRIPT_FETCH_STATUS`, holding the serde-serialized `TranscriptFetch` enum. The previous draft also wrote `KEY_CACHED_TRANSCRIPT` (just the `Option<TranscriptEvidence>` projection); that key is **removed** — the enum carries the same payload, and dual-writing produced an unenforced invariant + duplicated transcript bytes in context.
+
+**Write the new key:**
 
 ```rust
 // KEY_TRANSCRIPT_FETCH_STATUS holds the serde-serialized `TranscriptFetch` enum.
@@ -1608,7 +1639,22 @@ let status_json = serde_json::to_string(&transcript_fetch)
 session.context.set(KEY_TRANSCRIPT_FETCH_STATUS, status_json).await;
 ```
 
-If any consumer currently reads `KEY_CACHED_TRANSCRIPT` (none in the codebase today, but check via `git grep KEY_CACHED_TRANSCRIPT` before this PR), migrate it to deserialize `KEY_TRANSCRIPT_FETCH_STATUS` and project from the enum. Remove the `KEY_CACHED_TRANSCRIPT` constant from `workflow/tasks/common.rs` once no consumers remain.
+**Migrate the 10 existing `KEY_CACHED_TRANSCRIPT` references** (confirmed via `git grep KEY_CACHED_TRANSCRIPT crates/`):
+
+| File | Line(s) | Action |
+|---|---|---|
+| `crates/scorpio-core/src/workflow/tasks/common.rs` | 45 | Delete the `pub const KEY_CACHED_TRANSCRIPT` declaration |
+| `crates/scorpio-core/src/workflow/tasks/mod.rs` | 29 | Remove `KEY_CACHED_TRANSCRIPT` from the `pub use` re-export list |
+| `crates/scorpio-core/src/workflow/test_support.rs` | 24 | Remove from the test-support re-export list |
+| `crates/scorpio-core/src/workflow/tasks/preflight.rs` | 36 | Remove from the production import list |
+| `crates/scorpio-core/src/workflow/tasks/preflight.rs` | 274 | Delete the `seed_if_absent(&context, KEY_CACHED_TRANSCRIPT).await;` line. Preflight's transcript seed is now the typed-enum seed of `KEY_TRANSCRIPT_FETCH_STATUS` added in Step 5 below — **not** alongside the old null seed. |
+| `crates/scorpio-core/src/workflow/tasks/preflight.rs` | 313 | Remove from the test import list |
+| `crates/scorpio-core/src/workflow/tasks/preflight.rs` | 476 | Delete this read; it's the only production-shape consumer and it expected the `"null"` literal. The replacement is the `KEY_TRANSCRIPT_FETCH_STATUS` seed verification added in Step 5. |
+| `crates/scorpio-core/src/workflow/tasks/preflight.rs` | 518, 592, 802 | Rewrite the three `preflight_*_context_keys_present_after_run` / `preflight_seeds_null_when_no_enrichment_pre_hydrated` tests to assert on `KEY_TRANSCRIPT_FETCH_STATUS` instead. The expected value is the serialized `TranscriptFetch::Unavailable` (`"\"Unavailable\""`), not the string literal `"null"`. |
+
+Test names referencing the old contract (e.g., `preflight_seeds_cached_transcript_as_null_placeholder`) should be renamed to `preflight_seeds_transcript_fetch_status_as_unavailable`.
+
+Run `cargo check --workspace` to confirm no `KEY_CACHED_TRANSCRIPT` references remain.
 
 - [ ] **Step 4: Update `app/mod.rs` to construct `AlphaVantageClient` conditionally**
 
@@ -1689,15 +1735,32 @@ Go with **Option A** for clean separation:
 ```rust
 /// Aggregate transcript-render size cap. Bounds total bytes of segment
 /// content reaching the prompt, regardless of how many segments AV returns.
-/// 16 KiB ≈ 4k tokens at the standard 4-chars/token approximation.
+///
+/// Calibrated as a byte budget, not a token budget — tokenization ratios
+/// vary considerably (≈4 chars/token for English prose, ≈1.5–2 chars/token
+/// for dense financial numerics, ≈1 char/token for non-Latin scripts). The
+/// 16 KiB cap is a conservative byte budget that bounds prompt growth; if
+/// callers downstream need a tighter token budget, that's their concern.
 const MAX_TRANSCRIPT_RENDERED_BYTES: usize = 16 * 1024;
 
-/// Strip `<` and `>` characters before injection. This is a *structural*
-/// prompt-injection mitigation (angle-bracketed tag patterns like
-/// `</context>` or `<system>` can't fragment the prompt envelope), not a
-/// semantic-injection defense. A determined attacker can still inject
-/// role-prompt strings without tags; that mitigation is deferred under
-/// `TODO(transcripts-injection-scan)`.
+/// Bytes the truncation marker can add past the budget when truncation fires.
+/// Used by `build_transcript_context` for the post-marker length bound and by
+/// the corresponding test. Keeping this as a named constant lets the
+/// post-truncation contract be `len <= MAX_TRANSCRIPT_RENDERED_BYTES +
+/// MAX_TRUNCATION_MARKER_BYTES` rather than `<= MAX + magic_number`.
+const MAX_TRUNCATION_MARKER_BYTES: usize = 64;
+
+/// Strip ASCII `<` and `>` characters before injection.
+///
+/// **Narrow scope:** removes the *ASCII* angle-bracket pair only. Does not
+/// strip Unicode lookalikes (U+2039/203A guillemets, U+27E8/27E9 mathematical
+/// angle brackets, U+3008/3009 CJK brackets), markdown code fences (` ``` `),
+/// or other delimiter syntaxes. This is a narrow filter against ASCII-tag
+/// prompt-boundary fragmentation (e.g., `</context>`, `<system>`), not a
+/// general prompt-injection defense.
+///
+/// Broader detection (Unicode lookalikes, role-prompt patterns, markdown
+/// fences) is deferred under `TODO(transcripts-injection-scan)`.
 fn strip_angle_brackets(s: &str) -> String {
     s.chars().filter(|c| *c != '<' && *c != '>').collect()
 }
@@ -1807,7 +1870,7 @@ fn transcript_context_renders_not_published() {
 #[test]
 fn transcript_context_renders_throttled() {
     let ctx = build_transcript_context(&TranscriptFetch::Throttled);
-    assert!(ctx.contains("rate-limited"));
+    assert!(ctx.contains("rate-limit"));
     assert!(ctx.contains("retry"));
     assert!(ctx.contains("degraded mode: transcript unavailable"));
 }
@@ -1815,7 +1878,10 @@ fn transcript_context_renders_throttled() {
 #[test]
 fn transcript_context_renders_unavailable() {
     let ctx = build_transcript_context(&TranscriptFetch::Unavailable);
-    assert!(ctx.contains("transient fetch failure"));
+    // The prompt is deliberately neutral — see comment on the Unavailable arm.
+    // It covers feature-disabled, no-recent-earnings, transient fetch failure,
+    // auth failure, and 5xx without claiming a specific cause.
+    assert!(ctx.contains("not available for this cycle"));
     assert!(ctx.contains("degraded mode: transcript unavailable"));
 }
 
@@ -1860,7 +1926,10 @@ fn transcript_context_caps_aggregate_size() {
         segments: vec![big_segment; 20], // ~40 KiB raw → must be truncated
     };
     let ctx = build_transcript_context(&TranscriptFetch::Found(evidence));
-    assert!(ctx.len() < MAX_TRANSCRIPT_RENDERED_BYTES + 200, "must respect aggregate budget");
+    assert!(
+        ctx.len() <= MAX_TRANSCRIPT_RENDERED_BYTES + MAX_TRUNCATION_MARKER_BYTES,
+        "must respect aggregate budget + marker"
+    );
     assert!(ctx.contains("transcript truncated"), "must surface truncation");
 }
 ```
@@ -1937,7 +2006,19 @@ The previous version verified *response shape*, not *behavior*. The criteria bel
    - After a successful `Found` run, `AlphaVantageClient::Debug` reports `found > 0`.
    - After a `parse_response` failure (test via a fixture that injects malformed JSON into the parser), `schema_errors > 0`.
    - **Not** asserted: that an *invalid-quarter* run increments `schema_errors` — `validate_quarter` rejects before the HTTP path runs, so `schema_error_count` is never touched. An invalid-quarter run produces `Err(SchemaViolation)` and leaves all counters at zero.
-4. **Quarter-mapping live verification (manual, before merge):** with a real Alpha Vantage key, manually probe at least one non-December-FY ticker (AAPL) and confirm the resolver→AV pipeline returns a transcript for the most recent reported fiscal quarter. If `NotPublished`, the `Finnhub.year/quarter → AV.quarter` mapping is wrong; investigate Alpha Vantage's documented quarter semantics before merge. This is the primary residual risk from pass-2 review (AR2-01).
+4. **Quarter-mapping live verification (gated, before merge):** the `Finnhub(year,quarter) → AV(quarter)` mapping is a load-bearing assumption that this plan does not unit-test (a unit test would only verify `format!` output, not semantics). Two acceptance paths, in priority order:
+
+   **Path A (preferred): gated integration test.** Add a `#[ignore]` integration test `quarter_mapping_aapl_fy25_q1_live` under `crates/scorpio-core/tests/transcripts_live.rs` that, when run with `SCORPIO_ALPHA_VANTAGE_API_KEY` set and `--ignored`, probes AAPL and asserts a `Found` result for the most recent reported fiscal quarter (use the post-`2025-01-30` window for FY25-Q1, etc.). CI does not run this by default (no key in CI), but the test is committed and reviewable, and a maintainer can run it locally. Add a note to the PR template: *"Confirm `cargo nextest run --workspace -E 'test(quarter_mapping_aapl)' --run-ignored` passes locally before merge."*
+
+   **Path B (fallback): manual probe.** If Path A is too heavy for v1, manually probe at least one non-December-FY ticker (AAPL, MSFT, NVDA) before merge:
+   ```bash
+   SCORPIO_ALPHA_VANTAGE_API_KEY=<key> cargo run -p scorpio-cli -- analyze AAPL --json
+   ```
+   and confirm `transcript_fetch_status` contains `Found` for the most recent reported fiscal quarter. If `Unavailable` or `NotPublished`, the mapping is wrong — investigate Alpha Vantage's documented quarter semantics before merge.
+
+   This is the primary residual risk from pass-2 review (AR2-01). Path A is strongly preferred because a documented gated test resists silent skipping in a way that a "remember to run this manually" line in a doc does not.
+
+5. **Auth-failure counter behavior:** after a deliberate 401 response (via the integration test's mocked HTTP layer or a manual probe with an invalidated key), `AlphaVantageClient::Debug` shows `auth_failures > 0` and an `error!`-level log line containing `"Alpha Vantage rejected the API key (401)"` is emitted exactly once for that key state. (See `escalate_auth_failure` in Task 7.)
 
 - [ ] **Step 1: Run the full CI pipeline**
 
@@ -1996,7 +2077,6 @@ These items are explicitly deferred:
 - **Multi-key rotation** — single key only in v1. Restoring multi-key requires persistent quota tracking; doing it in-memory without persistence (the previous plan) is speculative complexity that may also violate AV TOS. Tag: `TODO(transcripts-multikey)`.
 - **Persistent daily-quota tracking** — `TODO(transcripts-quota)`
 - **Persistent per-key cooldown** — `TODO(transcripts-cooldown)` (irrelevant while single-key)
-- ~~**Semantic prompt-injection scanning**~~ — see consolidated entry below for full status.
 - **Our own sentiment NLP** — `TODO(transcripts-nlp)`
 - **Q&A separation and speaker indexing**
 - **Quarter backward walk** (single quarter per call)
