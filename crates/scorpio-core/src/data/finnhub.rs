@@ -9,15 +9,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use finnhub::FinnhubClient as FhClient;
-use finnhub::models::news::NewsCategory;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::JsonSchema;
-use secrecy::ExposeSecret;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-
 use super::symbol::validate_symbol;
 use crate::constants::NEWS_ANALYSIS_DAYS;
 use crate::{
@@ -30,6 +21,15 @@ use crate::{
         NewsData, TransactionType,
     },
 };
+use finnhub::FinnhubClient as FhClient;
+use finnhub::models::news::NewsCategory;
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
+use schemars::JsonSchema;
+use secrecy::ExposeSecret;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tracing::info;
 
 // ─── Client ─────────────────────────────────────────────────────────────────
 
@@ -280,6 +280,14 @@ impl FinnhubClient {
             .earnings(Some(from), Some(to), symbol)
             .await
             .map_err(map_finnhub_err)?;
+        info!(
+            from,
+            to,
+            symbol = symbol.unwrap_or("ALL"),
+            earnings_calendar = ?result.earnings_calendar,
+            "Fetched earnings calendar"
+        );
+
         Ok(Arc::new(result.earnings_calendar))
     }
 
