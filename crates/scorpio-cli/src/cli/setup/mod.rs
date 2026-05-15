@@ -9,8 +9,8 @@ use scorpio_core::settings::{
     PartialConfig, UserConfigFileError, load_user_config_at, save_user_config_at, user_config_path,
 };
 use steps::{
-    step1_finnhub_api_key, step2_fred_api_key, step3_llm_provider_keys, step4_provider_routing,
-    step5_health_check,
+    step1_finnhub_api_key, step2_fred_api_key, step2b_alpha_vantage_api_key,
+    step3_llm_provider_keys, step4_provider_routing, step5_health_check,
 };
 
 /// Map an `InquireError` cancellation signal into an `Ok(None)` early-exit,
@@ -146,6 +146,7 @@ pub fn run() -> anyhow::Result<()> {
 
     step!(step1_finnhub_api_key(&mut partial));
     step!(step2_fred_api_key(&mut partial));
+    step!(step2b_alpha_vantage_api_key(&mut partial));
     let step3_outcome =
         match handle_cancellation(step3_llm_provider_keys(&config_path, &mut partial))? {
             Some(outcome) => outcome,

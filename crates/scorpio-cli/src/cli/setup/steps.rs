@@ -101,6 +101,29 @@ pub fn step2_fred_api_key(partial: &mut PartialConfig) -> Result<(), inquire::In
     Ok(())
 }
 
+// ── Step 2b: Alpha Vantage API key ───────────────────────────────────────────
+
+/// Prompt for the optional Alpha Vantage API key, preserving an existing saved value on empty input.
+pub fn step2b_alpha_vantage_api_key(
+    partial: &mut PartialConfig,
+) -> Result<(), inquire::InquireError> {
+    println!(
+        "Alpha Vantage provides earnings call transcripts.\n\
+         Get your free key at: https://www.alphavantage.co/support/#api-key\n\
+         Free tier: 25 requests/day."
+    );
+    let existing = partial.alpha_vantage_api_key.clone();
+    let mut prompt = inquire::Password::new("Alpha Vantage API key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation();
+    if existing.is_some() {
+        prompt = prompt.with_help_message("[already set — press Enter to keep]");
+    }
+    let input = prompt.prompt()?;
+    partial.alpha_vantage_api_key = apply_optional_secret(&input, existing);
+    Ok(())
+}
+
 // ── Step 3: LLM provider keys ─────────────────────────────────────────────────
 
 /// Prompt for one or more LLM provider keys, requiring at least one configured provider.
