@@ -36,9 +36,6 @@ fn default_analysis_pack() -> String {
 /// section continue to work with current behaviour unchanged.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DataEnrichmentConfig {
-    /// Whether to fetch earnings-call transcript evidence.
-    #[serde(default)]
-    pub enable_transcripts: bool,
     /// Whether to fetch analyst consensus estimates evidence.
     #[serde(default)]
     pub enable_consensus_estimates: bool,
@@ -65,7 +62,6 @@ fn default_enrichment_fetch_timeout_secs() -> u64 {
 impl Default for DataEnrichmentConfig {
     fn default() -> Self {
         Self {
-            enable_transcripts: false,
             enable_consensus_estimates: false,
             enable_event_news: false,
             max_evidence_age_hours: default_max_evidence_age_hours(),
@@ -786,20 +782,8 @@ impl Config {
 /// fields carry `#[serde(skip)]` and would be silently dropped by the pipeline anyway.
 fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) -> Result<String> {
     let mut root = toml::map::Map::new();
-    let mut enrichment = toml::map::Map::new();
     let mut llm = toml::map::Map::new();
     let mut providers = toml::map::Map::new();
-
-    if let Some(enable_transcripts) = partial.enable_transcripts {
-        enrichment.insert(
-            "enable_transcripts".to_owned(),
-            toml::Value::Boolean(enable_transcripts),
-        );
-    }
-
-    if !enrichment.is_empty() {
-        root.insert("enrichment".to_owned(), toml::Value::Table(enrichment));
-    }
 
     if let Some(p) = &partial.quick_thinking_provider {
         llm.insert(
@@ -1482,7 +1466,6 @@ fetch_timeout_secs = 0
     #[test]
     fn enrichment_config_defaults_are_all_disabled() {
         let cfg = DataEnrichmentConfig::default();
-        assert!(!cfg.enable_transcripts);
         assert!(!cfg.enable_consensus_estimates);
         assert!(!cfg.enable_event_news);
         assert_eq!(cfg.max_evidence_age_hours, 48);
@@ -1493,25 +1476,9 @@ fetch_timeout_secs = 0
         let _guard = ENV_LOCK.lock().unwrap();
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("config should load");
-        assert!(!cfg.enrichment.enable_transcripts);
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
-    }
-
-    #[test]
-    fn enrichment_env_override_sets_enable_transcripts() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
-        unsafe {
-            std::env::set_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS", "true");
-        }
-        let result = Config::load_from(&path);
-        unsafe {
-            std::env::remove_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS");
-        }
-        let cfg = result.expect("config should load with enrichment env override");
-        assert!(cfg.enrichment.enable_transcripts);
     }
 
     #[test]
@@ -1533,7 +1500,6 @@ fetch_timeout_secs = 0
     fn config_without_enrichment_section_uses_defaults() {
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("should load without enrichment section");
-        assert!(!cfg.enrichment.enable_transcripts);
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
@@ -1783,25 +1749,6 @@ deep_thinking_model = "o3"
     }
 
     #[test]
-    fn load_from_user_path_reads_enable_transcripts_from_partial_config() {
-        use crate::settings::{PartialConfig, save_user_config_at};
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let partial = PartialConfig {
-            quick_thinking_provider: Some("openai".into()),
-            quick_thinking_model: Some("gpt-4o-mini".into()),
-            deep_thinking_provider: Some("openai".into()),
-            deep_thinking_model: Some("o3".into()),
-            enable_transcripts: Some(true),
-            ..Default::default()
-        };
-        save_user_config_at(&partial, &path).unwrap();
-        let cfg = Config::load_from_user_path(&path).expect("config should load");
-        assert!(cfg.enrichment.enable_transcripts);
-    }
-
-    #[test]
     fn partial_to_nested_toml_non_secrets_escapes_quotes_and_newlines() {
         let partial = crate::settings::PartialConfig {
             quick_thinking_provider: Some("openai".into()),
@@ -1856,23 +1803,6 @@ deep_thinking_model = "o3"
         assert_eq!(
             parsed["providers"]["deepseek"]["rpm"].as_integer(),
             Some(45)
-        );
-    }
-
-    #[test]
-    fn partial_to_nested_toml_non_secrets_includes_enrichment_flags() {
-        let partial = crate::settings::PartialConfig {
-            enable_transcripts: Some(true),
-            ..Default::default()
-        };
-
-        let nested = partial_to_nested_toml_non_secrets(&partial)
-            .expect("non-secret partial config should serialize");
-        let parsed: toml::Value = toml::from_str(&nested).expect("generated TOML should parse");
-
-        assert_eq!(
-            parsed["enrichment"]["enable_transcripts"].as_bool(),
-            Some(true)
         );
     }
 

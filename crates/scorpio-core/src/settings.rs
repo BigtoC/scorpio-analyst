@@ -25,8 +25,6 @@ struct UserConfigFile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     alpha_vantage_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    enable_transcripts: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     openai_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     anthropic_api_key: Option<String>,
@@ -122,7 +120,6 @@ impl From<UserConfigFile> for PartialConfig {
             finnhub_api_key: value.finnhub_api_key,
             fred_api_key: value.fred_api_key,
             alpha_vantage_api_key: value.alpha_vantage_api_key,
-            enable_transcripts: value.enable_transcripts,
             openai_api_key: value.openai_api_key,
             anthropic_api_key: value.anthropic_api_key,
             gemini_api_key: value.gemini_api_key,
@@ -156,7 +153,6 @@ impl From<&PartialConfig> for UserConfigFile {
             finnhub_api_key: value.finnhub_api_key.clone(),
             fred_api_key: value.fred_api_key.clone(),
             alpha_vantage_api_key: value.alpha_vantage_api_key.clone(),
-            enable_transcripts: value.enable_transcripts,
             openai_api_key: value.openai_api_key.clone(),
             anthropic_api_key: value.anthropic_api_key.clone(),
             gemini_api_key: value.gemini_api_key.clone(),
@@ -253,14 +249,14 @@ pub struct PartialConfig {
     pub fred_api_key: Option<String>,
     /// Alpha Vantage API key for earnings call transcripts.
     ///
-    /// v1 is single-key by design: persistent daily-quota tracking is deferred
-    /// (`TODO(transcripts-quota)`), so multi-key rotation cannot make a meaningful
-    /// claim about quota savings within a single process lifetime.
+    /// Presence of this key is the sole gate for transcript enrichment: when set,
+    /// the pipeline fetches earnings-call transcripts; when absent, transcripts
+    /// fall back to degraded mode. v1 is single-key by design: persistent
+    /// daily-quota tracking is deferred (`TODO(transcripts-quota)`), so
+    /// multi-key rotation cannot make a meaningful claim about quota savings
+    /// within a single process lifetime.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub alpha_vantage_api_key: Option<String>,
-    /// Whether transcript enrichment should run.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub enable_transcripts: Option<bool>,
     /// OpenAI API key.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub openai_api_key: Option<String>,
@@ -355,7 +351,6 @@ impl std::fmt::Debug for PartialConfig {
             .field("openrouter_api_key", &redact(&self.openrouter_api_key))
             .field("deepseek_api_key", &redact(&self.deepseek_api_key))
             .field("xiaomimimo_api_key", &redact(&self.xiaomimimo_api_key))
-            .field("enable_transcripts", &self.enable_transcripts)
             .field("quick_thinking_provider", &self.quick_thinking_provider)
             .field("quick_thinking_model", &self.quick_thinking_model)
             .field("deep_thinking_provider", &self.deep_thinking_provider)
@@ -580,7 +575,6 @@ mod tests {
             finnhub_api_key: Some("ct_abc123".into()),
             fred_api_key: Some("fred_xyz".into()),
             alpha_vantage_api_key: Some("av_abc".into()),
-            enable_transcripts: Some(true),
             openai_api_key: Some("sk-openai".into()),
             anthropic_api_key: Some("sk-ant".into()),
             gemini_api_key: Some("AIza_gem".into()),
@@ -976,19 +970,6 @@ rpm = 22
         save_user_config_at(&p, &path).expect("save");
         let loaded = load_user_config_at(&path).expect("load");
         assert_eq!(loaded.alpha_vantage_api_key.as_deref(), Some("av-persist"));
-    }
-
-    #[test]
-    fn partial_config_enable_transcripts_persists_via_save_load() {
-        let p = PartialConfig {
-            enable_transcripts: Some(true),
-            ..Default::default()
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        save_user_config_at(&p, &path).expect("save");
-        let loaded = load_user_config_at(&path).expect("load");
-        assert_eq!(loaded.enable_transcripts, Some(true));
     }
 
     #[test]
