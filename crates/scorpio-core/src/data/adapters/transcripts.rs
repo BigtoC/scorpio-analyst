@@ -19,7 +19,81 @@ pub struct TranscriptSegment {
     /// Spoken content for this segment.
     pub content: String,
     /// Provider-computed sentiment score for this segment, if available (`-1.0` to `1.0`).
+    ///
+    /// Alpha Vantage encodes this as a JSON string (e.g. `"0.0"`) in production
+    /// responses, even though the documentation describes it as a number. The
+    /// custom deserializer accepts numbers, numeric strings, or null so the
+    /// shared transcript shape is resilient to either wire format.
+    #[serde(default, deserialize_with = "deserialize_sentiment")]
     pub sentiment: Option<f64>,
+}
+
+/// Deserializer for [`TranscriptSegment::sentiment`] that accepts a JSON
+/// number, a numeric string (e.g. `"0.0"`), null, or a missing field.
+/// Empty strings deserialize to `None`.
+fn deserialize_sentiment<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use std::fmt;
+
+    use serde::de::{self, Visitor};
+
+    struct SentimentVisitor;
+
+    impl<'de> Visitor<'de> for SentimentVisitor {
+        type Value = Option<f64>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a float, a string parseable as a float, null, or absent")
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+
+        fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E> {
+            Ok(Some(f64::from(v)))
+        }
+
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed.parse::<f64>().map(Some).map_err(|e| {
+                E::custom(format!("invalid sentiment string {trimmed:?}: {e}"))
+            })
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, d: D2) -> Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            d.deserialize_any(SentimentVisitor)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(SentimentVisitor)
 }
 
 /// Structured earnings-call transcript evidence.

@@ -692,6 +692,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_sentiment_encoded_as_string() {
+        // Alpha Vantage encodes sentiment as a JSON string in live responses
+        // (e.g. `"0.0"`, `"0.9"`), even though docs describe it as a number.
+        let json = r#"{
+            "symbol": "GLW",
+            "quarter": "2026Q1",
+            "transcript": [
+                {"speaker": "Op", "title": "Operator", "content": "Hi.", "sentiment": "0.0"},
+                {"speaker": "CEO", "title": "CEO", "content": "Good Q.", "sentiment": "0.9"},
+                {"speaker": "CFO", "title": "CFO", "content": "Yes.", "sentiment": ""}
+            ]
+        }"#;
+        if let TranscriptFetch::Found(evidence) = AlphaVantageClient::parse_response(json).unwrap()
+        {
+            assert_eq!(evidence.segments[0].sentiment, Some(0.0));
+            assert_eq!(evidence.segments[1].sentiment, Some(0.9));
+            assert!(evidence.segments[2].sentiment.is_none());
+        } else {
+            panic!("expected Found");
+        }
+    }
+
+    #[test]
     fn parse_partial_sentiment() {
         let json = r#"{
             "symbol": "AAPL", "quarter": "2025Q1",
