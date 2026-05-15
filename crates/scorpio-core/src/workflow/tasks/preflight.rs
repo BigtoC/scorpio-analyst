@@ -35,7 +35,7 @@ use crate::{
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_MAX_DEBATE_ROUNDS,
     KEY_MAX_RISK_ROUNDS, KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS,
-    KEY_RESOLVED_INSTRUMENT, KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY,
+    KEY_RESOLVED_INSTRUMENT, KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY, KEY_TRANSCRIPT_FETCH_STATUS,
 };
 
 const TASK_ID: &str = "preflight";
@@ -275,7 +275,27 @@ impl Task for PreflightTask {
         seed_if_absent(&context, KEY_CACHED_CONSENSUS).await;
         seed_if_absent(&context, KEY_CACHED_EVENT_FEED).await;
 
+        // KEY_TRANSCRIPT_FETCH_STATUS holds the typed TranscriptFetch enum
+        // (serde-serialized). Default is Unavailable (NOT NotPublished):
+        // pre-enrichment the system has no information, which semantically
+        // maps to Unavailable. Downstream consumers always pattern-match on
+        // the typed enum.
+        seed_transcript_status_if_absent(&context).await;
+
         Ok(TaskResult::new(None, NextAction::Continue))
+    }
+}
+
+/// Seed `KEY_TRANSCRIPT_FETCH_STATUS` to the serialized `TranscriptFetch::Unavailable`
+/// if the key has not already been populated by `run_analysis_cycle`.
+async fn seed_transcript_status_if_absent(context: &Context) {
+    let existing: Option<String> = context.get(KEY_TRANSCRIPT_FETCH_STATUS).await;
+    if existing.is_none() {
+        let default = serde_json::to_string(
+            &crate::data::adapters::transcripts::TranscriptFetch::Unavailable,
+        )
+        .unwrap_or_else(|_| "\"Unavailable\"".to_owned());
+        context.set(KEY_TRANSCRIPT_FETCH_STATUS, default).await;
     }
 }
 

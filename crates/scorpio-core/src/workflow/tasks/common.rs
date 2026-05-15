@@ -42,7 +42,21 @@ pub const KEY_REQUIRED_COVERAGE_INPUTS: &str = "required_coverage_inputs";
 ///
 /// Value: JSON-serialised `Option<TranscriptEvidence>` — always present after
 /// preflight.  Stage 1 value is the JSON literal `null`.
+///
+/// Superseded by [`KEY_TRANSCRIPT_FETCH_STATUS`]; the new key holds the typed
+/// [`TranscriptFetch`](crate::data::adapters::transcripts::TranscriptFetch)
+/// enum and is the sole transcript context key going forward. This constant
+/// is retained transiently to keep migration deltas reviewable.
 pub const KEY_CACHED_TRANSCRIPT: &str = "cached_transcript";
+
+/// Context key for the serde-serialized
+/// [`TranscriptFetch`](crate::data::adapters::transcripts::TranscriptFetch)
+/// enum (JSON string).
+///
+/// Always present after preflight; preflight seeds it to the serialized form
+/// of `TranscriptFetch::Unavailable`. Consumers MUST deserialize back to
+/// `TranscriptFetch` and pattern-match — never compare raw string contents.
+pub const KEY_TRANSCRIPT_FETCH_STATUS: &str = "transcript_fetch_status";
 
 /// Context key for the optional cached consensus-estimates payload.
 ///
