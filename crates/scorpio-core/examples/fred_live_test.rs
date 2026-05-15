@@ -98,6 +98,7 @@ async fn main() {
         &ApiConfig {
             fred_api_key: Some(SecretString::from(api_key)),
             finnhub_api_key: None,
+            alpha_vantage_api_key: None,
         },
         SharedRateLimiter::new("fred", 10),
     )
