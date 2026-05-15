@@ -71,7 +71,9 @@ fn first_sentence(s: &str) -> &str {
 fn action_colored(action: &TradeAction) -> String {
     match action {
         TradeAction::Buy => "Buy".green().bold().to_string(),
+        TradeAction::Underweight => "Underweight".green().bold().to_string(),
         TradeAction::Sell => "Sell".red().bold().to_string(),
+        TradeAction::Overweight => "Overweight".red().bold().to_string(),
         TradeAction::Hold => "Hold".yellow().bold().to_string(),
     }
 }
