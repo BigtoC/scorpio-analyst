@@ -118,12 +118,10 @@ impl AnalysisRuntime {
         let yfinance = YFinanceClient::from_config(&cfg.rate_limits);
 
         // Alpha Vantage transcript provider: optional. Constructed only when
-        // transcripts are enabled in config AND a key is configured. A
-        // missing key with `enable_transcripts = true` is a soft failure —
-        // the pipeline runs in degraded mode.
-        let alpha_vantage = if cfg.enrichment.enable_transcripts
-            && cfg.api.alpha_vantage_api_key.is_some()
-        {
+        // an Alpha Vantage API key is configured — the key's presence is the
+        // sole gate for transcript enrichment. Without a key the pipeline
+        // runs in degraded mode (no transcripts).
+        let alpha_vantage = if cfg.api.alpha_vantage_api_key.is_some() {
             let av_limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg.rate_limits)
                 .unwrap_or_else(|| SharedRateLimiter::disabled("alpha_vantage"));
             match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter) {
