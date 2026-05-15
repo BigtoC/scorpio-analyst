@@ -15,7 +15,7 @@ use crate::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
             accounting::risk_moderator_accounting,
-            common::{KEY_RISK_ROUND, RISK_USAGE_PREFIX, write_round_usage},
+            common::{KEY_RISK_ROUND, RISK_USAGE_PREFIX, load_transcript_fetch, write_round_usage},
             runtime::{load_state, save_state, task_error},
         },
     },
@@ -50,14 +50,22 @@ impl Task for AggressiveRiskTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 
-        let usage = run_aggressive_risk_turn(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to run aggressive turn", error))?;
+        let usage = run_aggressive_risk_turn(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run aggressive turn", error))?;
 
         write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "agg", &usage)
             .await
@@ -99,16 +107,22 @@ impl Task for ConservativeRiskTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 
-        let usage = run_conservative_risk_turn(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| {
-                task_error(Self::TASK_NAME, "failed to run conservative turn", error)
-            })?;
+        let usage = run_conservative_risk_turn(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run conservative turn", error))?;
 
         write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "con", &usage)
             .await
@@ -150,14 +164,22 @@ impl Task for NeutralRiskTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
         let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 
-        let usage = run_neutral_risk_turn(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to run neutral turn", error))?;
+        let usage = run_neutral_risk_turn(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run neutral turn", error))?;
 
         write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "neu", &usage)
             .await
@@ -210,10 +232,18 @@ impl Task for RiskModeratorTask {
         info!(task = Self::TASK_ID, phase = 4, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
-        let mod_usage = run_risk_moderation(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to run moderation", error))?;
+        let mod_usage = run_risk_moderation(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run moderation", error))?;
 
         let is_final =
             risk_moderator_accounting(&context, &mut state, &mod_usage, &phase_start).await;

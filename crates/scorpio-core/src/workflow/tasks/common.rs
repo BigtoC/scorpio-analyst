@@ -1,6 +1,7 @@
 use graph_flow::Context;
 
 use crate::{
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     state::AgentTokenUsage,
     workflow::context_bridge::{read_prefixed_result, write_prefixed_result},
@@ -37,17 +38,6 @@ pub const KEY_PROVIDER_CAPABILITIES: &str = "provider_capabilities";
 ///
 /// Value: JSON array `["fundamentals", "sentiment", "news", "technical"]`.
 pub const KEY_REQUIRED_COVERAGE_INPUTS: &str = "required_coverage_inputs";
-
-/// Context key for the optional cached transcript payload.
-///
-/// Value: JSON-serialised `Option<TranscriptEvidence>` — always present after
-/// preflight.  Stage 1 value is the JSON literal `null`.
-///
-/// Superseded by [`KEY_TRANSCRIPT_FETCH_STATUS`]; the new key holds the typed
-/// [`TranscriptFetch`](crate::data::adapters::transcripts::TranscriptFetch)
-/// enum and is the sole transcript context key going forward. This constant
-/// is retained transiently to keep migration deltas reviewable.
-pub const KEY_CACHED_TRANSCRIPT: &str = "cached_transcript";
 
 /// Context key for the serde-serialized
 /// [`TranscriptFetch`](crate::data::adapters::transcripts::TranscriptFetch)
@@ -149,5 +139,79 @@ pub(super) async fn read_round_usage(
     match read_prefixed_result::<AgentTokenUsage>(context, &round_prefix, role).await {
         Ok(usage) => usage,
         Err(_) => AgentTokenUsage::unavailable(agent_name, "unknown", 0),
+    }
+}
+
+pub(super) async fn load_transcript_fetch(
+    context: &Context,
+) -> Result<TranscriptFetch, TradingError> {
+    let raw: String = context
+        .get(KEY_TRANSCRIPT_FETCH_STATUS)
+        .await
+        .ok_or_else(|| TradingError::SchemaViolation {
+            message: format!("context missing required key '{KEY_TRANSCRIPT_FETCH_STATUS}'"),
+        })?;
+
+    serde_json::from_str(&raw).map_err(|error| TradingError::SchemaViolation {
+        message: format!(
+            "failed to deserialize {KEY_TRANSCRIPT_FETCH_STATUS} as TranscriptFetch: {error}"
+        ),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use graph_flow::Context;
+
+    use super::{KEY_TRANSCRIPT_FETCH_STATUS, load_transcript_fetch};
+    use crate::data::adapters::transcripts::TranscriptFetch;
+
+    #[tokio::test]
+    async fn load_transcript_fetch_reads_serialized_status_from_context() {
+        let context = Context::new();
+        let status = TranscriptFetch::Unavailable;
+        let raw = serde_json::to_string(&status).expect("status serialization");
+        context.set(KEY_TRANSCRIPT_FETCH_STATUS, raw).await;
+
+        let loaded = load_transcript_fetch(&context)
+            .await
+            .expect("transcript status should deserialize");
+
+        assert_eq!(loaded, status);
+    }
+
+    #[tokio::test]
+    async fn load_transcript_fetch_fails_when_context_key_is_missing() {
+        let context = Context::new();
+
+        let error = load_transcript_fetch(&context)
+            .await
+            .expect_err("missing transcript status should fail");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "schema violation: context missing required key '{KEY_TRANSCRIPT_FETCH_STATUS}'"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn load_transcript_fetch_fails_when_context_value_is_invalid_json() {
+        let context = Context::new();
+        context
+            .set(KEY_TRANSCRIPT_FETCH_STATUS, "not-json".to_owned())
+            .await;
+
+        let error = load_transcript_fetch(&context)
+            .await
+            .expect_err("invalid transcript status should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deserialize transcript_fetch_status as TranscriptFetch"),
+            "unexpected error: {error}"
+        );
     }
 }

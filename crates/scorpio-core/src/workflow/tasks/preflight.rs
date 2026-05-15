@@ -33,9 +33,9 @@ use crate::{
 };
 
 use super::common::{
-    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_MAX_DEBATE_ROUNDS,
-    KEY_MAX_RISK_ROUNDS, KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS,
-    KEY_RESOLVED_INSTRUMENT, KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY, KEY_TRANSCRIPT_FETCH_STATUS,
+    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
+    KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+    KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY, KEY_TRANSCRIPT_FETCH_STATUS,
 };
 
 const TASK_ID: &str = "preflight";
@@ -271,7 +271,6 @@ impl Task for PreflightTask {
         // `expect` it.  However, if `run_analysis_cycle` has already hydrated a
         // key with real enrichment data (non-null JSON), we preserve it instead
         // of overwriting with `"null"`.
-        seed_if_absent(&context, KEY_CACHED_TRANSCRIPT).await;
         seed_if_absent(&context, KEY_CACHED_CONSENSUS).await;
         seed_if_absent(&context, KEY_CACHED_EVENT_FEED).await;
 
@@ -330,9 +329,8 @@ mod tests {
             context_bridge::{deserialize_state_from_context, serialize_state_to_context},
             snapshot::SnapshotPhase,
             tasks::common::{
-                KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT,
-                KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
-                KEY_TRANSCRIPT_FETCH_STATUS,
+                KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_PROVIDER_CAPABILITIES,
+                KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_TRANSCRIPT_FETCH_STATUS,
             },
         },
     };
@@ -488,16 +486,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_seeds_cached_transcript_as_null_placeholder() {
+    async fn preflight_does_not_seed_legacy_cached_transcript_key() {
         let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
             .await
             .expect("preflight should succeed");
 
-        let raw: String = ctx
-            .get(KEY_CACHED_TRANSCRIPT)
-            .await
-            .expect("cached_transcript must be present");
-        assert_eq!(raw, "null", "Stage 1 value must be the JSON literal 'null'");
+        let raw: Option<String> = ctx.get("cached_transcript").await;
+        assert!(
+            raw.is_none(),
+            "legacy cached_transcript key should be absent after preflight"
+        );
     }
 
     #[tokio::test]
@@ -545,7 +543,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_all_six_context_keys_present_after_run() {
+    async fn preflight_all_transcript_and_enrichment_context_keys_present_after_run() {
         let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
             .await
             .expect("preflight should succeed");
@@ -554,7 +552,7 @@ mod tests {
             KEY_RESOLVED_INSTRUMENT,
             KEY_PROVIDER_CAPABILITIES,
             KEY_REQUIRED_COVERAGE_INPUTS,
-            KEY_CACHED_TRANSCRIPT,
+            KEY_TRANSCRIPT_FETCH_STATUS,
             KEY_CACHED_CONSENSUS,
             KEY_CACHED_EVENT_FEED,
         ] {
@@ -626,18 +624,26 @@ mod tests {
             .await
             .expect("preflight should succeed");
 
-        // Without pre-hydration, all enrichment keys should be "null".
-        for key in [
-            KEY_CACHED_TRANSCRIPT,
-            KEY_CACHED_CONSENSUS,
-            KEY_CACHED_EVENT_FEED,
-        ] {
+        // Without pre-hydration, the JSON cache placeholders remain null and the
+        // transcript status key remains explicitly typed.
+        for key in [KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED] {
             let raw: String = ctx.get(key).await.expect("key must be present");
             assert_eq!(
                 raw, "null",
                 "key '{key}' should be null without pre-hydration"
             );
         }
+
+        let transcript_status: String = ctx
+            .get(KEY_TRANSCRIPT_FETCH_STATUS)
+            .await
+            .expect("transcript status must be present");
+        let status: crate::data::adapters::transcripts::TranscriptFetch =
+            serde_json::from_str(&transcript_status).expect("TranscriptFetch deserialization");
+        assert_eq!(
+            status,
+            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+        );
     }
 
     // ── Thesis-memory tests ───────────────────────────────────────────────────
@@ -829,7 +835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_all_seven_context_keys_present_after_run() {
+    async fn preflight_all_runtime_context_keys_present_after_run() {
         let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
             .await
             .expect("preflight should succeed");
@@ -838,7 +844,6 @@ mod tests {
             KEY_RESOLVED_INSTRUMENT,
             KEY_PROVIDER_CAPABILITIES,
             KEY_REQUIRED_COVERAGE_INPUTS,
-            KEY_CACHED_TRANSCRIPT,
             KEY_TRANSCRIPT_FETCH_STATUS,
             KEY_CACHED_CONSENSUS,
             KEY_CACHED_EVENT_FEED,
