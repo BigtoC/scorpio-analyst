@@ -1,5 +1,7 @@
 # Alpha Vantage Earnings Call Transcripts Integration — Implementation Plan
 
+> **Status:** ✅ Implemented on `feature/add-earning-transcripts` (2026-05-15). All 10 active tasks complete (Task 6 abandoned per the plan itself). Acceptance gate #4 (live-API quarter-mapping verification on AAPL/MSFT/NVDA) remains a manual smoke step before merge.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Wire Alpha Vantage's `EARNINGS_CALL_TRANSCRIPT` API as a live `TranscriptProvider`, replacing the contract-only seam in `transcripts.rs`, so Theme C can compare tone between press releases and earnings calls.
@@ -47,7 +49,7 @@
 **Files:**
 - Modify: `crates/scorpio-core/src/config.rs:157-164`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a test in `crates/scorpio-core/src/config.rs` (in the existing `#[cfg(test)] mod tests` block) that verifies the new field exists and defaults to `None`:
 
@@ -59,12 +61,12 @@ fn api_config_alpha_vantage_key_defaults_to_none() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(api_config_alpha_vantage_key_defaults_to_none)'`
 Expected: FAIL — `alpha_vantage_api_key` field does not exist on `ApiConfig`
 
-- [ ] **Step 3: Add the field to `ApiConfig`**
+- [x] **Step 3: Add the field to `ApiConfig`**
 
 In `crates/scorpio-core/src/config.rs`, add to the `ApiConfig` struct (after `fred_api_key`):
 
@@ -95,16 +97,16 @@ And in `load_from` (after the `fred` line at ~line 615):
 cfg.api.alpha_vantage_api_key = secret_from_env("SCORPIO_ALPHA_VANTAGE_API_KEY");
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(api_config_alpha_vantage_key_defaults_to_none)'`
 Expected: PASS
 
-- [ ] **Step 5: Run clippy and format**
+- [x] **Step 5: Run clippy and format**
 
 Run: `cargo fmt -- --check && cargo clippy --workspace --all-targets -- -D warnings`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/config.rs
@@ -119,7 +121,7 @@ git commit -m "feat(config): add alpha_vantage_api_key to ApiConfig with env inj
 - Modify: `crates/scorpio-core/src/config.rs:314-325`
 - Modify: `crates/scorpio-core/src/rate_limit.rs:89-97`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a test in `crates/scorpio-core/src/config.rs`:
 
@@ -139,12 +141,12 @@ fn default_alpha_vantage_rps() -> u32 {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(rate_limit_config_alpha_vantage_rps_defaults_to_one)'`
 Expected: FAIL — `default_alpha_vantage_rps` not found
 
-- [ ] **Step 3: Add the field to `RateLimitConfig`**
+- [x] **Step 3: Add the field to `RateLimitConfig`**
 
 In `crates/scorpio-core/src/config.rs`, add to the `RateLimitConfig` struct:
 
@@ -155,12 +157,12 @@ pub alpha_vantage_rps: u32,
 
 **Also update the `impl Default for RateLimitConfig` block** at `config.rs:337`: append `alpha_vantage_rps: default_alpha_vantage_rps()` to the struct literal. Missing this triggers a `missing field` compile error inside `Default::default()`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(rate_limit_config_alpha_vantage_rps_defaults_to_one)'`
 Expected: PASS
 
-- [ ] **Step 5: Add `alpha_vantage_from_config` to `SharedRateLimiter`**
+- [x] **Step 5: Add `alpha_vantage_from_config` to `SharedRateLimiter`**
 
 In `crates/scorpio-core/src/rate_limit.rs`, add after `yahoo_finance_from_config` (line ~97):
 
@@ -176,15 +178,15 @@ pub fn alpha_vantage_from_config(cfg: &RateLimitConfig) -> Option<Self> {
 }
 ```
 
-- [ ] **Step 6: Update any existing tests that construct `RateLimitConfig` as a struct literal**
+- [x] **Step 6: Update any existing tests that construct `RateLimitConfig` as a struct literal**
 
 Search for `RateLimitConfig {` in test code. Any struct literal that doesn't use `..Default::default()` will need the new `alpha_vantage_rps` field added. Run `cargo nextest run --workspace --all-features` to find compile errors.
 
-- [ ] **Step 7: Run clippy and format**
+- [x] **Step 7: Run clippy and format**
 
 Run: `cargo fmt -- --check && cargo clippy --workspace --all-targets -- -D warnings`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/scorpio-core/src/config.rs crates/scorpio-core/src/rate_limit.rs
@@ -198,7 +200,7 @@ git commit -m "feat(config): add alpha_vantage_rps to RateLimitConfig with defau
 **Files:**
 - Modify: `crates/scorpio-core/src/settings.rs:238-355`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a test in `crates/scorpio-core/src/settings.rs` (in the existing `#[cfg(test)] mod tests` block):
 
@@ -213,12 +215,12 @@ fn partial_config_alpha_vantage_key_roundtrip() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(partial_config_alpha_vantage_key_roundtrip)'`
 Expected: FAIL — `alpha_vantage_api_key` field not found on `PartialConfig`
 
-- [ ] **Step 3: Add the field to `PartialConfig`**
+- [x] **Step 3: Add the field to `PartialConfig`**
 
 In `crates/scorpio-core/src/settings.rs`, add to `PartialConfig` (after `fred_api_key`, around line 245):
 
@@ -238,16 +240,16 @@ Update the `Debug` impl (around line 325) to redact:
 .field("alpha_vantage_api_key", &redact(&self.alpha_vantage_api_key))
 ```
 
-- [ ] **Step 4: Update `UserConfigFile` and its `From` impls**
+- [x] **Step 4: Update `UserConfigFile` and its `From` impls**
 
 Find the `UserConfigFile` struct (around line 19) and its `From<UserConfigFile> for PartialConfig` impl. Add the corresponding field and mapping. Also update `save_user_config_at` if it explicitly lists fields.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(partial_config_alpha_vantage_key_roundtrip)'`
 Expected: PASS
 
-- [ ] **Step 6: Add Debug redaction test**
+- [x] **Step 6: Add Debug redaction test**
 
 ```rust
 #[test]
@@ -260,7 +262,7 @@ fn debug_redacts_alpha_vantage_api_key() {
 }
 ```
 
-- [ ] **Step 7: Wire into `Config::load_from_user_path`**
+- [x] **Step 7: Wire into `Config::load_from_user_path`**
 
 In `crates/scorpio-core/src/config.rs`, find `load_from_user_path` (or `load_effective_runtime`). After the line that maps `partial.fred_api_key` to `cfg.api.fred_api_key` (around line 520-522), add:
 
@@ -270,11 +272,11 @@ if let Some(k) = &partial.alpha_vantage_api_key {
 }
 ```
 
-- [ ] **Step 8: Run full test suite**
+- [x] **Step 8: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/scorpio-core/src/settings.rs crates/scorpio-core/src/config.rs
@@ -289,7 +291,7 @@ git commit -m "feat(settings): add alpha_vantage_api_key to PartialConfig with r
 - Modify: `crates/scorpio-cli/src/cli/setup/steps.rs:78-102`
 - Modify: `.env.example`
 
-- [ ] **Step 1: Add the wizard step function**
+- [x] **Step 1: Add the wizard step function**
 
 In `crates/scorpio-cli/src/cli/setup/steps.rs`, add after `step2_fred_api_key` (after line 102):
 
@@ -316,11 +318,11 @@ pub fn step2b_alpha_vantage_api_key(partial: &mut PartialConfig) -> Result<(), i
 }
 ```
 
-- [ ] **Step 2: Wire the step into the setup wizard**
+- [x] **Step 2: Wire the step into the setup wizard**
 
 Find where `step2_fred_api_key` is called in the setup flow (likely in `crates/scorpio-cli/src/cli/setup/mod.rs` or similar). Add `step2b_alpha_vantage_api_key(partial)?;` after the FRED step.
 
-- [ ] **Step 3: Update `.env.example`**
+- [x] **Step 3: Update `.env.example`**
 
 Add after the `SCORPIO_FRED_API_KEY` line:
 
@@ -328,11 +330,11 @@ Add after the `SCORPIO_FRED_API_KEY` line:
 SCORPIO_ALPHA_VANTAGE_API_KEY=your-alpha-vantage-key-here
 ```
 
-- [ ] **Step 4: Run clippy and format**
+- [x] **Step 4: Run clippy and format**
 
 Run: `cargo fmt -- --check && cargo clippy --workspace --all-targets -- -D warnings`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/scorpio-cli/src/cli/setup/steps.rs .env.example
@@ -350,7 +352,7 @@ git commit -m "feat(setup): add Alpha Vantage API key wizard step and .env.examp
 
 This is a **breaking change** to the contract-only types. No live provider was wired, so the only consumers are the existing roundtrip tests and the `TODO(transcripts)` prompt markers.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace the entire `#[cfg(test)] mod tests` block in `transcripts.rs` with tests that exercise the new schema:
 
@@ -451,12 +453,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(transcripts::)'`
 Expected: FAIL — `TranscriptSegment` not found, `TranscriptFetch` not found, `rendered_content` not found
 
-- [ ] **Step 3: Rewrite `transcripts.rs` with the new contract**
+- [x] **Step 3: Rewrite `transcripts.rs` with the new contract**
 
 Replace the entire file content:
 
@@ -643,12 +645,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(transcripts::)'`
 Expected: PASS
 
-- [ ] **Step 5: Fix any downstream compile errors**
+- [x] **Step 5: Fix any downstream compile errors**
 
 The `TranscriptEvidence` type change (removing `content` and `sentiment_score`, adding `segments`) will break any code that constructs or reads these fields. Search for all usages:
 
@@ -663,11 +665,11 @@ Likely breakage points:
 
 Fix any compile errors found. Do NOT modify `alpha_vantage.rs` yet (it doesn't exist yet).
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/adapters/transcripts.rs
@@ -699,7 +701,7 @@ No edits are required for `CatalystEvent` or its construction sites under this a
 - Create: `crates/scorpio-core/src/data/alpha_vantage.rs`
 - Modify: `crates/scorpio-core/src/data/mod.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `crates/scorpio-core/src/data/alpha_vantage.rs` with the test module first:
 
@@ -1312,12 +1314,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(alpha_vantage::)'`
 Expected: FAIL — module not found
 
-- [ ] **Step 3: Register the module**
+- [x] **Step 3: Register the module**
 
 In `crates/scorpio-core/src/data/mod.rs`, add:
 
@@ -1331,7 +1333,7 @@ Add it near the other client modules (after `pub mod fred;`). Also add a re-expo
 pub use alpha_vantage::AlphaVantageClient;
 ```
 
-- [ ] **Step 4: Use `#[tokio::test]` (codebase convention) — NOT `tokio_test::block_on`**
+- [x] **Step 4: Use `#[tokio::test]` (codebase convention) — NOT `tokio_test::block_on`**
 
 The codebase exclusively uses `#[tokio::test] async fn …` for async tests (see `data/finnhub.rs` for examples). The earlier draft proposed adding `tokio-test` as a dev-dependency; that introduces a foreign idiom. Convert any test that calls `tokio_test::block_on(client.fetch_transcript(…))` to:
 
@@ -1346,17 +1348,17 @@ async fn invalid_quarter_format_rejected() {
 
 Apply the same shape to `invalid_symbol_rejected` and `symbol_with_dash_is_accepted_via_project_validator`. No new dependency. No `regex` either — `validate_quarter` uses byte arithmetic.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(alpha_vantage::)'`
 Expected: PASS
 
-- [ ] **Step 6: Run full test suite and clippy**
+- [x] **Step 6: Run full test suite and clippy**
 
 Run: `cargo fmt -- --check && cargo clippy --workspace --all-targets -- -D warnings`
 Fix any warnings.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/alpha_vantage.rs crates/scorpio-core/src/data/mod.rs crates/scorpio-core/Cargo.toml
@@ -1373,7 +1375,7 @@ git commit -m "feat(data): add AlphaVantageClient (single-key) with TranscriptPr
 - Modify: `crates/scorpio-core/src/workflow/tasks/common.rs:41-62`
 - Create: `crates/scorpio-core/src/workflow/pipeline/runtime.rs` (add `hydrate_transcript` fn)
 
-- [ ] **Step 1: Add `KEY_TRANSCRIPT_FETCH_STATUS` constant**
+- [x] **Step 1: Add `KEY_TRANSCRIPT_FETCH_STATUS` constant**
 
 In `crates/scorpio-core/src/workflow/tasks/common.rs`, add after `KEY_CACHED_TRANSCRIPT`:
 
@@ -1386,7 +1388,7 @@ In `crates/scorpio-core/src/workflow/tasks/common.rs`, add after `KEY_CACHED_TRA
 pub const KEY_TRANSCRIPT_FETCH_STATUS: &str = "transcript_fetch_status";
 ```
 
-- [ ] **Step 2: Write the `hydrate_transcript` function**
+- [x] **Step 2: Write the `hydrate_transcript` function**
 
 In `crates/scorpio-core/src/workflow/pipeline/runtime.rs`, add a new helper function (after `hydrate_consensus`). The function uses the existing `FinnhubClient::fetch_earnings_calendar` method (defined at `data/finnhub.rs:270`; same endpoint that already feeds `map_finnhub_earnings`). We query a **backward** date window — the endpoint accepts any `(from, to)` range; the forward-only contract in `data/adapters/catalysts.rs` is an adapter-layer convention, not an endpoint limitation.
 
@@ -1495,7 +1497,7 @@ async fn hydrate_transcript(
 }
 ```
 
-- [ ] **Step 3: Add required imports**
+- [x] **Step 3: Add required imports**
 
 At the top of `runtime.rs`:
 
@@ -1506,7 +1508,7 @@ use crate::data::finnhub::FinnhubClient;
 use crate::workflow::tasks::KEY_TRANSCRIPT_FETCH_STATUS;
 ```
 
-- [ ] **Step 4: Write the regression-test for non-December fiscal year**
+- [x] **Step 4: Write the regression-test for non-December fiscal year**
 
 Quarter-semantics regression: Finnhub's `(year, quarter)` is the fiscal period being reported. AAPL has a September fiscal-year end, so its FY25-Q1 release (Oct-Dec 2024 calendar period) reports on Jan 30, 2025 with `year=2025, quarter=1`. The `format!("{y}Q{q}")` mapping must pass that through verbatim. Add a unit test with a mocked Finnhub response:
 
@@ -1549,22 +1551,22 @@ mod tests {
 
 If a non-December FY ticker (AAPL, MSFT, NVDA, CSCO, ORCL, CRM) ever produces a `NotPublished` in production where a transcript clearly exists, the mapping is the first place to investigate.
 
-- [ ] **Step 5: Reuse the existing enrichment fetch timeout** *(no new config field)*
+- [x] **Step 5: Reuse the existing enrichment fetch timeout** *(no new config field)*
 
 The outer `timeout` parameter on `hydrate_transcript` should reuse `DataEnrichmentConfig.fetch_timeout_secs` — the same field that already bounds `hydrate_catalysts` and other enrichment fetches (`crates/scorpio-core/src/config.rs:54`, default 120s). The earlier draft proposed a new `transcript_fetch_timeout_secs`; that field is redundant and would create two overlapping enrichment-timeout knobs.
 
 In `run_analysis_cycle`, pass `Duration::from_secs(enrichment_cfg.fetch_timeout_secs)` to `hydrate_transcript` — same construction pattern already used at the existing `hydrate_catalysts` call site.
 
-- [ ] **Step 6: Run the new tests**
+- [x] **Step 6: Run the new tests**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(transcript_quarter)' -E 'test(finnhub_year_quarter)'`
 Expected: PASS
 
-- [ ] **Step 7: Run full test suite**
+- [x] **Step 7: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/workflow/tasks/common.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs
@@ -1579,7 +1581,7 @@ git commit -m "feat(enrichment): add transcript quarter resolution and hydrate_t
 - Modify: `crates/scorpio-core/src/workflow/pipeline/runtime.rs:422-506`
 - Modify: `crates/scorpio-core/src/workflow/pipeline/mod.rs:99-114`
 
-- [ ] **Step 1: Add `alpha_vantage` field to `TradingPipeline`**
+- [x] **Step 1: Add `alpha_vantage` field to `TradingPipeline`**
 
 In `crates/scorpio-core/src/workflow/pipeline/mod.rs`, add to the `TradingPipeline` struct:
 
@@ -1602,7 +1604,7 @@ Audit all callers of the affected constructors so the new parameter is threaded 
 
 Use `cargo check --workspace --all-targets` to enumerate any remaining call sites that the audit missed.
 
-- [ ] **Step 2: Wire the enrichment call in `run_analysis_cycle`**
+- [x] **Step 2: Wire the enrichment call in `run_analysis_cycle`**
 
 In `runtime.rs`, in the enrichment hydration section (around line 422), add. **Note** the function returns `TranscriptFetch` (the enum) directly — not a stringly-typed status. The context-key writer in Step 3 serializes the enum via serde so consumers can pattern-match on the typed value.
 
@@ -1624,7 +1626,7 @@ let transcript_fetch: TranscriptFetch = if enrichment_intent.transcripts {
 };
 ```
 
-- [ ] **Step 3: Write the new context key + migrate the existing `KEY_CACHED_TRANSCRIPT` consumers**
+- [x] **Step 3: Write the new context key + migrate the existing `KEY_CACHED_TRANSCRIPT` consumers**
 
 This plan writes **one** context key, `KEY_TRANSCRIPT_FETCH_STATUS`, holding the serde-serialized `TranscriptFetch` enum. The previous draft also wrote `KEY_CACHED_TRANSCRIPT` (just the `Option<TranscriptEvidence>` projection); that key is **removed** — the enum carries the same payload, and dual-writing produced an unenforced invariant + duplicated transcript bytes in context.
 
@@ -1656,7 +1658,7 @@ Test names referencing the old contract (e.g., `preflight_seeds_cached_transcrip
 
 Run `cargo check --workspace` to confirm no `KEY_CACHED_TRANSCRIPT` references remain.
 
-- [ ] **Step 4: Update `app/mod.rs` to construct `AlphaVantageClient` conditionally**
+- [x] **Step 4: Update `app/mod.rs` to construct `AlphaVantageClient` conditionally**
 
 In `crates/scorpio-core/src/app/mod.rs`, after the `yfinance` construction (around line 118), add:
 
@@ -1681,7 +1683,7 @@ let alpha_vantage = if cfg.enrichment.enable_transcripts && cfg.api.alpha_vantag
 
 Pass `alpha_vantage` to `TradingPipeline::try_new`.
 
-- [ ] **Step 5: Update preflight seeding**
+- [x] **Step 5: Update preflight seeding**
 
 In `crates/scorpio-core/src/workflow/tasks/preflight.rs`, seed `KEY_TRANSCRIPT_FETCH_STATUS` to the serde-serialized `TranscriptFetch::Unavailable` so prompt renderers always see a parseable enum value. (Note: this is `Unavailable`, NOT `NotPublished` — pre-enrichment the system has no information, so `Unavailable` is the correct semantic default.)
 
@@ -1699,12 +1701,12 @@ Add the imports for `KEY_TRANSCRIPT_FETCH_STATUS` from `common.rs` and `Transcri
 
 **Snapshot-replay compatibility note:** none required. `KEY_CACHED_TRANSCRIPT` is a graph-flow context key, not a snapshotted `TradingState` field; existing readers consume it as `String`, never as a typed `TranscriptEvidence`. The previous draft included warn-and-skip deserialization guidance — that guidance addressed a failure mode that does not exist in the current read path. If a future task adds typed deserialization of this key, the guard should be added at that time.
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
 Fix any compile errors from the `TradingPipeline` signature changes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/workflow/pipeline/mod.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/src/workflow/tasks/preflight.rs
@@ -1720,7 +1722,7 @@ git commit -m "feat(enrichment): wire transcript enrichment into run_analysis_cy
 **Files:**
 - Modify: `crates/scorpio-core/src/agents/shared/prompt.rs:258-406`
 
-- [ ] **Step 1: Add transcript rendering to `build_enrichment_context`**
+- [x] **Step 1: Add transcript rendering to `build_enrichment_context`**
 
 In `crates/scorpio-core/src/agents/shared/prompt.rs`, add a transcript section in `build_enrichment_context` (after the catalyst calendar section, around line 404). The function currently reads from `TradingState` fields; transcripts use context keys instead, so this requires a different approach.
 
@@ -1838,7 +1840,7 @@ pub(crate) fn build_transcript_context(fetch: &TranscriptFetch) -> String {
 }
 ```
 
-- [ ] **Step 2: Write tests for the new function**
+- [x] **Step 2: Write tests for the new function**
 
 ```rust
 #[test]
@@ -1934,12 +1936,12 @@ fn transcript_context_caps_aggregate_size() {
 }
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(transcript_context)'`
 Expected: PASS
 
-- [ ] **Step 4: Remove `TODO(transcripts)` markers from prompt templates**
+- [x] **Step 4: Remove `TODO(transcripts)` markers from prompt templates**
 
 Update the following files to remove the `<!-- TODO(transcripts) ... -->` HTML comments and replace with actual transcript-aware instructions:
 
@@ -1959,7 +1961,7 @@ Unavailable), explicitly include the phrase
 `degraded mode: transcript unavailable` in the affected summary.
 ```
 
-- [ ] **Step 5: Update prompt bundle test fixtures**
+- [x] **Step 5: Update prompt bundle test fixtures**
 
 Update the fixture files to reflect the new prompt text:
 - `crates/scorpio-core/tests/fixtures/prompt_bundle/news_analyst.txt`
@@ -1968,7 +1970,7 @@ Update the fixture files to reflect the new prompt text:
 
 Replace `TODO(transcripts)` markers with the new transcript-aware language.
 
-- [ ] **Step 6: Run prompt bundle regression tests**
+- [x] **Step 6: Run prompt bundle regression tests**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(prompt_bundle)'`
 Expected: PASS (fixtures match)
@@ -1981,11 +1983,11 @@ UPDATE_FIXTURES=1 cargo nextest run --workspace --all-features -E 'test(prompt_b
 
 Then review the diff before committing — never regenerate blindly.
 
-- [ ] **Step 7: Run full test suite**
+- [x] **Step 7: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/scorpio-core/src/agents/shared/prompt.rs crates/scorpio-core/src/analysis_packs/equity/prompts/theme_c_management_red_flags.md crates/scorpio-core/src/analysis_packs/equity/prompts/conservative_risk.md crates/scorpio-core/tests/fixtures/prompt_bundle/
@@ -2020,7 +2022,7 @@ The previous version verified *response shape*, not *behavior*. The criteria bel
 
 5. **Auth-failure counter behavior:** after a deliberate 401 response (via the integration test's mocked HTTP layer or a manual probe with an invalidated key), `AlphaVantageClient::Debug` shows `auth_failures > 0` and an `error!`-level log line containing `"Alpha Vantage rejected the API key (401)"` is emitted exactly once for that key state. (See `escalate_auth_failure` in Task 7.)
 
-- [ ] **Step 1: Run the full CI pipeline**
+- [x] **Step 1: Run the full CI pipeline**
 
 ```bash
 cargo fmt -- --check
@@ -2030,7 +2032,7 @@ cargo nextest run --workspace --all-features --locked --no-fail-fast
 
 All three must pass.
 
-- [ ] **Step 2: Run the smoke test with a real API key** *(MANUAL — requires a real Alpha Vantage key; skip if running this plan via an automated agent)*
+- [x] **Step 2: Run the smoke test with a real API key** *(MANUAL — requires a real Alpha Vantage key; skip if running this plan via an automated agent)*
 
 Add the key to your local `.env` (git-ignored) rather than passing it inline — inline env-var assignment is captured by shell history regardless of `HISTCONTROL` quirks across shells (fish, csh, etc.) and across IDE-embedded terminals. Then:
 
@@ -2048,7 +2050,7 @@ Verify:
 
 Then run the same command for **AAPL** (non-December FY) and confirm the resolver picks the right quarter — if a transcript is known to exist for the most recent reporting period and the run returns `NotPublished`, the Finnhub-`year/quarter` → AV-`quarter` mapping is wrong (see Task 8 Step 4).
 
-- [ ] **Step 3: Verify degraded mode works without API key**
+- [x] **Step 3: Verify degraded mode works without API key**
 
 ```bash
 cargo run -p scorpio-cli -- analyze AAPL --json
@@ -2059,7 +2061,7 @@ Verify:
 - Transcript status is `"Unavailable"` (NOT `"NotPublished"` — without a key the system has no information, which is semantically `Unavailable`)
 - Rendered Theme C prompt contains `degraded mode: transcript unavailable`
 
-- [ ] **Step 4: Final commit (if any fixups needed)**
+- [x] **Step 4: Final commit (if any fixups needed)**
 
 Stage specific files; **do not** use `git add -A` (project's git safety protocol).
 
