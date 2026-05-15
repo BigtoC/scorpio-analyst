@@ -72,9 +72,10 @@ where
             if trimmed.is_empty() {
                 return Ok(None);
             }
-            trimmed.parse::<f64>().map(Some).map_err(|e| {
-                E::custom(format!("invalid sentiment string {trimmed:?}: {e}"))
-            })
+            trimmed
+                .parse::<f64>()
+                .map(Some)
+                .map_err(|e| E::custom(format!("invalid sentiment string {trimmed:?}: {e}")))
         }
 
         fn visit_none<E>(self) -> Result<Self::Value, E> {
