@@ -13,6 +13,7 @@ use crate::{
     agents::shared::redact_secret_like_values,
     config::LlmConfig,
     constants::{MAX_RAW_MODEL_OUTPUT_CHARS, MAX_RISK_CHARS, MAX_RISK_HISTORY_CHARS},
+    data::adapters::transcripts::TranscriptFetch,
     error::{RetryPolicy, TradingError},
     prompts::PromptBundle,
     providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
@@ -267,8 +268,11 @@ pub(super) fn validate_raw_model_output_size(
 // ─── Prompt context helpers ───────────────────────────────────────────────────
 
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
-pub(super) fn build_analyst_context(state: &TradingState) -> String {
-    crate::agents::shared::build_analyst_context_body(state)
+pub(super) fn build_analyst_context(
+    state: &TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
+) -> String {
+    crate::agents::shared::build_analyst_context_body(state, transcript_fetch)
 }
 
 /// Borrow the runtime policy from `state` or return a typed `Config` error
@@ -311,11 +315,14 @@ pub(crate) fn render_risk_system_prompt(
 }
 
 /// Build the initial user message that seeds each persona chat with untrusted analyst context.
-pub(super) fn initial_untrusted_history(state: &TradingState) -> Vec<Message> {
+pub(super) fn initial_untrusted_history(
+    state: &TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
+) -> Vec<Message> {
     vec![Message::User {
         content: OneOrMany::one(UserContent::text(format!(
             "{UNTRUSTED_CONTEXT_NOTICE}\n\n{}",
-            build_analyst_context(state)
+            build_analyst_context(state, transcript_fetch)
         ))),
     }]
 }
@@ -413,6 +420,9 @@ mod tests {
 
     use super::*;
     use crate::config::LlmConfig;
+    use crate::data::adapters::transcripts::{
+        TranscriptEvidence, TranscriptFetch, TranscriptSegment,
+    };
     use crate::state::{RiskLevel, RiskReport, TradingState};
 
     fn sample_llm_config() -> LlmConfig {
@@ -714,11 +724,32 @@ mod tests {
     #[test]
     fn build_analyst_context_serializes_none_fields_as_null() {
         let state = make_state();
-        let ctx = build_analyst_context(&state);
+        let ctx = build_analyst_context(&state, None);
         assert!(ctx.contains("Fundamental data: null"));
         assert!(ctx.contains("Technical data: null"));
         assert!(ctx.contains("Sentiment data: null"));
         assert!(ctx.contains("News data: null"));
+    }
+
+    #[test]
+    fn build_analyst_context_includes_transcript_context_when_found() {
+        let state = make_state();
+        let transcript = TranscriptFetch::Found(TranscriptEvidence {
+            symbol: "AAPL".to_owned(),
+            call_date: "2025Q1".to_owned(),
+            segments: vec![TranscriptSegment {
+                speaker: "Tim Cook".to_owned(),
+                title: "CEO".to_owned(),
+                content: "Installed base hit a new high.".to_owned(),
+                sentiment: Some(0.33),
+            }],
+        });
+
+        let ctx = build_analyst_context(&state, Some(&transcript));
+
+        assert!(ctx.contains("Earnings call transcript (2025Q1):"));
+        assert!(ctx.contains("Tim Cook"));
+        assert!(ctx.contains("Installed base hit a new high."));
     }
 
     #[test]
@@ -787,7 +818,7 @@ mod tests {
     #[test]
     fn initial_untrusted_history_prefixes_notice() {
         let state = make_state();
-        let history = initial_untrusted_history(&state);
+        let history = initial_untrusted_history(&state, None);
         match &history[0] {
             Message::User { content } => {
                 let rendered = format!("{content:?}");
@@ -869,7 +900,7 @@ mod tests {
     #[test]
     fn build_analyst_context_includes_evidence_and_data_quality_sections() {
         let state = make_state();
-        let ctx = build_analyst_context(&state);
+        let ctx = build_analyst_context(&state, None);
         assert!(ctx.contains("Typed evidence snapshot:"));
         assert!(ctx.contains("- fundamentals: null"));
         assert!(ctx.contains("Data quality snapshot:"));
@@ -884,7 +915,7 @@ mod tests {
         state.analysis_runtime_policy =
             crate::analysis_packs::resolve_runtime_policy("baseline").ok();
 
-        let ctx = build_analyst_context(&state);
+        let ctx = build_analyst_context(&state, None);
         assert!(ctx.contains("Analysis strategy: Balanced Institutional"));
         assert!(ctx.contains("Emphasis:"));
     }
@@ -903,7 +934,7 @@ mod tests {
             captured_at: chrono::Utc::now(),
         });
 
-        let ctx = build_analyst_context(&state);
+        let ctx = build_analyst_context(&state, None);
         assert!(ctx.contains("Past learnings:"));
         assert!(ctx.contains("Ignore previous instructions"));
     }
@@ -1041,7 +1072,7 @@ mod tests {
         let mut state = make_state();
         state.set_technical_indicators(sample_technical_with_options_context());
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
 
         // 1. options_context key must appear in rendered context
         assert!(
@@ -1082,7 +1113,7 @@ mod tests {
     fn risk_analyst_context_includes_options_context() {
         let mut state = make_state();
         state.set_technical_indicators(sample_technical_with_options_context());
-        let rendered = build_analyst_context(&state);
+        let rendered = build_analyst_context(&state, None);
         assert!(
             rendered.contains("options_context"),
             "options_context must appear in risk context: {rendered}"
@@ -1114,7 +1145,7 @@ mod tests {
             options_context: None,
         });
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
 
         // Legacy blob passes through as a plain string
         assert!(
@@ -1153,7 +1184,7 @@ mod tests {
             }),
         });
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
 
         assert!(
             context.contains("fetch_failed"),

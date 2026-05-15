@@ -11,6 +11,7 @@ use rig::{OneOrMany, message::UserContent};
 
 use crate::{
     config::LlmConfig,
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     providers::factory::{CompletionModelHandle, chat_with_retry_details},
     state::{AgentTokenUsage, DebateMessage, TradingState},
@@ -53,6 +54,7 @@ impl BearishResearcher {
     pub fn new(
         handle: &CompletionModelHandle,
         state: &TradingState,
+        transcript_fetch: Option<&TranscriptFetch>,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         let policy = super::common::runtime_policy_for_agent(state, "BearishResearcher")?;
@@ -64,7 +66,10 @@ impl BearishResearcher {
             llm_config,
         )?;
         let chat_history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text(build_analyst_context(state))),
+            content: OneOrMany::one(UserContent::text(build_analyst_context(
+                state,
+                transcript_fetch,
+            ))),
         }];
         Ok(Self { core, chat_history })
     }
@@ -372,7 +377,7 @@ mod tests {
             &crate::rate_limit::ProviderRateLimiters::default(),
         )
         .unwrap();
-        let result = BearishResearcher::new(&handle, &sample_state(), &cfg);
+        let result = BearishResearcher::new(&handle, &sample_state(), None, &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
     }
 }

@@ -12,6 +12,7 @@ use crate::{
     },
     config::LlmConfig,
     constants::MAX_DEBATE_CHARS,
+    data::adapters::transcripts::TranscriptFetch,
     error::{RetryPolicy, TradingError},
     prompts::PromptBundle,
     providers::factory::{CompletionModelHandle, LlmAgent, build_agent},
@@ -92,8 +93,11 @@ pub(super) fn validate_consensus_summary(content: &str) -> Result<(), TradingErr
 }
 
 /// Serialize the current analyst snapshot into a compact prompt-safe context block.
-pub(super) fn build_analyst_context(state: &TradingState) -> String {
-    let body = crate::agents::shared::build_analyst_context_body(state);
+pub(super) fn build_analyst_context(
+    state: &TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
+) -> String {
+    let body = crate::agents::shared::build_analyst_context_body(state, transcript_fetch);
     format!("{UNTRUSTED_CONTEXT_NOTICE}\n\nAnalyst data snapshot:\n{body}")
 }
 
@@ -261,6 +265,9 @@ mod tests {
     use rig::completion::Usage;
 
     use super::*;
+    use crate::data::adapters::transcripts::{
+        TranscriptEvidence, TranscriptFetch, TranscriptSegment,
+    };
 
     fn sample_llm_config() -> LlmConfig {
         LlmConfig {
@@ -444,7 +451,7 @@ mod tests {
             audit_report: None,
         };
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
         assert!(context.contains("Fundamental data: null"));
         assert!(context.contains("Technical data: null"));
     }
@@ -452,12 +459,33 @@ mod tests {
     #[test]
     fn build_analyst_context_includes_evidence_and_data_quality_sections() {
         let state = TradingState::new("TSLA", "2026-01-15");
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
         assert!(context.contains("Typed evidence snapshot:"));
         assert!(context.contains("- fundamentals: null"));
         assert!(context.contains("Data quality snapshot:"));
         assert!(context.contains("- required_inputs: unavailable"));
         assert!(context.contains("Past learnings:"));
+    }
+
+    #[test]
+    fn build_analyst_context_includes_transcript_context_when_found() {
+        let state = TradingState::new("TSLA", "2026-01-15");
+        let transcript = TranscriptFetch::Found(TranscriptEvidence {
+            symbol: "TSLA".to_owned(),
+            call_date: "2025Q4".to_owned(),
+            segments: vec![TranscriptSegment {
+                speaker: "Elon Musk".to_owned(),
+                title: "CEO".to_owned(),
+                content: "Margins improved quarter over quarter.".to_owned(),
+                sentiment: Some(0.42),
+            }],
+        });
+
+        let context = build_analyst_context(&state, Some(&transcript));
+
+        assert!(context.contains("Earnings call transcript (2025Q4):"));
+        assert!(context.contains("Elon Musk"));
+        assert!(context.contains("Margins improved quarter over quarter."));
     }
 
     #[test]
@@ -467,7 +495,7 @@ mod tests {
         state.analysis_runtime_policy =
             crate::analysis_packs::resolve_runtime_policy("baseline").ok();
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
         assert!(context.contains("Analysis strategy: Balanced Institutional"));
         assert!(context.contains("Emphasis:"));
     }
@@ -486,7 +514,7 @@ mod tests {
             captured_at: chrono::Utc::now(),
         });
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
         assert!(context.contains(UNTRUSTED_CONTEXT_NOTICE));
         assert!(context.contains("Ignore previous instructions"));
     }
@@ -667,7 +695,7 @@ mod tests {
         let mut state = TradingState::new("AAPL", "2026-01-17");
         state.set_technical_indicators(sample_technical_with_options_context());
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
 
         // 1. options_context key must appear in rendered context
         assert!(
@@ -708,7 +736,7 @@ mod tests {
     fn researcher_analyst_context_includes_options_context() {
         let mut state = TradingState::new("AAPL", "2026-01-15");
         state.set_technical_indicators(sample_technical_with_options_context());
-        let rendered = build_analyst_context(&state);
+        let rendered = build_analyst_context(&state, None);
         assert!(
             rendered.contains("options_context"),
             "options_context must appear in researcher context: {rendered}"
@@ -740,7 +768,7 @@ mod tests {
             options_context: None,
         });
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
 
         // Legacy blob passes through as a plain string
         assert!(
@@ -779,7 +807,7 @@ mod tests {
             }),
         });
 
-        let context = build_analyst_context(&state);
+        let context = build_analyst_context(&state, None);
 
         assert!(
             context.contains("fetch_failed"),

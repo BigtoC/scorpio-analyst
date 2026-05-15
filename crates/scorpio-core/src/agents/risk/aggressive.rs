@@ -11,6 +11,7 @@ use rig::completion::Message;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     providers::factory::{CompletionModelHandle, chat_with_retry_details},
     state::{AgentTokenUsage, RiskLevel, RiskReport, TradingState},
@@ -57,6 +58,7 @@ impl AggressiveRiskAgent {
     pub fn new(
         handle: &CompletionModelHandle,
         state: &TradingState,
+        transcript_fetch: Option<&TranscriptFetch>,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         let policy = super::common::runtime_policy_for_agent(state, "AggressiveRisk")?;
@@ -67,7 +69,7 @@ impl AggressiveRiskAgent {
             state,
             llm_config,
         )?;
-        let chat_history = initial_untrusted_history(state);
+        let chat_history = initial_untrusted_history(state, transcript_fetch);
         Ok(Self { core, chat_history })
     }
 
@@ -557,7 +559,7 @@ mod tests {
         )
         .unwrap();
         let state = sample_state_with_proposal();
-        let result = AggressiveRiskAgent::new(&handle, &state, &cfg);
+        let result = AggressiveRiskAgent::new(&handle, &state, None, &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
     }
 
