@@ -117,6 +117,32 @@ impl AnalysisRuntime {
 
         let yfinance = YFinanceClient::from_config(&cfg.rate_limits);
 
+        // Alpha Vantage transcript provider: optional. Constructed only when
+        // transcripts are enabled in config AND a key is configured. A
+        // missing key with `enable_transcripts = true` is a soft failure —
+        // the pipeline runs in degraded mode.
+        let alpha_vantage = if cfg.enrichment.enable_transcripts
+            && cfg.api.alpha_vantage_api_key.is_some()
+        {
+            let av_limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg.rate_limits)
+                .unwrap_or_else(|| SharedRateLimiter::disabled("alpha_vantage"));
+            match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter) {
+                Ok(client) => {
+                    tracing::info!("Alpha Vantage client constructed for transcript enrichment");
+                    Some(client)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to construct Alpha Vantage client; transcripts disabled"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Production callers route through `try_new` so an invalid
         // `config.analysis_pack` value surfaces as a typed `TradingError`
         // here rather than silently coercing to "no runtime policy" and
@@ -126,6 +152,7 @@ impl AnalysisRuntime {
             finnhub,
             fred,
             yfinance,
+            alpha_vantage,
             snapshot_store,
             quick_handle,
             deep_handle,
