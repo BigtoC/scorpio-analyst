@@ -122,9 +122,9 @@ pub fn baseline_pack() -> AnalysisPackManifest {
             "technical".to_owned(),
         ],
         enrichment_intent: EnrichmentIntent {
-            transcripts: false,
-            consensus_estimates: false,
-            event_news: false,
+            transcripts: true,
+            consensus_estimates: true,
+            event_news: true,
         },
         strategy_focus: StrategyFocus::Balanced,
         analysis_emphasis: "Weight all data sources equally. Use DCF and multiples for valuation \
