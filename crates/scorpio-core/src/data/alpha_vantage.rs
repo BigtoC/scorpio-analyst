@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::config::ApiConfig;
 use crate::data::adapters::transcripts::{
@@ -190,6 +190,7 @@ impl AlphaVantageClient {
     /// Classify an `Information` / `Note` body into a transcript fetch outcome.
     fn classify_information(msg: &str) -> TranscriptFetch {
         let lower = msg.to_ascii_lowercase();
+        let truncated = Self::truncate_provider_msg(msg);
         if lower.contains("call frequency")
             || lower.contains("per minute")
             || lower.contains("requests per")
@@ -197,11 +198,26 @@ impl AlphaVantageClient {
             || lower.contains("daily quota")
             || lower.contains("exceeded")
         {
+            debug!(
+                provider = "alpha_vantage",
+                body = %truncated,
+                "classified Information/Note as Throttled"
+            );
             return TranscriptFetch::Throttled;
         }
         if lower.contains("premium") || lower.contains("standard plan") {
+            debug!(
+                provider = "alpha_vantage",
+                body = %truncated,
+                "classified Information/Note as Unavailable (premium endpoint)"
+            );
             return TranscriptFetch::Unavailable;
         }
+        debug!(
+            provider = "alpha_vantage",
+            body = %truncated,
+            "classified Information/Note as NotPublished (unrecognised body)"
+        );
         TranscriptFetch::NotPublished
     }
 
@@ -211,12 +227,31 @@ impl AlphaVantageClient {
 
     /// Parse the raw JSON response.
     fn parse_response(raw: &str) -> Result<TranscriptFetch, TradingError> {
+        debug!(
+            provider = "alpha_vantage",
+            body_bytes = raw.len(),
+            "parsing Alpha Vantage response body"
+        );
+
         let resp: AlphaVantageTranscriptResponse =
-            serde_json::from_str(raw).map_err(|e| TradingError::SchemaViolation {
-                message: format!("Alpha Vantage response deserialization failed: {e}"),
+            serde_json::from_str(raw).map_err(|e| {
+                warn!(
+                    provider = "alpha_vantage",
+                    error = %e,
+                    body_bytes = raw.len(),
+                    "response deserialization failed"
+                );
+                TradingError::SchemaViolation {
+                    message: format!("Alpha Vantage response deserialization failed: {e}"),
+                }
             })?;
 
         if let Some(msg) = &resp.error_message {
+            warn!(
+                provider = "alpha_vantage",
+                error = %Self::truncate_provider_msg(msg),
+                "response contained Error Message field"
+            );
             return Err(TradingError::SchemaViolation {
                 message: format!("Alpha Vantage error: {}", Self::truncate_provider_msg(msg)),
             });
@@ -230,13 +265,37 @@ impl AlphaVantageClient {
             Some(segments) if !segments.is_empty() => {
                 let symbol = resp.symbol.unwrap_or_default().to_uppercase();
                 let call_date = resp.quarter.unwrap_or_default();
+                info!(
+                    provider = "alpha_vantage",
+                    symbol = %symbol,
+                    quarter = %call_date,
+                    segments = segments.len(),
+                    "parsed transcript response: Found"
+                );
                 Ok(TranscriptFetch::Found(TranscriptEvidence {
                     symbol,
                     call_date,
                     segments,
                 }))
             }
-            _ => Ok(TranscriptFetch::NotPublished),
+            Some(_) => {
+                debug!(
+                    provider = "alpha_vantage",
+                    symbol = ?resp.symbol,
+                    quarter = ?resp.quarter,
+                    "transcript field present but empty -> NotPublished"
+                );
+                Ok(TranscriptFetch::NotPublished)
+            }
+            None => {
+                debug!(
+                    provider = "alpha_vantage",
+                    symbol = ?resp.symbol,
+                    quarter = ?resp.quarter,
+                    "transcript field absent -> NotPublished"
+                );
+                Ok(TranscriptFetch::NotPublished)
+            }
         }
     }
 
@@ -247,7 +306,17 @@ impl AlphaVantageClient {
             TranscriptFetch::Throttled => &self.throttled_count,
             TranscriptFetch::Unavailable => &self.unavailable_count,
         };
-        counter.fetch_add(1, Ordering::Relaxed);
+        let new_count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+        debug!(
+            provider = "alpha_vantage",
+            outcome = ?outcome,
+            counter = new_count,
+            found_total = self.found_count.load(Ordering::Relaxed),
+            not_published_total = self.not_published_count.load(Ordering::Relaxed),
+            throttled_total = self.throttled_count.load(Ordering::Relaxed),
+            unavailable_total = self.unavailable_count.load(Ordering::Relaxed),
+            "recorded transcript fetch outcome"
+        );
     }
 
     fn record_schema_error(&self) {
@@ -290,10 +359,31 @@ impl TranscriptProvider for AlphaVantageClient {
         symbol: &str,
         as_of_date: &str,
     ) -> Result<TranscriptFetch, TradingError> {
+        info!(
+            provider = "alpha_vantage",
+            symbol,
+            quarter = as_of_date,
+            "fetch_transcript: invoked"
+        );
+
         validate_symbol(symbol)?;
         Self::validate_quarter(as_of_date)?;
 
+        debug!(
+            provider = "alpha_vantage",
+            limiter = %self.rate_limiter.label(),
+            "fetch_transcript: acquiring rate-limit permit"
+        );
         self.rate_limiter.acquire().await;
+
+        let request_started = std::time::Instant::now();
+        debug!(
+            provider = "alpha_vantage",
+            url = %self.build_url(),
+            symbol,
+            quarter = as_of_date,
+            "fetch_transcript: sending request"
+        );
 
         let response = self
             .http
@@ -306,22 +396,53 @@ impl TranscriptProvider for AlphaVantageClient {
             .send()
             .await;
 
+        let elapsed_ms = request_started.elapsed().as_millis() as u64;
+
         let outcome = match response {
             Ok(resp) => {
                 let status = resp.status();
+                info!(
+                    provider = "alpha_vantage",
+                    symbol,
+                    quarter = as_of_date,
+                    %status,
+                    elapsed_ms,
+                    "fetch_transcript: received HTTP response"
+                );
+
                 if status.is_success() {
                     let body = resp.text().await.map_err(|e| {
+                        warn!(
+                            provider = "alpha_vantage",
+                            symbol,
+                            quarter = as_of_date,
+                            error = %e,
+                            "fetch_transcript: response body read failed"
+                        );
                         TradingError::Config(anyhow::anyhow!("response read error: {e}"))
                     })?;
                     match Self::parse_response(&body) {
                         Ok(o) => o,
                         Err(e) => {
                             self.record_schema_error();
+                            warn!(
+                                provider = "alpha_vantage",
+                                symbol,
+                                quarter = as_of_date,
+                                error = %e,
+                                schema_error_total = self.schema_error_count.load(Ordering::Relaxed),
+                                "fetch_transcript: response parse failed (schema error)"
+                            );
                             return Err(e);
                         }
                     }
                 } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    warn!(provider = "alpha_vantage", "HTTP 429");
+                    warn!(
+                        provider = "alpha_vantage",
+                        symbol,
+                        quarter = as_of_date,
+                        "fetch_transcript: HTTP 429 -> Throttled"
+                    );
                     TranscriptFetch::Throttled
                 } else if status == reqwest::StatusCode::UNAUTHORIZED
                     || status == reqwest::StatusCode::FORBIDDEN
@@ -329,19 +450,51 @@ impl TranscriptProvider for AlphaVantageClient {
                     self.escalate_auth_failure(status);
                     TranscriptFetch::Unavailable
                 } else if status.is_server_error() {
-                    warn!(provider = "alpha_vantage", %status, "5xx response");
+                    warn!(
+                        provider = "alpha_vantage",
+                        symbol,
+                        quarter = as_of_date,
+                        %status,
+                        "fetch_transcript: 5xx response -> Unavailable"
+                    );
                     TranscriptFetch::Unavailable
                 } else {
+                    warn!(
+                        provider = "alpha_vantage",
+                        symbol,
+                        quarter = as_of_date,
+                        %status,
+                        "fetch_transcript: unexpected HTTP status -> Err"
+                    );
                     return Err(TradingError::Config(anyhow::anyhow!(
                         "Alpha Vantage HTTP error: {status}"
                     )));
                 }
             }
-            Err(e) if e.is_timeout() || e.is_connect() => TranscriptFetch::Unavailable,
+            Err(e) if e.is_timeout() || e.is_connect() => {
+                warn!(
+                    provider = "alpha_vantage",
+                    symbol,
+                    quarter = as_of_date,
+                    elapsed_ms,
+                    is_timeout = e.is_timeout(),
+                    is_connect = e.is_connect(),
+                    "fetch_transcript: network failure -> Unavailable (fail-open)"
+                );
+                TranscriptFetch::Unavailable
+            }
             Err(e) => {
                 // Scrub the URL (which contains the apikey query param) before
                 // embedding the error.
                 let scrubbed = e.without_url();
+                warn!(
+                    provider = "alpha_vantage",
+                    symbol,
+                    quarter = as_of_date,
+                    elapsed_ms,
+                    error = %scrubbed,
+                    "fetch_transcript: request error -> Err"
+                );
                 return Err(TradingError::Config(anyhow::anyhow!(
                     "Alpha Vantage request error: {scrubbed}"
                 )));
@@ -349,6 +502,14 @@ impl TranscriptProvider for AlphaVantageClient {
         };
 
         self.record_outcome(&outcome);
+        info!(
+            provider = "alpha_vantage",
+            symbol,
+            quarter = as_of_date,
+            outcome = ?outcome,
+            elapsed_ms,
+            "fetch_transcript: completed"
+        );
         Ok(outcome)
     }
 }
