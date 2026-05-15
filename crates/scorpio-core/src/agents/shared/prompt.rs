@@ -4,27 +4,13 @@ use crate::{
     state::{ImpactLevel, TradingState},
 };
 
-/// Aggregate transcript-render size cap. Bounds total bytes of segment
-/// content reaching the prompt, regardless of how many segments AV returns.
-///
-/// Calibrated as a byte budget, not a token budget — tokenization ratios
-/// vary considerably across content types. The 16 KiB cap is a conservative
-/// byte budget that bounds prompt growth.
-#[allow(dead_code)]
-pub(crate) const MAX_TRANSCRIPT_RENDERED_BYTES: usize = 16 * 1024;
-
-/// Bytes the truncation marker can add past the budget when truncation fires.
-#[allow(dead_code)]
-pub(crate) const MAX_TRUNCATION_MARKER_BYTES: usize = 64;
-
 /// Strip ASCII `<` and `>` characters before injection.
 ///
 /// **Narrow scope:** removes the *ASCII* angle-bracket pair only. Does not
-/// strip Unicode lookalikes, markdown code fences, or other delimiter
+/// strip Unicode lookalikes, Markdown code fences, or other delimiter
 /// syntaxes. This is a narrow filter against ASCII-tag prompt-boundary
 /// fragmentation (e.g., `</context>`, `<system>`), not a general
 /// prompt-injection defense.
-#[allow(dead_code)]
 fn strip_angle_brackets(s: &str) -> String {
     s.chars().filter(|c| *c != '<' && *c != '>').collect()
 }
@@ -40,17 +26,9 @@ fn strip_angle_brackets(s: &str) -> String {
 /// 2. `strip_angle_brackets` removes `<` and `>` from third-party fields
 ///    so an attacker-controlled segment can't introduce tag-like prompt
 ///    boundary tokens.
-/// 3. Aggregate bytes are bounded by `MAX_TRANSCRIPT_RENDERED_BYTES`.
 ///
 /// Semantic prompt-injection detection is deferred —
 /// `TODO(transcripts-injection-scan)`.
-///
-/// **Not yet wired into agent prompts.** The function is the contract;
-/// the planned call sites are Theme C management and Conservative Risk
-/// builders. Those agents need context access (the value lives in
-/// `KEY_TRANSCRIPT_FETCH_STATUS`, not on `TradingState`), which is the
-/// follow-on wiring task once an agent reads that key.
-#[allow(dead_code)]
 pub(crate) fn build_transcript_context(fetch: &TranscriptFetch) -> String {
     fn clean(s: &str) -> String {
         strip_angle_brackets(&sanitize_prompt_context(s))
@@ -74,10 +52,6 @@ pub(crate) fn build_transcript_context(fetch: &TranscriptFetch) -> String {
                     sentiment_str,
                     clean(&segment.content),
                 );
-                if buf.len() + line.len() > MAX_TRANSCRIPT_RENDERED_BYTES {
-                    buf.push_str("\n  […transcript truncated for prompt budget…]");
-                    break;
-                }
                 buf.push_str(&line);
             }
             buf
@@ -734,30 +708,6 @@ mod tests {
         assert!(!ctx.contains('>'));
         assert!(!ctx.contains("</context>"));
         assert!(!ctx.contains("<system>"));
-    }
-
-    #[test]
-    fn transcript_context_caps_aggregate_size() {
-        let big_segment = TranscriptSegment {
-            speaker: "A".to_owned(),
-            title: "B".to_owned(),
-            content: "x".repeat(2000),
-            sentiment: None,
-        };
-        let evidence = TranscriptEvidence {
-            symbol: "AAPL".to_owned(),
-            call_date: "2025Q1".to_owned(),
-            segments: vec![big_segment; 20],
-        };
-        let ctx = build_transcript_context(&TranscriptFetch::Found(evidence));
-        assert!(
-            ctx.len() <= MAX_TRANSCRIPT_RENDERED_BYTES + MAX_TRUNCATION_MARKER_BYTES,
-            "must respect aggregate budget + marker"
-        );
-        assert!(
-            ctx.contains("transcript truncated"),
-            "must surface truncation"
-        );
     }
 
     fn empty_state() -> TradingState {
