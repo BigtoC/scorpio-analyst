@@ -19,7 +19,9 @@ use crate::{
         AnalystId, FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst,
     },
     config::LlmConfig,
-    data::{FinnhubClient, FredClient, YFinanceClient},
+    data::{
+        FinnhubClient, FredClient, YFinanceClient, adapters::transcripts::TranscriptFetch,
+    },
     providers::factory::CompletionModelHandle,
     state::{
         AgentTokenUsage, AssetShape, DataCoverageReport, DerivedValuation, EvidenceKind,
@@ -50,6 +52,15 @@ const PROVIDER_FINNHUB: &str = "finnhub";
 const PROVIDER_FRED: &str = "fred";
 /// Fixed provider for technical data in Stage 1.
 const PROVIDER_YFINANCE: &str = "yfinance";
+/// Provider tag for earnings-call transcripts (Alpha Vantage).
+const PROVIDER_ALPHA_VANTAGE: &str = "alpha_vantage";
+/// Provider tag for SEC EDGAR catalyst feeds (8-K, etc.).
+const PROVIDER_SEC_EDGAR: &str = "sec_edgar";
+
+/// Source-tag used on `CatalystEvent.source` by [`crate::data::adapters::catalysts`]
+/// when an 8-K filing comes from SEC EDGAR. Kept in sync there manually — this is
+/// a string contract between producer and aggregator.
+const CATALYST_SOURCE_SEC_EDGAR: &str = "sec_edgar";
 
 /// Build a single-provider [`EvidenceSource`] with Stage 1 defaults.
 fn stage1_source(provider: &str, datasets: Vec<String>) -> EvidenceSource {
@@ -759,8 +770,26 @@ impl Task for AnalystSyncTask {
         let active_total = active_ids.len();
         let mut failures = Vec::new();
 
-        // Only merge for analysts the active pack declared — keeps byte-
-        // identical behaviour for the equity baseline (all four active) while
+        // Did enrichment-layer providers actually contribute to this cycle?
+        // Computed once here so we can append their `EvidenceSource`s to the
+        // existing analyst evidence records below — keeping the producer-side
+        // attribution model that the rest of the aggregator already follows.
+        let transcript_from_alpha_vantage = matches!(
+            load_transcript_fetch(&context).await.ok(),
+            Some(TranscriptFetch::Found(_))
+        );
+        let sec_edgar_contributed_catalysts = state
+            .enrichment_catalysts
+            .payload
+            .as_ref()
+            .is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event.source == CATALYST_SOURCE_SEC_EDGAR)
+            });
+
+        // Only merge for analysts the active pack declared — keeps byte-identical
+        // behaviour for the equity baseline (all four active) while
         // preventing phantom "missing analyst" failures for packs that
         // intentionally omit one. Each arm is still type-specialised because
         // each analyst writes a differently-shaped payload into state; the
@@ -794,13 +823,20 @@ impl Task for AnalystSyncTask {
                 ANALYST_SENTIMENT,
                 |state, data| state.set_market_sentiment(data),
                 |state, data| {
+                    let mut sources = vec![stage1_source(
+                        PROVIDER_FINNHUB,
+                        vec!["company_news_sentiment_inputs".to_owned()],
+                    )];
+                    if transcript_from_alpha_vantage {
+                        sources.push(stage1_source(
+                            PROVIDER_ALPHA_VANTAGE,
+                            vec!["earnings_transcript".to_owned()],
+                        ));
+                    }
                     state.set_evidence_sentiment(EvidenceRecord {
                         kind: EvidenceKind::Sentiment,
                         payload: data,
-                        sources: vec![stage1_source(
-                            PROVIDER_FINNHUB,
-                            vec!["company_news_sentiment_inputs".to_owned()],
-                        )],
+                        sources,
                         quality_flags: vec![],
                     });
                 },
@@ -815,13 +851,26 @@ impl Task for AnalystSyncTask {
                 ANALYST_NEWS,
                 |state, data| state.set_macro_news(data),
                 |state, data| {
+                    let mut sources = vec![
+                        stage1_source(PROVIDER_FINNHUB, vec!["company_news".to_owned()]),
+                        stage1_source(PROVIDER_FRED, vec!["macro_indicators".to_owned()]),
+                    ];
+                    if transcript_from_alpha_vantage {
+                        sources.push(stage1_source(
+                            PROVIDER_ALPHA_VANTAGE,
+                            vec!["earnings_transcript".to_owned()],
+                        ));
+                    }
+                    if sec_edgar_contributed_catalysts {
+                        sources.push(stage1_source(
+                            PROVIDER_SEC_EDGAR,
+                            vec!["form_8k".to_owned()],
+                        ));
+                    }
                     state.set_evidence_news(EvidenceRecord {
                         kind: EvidenceKind::News,
                         payload: data,
-                        sources: vec![
-                            stage1_source(PROVIDER_FINNHUB, vec!["company_news".to_owned()]),
-                            stage1_source(PROVIDER_FRED, vec!["macro_indicators".to_owned()]),
-                        ],
+                        sources,
                         quality_flags: vec![],
                     });
                 },
