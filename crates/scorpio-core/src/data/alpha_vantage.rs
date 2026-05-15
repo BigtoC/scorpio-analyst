@@ -233,18 +233,17 @@ impl AlphaVantageClient {
             "parsing Alpha Vantage response body"
         );
 
-        let resp: AlphaVantageTranscriptResponse =
-            serde_json::from_str(raw).map_err(|e| {
-                warn!(
-                    provider = "alpha_vantage",
-                    error = %e,
-                    body_bytes = raw.len(),
-                    "response deserialization failed"
-                );
-                TradingError::SchemaViolation {
-                    message: format!("Alpha Vantage response deserialization failed: {e}"),
-                }
-            })?;
+        let resp: AlphaVantageTranscriptResponse = serde_json::from_str(raw).map_err(|e| {
+            warn!(
+                provider = "alpha_vantage",
+                error = %e,
+                body_bytes = raw.len(),
+                "response deserialization failed"
+            );
+            TradingError::SchemaViolation {
+                message: format!("Alpha Vantage response deserialization failed: {e}"),
+            }
+        })?;
 
         if let Some(msg) = &resp.error_message {
             warn!(
