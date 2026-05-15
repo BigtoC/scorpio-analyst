@@ -28,7 +28,7 @@ pub enum TradeAction {
 }
 
 /// Coarse trade-direction bucket used for same-direction comparisons that
-/// must collapse `Buy`/`Underweight` and `Sell`/`Overweight` into a single
+/// must collapse `Buy`/`Overweight` and `Sell`/`Underweight` into a single
 /// concept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TradeDirection {
@@ -40,12 +40,12 @@ pub enum TradeDirection {
 impl TradeAction {
     /// Map an action to its directional bucket.
     ///
-    /// `Buy` and `Underweight` are both `Bullish`; `Sell` and `Overweight`
+    /// `Buy` and `Overweight` are both `Bullish`; `Sell` and `Underweight`
     /// are both `Bearish`; `Hold` is `Neutral`.
     pub fn direction(&self) -> TradeDirection {
         match self {
-            TradeAction::Buy | TradeAction::Underweight => TradeDirection::Bullish,
-            TradeAction::Sell | TradeAction::Overweight => TradeDirection::Bearish,
+            TradeAction::Buy | TradeAction::Overweight => TradeDirection::Bullish,
+            TradeAction::Sell | TradeAction::Underweight => TradeDirection::Bearish,
             TradeAction::Hold => TradeDirection::Neutral,
         }
     }
