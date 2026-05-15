@@ -259,6 +259,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            None,
             catalyst_provider,
             snapshot_store,
             quick_handle,
