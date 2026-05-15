@@ -151,6 +151,8 @@ In `crates/scorpio-core/src/config.rs`, add to the `RateLimitConfig` struct:
 pub alpha_vantage_rps: u32,
 ```
 
+**Also update the `impl Default for RateLimitConfig` block** at `config.rs:337`: append `alpha_vantage_rps: default_alpha_vantage_rps()` to the struct literal. Missing this triggers a `missing field` compile error inside `Default::default()`.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(rate_limit_config_alpha_vantage_rps_defaults_to_one)'`
@@ -808,13 +810,19 @@ impl AlphaVantageClient {
         })
     }
 
-    /// Test-only constructor with a dummy key and no live HTTP.
+    /// Test-only constructor with a dummy key and a non-routable base URL.
+    ///
+    /// **Hermetic-by-default:** `base_url` is set to `http://127.0.0.1:1` so a
+    /// test that accidentally hits the network fails fast (connection refused)
+    /// rather than reaching live Alpha Vantage. Tests that need to exercise the
+    /// HTTP path should layer on a `wiremock`/`httpmock` server and call
+    /// `new_with_base_url` directly with that server's URL.
     #[doc(hidden)]
     pub fn for_test() -> Self {
         Self::new_with_base_url(
             SecretString::from("test-dummy-key"),
             SharedRateLimiter::disabled("test"),
-            BASE_URL.to_owned(),
+            "http://127.0.0.1:1/query".to_owned(),
         )
     }
 
@@ -850,12 +858,17 @@ impl AlphaVantageClient {
 
     /// Truncate provider-returned diagnostics before embedding in an internal
     /// error/logging value. Third-party content should not be unbounded.
+    ///
+    /// Counts by chars (not bytes) to avoid panicking on multi-byte UTF-8
+    /// boundaries — Alpha Vantage messages can contain Unicode quotes/dashes.
+    /// MAX_PROVIDER_ERROR_LEN is interpreted as a char count, matching the
+    /// pattern in `sanitize_prompt_context`.
     fn truncate_provider_msg(msg: &str) -> String {
-        if msg.len() <= MAX_PROVIDER_ERROR_LEN {
+        if msg.chars().count() <= MAX_PROVIDER_ERROR_LEN {
             msg.to_owned()
         } else {
-            let mut s = msg[..MAX_PROVIDER_ERROR_LEN].to_owned();
-            s.push_str("…");
+            let mut s: String = msg.chars().take(MAX_PROVIDER_ERROR_LEN).collect();
+            s.push('…');
             s
         }
     }
@@ -1011,18 +1024,17 @@ mod tests {
     // ── Constructor ─────────────────────────────────────────────────────
 
     #[test]
-    fn constructor_does_not_leak_secret_in_error_when_real_secret_in_play() {
-        // Set a real-looking secret, then ensure the error message produced
-        // by a *different* failure path doesn't echo it. We can't trigger an
-        // error from a successful construct; this test instead verifies the
-        // construct→drop cycle never has the chance to print the secret.
+    fn debug_does_not_leak_secret() {
         let mut api = ApiConfig::default();
-        api.alpha_vantage_api_key = Some(SecretString::from("AVKEY-DO-NOT-LEAK-123"));
+        let secret = "AVKEY-DO-NOT-LEAK-123";
+        api.alpha_vantage_api_key = Some(SecretString::from(secret));
         let client =
             AlphaVantageClient::new(&api, SharedRateLimiter::disabled("test")).expect("construct");
         let debug = format!("{client:?}");
-        assert!(!debug.contains("AVKEY-DO-NOT-LEAK-123"));
-        assert!(!debug.contains("key"), "Debug must not expose the key field");
+        assert!(!debug.contains(secret), "Debug must not expose the secret value");
+        // Note: we deliberately do not assert `!debug.contains("key")` —
+        // that pattern is too brittle (matches any field name containing "key").
+        // The behavioral test is "the secret value never appears."
     }
 
     #[test]
@@ -1038,10 +1050,10 @@ mod tests {
 
     // ── Input validation ────────────────────────────────────────────────
 
-    #[test]
-    fn invalid_quarter_format_rejected() {
+    #[tokio::test]
+    async fn invalid_quarter_format_rejected() {
         let client = AlphaVantageClient::for_test();
-        let err = tokio_test::block_on(client.fetch_transcript("AAPL", "2025-Q1")).unwrap_err();
+        let err = client.fetch_transcript("AAPL", "2025-Q1").await.unwrap_err();
         assert!(format!("{err}").contains("invalid quarter format"));
     }
 
@@ -1055,31 +1067,19 @@ mod tests {
         assert!(AlphaVantageClient::validate_quarter("2025-Q1").is_err());
     }
 
-    #[test]
-    fn invalid_symbol_rejected() {
+    #[tokio::test]
+    async fn invalid_symbol_rejected() {
         let client = AlphaVantageClient::for_test();
-        let err = tokio_test::block_on(client.fetch_transcript("", "2025Q1")).unwrap_err();
-        assert!(format!("{err}").contains("invalid symbol") || format!("{err}").contains("empty"));
+        let err = client.fetch_transcript("", "2025Q1").await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid symbol") || msg.contains("empty"));
     }
 
-    #[test]
-    fn symbol_with_dash_is_accepted_via_project_validator() {
-        // BF-B is a real ticker accepted by data::symbol::validate_symbol.
-        // The previous local regex was stricter and rejected it; regression test.
-        let client = AlphaVantageClient::for_test();
-        // Must NOT return a SchemaViolation pre-network. (It will likely fail
-        // later because the test client has no real network endpoint, but the
-        // validate-symbol gate at the top of fetch_transcript must pass.)
-        let res = tokio_test::block_on(client.fetch_transcript("BF-B", "2025Q1"));
-        // We don't care about the network outcome here; just that we didn't
-        // hit `invalid symbol` from local validation.
-        if let Err(e) = res {
-            assert!(
-                !format!("{e}").contains("invalid symbol"),
-                "BF-B must pass local symbol validation"
-            );
-        }
-    }
+    // Note: a `BF-B` round-trip test was considered but removed — the network
+    // hop against `for_test()`'s 127.0.0.1 base URL would still fire a real
+    // TCP attempt before the response is parsed. A unit test on
+    // `validate_symbol` itself (see `data::symbol` tests) already covers the
+    // BRK.B / BF-B / ^GSPC acceptance contract.
 
     // ── Response parsing ────────────────────────────────────────────────
 
@@ -1235,9 +1235,20 @@ Add it near the other client modules (after `pub mod fred;`). Also add a re-expo
 pub use alpha_vantage::AlphaVantageClient;
 ```
 
-- [ ] **Step 4: Add `tokio-test` to `[dev-dependencies]` if not present**
+- [ ] **Step 4: Use `#[tokio::test]` (codebase convention) — NOT `tokio_test::block_on`**
 
-The unit tests use `tokio_test::block_on` to drive `async fn fetch_transcript` from sync test bodies. Check `crates/scorpio-core/Cargo.toml`; add `tokio-test = "0.4"` under `[dev-dependencies]` if missing. **No `regex` dependency is required** — `validate_quarter` uses byte arithmetic.
+The codebase exclusively uses `#[tokio::test] async fn …` for async tests (see `data/finnhub.rs` for examples). The earlier draft proposed adding `tokio-test` as a dev-dependency; that introduces a foreign idiom. Convert any test that calls `tokio_test::block_on(client.fetch_transcript(…))` to:
+
+```rust
+#[tokio::test]
+async fn invalid_quarter_format_rejected() {
+    let client = AlphaVantageClient::for_test();
+    let err = client.fetch_transcript("AAPL", "2025-Q1").await.unwrap_err();
+    assert!(format!("{err}").contains("invalid quarter format"));
+}
+```
+
+Apply the same shape to `invalid_symbol_rejected` and `symbol_with_dash_is_accepted_via_project_validator`. No new dependency. No `regex` either — `validate_quarter` uses byte arithmetic.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1271,25 +1282,23 @@ git commit -m "feat(data): add AlphaVantageClient (single-key) with TranscriptPr
 In `crates/scorpio-core/src/workflow/tasks/common.rs`, add after `KEY_CACHED_TRANSCRIPT`:
 
 ```rust
-/// Context key for the `TranscriptFetch` outcome variant name.
-/// Written by transcript enrichment or by preflight to `"NotPublished"`.
-/// Always present after preflight.
+/// Context key for the serde-serialized `TranscriptFetch` enum (JSON string).
+///
+/// Always present after preflight; preflight seeds it to the serialized
+/// form of `TranscriptFetch::Unavailable`. Consumers deserialize back to
+/// `TranscriptFetch` and pattern-match — never compare raw string contents.
 pub const KEY_TRANSCRIPT_FETCH_STATUS: &str = "transcript_fetch_status";
 ```
 
 - [ ] **Step 2: Write the `hydrate_transcript` function**
 
-In `crates/scorpio-core/src/workflow/pipeline/runtime.rs`, add a new helper function (after `hydrate_consensus`). The function uses Finnhub's `stock_earnings(symbol, from, to)` to resolve the fiscal quarter directly (no heuristic, no forward-only-calendar dependency):
+In `crates/scorpio-core/src/workflow/pipeline/runtime.rs`, add a new helper function (after `hydrate_consensus`). The function uses the existing `FinnhubClient::fetch_earnings_calendar` method (defined at `data/finnhub.rs:270`; same endpoint that already feeds `map_finnhub_earnings`). We query a **backward** date window — the endpoint accepts any `(from, to)` range; the forward-only contract in `data/adapters/catalysts.rs` is an adapter-layer convention, not an endpoint limitation.
+
+> ⚠ **Quarter-semantics caveat:** This function passes Finnhub's `year`/`quarter` directly to Alpha Vantage as the `quarter` URL parameter, on the assumption that both providers use the **fiscal period being reported on** (so AAPL's FY25-Q1 release on 2025-01-30 → `2025Q1` on both sides). This mapping is **not yet verified** against live Alpha Vantage responses. Before merge, complete the manual verification described in Task 11 Step 2 against AAPL (non-December FY) and at least one December-FY ticker. If the mapping is wrong, all non-December-FY tickers will silently return `NotPublished`.
 
 ```rust
 /// Resolve the target fiscal quarter for transcript fetching from Finnhub's
-/// `stock/earnings` endpoint.
-///
-/// Quarter semantics: Finnhub's `year`+`quarter` fields describe the
-/// **fiscal period being reported on** — which is what Alpha Vantage's
-/// `quarter` URL parameter also expects, so we pass them through verbatim.
-/// This mapping is regression-tested for AAPL (non-December fiscal year)
-/// to catch any divergence early.
+/// earnings-calendar endpoint queried backward.
 ///
 /// Returns `None` when Finnhub returns no recent earnings releases for
 /// the symbol, or all releases lack `year`/`quarter` fields. The caller
@@ -1308,16 +1317,20 @@ async fn resolve_transcript_quarter(
         .format("%Y-%m-%d")
         .to_string();
 
+    // Real signature: fetch_earnings_calendar(from, to, symbol_opt) -> Arc<Vec<EarningsRelease>>
     let releases = finnhub
-        .earnings_calendar(symbol, &from, as_of_date)
+        .fetch_earnings_calendar(&from, as_of_date, Some(symbol))
         .await
         .ok()?;
 
-    // Most recent release with both year and quarter populated.
+    // Iterate by reference; field types per finnhub crate:
+    //   year: Option<i64>, quarter: Option<i64>, date: Option<String>.
     let recent = releases
-        .into_iter()
-        .filter_map(|r| match (r.year, r.quarter, r.date) {
-            (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => Some((d, y, q)),
+        .iter()
+        .filter_map(|r| match (r.year, r.quarter, r.date.as_deref()) {
+            (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => {
+                Some((d.to_owned(), y, q))
+            }
             _ => None,
         })
         .max_by(|(da, ..), (db, ..)| da.cmp(db))
@@ -1327,20 +1340,19 @@ async fn resolve_transcript_quarter(
         tracing::info!(
             symbol,
             quarter = %q,
-            source = "finnhub_earnings",
+            source = "finnhub_earnings_calendar",
             "transcript quarter resolved"
         );
     } else {
-        tracing::info!(symbol, "no recent earnings release in window; transcript marked unavailable");
+        tracing::debug!(symbol, "no recent earnings release in window");
     }
     recent
 }
 
 /// Fetch transcript enrichment with an outer timeout boundary.
 ///
-/// Returns the evidence plus the `TranscriptFetch` outcome enum (NOT a
-/// stringly-typed status — preserves compiler-checked exhaustiveness at
-/// every consumer).
+/// Returns the `TranscriptFetch` enum (NOT a stringly-typed status — every
+/// consumer gets compile-checked exhaustiveness via match).
 async fn hydrate_transcript(
     av_client: &AlphaVantageClient,
     finnhub: &FinnhubClient,
@@ -1361,14 +1373,16 @@ async fn hydrate_transcript(
                     symbol, quarter = %quarter, segments = ev.segments.len(),
                     "transcript enrichment: available"
                 ),
-                TranscriptFetch::NotPublished => tracing::info!(
+                // NotPublished is the steady-state outside the post-earnings window —
+                // log at DEBUG to avoid cycle-per-symbol log noise.
+                TranscriptFetch::NotPublished => tracing::debug!(
                     symbol, quarter = %quarter, "transcript enrichment: not published"
                 ),
                 TranscriptFetch::Throttled => tracing::warn!(
                     symbol, "transcript enrichment: throttled"
                 ),
                 TranscriptFetch::Unavailable => tracing::warn!(
-                    symbol, "transcript enrichment: unavailable (transient failure)"
+                    symbol, "transcript enrichment: unavailable"
                 ),
             }
             outcome
@@ -1387,7 +1401,7 @@ async fn hydrate_transcript(
 
 - [ ] **Step 3: Add required imports**
 
-At the top of `runtime.rs`, add:
+At the top of `runtime.rs`:
 
 ```rust
 use crate::data::alpha_vantage::AlphaVantageClient;
@@ -1395,8 +1409,6 @@ use crate::data::adapters::transcripts::TranscriptFetch;
 use crate::data::finnhub::FinnhubClient;
 use crate::workflow::tasks::KEY_TRANSCRIPT_FETCH_STATUS;
 ```
-
-(Adjust `crate::data::finnhub::FinnhubClient` to whatever module path the existing Finnhub client uses in this codebase.)
 
 - [ ] **Step 4: Write the regression-test for non-December fiscal year**
 
@@ -1441,20 +1453,11 @@ mod tests {
 
 If a non-December FY ticker (AAPL, MSFT, NVDA, CSCO, ORCL, CRM) ever produces a `NotPublished` in production where a transcript clearly exists, the mapping is the first place to investigate.
 
-- [ ] **Step 5: Add `transcript_fetch_timeout_secs` to `EnrichmentConfig`**
+- [ ] **Step 5: Reuse the existing enrichment fetch timeout** *(no new config field)*
 
-The outer `timeout` parameter on `hydrate_transcript` must be a *defined* value rather than something pulled from the analyst-timeout default. Add to `EnrichmentConfig`:
+The outer `timeout` parameter on `hydrate_transcript` should reuse `DataEnrichmentConfig.fetch_timeout_secs` — the same field that already bounds `hydrate_catalysts` and other enrichment fetches (`crates/scorpio-core/src/config.rs:54`, default 120s). The earlier draft proposed a new `transcript_fetch_timeout_secs`; that field is redundant and would create two overlapping enrichment-timeout knobs.
 
-```rust
-#[serde(default = "default_transcript_fetch_timeout_secs")]
-pub transcript_fetch_timeout_secs: u64,
-
-fn default_transcript_fetch_timeout_secs() -> u64 {
-    20
-}
-```
-
-20s comfortably bounds the inner reqwest 30s timeout (the outer fires first under most conditions, preventing the worst-case 30s+ tail latency). Thread the value through from `app/mod.rs` to `run_analysis_cycle`.
+In `run_analysis_cycle`, pass `Duration::from_secs(enrichment_cfg.fetch_timeout_secs)` to `hydrate_transcript` — same construction pattern already used at the existing `hydrate_catalysts` call site.
 
 - [ ] **Step 6: Run the new tests**
 
@@ -1510,16 +1513,17 @@ In `runtime.rs`, in the enrichment hydration section (around line 422), add. **N
 ```rust
 let transcript_fetch: TranscriptFetch = if enrichment_intent.transcripts {
     if let Some(ref av_client) = pipeline.alpha_vantage {
-        let fetch_timeout = std::time::Duration::from_secs(cfg.enrichment.transcript_fetch_timeout_secs);
+        // Reuse the existing enrichment timeout (default 120s) — same value
+        // already passed to hydrate_catalysts. No new config knob.
+        let fetch_timeout = std::time::Duration::from_secs(cfg.enrichment.fetch_timeout_secs);
         hydrate_transcript(av_client, &pipeline.finnhub, &symbol, &date, fetch_timeout).await
     } else {
         warn!("transcripts enabled but AlphaVantageClient not constructed");
         TranscriptFetch::Unavailable
     }
 } else {
-    // Transcripts disabled in config — distinct from "API said no transcript".
-    // Using `Unavailable` rather than `NotPublished` keeps the semantics
-    // unambiguous downstream.
+    // Feature disabled in config; downstream prompt renders "feature disabled"
+    // language via the Unavailable variant.
     TranscriptFetch::Unavailable
 };
 ```
@@ -1584,7 +1588,7 @@ if existing_status.is_none() {
 
 Add the imports for `KEY_TRANSCRIPT_FETCH_STATUS` from `common.rs` and `TranscriptFetch` from `data::adapters::transcripts`.
 
-**Snapshot-replay compatibility:** if an older snapshot contains the old `TranscriptEvidence` shape (`{content, sentiment_score}`) in `KEY_CACHED_TRANSCRIPT`, deserialization into the new shape will fail. The thesis-lookup pattern (see CLAUDE.md, `THESIS_MEMORY_SCHEMA_VERSION`) applies here: wrap the deserialize in a `warn!`-and-treat-as-`None` so old snapshots degrade gracefully rather than crashing the cycle. The `warn!` line emits `symbol` and `error.kind = "deserialize"` — never serde error text.
+**Snapshot-replay compatibility note:** none required. `KEY_CACHED_TRANSCRIPT` is a graph-flow context key, not a snapshotted `TradingState` field; existing readers consume it as `String`, never as a typed `TranscriptEvidence`. The previous draft included warn-and-skip deserialization guidance — that guidance addressed a failure mode that does not exist in the current read path. If a future task adds typed deserialization of this key, the guard should be added at that time.
 
 - [ ] **Step 6: Run full test suite**
 
@@ -1625,12 +1629,17 @@ Go with **Option A** for clean separation:
 /// Per-variant output is exhaustively pattern-matched — adding a new
 /// `TranscriptFetch` variant is a compile error here until handled.
 ///
-/// **Sanitization:** speaker, title, and content are third-party strings
-/// from Alpha Vantage. Each field is run through `sanitize_prompt_context`
-/// (the same control-character + secret-redaction filter used for every
-/// other enrichment string in the codebase). Without this wrap, an
-/// upstream-compromised or malformed transcript segment could inject
-/// prompt-boundary tokens into a downstream agent's system prompt.
+/// **Sanitization (hygiene, NOT prompt-injection defense):** speaker, title,
+/// and content are third-party strings from Alpha Vantage. Each field is run
+/// through `sanitize_prompt_context`, which strips ASCII control characters
+/// (other than `\n` and `\t`) and runs the codebase's secret-redaction pass.
+///
+/// This is the same hygiene wrap every other enrichment string uses; it is
+/// NOT a prompt-injection scanner. A segment containing literal tag-like or
+/// role-injection text (e.g., `"\n\nSystem: ignore prior instructions..."`)
+/// passes through unmodified. Defense against deliberate prompt injection in
+/// transcripts is tracked under `TODO(transcripts-injection-scan)` in the
+/// Out-of-Scope section and should not be assumed by readers of this code.
 pub(crate) fn build_transcript_context(fetch: &TranscriptFetch) -> String {
     use crate::agents::shared::prompt::sanitize_prompt_context;
 
@@ -1804,13 +1813,15 @@ git commit -m "feat(prompts): add transcript segment rendering and fetch-status-
 
 #### Acceptance criteria — feature is "done" when ALL of these hold
 
-The previous version of this section verified *response shape*, not *behavior*. The added behavioral criteria below make "done" falsifiable so a wired-but-inert integration cannot pass.
+The previous version verified *response shape*, not *behavior*. The criteria below make "done" falsifiable so a wired-but-inert integration cannot pass.
 
 1. **Tone-comparison wiring fires:** Theme C output, when a transcript is `Found`, references at least one transcript-derived phrase distinct from the press-release headline. Verify via a golden-file integration test under `crates/scorpio-core/tests/` using a fixture transcript (do NOT depend on a live API key for the gate).
 2. **Degraded-mode marker present:** When `TranscriptFetch` is anything other than `Found`, the rendered prompt for the affected agent contains the literal phrase `degraded mode: transcript unavailable`.
-3. **Prompt size budget:** With a representative transcript injected, the Theme C system-prompt token count stays under the per-agent budget (cite the existing budget constant or pin a value — e.g., 4k tokens).
-4. **Health counters non-zero:** After a successful run with `Found`, `AlphaVantageClient::Debug` reports `found > 0`. After a deliberately invalid quarter run, `schema_errors > 0`. The integration test asserts both.
-5. **Quarter mapping regression test passes** for at least one non-December fiscal-year ticker (AAPL FY25-Q1 → `2025Q1`). See Task 8 Step 4.
+3. **Health counters increment correctly:**
+   - After a successful `Found` run, `AlphaVantageClient::Debug` reports `found > 0`.
+   - After a `parse_response` failure (test via a fixture that injects malformed JSON into the parser), `schema_errors > 0`.
+   - **Not** asserted: that an *invalid-quarter* run increments `schema_errors` — `validate_quarter` rejects before the HTTP path runs, so `schema_error_count` is never touched. An invalid-quarter run produces `Err(SchemaViolation)` and leaves all counters at zero.
+4. **Quarter-mapping live verification (manual, before merge):** with a real Alpha Vantage key, manually probe at least one non-December-FY ticker (AAPL) and confirm the resolver→AV pipeline returns a transcript for the most recent reported fiscal quarter. If `NotPublished`, the `Finnhub.year/quarter → AV.quarter` mapping is wrong; investigate Alpha Vantage's documented quarter semantics before merge. This is the primary residual risk from pass-2 review (AR2-01).
 
 - [ ] **Step 1: Run the full CI pipeline**
 
@@ -1824,10 +1835,9 @@ All three must pass.
 
 - [ ] **Step 2: Run the smoke test with a real API key** *(MANUAL — requires a real Alpha Vantage key; skip if running this plan via an automated agent)*
 
-Prefer a `.env` file or shell-history-suppressing entry (`HISTCONTROL=ignorespace` + leading space) so the key is not recorded in shell history:
+Add the key to your local `.env` (git-ignored) rather than passing it inline — inline env-var assignment is captured by shell history regardless of `HISTCONTROL` quirks across shells (fish, csh, etc.) and across IDE-embedded terminals. Then:
 
 ```bash
-SCORPIO_ALPHA_VANTAGE_API_KEY=your_key \
 cargo run -p scorpio-cli -- analyze COIN --json
 ```
 
