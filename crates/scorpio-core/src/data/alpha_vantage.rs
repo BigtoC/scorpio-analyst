@@ -173,10 +173,15 @@ impl AlphaVantageClient {
     /// Counts by chars (not bytes) to avoid panicking on multi-byte UTF-8
     /// boundaries.
     fn truncate_provider_msg(msg: &str) -> String {
-        if msg.chars().count() <= MAX_PROVIDER_ERROR_LEN {
-            msg.to_owned()
+        let sanitized: String = msg
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect();
+        let collapsed = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.chars().count() <= MAX_PROVIDER_ERROR_LEN {
+            collapsed
         } else {
-            let mut s: String = msg.chars().take(MAX_PROVIDER_ERROR_LEN).collect();
+            let mut s: String = collapsed.chars().take(MAX_PROVIDER_ERROR_LEN).collect();
             s.push('…');
             s
         }
@@ -492,6 +497,20 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.len() < 500, "provider message must be bounded");
         assert!(msg.contains("Alpha Vantage error"));
+    }
+
+    #[test]
+    fn parse_error_message_strips_control_characters() {
+        let json = r#"{"Error Message": "bad key\nnext\u0007line"}"#;
+        let err = AlphaVantageClient::parse_response(json).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            !msg.chars().any(char::is_control),
+            "provider message must be log-safe: {msg:?}"
+        );
+        assert!(msg.contains("bad key"));
+        assert!(msg.contains("next"));
+        assert!(msg.contains("line"));
     }
 
     #[test]
