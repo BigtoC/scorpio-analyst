@@ -106,7 +106,7 @@ const ANALYTICAL_THEME_PORT_COVERAGE: &[ThemeCoverageCase] = &[
         ],
         required_markers: &[
             "Management Commentary Red Flags",
-            "degraded mode: headline/summary only",
+            "degraded mode: transcript unavailable",
         ],
     },
     ThemeCoverageCase {

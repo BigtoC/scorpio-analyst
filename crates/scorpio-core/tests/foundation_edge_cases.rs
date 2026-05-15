@@ -13,6 +13,7 @@ fn api_config_debug_never_leaks_secrets() {
     let api = ApiConfig {
         finnhub_api_key: Some(SecretString::from("ct_finnhub_key")),
         fred_api_key: None,
+        alpha_vantage_api_key: None,
     };
     let debug = format!("{api:?}");
 
@@ -20,8 +21,8 @@ fn api_config_debug_never_leaks_secrets() {
     assert!(!debug.contains("ct_finnhub_key"));
     // The one present key should show [REDACTED]
     assert_eq!(debug.matches("[REDACTED]").count(), 1);
-    // The absent key should show <not set>
-    assert_eq!(debug.matches("<not set>").count(), 1);
+    // The two absent keys should each show <not set>
+    assert_eq!(debug.matches("<not set>").count(), 2);
 }
 
 #[test]
