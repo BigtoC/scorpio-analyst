@@ -4,7 +4,7 @@ use crate::{
     agents::{risk::DualRiskStatus, shared::extract_json_object},
     constants::{MAX_RATIONALE_CHARS, MAX_RAW_RESPONSE_CHARS},
     error::TradingError,
-    state::{Decision, ExecutionStatus, TradeAction, TradingState},
+    state::{Decision, ExecutionStatus, TradeAction, TradeDirection, TradingState},
 };
 
 #[derive(Debug, Deserialize)]
@@ -36,8 +36,10 @@ pub(super) fn parse_and_validate_execution_status(
 
     let cleaned = extract_json_object("FundManager", raw_output)?;
     let parsed: ExecutionStatusResponse =
-        serde_json::from_str(&cleaned).map_err(|_| TradingError::SchemaViolation {
-            message: "FundManager: response could not be parsed as ExecutionStatus".to_owned(),
+        serde_json::from_str(&cleaned).map_err(|err| TradingError::SchemaViolation {
+            message: format!(
+                "FundManager: response could not be parsed as ExecutionStatus ({err})"
+            ),
         })?;
 
     let mut status = ExecutionStatus {
@@ -169,17 +171,22 @@ fn validate_dual_risk_rationale(
     match dual_risk_status {
         DualRiskStatus::Absent => return Ok(()),
         DualRiskStatus::Present => {
-            // Same-direction rejection is invalid (e.g. trader proposed Buy, FM rejected Buy).
-            // Exception: trader proposed Hold (no defined "opposite direction").
+            // Same-direction rejection is invalid (e.g. trader proposed Buy, FM rejected
+            // with a bullish action like Buy or Overweight). Direction is compared via
+            // `TradeAction::direction` so the Buy/Overweight pair and the Sell/Underweight
+            // pair both collapse into a single bullish/bearish bucket.
+            // Exception: either side resolves to Neutral (Hold) — no defined opposite.
+            let status_dir = status.action.direction();
+            let trader_dir = trader_proposal_action.direction();
             if status.decision == Decision::Rejected
-                && status.action != TradeAction::Hold
-                && trader_proposal_action != TradeAction::Hold
-                && status.action == trader_proposal_action
+                && status_dir != TradeDirection::Neutral
+                && trader_dir != TradeDirection::Neutral
+                && status_dir == trader_dir
             {
                 return Err(TradingError::SchemaViolation {
                     message: format!(
-                        "FundManager: dual-risk escalation present — Rejected+{:?} is invalid when trader also proposed {:?} (same-direction rejection)",
-                        status.action, trader_proposal_action
+                        "FundManager: dual-risk escalation present — Rejected+{:?} is invalid when trader proposed {:?} (same-direction rejection: both {:?})",
+                        status.action, trader_proposal_action, status_dir
                     ),
                 });
             }
@@ -417,5 +424,114 @@ mod tests {
             suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
+    }
+
+    #[test]
+    fn overweight_approved_passes_overridden_prefix_under_dual_risk_present() {
+        // Overweight is a directional (non-Hold) approval, so under dual-risk Present
+        // the required rationale prefix is the "overridden" form.
+        let status = make_status(
+            TradeAction::Overweight,
+            Decision::Approved,
+            "Dual-risk escalation: overridden because the evidence still warrants graded exposure.",
+        );
+        assert!(
+            validate_dual_risk_rationale(&status, DualRiskStatus::Present, TradeAction::Buy)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn underweight_approved_passes_overridden_prefix_under_dual_risk_present() {
+        let status = make_status(
+            TradeAction::Underweight,
+            Decision::Approved,
+            "Dual-risk escalation: overridden because conviction is too low for a full exit.",
+        );
+        assert!(
+            validate_dual_risk_rationale(&status, DualRiskStatus::Present, TradeAction::Sell)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn dual_risk_rejects_same_direction_when_fm_uses_graded_variant_against_buy_proposal() {
+        // Trader proposed Buy (Bullish). FM rejected with a graded directional action
+        // that maps to the same direction as Buy. The same-direction-rejection rule
+        // must catch this regardless of whether FM uses the full Buy or graded variant.
+        // The graded variant is whichever of Overweight/Underweight maps to Bullish
+        // under the current TradeAction::direction() table.
+        use crate::state::{TradeAction as A, TradeDirection};
+        let graded_bullish = if A::Overweight.direction() == TradeDirection::Bullish {
+            A::Overweight
+        } else {
+            A::Underweight
+        };
+
+        let status = make_status(
+            graded_bullish.clone(),
+            Decision::Rejected,
+            "Dual-risk escalation: upheld because the trader's bullish thesis is unsupported.",
+        );
+        let err = validate_dual_risk_rationale(&status, DualRiskStatus::Present, TradeAction::Buy)
+            .expect_err("same-direction rejection should be blocked even with graded variants");
+        match err {
+            TradingError::SchemaViolation { message } => {
+                assert!(
+                    message.contains("same-direction rejection"),
+                    "error must mention same-direction rejection: {message}"
+                );
+            }
+            other => panic!("expected SchemaViolation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dual_risk_allows_opposite_direction_rejection_with_graded_variant() {
+        // Trader proposed Buy (Bullish). FM rejected with the graded variant that maps
+        // to Bearish under the current direction() table — that is the opposite
+        // direction, so the same-direction rule does not fire.
+        use crate::state::{TradeAction as A, TradeDirection};
+        let graded_bearish = if A::Underweight.direction() == TradeDirection::Bearish {
+            A::Underweight
+        } else {
+            A::Overweight
+        };
+
+        let status = make_status(
+            graded_bearish,
+            Decision::Rejected,
+            "Dual-risk escalation: upheld because the evidence supports a bearish posture.",
+        );
+        assert!(
+            validate_dual_risk_rationale(&status, DualRiskStatus::Present, TradeAction::Buy)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn trade_action_direction_buckets_are_partitioned() {
+        // Every variant must resolve to exactly one direction bucket. This test pins
+        // the partition: each of the five variants maps to one of three buckets, and
+        // each bucket has at least one variant. Mapping details (which graded variant
+        // belongs to which bucket) are policy-defined in `TradeAction::direction` and
+        // intentionally not asserted here — direction-sensitive tests above pull the
+        // graded variant out of the live table to stay aligned.
+        use crate::state::{TradeAction as A, TradeDirection};
+        let mut bullish = 0u8;
+        let mut bearish = 0u8;
+        let mut neutral = 0u8;
+        for action in [A::Buy, A::Sell, A::Hold, A::Overweight, A::Underweight] {
+            match action.direction() {
+                TradeDirection::Bullish => bullish += 1,
+                TradeDirection::Bearish => bearish += 1,
+                TradeDirection::Neutral => neutral += 1,
+            }
+        }
+        assert_eq!(bullish + bearish + neutral, 5);
+        assert!(bullish >= 1 && bearish >= 1 && neutral >= 1);
+        assert_eq!(A::Hold.direction(), TradeDirection::Neutral);
+        assert_eq!(A::Buy.direction(), TradeDirection::Bullish);
+        assert_eq!(A::Sell.direction(), TradeDirection::Bearish);
     }
 }
