@@ -12,25 +12,25 @@
 
 ## File Structure
 
-| File                                                                                    | Action     | Responsibility                                                                                                                            |
-|-----------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/scorpio-core/src/config.rs`                                                     | Modify     | Add `alpha_vantage_api_key` to `ApiConfig`, `alpha_vantage_rps` to `RateLimitConfig`, env injection                                       |
-| `crates/scorpio-core/src/settings.rs`                                                   | Modify     | Add `alpha_vantage_api_key` to `PartialConfig` + `UserConfigFile`, round-trip, Debug redaction                                            |
-| `crates/scorpio-core/src/rate_limit.rs`                                                 | Modify     | Add `SharedRateLimiter::alpha_vantage_from_config`                                                                                        |
-| `.env.example`                                                                          | Modify     | Add `SCORPIO_ALPHA_VANTAGE_API_KEY`                                                                                                       |
-| `crates/scorpio-cli/src/cli/setup/steps.rs`                                             | Modify     | Add Alpha Vantage API key wizard step                                                                                                     |
-| `crates/scorpio-core/src/data/adapters/transcripts.rs`                                  | Modify     | Update `TranscriptEvidence` (segments, drop content/sentiment_score), add `TranscriptFetch` enum, change `TranscriptProvider` return type |
-| `crates/scorpio-core/src/data/adapters/catalysts.rs`                                    | Modify     | Add `fiscal_period: Option<String>` to `CatalystEvent`, update Finnhub builder                                                            |
-| `crates/scorpio-core/src/data/alpha_vantage.rs`                                         | **Create** | `AlphaVantageClient`, serde structs, `TranscriptProvider` impl, key rotation, validation                                                  |
-| `crates/scorpio-core/src/data/mod.rs`                                                   | Modify     | Add `pub mod alpha_vantage;`                                                                                                              |
-| `crates/scorpio-core/src/workflow/tasks/common.rs`                                      | Modify     | Add `KEY_TRANSCRIPT_FETCH_STATUS` constant                                                                                                |
-| `crates/scorpio-core/src/workflow/pipeline/runtime.rs`                                  | Modify     | Add `hydrate_transcript` fn, wire into enrichment section of `run_analysis_cycle`                                                         |
-| `crates/scorpio-core/src/workflow/pipeline/mod.rs`                                      | Modify     | Add `alpha_vantage: Option<AlphaVantageClient>` to `TradingPipeline`                                                                      |
-| `crates/scorpio-core/src/app/mod.rs`                                                    | Modify     | Construct `AlphaVantageClient` conditionally, pass to pipeline                                                                            |
-| `crates/scorpio-core/src/agents/shared/prompt.rs`                                       | Modify     | Update `build_enrichment_context` to render transcript segments + fetch status                                                            |
-| `crates/scorpio-core/src/analysis_packs/equity/prompts/theme_c_management_red_flags.md` | Modify     | Remove `TODO(transcripts)` marker, add transcript-aware language                                                                          |
-| `crates/scorpio-core/src/analysis_packs/equity/prompts/conservative_risk.md`            | Modify     | Remove `TODO(transcripts)` marker                                                                                                         |
-| `crates/scorpio-core/tests/fixtures/prompt_bundle/*.txt`                                | Modify     | Update fixture files to match new prompt output                                                                                           |
+| File                                                                                    | Action     | Responsibility                                                                                                                                         |
+|-----------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `crates/scorpio-core/src/config.rs`                                                     | Modify     | Add `alpha_vantage_api_key` to `ApiConfig`, `alpha_vantage_rps` to `RateLimitConfig`, env injection                                                    |
+| `crates/scorpio-core/src/settings.rs`                                                   | Modify     | Add `alpha_vantage_api_key` to `PartialConfig` + `UserConfigFile`, round-trip, Debug redaction                                                         |
+| `crates/scorpio-core/src/rate_limit.rs`                                                 | Modify     | Add `SharedRateLimiter::alpha_vantage_from_config`                                                                                                     |
+| `.env.example`                                                                          | Modify     | Add `SCORPIO_ALPHA_VANTAGE_API_KEY`                                                                                                                    |
+| `crates/scorpio-cli/src/cli/setup/steps.rs`                                             | Modify     | Add Alpha Vantage API key wizard step                                                                                                                  |
+| `crates/scorpio-core/src/data/adapters/transcripts.rs`                                  | Modify     | Update `TranscriptEvidence` (segments, drop content/sentiment_score), add `TranscriptFetch` enum, change `TranscriptProvider` return type              |
+| `crates/scorpio-core/src/data/adapters/catalysts.rs`                                    | Modify     | Add `fiscal_period: Option<String>` to `CatalystEvent`, update Finnhub builder                                                                         |
+| `crates/scorpio-core/src/data/alpha_vantage.rs`                                         | **Create** | `AlphaVantageClient`, serde structs, `TranscriptProvider` impl, key rotation, validation                                                               |
+| `crates/scorpio-core/src/data/mod.rs`                                                   | Modify     | Add `pub mod alpha_vantage;`                                                                                                                           |
+| `crates/scorpio-core/src/workflow/tasks/common.rs`                                      | Modify     | Add `KEY_TRANSCRIPT_FETCH_STATUS` constant                                                                                                             |
+| `crates/scorpio-core/src/workflow/pipeline/runtime.rs`                                  | Modify     | Add `hydrate_transcript` fn, wire into enrichment section of `run_analysis_cycle`                                                                      |
+| `crates/scorpio-core/src/workflow/pipeline/mod.rs`                                      | Modify     | Add `alpha_vantage: Option<AlphaVantageClient>` to `TradingPipeline`                                                                                   |
+| `crates/scorpio-core/src/app/mod.rs`                                                    | Modify     | Construct `AlphaVantageClient` conditionally, pass to pipeline                                                                                         |
+| `crates/scorpio-core/src/agents/shared/prompt.rs`                                       | Modify     | Add `build_transcript_context` function (renders transcript evidence + fetch-status-aware prompt language); `build_enrichment_context` is not modified |
+| `crates/scorpio-core/src/analysis_packs/equity/prompts/theme_c_management_red_flags.md` | Modify     | Remove `TODO(transcripts)` marker, add transcript-aware language                                                                                       |
+| `crates/scorpio-core/src/analysis_packs/equity/prompts/conservative_risk.md`            | Modify     | Remove `TODO(transcripts)` marker                                                                                                                      |
+| `crates/scorpio-core/tests/fixtures/prompt_bundle/*.txt`                                | Modify     | Update fixture files to match new prompt output                                                                                                        |
 
 ---
 
@@ -1040,7 +1040,7 @@ impl TranscriptProvider for AlphaVantageClient {
 
         for retry in 0..num_keys {
             let key_idx = (start_index + retry) % num_keys;
-            let key = &keys[key_idx];
+            let key = &self.keys[key_idx];
 
             self.rate_limiter.acquire().await;
 
@@ -1101,9 +1101,6 @@ impl TranscriptProvider for AlphaVantageClient {
         Ok(TranscriptFetch::Throttled)
     }
 }
-
-// Fix the borrow issue: need to access self.keys via &self.keys
-// The above code has a bug: `keys` should be `self.keys`
 
 #[cfg(test)]
 mod tests {
@@ -1599,22 +1596,26 @@ Add to the `Debug` impl:
 .field("alpha_vantage", &self.alpha_vantage.as_ref().map(|c| format!("{:?}", c)))
 ```
 
-Update `new`, `try_new`, `__from_parts`, and `build_graph` to accept and store the new field. The parameter should be `Option<AlphaVantageClient>` — `None` when the key is not configured.
+Update `new`, `try_new`, and `__from_parts` to accept and store the new field. The parameter should be `Option<AlphaVantageClient>` — `None` when the key is not configured. **`build_graph` does NOT need modification:** the enrichment happens in `run_analysis_cycle` (outside the graph), so the client is accessed directly from `pipeline.alpha_vantage` — same pattern as `finnhub`, `fred`, and `yfinance`.
 
-- [ ] **Step 2: Add `alpha_vantage` parameter to `build_graph`**
+Audit all callers of the affected constructors so the new parameter is threaded through:
+- `crates/scorpio-core/src/app/mod.rs` (production wiring, covered in Step 5 below)
+- `crates/scorpio-core/src/workflow/builder.rs` (`from_pack` calls `__from_parts`)
+- `crates/scorpio-core/src/workflow/pipeline/tests.rs` and `crates/scorpio-core/tests/**` (test construction sites — pass `None`)
 
-In `runtime.rs`, update the `build_graph` function signature to accept `alpha_vantage: Option<&AlphaVantageClient>`. This is needed so the enrichment code can access the client.
+Use `cargo check --workspace --all-targets` to enumerate any remaining call sites that the audit missed.
 
-Actually, looking at the architecture more carefully: the enrichment happens in `run_analysis_cycle`, not in graph tasks. The `AlphaVantageClient` should be stored on `TradingPipeline` and accessed in `run_analysis_cycle` directly (same pattern as `finnhub`, `fred`, `yfinance`).
-
-- [ ] **Step 3: Wire the enrichment call in `run_analysis_cycle`**
+- [ ] **Step 2: Wire the enrichment call in `run_analysis_cycle`**
 
 In `runtime.rs`, in the enrichment hydration section (around line 422), add:
 
 ```rust
 let (transcript_evidence, transcript_status) = if enrichment_intent.transcripts {
     if let Some(ref av_client) = pipeline.alpha_vantage {
-        let catalyst_events = catalysts_result
+        // `catalysts_result` has been moved into `initial_state.enrichment_catalysts` by
+        // this point in `run_analysis_cycle`; read the payload from there instead.
+        let catalyst_events = initial_state
+            .enrichment_catalysts
             .payload
             .as_ref()
             .map(|v| v.as_slice())
@@ -1636,7 +1637,7 @@ let (transcript_evidence, transcript_status) = if enrichment_intent.transcripts 
 };
 ```
 
-- [ ] **Step 4: Write context keys**
+- [ ] **Step 3: Write context keys**
 
 After the existing enrichment context-key writes (around line 506), add:
 
@@ -1650,7 +1651,7 @@ session.context.set(KEY_CACHED_TRANSCRIPT, transcript_json).await;
 session.context.set(KEY_TRANSCRIPT_FETCH_STATUS, transcript_status.to_owned()).await;
 ```
 
-- [ ] **Step 5: Update `app/mod.rs` to construct `AlphaVantageClient` conditionally**
+- [ ] **Step 4: Update `app/mod.rs` to construct `AlphaVantageClient` conditionally**
 
 In `crates/scorpio-core/src/app/mod.rs`, after the `yfinance` construction (around line 118), add:
 
@@ -1675,7 +1676,7 @@ let alpha_vantage = if cfg.enrichment.enable_transcripts && cfg.api.alpha_vantag
 
 Pass `alpha_vantage` to `TradingPipeline::try_new`.
 
-- [ ] **Step 6: Update preflight seeding**
+- [ ] **Step 5: Update preflight seeding**
 
 In `crates/scorpio-core/src/workflow/tasks/preflight.rs`, extend the `seed_if_absent` block (around line 274) to also seed the status key. Since `seed_if_absent` always writes `"null"`, add a separate call:
 
@@ -1689,12 +1690,12 @@ if existing_status.is_none() {
 
 Add the import for `KEY_TRANSCRIPT_FETCH_STATUS` from `common.rs`.
 
-- [ ] **Step 7: Run full test suite**
+- [ ] **Step 6: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
 Fix any compile errors from the `TradingPipeline` signature changes.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/workflow/pipeline/mod.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/src/workflow/tasks/preflight.rs
@@ -1857,6 +1858,14 @@ Replace `TODO(transcripts)` markers with the new transcript-aware language.
 Run: `cargo nextest run --workspace --all-features --no-fail-fast -E 'test(prompt_bundle)'`
 Expected: PASS (fixtures match)
 
+If fixtures need regeneration after Step 4/5 prompt edits, rerun with the existing convention from `tests/prompt_bundle_regression_gate.rs`:
+
+```bash
+UPDATE_FIXTURES=1 cargo nextest run --workspace --all-features -E 'test(prompt_bundle)'
+```
+
+Then review the diff before committing — never regenerate blindly.
+
 - [ ] **Step 7: Run full test suite**
 
 Run: `cargo nextest run --workspace --all-features --no-fail-fast`
@@ -1882,7 +1891,9 @@ cargo nextest run --workspace --all-features --locked --no-fail-fast
 
 All three must pass.
 
-- [ ] **Step 2: Run the smoke test with a real API key**
+- [ ] **Step 2: Run the smoke test with a real API key** *(MANUAL — requires a real Alpha Vantage key; skip if running this plan via an automated agent)*
+
+Prefer using a `.env` file or shell-history-suppressing entry (`HISTCONTROL=ignorespace` + leading space) so the key is not recorded in shell history:
 
 ```bash
 SCORPIO_ALPHA_VANTAGE_API_KEY=your_key \
