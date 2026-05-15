@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use chrono::{Duration, NaiveDate};
 use graph_flow::{
     ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage, Session, SessionStorage,
 };
+use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -868,7 +868,10 @@ async fn resolve_transcript_quarter(
     // Look back ~120 days to ensure we catch the most recent earnings release
     // even with reporting-lag variance.
     let lookback_days = 120;
-    info!(symbol, lookback_days, as_of_date, "resolving transcript quarter from Finnhub earnings calendar");
+    info!(
+        symbol,
+        lookback_days, as_of_date, "resolving transcript quarter from Finnhub earnings calendar"
+    );
     let as_of = NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d").ok()?;
     let from = (as_of - Duration::days(lookback_days))
         .format("%Y-%m-%d")
