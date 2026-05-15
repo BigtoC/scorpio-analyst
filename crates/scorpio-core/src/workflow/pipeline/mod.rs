@@ -101,6 +101,10 @@ pub struct TradingPipeline {
     pub(super) finnhub: FinnhubClient,
     pub(super) fred: FredClient,
     pub(super) yfinance: YFinanceClient,
+    /// Alpha Vantage transcript provider. `None` when no key is configured
+    /// or transcripts are disabled; downstream renders "Unavailable" prompt
+    /// language in that case.
+    pub(super) alpha_vantage: Option<crate::data::AlphaVantageClient>,
     pub(super) catalyst_provider: Arc<dyn CatalystCalendarProvider>,
     pub(super) snapshot_store: Arc<SnapshotStore>,
     /// Handle for quick-thinking agents (Analyst Team - Phase 1).
@@ -120,6 +124,10 @@ impl std::fmt::Debug for TradingPipeline {
             .field("finnhub", &self.finnhub)
             .field("fred", &self.fred)
             .field("yfinance", &self.yfinance)
+            .field(
+                "alpha_vantage",
+                &self.alpha_vantage.as_ref().map(|c| format!("{c:?}")),
+            )
             .field("catalyst_provider", &"Arc<dyn CatalystCalendarProvider>")
             .field("snapshot_store", &self.snapshot_store)
             .field("quick_handle", &self.quick_handle)
@@ -179,6 +187,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            alpha_vantage: None,
             catalyst_provider,
             snapshot_store,
             quick_handle,
@@ -212,6 +221,7 @@ impl TradingPipeline {
         finnhub: FinnhubClient,
         fred: FredClient,
         yfinance: YFinanceClient,
+        alpha_vantage: Option<crate::data::AlphaVantageClient>,
         snapshot_store: SnapshotStore,
         quick_handle: CompletionModelHandle,
         deep_handle: CompletionModelHandle,
@@ -245,6 +255,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            alpha_vantage,
             catalyst_provider,
             snapshot_store,
             quick_handle,
@@ -266,6 +277,7 @@ impl TradingPipeline {
         finnhub: FinnhubClient,
         fred: FredClient,
         yfinance: YFinanceClient,
+        alpha_vantage: Option<crate::data::AlphaVantageClient>,
         catalyst_provider: Arc<dyn CatalystCalendarProvider>,
         snapshot_store: Arc<SnapshotStore>,
         quick_handle: CompletionModelHandle,
@@ -278,6 +290,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            alpha_vantage,
             catalyst_provider,
             snapshot_store,
             quick_handle,

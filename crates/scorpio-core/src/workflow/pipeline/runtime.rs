@@ -33,7 +33,8 @@ use crate::{
         tasks::{
             FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
             KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
-            NewsAnalystTask, SentimentAnalystTask, TechnicalAnalystTask,
+            KEY_TRANSCRIPT_FETCH_STATUS, NewsAnalystTask, SentimentAnalystTask,
+            TechnicalAnalystTask,
         },
     },
 };
@@ -448,6 +449,22 @@ pub async fn run_analysis_cycle(
         }
     };
 
+    // Transcript enrichment: fail-open. Any failure paths (no client, fetch
+    // error, timeout, schema problems) collapse to `TranscriptFetch::Unavailable`
+    // so the pipeline can complete in degraded mode rather than abort.
+    let transcript_fetch: crate::data::adapters::transcripts::TranscriptFetch = if enrichment_intent
+        .transcripts
+    {
+        if let Some(ref av_client) = pipeline.alpha_vantage {
+            hydrate_transcript(av_client, &pipeline.finnhub, &symbol, &date, fetch_timeout).await
+        } else {
+            warn!("transcripts enabled but AlphaVantageClient not constructed");
+            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+        }
+    } else {
+        crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+    };
+
     // Persist enrichment results on state for downstream consumers.
     initial_state.enrichment_event_news = EnrichmentState {
         status: if enrichment_intent.event_news {
@@ -504,6 +521,16 @@ pub async fn run_analysis_cycle(
         info!(symbol = %consensus.symbol, "hydrated consensus-estimates enrichment");
         session.context.set(KEY_CACHED_CONSENSUS, json).await;
     }
+
+    // KEY_TRANSCRIPT_FETCH_STATUS holds the serde-serialized `TranscriptFetch`.
+    // Readers MUST deserialize back to the typed enum (no raw string matching)
+    // so adding a variant is a compile error at every consumer.
+    let status_json =
+        serde_json::to_string(&transcript_fetch).unwrap_or_else(|_| "\"Unavailable\"".to_owned());
+    session
+        .context
+        .set(KEY_TRANSCRIPT_FETCH_STATUS, status_json)
+        .await;
 
     storage
         .save(session)
@@ -819,6 +846,103 @@ pub(super) fn apply_consensus_half_life_policy(
                 status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
                 payload: prior_payload.cloned(),
             }
+        }
+    }
+}
+
+/// Resolve the target fiscal quarter for transcript fetching from Finnhub's
+/// earnings-calendar endpoint queried backward.
+///
+/// Returns `None` when Finnhub returns no recent earnings releases for
+/// the symbol, or all releases lack `year`/`quarter` fields. The caller
+/// writes `TranscriptFetch::Unavailable` in that case rather than guessing.
+async fn resolve_transcript_quarter(
+    finnhub: &FinnhubClient,
+    symbol: &str,
+    as_of_date: &str,
+) -> Option<String> {
+    // Look back ~120 days to ensure we catch the most recent earnings release
+    // even with reporting-lag variance.
+    let lookback_days = 120;
+    let from = chrono::NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d")
+        .ok()?
+        .checked_sub_signed(chrono::Duration::days(lookback_days))?
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let releases = finnhub
+        .fetch_earnings_calendar(&from, as_of_date, Some(symbol))
+        .await
+        .ok()?;
+
+    let recent = releases
+        .iter()
+        .filter_map(|r| match (r.year, r.quarter, r.date.as_deref()) {
+            (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => Some((d.to_owned(), y, q)),
+            _ => None,
+        })
+        .max_by(|(da, ..), (db, ..)| da.cmp(db))
+        .map(|(_d, y, q)| format!("{y}Q{q}"));
+
+    if let Some(q) = &recent {
+        tracing::info!(
+            symbol,
+            quarter = %q,
+            source = "finnhub_earnings_calendar",
+            "transcript quarter resolved"
+        );
+    } else {
+        tracing::debug!(symbol, "no recent earnings release in window");
+    }
+    recent
+}
+
+/// Fetch transcript enrichment with an outer timeout boundary.
+///
+/// Returns the [`TranscriptFetch`] enum directly — every consumer gets
+/// compile-checked exhaustiveness via match.
+async fn hydrate_transcript(
+    av_client: &crate::data::alpha_vantage::AlphaVantageClient,
+    finnhub: &FinnhubClient,
+    symbol: &str,
+    as_of_date: &str,
+    timeout: std::time::Duration,
+) -> crate::data::adapters::transcripts::TranscriptFetch {
+    use crate::data::adapters::transcripts::TranscriptFetch;
+    use crate::data::adapters::transcripts::TranscriptProvider;
+
+    let Some(quarter) = resolve_transcript_quarter(finnhub, symbol, as_of_date).await else {
+        return TranscriptFetch::Unavailable;
+    };
+
+    let result = tokio::time::timeout(timeout, av_client.fetch_transcript(symbol, &quarter)).await;
+
+    match result {
+        Ok(Ok(outcome)) => {
+            match &outcome {
+                TranscriptFetch::Found(ev) => tracing::info!(
+                    symbol, quarter = %quarter, segments = ev.segments.len(),
+                    "transcript enrichment: available"
+                ),
+                TranscriptFetch::NotPublished => tracing::debug!(
+                    symbol, quarter = %quarter, "transcript enrichment: not published"
+                ),
+                TranscriptFetch::Throttled => {
+                    tracing::warn!(symbol, "transcript enrichment: throttled")
+                }
+                TranscriptFetch::Unavailable => {
+                    tracing::warn!(symbol, "transcript enrichment: unavailable")
+                }
+            }
+            outcome
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(symbol, error = %e, "transcript enrichment: fetch error (fail-open)");
+            TranscriptFetch::Unavailable
+        }
+        Err(_) => {
+            tracing::warn!(symbol, "transcript enrichment: outer timeout (fail-open)");
+            TranscriptFetch::Unavailable
         }
     }
 }
