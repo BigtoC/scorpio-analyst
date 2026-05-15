@@ -332,6 +332,7 @@ mod tests {
             tasks::common::{
                 KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT,
                 KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+                KEY_TRANSCRIPT_FETCH_STATUS,
             },
         },
     };
@@ -523,6 +524,24 @@ mod tests {
             .await
             .expect("cached_event_feed must be present");
         assert_eq!(raw, "null");
+    }
+
+    #[tokio::test]
+    async fn preflight_seeds_transcript_fetch_status_as_unavailable() {
+        let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let raw: String = ctx
+            .get(KEY_TRANSCRIPT_FETCH_STATUS)
+            .await
+            .expect("transcript_fetch_status must be present");
+        let status: crate::data::adapters::transcripts::TranscriptFetch =
+            serde_json::from_str(&raw).expect("TranscriptFetch deserialization");
+        assert_eq!(
+            status,
+            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+        );
     }
 
     #[tokio::test]
@@ -820,6 +839,7 @@ mod tests {
             KEY_PROVIDER_CAPABILITIES,
             KEY_REQUIRED_COVERAGE_INPUTS,
             KEY_CACHED_TRANSCRIPT,
+            KEY_TRANSCRIPT_FETCH_STATUS,
             KEY_CACHED_CONSENSUS,
             KEY_CACHED_EVENT_FEED,
             KEY_RUNTIME_POLICY,
