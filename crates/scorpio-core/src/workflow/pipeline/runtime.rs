@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use chrono::{Duration, NaiveDate};
 use graph_flow::{
     ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage, Session, SessionStorage,
 };
@@ -853,9 +853,8 @@ pub(super) fn apply_consensus_half_life_policy(
 /// Resolve the target fiscal quarter for transcript fetching from Finnhub's
 /// earnings-calendar endpoint queried backward.
 ///
-/// The returned `"YYYYQN"` is the **reported** quarter — i.e., one quarter
-/// before Finnhub's announcement `year`/`quarter` (see
-/// [`select_transcript_quarter`]).
+/// The returned `"YYYYQN"` is the **reported** quarter, taken directly from
+/// Finnhub's `year`/`quarter` fields (see [`select_transcript_quarter`]).
 ///
 /// Returns `None` when Finnhub returns no recent earnings releases for
 /// the symbol, or all releases lack `year`/`quarter` fields. The caller
@@ -869,9 +868,9 @@ async fn resolve_transcript_quarter(
     // Look back ~120 days to ensure we catch the most recent earnings release
     // even with reporting-lag variance.
     let lookback_days = 120;
-    let from = chrono::NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d")
-        .ok()?
-        .checked_sub_signed(chrono::Duration::days(lookback_days))?
+    info!(symbol, lookback_days, as_of_date, "resolving transcript quarter from Finnhub earnings calendar");
+    let as_of = NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d").ok()?;
+    let from = (as_of - Duration::days(lookback_days))
         .format("%Y-%m-%d")
         .to_string();
 
@@ -879,37 +878,36 @@ async fn resolve_transcript_quarter(
         symbol,
         timeout,
         finnhub.fetch_earnings_calendar(&from, as_of_date, Some(symbol)),
+        as_of,
     )
     .await
 }
 
 fn select_transcript_quarter(
     releases: &[finnhub::models::calendar::EarningsRelease],
+    as_of: NaiveDate,
 ) -> Option<String> {
     releases
         .iter()
         .filter_map(|r| match (r.year, r.quarter, r.date.as_deref()) {
-            (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => Some((d.to_owned(), y, q)),
+            (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => {
+                let release_date = NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()?;
+                if release_date > as_of {
+                    return None;
+                }
+                Some((release_date, y, q))
+            }
             _ => None,
         })
-        .max_by(|(da, ..), (db, ..)| da.cmp(db))
-        .map(|(_d, y, q)| {
-            // Finnhub's `year`/`quarter` describe the *announcement* period —
-            // the calendar quarter the release falls in. Alpha Vantage's
-            // transcript endpoint is keyed by the *reported* period, which is
-            // the previous quarter. E.g., a release on 2026-05-05 comes back
-            // from Finnhub as `quarter = 2`, but the published transcript is
-            // "2026Q1". Step back one quarter, wrapping into the prior year
-            // when crossing Q1 → Q4.
-            let (year, quarter) = if q == 1 { (y - 1, 4) } else { (y, q - 1) };
-            format!("{year}Q{quarter}")
-        })
+        .max_by_key(|(date, ..)| *date)
+        .map(|(_d, y, q)| format!("{y}Q{q}"))
 }
 
 async fn resolve_transcript_quarter_from_fetch<F>(
     symbol: &str,
     timeout: std::time::Duration,
     fetch: F,
+    as_of: NaiveDate,
 ) -> Option<String>
 where
     F: std::future::Future<
@@ -936,7 +934,7 @@ where
         }
     };
 
-    let recent = select_transcript_quarter(releases.as_ref());
+    let recent = select_transcript_quarter(releases.as_ref(), as_of);
 
     if let Some(q) = &recent {
         tracing::info!(
@@ -1438,7 +1436,7 @@ mod transcript_quarter_tests {
     use super::*;
 
     #[test]
-    fn select_transcript_quarter_maps_announcement_quarter_to_reported_quarter() {
+    fn select_transcript_quarter_returns_reported_quarter_of_latest_release() {
         let releases = vec![
             finnhub::models::calendar::EarningsRelease {
                 symbol: Some("AAPL".to_owned()),
@@ -1475,43 +1473,84 @@ mod transcript_quarter_tests {
             },
         ];
 
-        // Latest valid release: 2026-07-25 with announcement quarter Q2 →
-        // reported quarter is Q1 of the same year.
+        // Latest valid release is 2026-07-25 with reported quarter Q2;
+        // the release with missing year/quarter is filtered out.
+        let as_of = NaiveDate::from_ymd_opt(2026, 8, 1).expect("valid date");
         assert_eq!(
-            select_transcript_quarter(&releases),
+            select_transcript_quarter(&releases, as_of),
+            Some("2026Q2".to_owned())
+        );
+    }
+
+    #[test]
+    fn select_transcript_quarter_glw_release_on_2026_04_28_returns_2026q1() {
+        let releases = vec![finnhub::models::calendar::EarningsRelease {
+            symbol: Some("GLW".to_owned()),
+            date: Some("2026-04-28".to_owned()),
+            hour: Some("bmo".to_owned()),
+            year: Some(2026),
+            quarter: Some(1),
+            eps_estimate: Some(0.6968),
+            eps_actual: Some(0.7),
+            revenue_estimate: Some(4_305_870_107.0),
+            revenue_actual: Some(4_345_000_000.0),
+        }];
+
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
+        assert_eq!(
+            select_transcript_quarter(&releases, as_of),
             Some("2026Q1".to_owned())
         );
     }
 
     #[test]
-    fn select_transcript_quarter_wraps_q1_to_prior_year_q4() {
-        let releases = vec![finnhub::models::calendar::EarningsRelease {
-            symbol: Some("AAPL".to_owned()),
-            date: Some("2026-02-01".to_owned()),
-            hour: None,
-            year: Some(2026),
-            quarter: Some(1),
-            eps_estimate: None,
-            eps_actual: None,
-            revenue_estimate: None,
-            revenue_actual: None,
-        }];
+    fn select_transcript_quarter_skips_release_in_the_future() {
+        // Two releases: a past one (Q1 reported, dated 2026-01-30) and an
+        // upcoming one (Q2 reported, dated 2026-07-25). With as_of = 2026-05-15
+        // the future Q2 release must be filtered out, so the function returns
+        // the prior Q1 release.
+        let releases = vec![
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("GLW".to_owned()),
+                date: Some("2026-01-30".to_owned()),
+                hour: None,
+                year: Some(2025),
+                quarter: Some(4),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("GLW".to_owned()),
+                date: Some("2026-07-25".to_owned()),
+                hour: None,
+                year: Some(2026),
+                quarter: Some(2),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+        ];
 
-        // Announcement quarter Q1 wraps to the prior year's Q4.
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
         assert_eq!(
-            select_transcript_quarter(&releases),
+            select_transcript_quarter(&releases, as_of),
             Some("2025Q4".to_owned())
         );
     }
 
     #[tokio::test]
     async fn resolve_transcript_quarter_from_fetch_returns_none_on_fetch_error() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
         let result = resolve_transcript_quarter_from_fetch(
             "AAPL",
             Duration::from_secs(1),
             future::ready(Err(TradingError::RateLimitExceeded {
                 provider: "finnhub".to_owned(),
             })),
+            as_of,
         )
         .await;
 
@@ -1520,12 +1559,14 @@ mod transcript_quarter_tests {
 
     #[tokio::test]
     async fn resolve_transcript_quarter_from_fetch_times_out() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
         let result = resolve_transcript_quarter_from_fetch(
             "AAPL",
             Duration::from_millis(1),
             future::pending::<
                 Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
             >(),
+            as_of,
         )
         .await;
 
