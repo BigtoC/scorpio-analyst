@@ -121,6 +121,7 @@ pub fn step2b_alpha_vantage_api_key(
     }
     let input = prompt.prompt()?;
     partial.alpha_vantage_api_key = apply_optional_secret(&input, existing);
+    sync_transcript_enablement_with_alpha_vantage_key(partial);
     Ok(())
 }
 
@@ -449,6 +450,12 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
         current
     } else {
         Some(input.to_owned())
+    }
+}
+
+fn sync_transcript_enablement_with_alpha_vantage_key(partial: &mut PartialConfig) {
+    if partial.alpha_vantage_api_key.is_some() {
+        partial.enable_transcripts = Some(true);
     }
 }
 
@@ -1077,6 +1084,31 @@ mod tests {
             apply_optional_secret("new", Some("old".to_owned())),
             Some("new".to_owned())
         );
+    }
+
+    #[test]
+    fn alpha_vantage_key_enables_transcripts() {
+        let mut partial = PartialConfig {
+            alpha_vantage_api_key: Some("av-key".into()),
+            enable_transcripts: Some(false),
+            ..Default::default()
+        };
+
+        sync_transcript_enablement_with_alpha_vantage_key(&mut partial);
+
+        assert_eq!(partial.enable_transcripts, Some(true));
+    }
+
+    #[test]
+    fn missing_alpha_vantage_key_keeps_existing_transcript_setting() {
+        let mut partial = PartialConfig {
+            enable_transcripts: Some(false),
+            ..Default::default()
+        };
+
+        sync_transcript_enablement_with_alpha_vantage_key(&mut partial);
+
+        assert_eq!(partial.enable_transcripts, Some(false));
     }
 
     // ── validate_step3_result ─────────────────────────────────────────────────
