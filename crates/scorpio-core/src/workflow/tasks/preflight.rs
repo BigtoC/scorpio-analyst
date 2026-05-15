@@ -51,6 +51,10 @@ const THESIS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 /// with the shared [`SnapshotStore`] so it can load prior thesis memory.
 pub struct PreflightTask {
     enrichment: crate::config::DataEnrichmentConfig,
+    /// Whether transcript enrichment should run this cycle. Set by the pipeline
+    /// builder from the presence of an Alpha Vantage API key — see
+    /// `ProviderCapabilities::from_config`.
+    transcripts_enabled: bool,
     snapshot_store: Arc<SnapshotStore>,
     /// The resolved runtime policy or the deferred resolution error for the
     /// config-selected pack.
@@ -70,6 +74,7 @@ impl PreflightTask {
     ) -> Self {
         Self::with_runtime_policy(
             enrichment,
+            false,
             snapshot_store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
@@ -80,11 +85,13 @@ impl PreflightTask {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn with_pack(
         enrichment: crate::config::DataEnrichmentConfig,
+        transcripts_enabled: bool,
         snapshot_store: Arc<SnapshotStore>,
         pack_id: String,
     ) -> Self {
         Self {
             enrichment,
+            transcripts_enabled,
             snapshot_store,
             runtime_policy: crate::analysis_packs::resolve_runtime_policy(&pack_id),
         }
@@ -93,11 +100,13 @@ impl PreflightTask {
     /// Create a new `PreflightTask` from an already-resolved runtime policy.
     pub fn with_runtime_policy(
         enrichment: crate::config::DataEnrichmentConfig,
+        transcripts_enabled: bool,
         snapshot_store: Arc<SnapshotStore>,
         runtime_policy: RuntimePolicy,
     ) -> Self {
         Self {
             enrichment,
+            transcripts_enabled,
             snapshot_store,
             runtime_policy: Ok(runtime_policy),
         }
@@ -163,7 +172,8 @@ impl Task for PreflightTask {
             })?;
 
         // ── Derive and write ProviderCapabilities ─────────────────────────
-        let capabilities = ProviderCapabilities::from_config(&self.enrichment);
+        let capabilities =
+            ProviderCapabilities::from_config(&self.enrichment, self.transcripts_enabled);
         let caps_json = serde_json::to_string(&capabilities).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: orchestration corruption: ProviderCapabilities serialization failed: {e}"
@@ -358,6 +368,31 @@ mod tests {
         run_preflight_with_store(symbol, enrichment, store).await
     }
 
+    /// Test variant that lets the caller assert the transcripts-enabled flag.
+    /// Production callers derive this from the Alpha Vantage API key presence.
+    async fn run_preflight_with_transcripts(
+        symbol: &str,
+        enrichment: DataEnrichmentConfig,
+        transcripts_enabled: bool,
+    ) -> graph_flow::Result<Context> {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new(symbol, "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let task = PreflightTask::with_runtime_policy(
+            enrichment,
+            transcripts_enabled,
+            store,
+            crate::analysis_packs::resolve_runtime_policy("baseline")
+                .expect("baseline pack must resolve"),
+        );
+        task.run(ctx.clone()).await?;
+        Ok(ctx)
+    }
+
     async fn run_preflight_with_store(
         symbol: &str,
         enrichment: DataEnrichmentConfig,
@@ -447,12 +482,11 @@ mod tests {
     #[tokio::test]
     async fn preflight_writes_provider_capabilities_to_context() {
         let enrichment = DataEnrichmentConfig {
-            enable_transcripts: true,
             enable_consensus_estimates: false,
             enable_event_news: false,
             ..DataEnrichmentConfig::default()
         };
-        let ctx = run_preflight("AAPL", enrichment)
+        let ctx = run_preflight_with_transcripts("AAPL", enrichment, true)
             .await
             .expect("preflight should succeed");
 
@@ -819,6 +853,7 @@ mod tests {
 
         let task = PreflightTask::with_pack(
             DataEnrichmentConfig::default(),
+            false,
             store,
             "nonexistent_pack".to_owned(),
         );
