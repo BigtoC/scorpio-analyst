@@ -180,9 +180,9 @@ mod tests {
     #[test]
     fn baseline_pack_enrichment_intent_preserves_current_defaults() {
         let pack = resolve_pack(PackId::Baseline);
-        assert!(!pack.enrichment_intent.transcripts);
-        assert!(!pack.enrichment_intent.consensus_estimates);
-        assert!(!pack.enrichment_intent.event_news);
+        assert!(pack.enrichment_intent.transcripts);
+        assert!(pack.enrichment_intent.consensus_estimates);
+        assert!(pack.enrichment_intent.event_news);
     }
 
     #[test]

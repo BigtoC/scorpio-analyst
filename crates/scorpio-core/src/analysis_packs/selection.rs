@@ -127,9 +127,9 @@ mod tests {
     #[test]
     fn resolve_baseline_enrichment_intent_matches_current_defaults() {
         let policy = resolve_runtime_policy("baseline").expect("should resolve");
-        assert!(!policy.enrichment_intent.transcripts);
-        assert!(!policy.enrichment_intent.consensus_estimates);
-        assert!(!policy.enrichment_intent.event_news);
+        assert!(policy.enrichment_intent.transcripts);
+        assert!(policy.enrichment_intent.consensus_estimates);
+        assert!(policy.enrichment_intent.event_news);
     }
 
     #[test]
