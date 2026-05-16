@@ -19,9 +19,7 @@ use crate::{
         AnalystId, FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst,
     },
     config::LlmConfig,
-    data::{
-        FinnhubClient, FredClient, YFinanceClient, adapters::transcripts::TranscriptFetch,
-    },
+    data::{FinnhubClient, FredClient, YFinanceClient, adapters::transcripts::TranscriptFetch},
     providers::factory::CompletionModelHandle,
     state::{
         AgentTokenUsage, AssetShape, DataCoverageReport, DerivedValuation, EvidenceKind,
