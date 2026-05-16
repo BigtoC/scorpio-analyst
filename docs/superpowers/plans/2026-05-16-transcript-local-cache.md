@@ -4,15 +4,15 @@
 
 **Goal:** Persist stable Alpha Vantage transcript results in a dedicated local SQLite cache so repeated analyses for the same symbol and quarter skip the external API call entirely.
 
-**Architecture:** Add a new `TranscriptCacheStore` in `scorpio-core::data` that owns its own SQLite database, migrations, schema-version gating, and cacheability rules. Keep caching fully internal to `AlphaVantageClient` by injecting an optional store at construction time, so the `TranscriptProvider` trait and all downstream callers remain unchanged; runtime startup should degrade gracefully to uncached API calls if the cache cannot be opened.
+**Architecture:** Add a new `TranscriptCacheStore` in `scorpio-core::data` that owns its own SQLite database, migrations, and uppercase-symbol normalization. The store caches only `TranscriptFetch::Found` results — negative outcomes (`NotPublished`, `Throttled`, `Unavailable`) bypass the cache and stay re-fetchable. Cache failures degrade silently to direct API calls with a `cache_failure_count` counter on `AlphaVantageClient` so chronic failure is observable without `RUST_LOG=debug`. Caching is fully internal to `AlphaVantageClient` by injecting an optional store at construction time, so the `TranscriptProvider` trait and all downstream callers remain unchanged; runtime startup degrades gracefully to uncached API calls if the cache cannot be opened.
 
-**Tech Stack:** Rust 2024, `sqlx` SQLite migrations, `serde`/`serde_json`, `chrono`, `reqwest`, `tokio`, `tracing`, existing `Config`/`AnalysisRuntime`/`SharedRateLimiter` patterns.
+**Tech Stack:** Rust 2024, `sqlx` SQLite migrations, `serde`/`serde_json`, `reqwest`, `tokio`, `tracing`, existing `Config`/`AnalysisRuntime`/`SharedRateLimiter` patterns. No new dependencies.
 
 ---
 
 ## Read First
 
-- `docs/superpowers/specs/2026-05-16-transcript-local-cache-design.md`
+- `docs/superpowers/specs/2026-05-16-transcript-local-cache-design.md` — note: this plan intentionally implements a simpler scope than the spec (no schema versioning, no `NotPublished` caching, no settings-boundary changes); the deferred items are listed in **Scope Check** below.
 - `AGENTS.md`
 - `CLAUDE.md`
 - `.github/instructions/rust.instructions.md`
@@ -20,9 +20,9 @@
 ## Preconditions
 
 - Work in a dedicated worktree.
-- Keep Rust/code changes inside `crates/scorpio-core`; the only planned edits outside it are the final doc updates in `CLAUDE.md` and `AGENTS.md`. `scorpio-cli` should stay untouched.
+- Keep Rust/code changes inside `crates/scorpio-core`; the only planned edit outside it is the doc update in `AGENTS.md`. `scorpio-cli` stays untouched.
 - Follow `@superpowers:test-driven-development` discipline for each task.
-- After implementation, run `@ce:review`, then capture the migration/cache pattern in `@ce:compound`.
+- After implementation, run `@ce:review`, then capture the cache pattern in `@ce:compound`.
 - Use `cargo nextest`, not `cargo test`.
 - Full verification must end with:
 
@@ -40,52 +40,48 @@ brew install protobuf
 
 ## Scope Check
 
-This is one coherent subsystem: a transcript cache store plus the `AlphaVantageClient` wiring that consumes it. Do not split it further unless you intentionally land the migration-directory refactor as a preparatory PR.
+This is one coherent subsystem: a transcript cache store plus the `AlphaVantageClient` wiring that consumes it.
 
 Out of scope for this plan:
 
 - New CLI commands such as `scorpio cache prune`
-- TTL/eviction logic for published transcripts
+- TTL/eviction logic for cached transcripts
 - Changes to `TranscriptProvider` or transcript prompt rendering
 - A generic shared storage abstraction for every SQLite-backed store
+- Caching of negative outcomes (`NotPublished`, `Throttled`, `Unavailable`) — keep re-fetchable; only `Found` is cacheable
+- Schema versioning of cache rows — `serde_json` deserialization failure is the sole stale-row signal; treated as a cache miss with a sanitized warn
+- User-file `[storage]` overrides for the new path — env var only. The same pre-plan limitation already applies to `snapshot_db_path`; out of scope here, addressable in a follow-on settings PR if user demand appears
+- Restructuring the existing flat `crates/scorpio-core/migrations/` directory; the new cache migration sits in a new `migrations/transcript_cache/` subdirectory which `SnapshotStore`'s `sqlx::migrate!()` does not recurse into
 
 ## File Structure
 
-| File                                                                               | Action | Responsibility                                                                                                                                                                          |
-|------------------------------------------------------------------------------------|--------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/scorpio-core/migrations/snapshots/0001_create_phase_snapshots.sql`         | Move   | Preserve the existing snapshot migration byte-for-byte so sqlx checksums stay valid after the per-store directory split                                                                 |
-| `crates/scorpio-core/migrations/snapshots/0002_add_symbol_and_schema_version.sql`  | Move   | Same as above for the second snapshot migration                                                                                                                                         |
-| `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql` | Create | Define the transcript cache table keyed by `(symbol, quarter)` with payload JSON and schema version                                                                                     |
-| `crates/scorpio-core/src/workflow/snapshot.rs`                                     | Modify | Point `SnapshotStore::new` at `migrations/snapshots` instead of the crate-root migration directory                                                                                      |
-| `crates/scorpio-core/src/data/transcript_cache.rs`                                 | Create | Own `TranscriptCacheStore`, `TRANSCRIPT_CACHE_SCHEMA_VERSION`, quarter-age logic, uppercase symbol normalization, SQLite open/setup, cache read/write behavior, and focused store tests |
-| `crates/scorpio-core/src/data/mod.rs`                                              | Modify | Expose the new `transcript_cache` module                                                                                                                                                |
-| `crates/scorpio-core/src/data/alpha_vantage.rs`                                    | Modify | Add optional cache wiring, cache hit/miss flow, and integration-style cache tests using the private test constructor                                                                    |
-| `crates/scorpio-core/src/config.rs`                                                | Modify | Add `StorageConfig::transcript_cache_db_path`, remove the snapshot-only storage fast path, and extend storage tests                                                                     |
-| `crates/scorpio-core/src/settings.rs`                                              | Modify | Extend the user-config boundary so `Config::load_from_user_path()` can preserve nested storage overrides from `~/.scorpio-analyst/config.toml`                                          |
-| `crates/scorpio-core/src/app/mod.rs`                                               | Modify | Construct the transcript cache best-effort and pass it into `AlphaVantageClient::new` only when Alpha Vantage is enabled                                                                |
-| `crates/scorpio-core/tests/app_runtime.rs`                                         | Modify | Fix the `StorageConfig` struct literal after the new storage field is added                                                                                                             |
-| `CLAUDE.md`                                                                        | Modify | Document the per-store migration directory convention and transcript cache database                                                                                                     |
-| `AGENTS.md`                                                                        | Modify | Keep the agent instructions aligned with the new migration layout and cache store boundary                                                                                              |
+| File | Action | Responsibility |
+|------|--------|----------------|
+| `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql` | Create | Define the transcript cache table keyed by `(symbol, quarter)` with payload JSON |
+| `crates/scorpio-core/src/data/transcript_cache.rs` | Create | Own `TranscriptCacheStore`, uppercase symbol normalization, SQLite open/setup, cache read/write, and focused store tests |
+| `crates/scorpio-core/src/data/mod.rs` | Modify | Expose the new `transcript_cache` module |
+| `crates/scorpio-core/src/data/alpha_vantage.rs` | Modify | Add optional cache wiring, cache hit/miss flow, `cache_failure_count` counter, integration-style cache tests |
+| `crates/scorpio-core/src/config.rs` | Modify | Add `StorageConfig::transcript_cache_db_path` with `serde(default)` and update the `Default` impl; add focused storage-config tests |
+| `crates/scorpio-core/src/app/mod.rs` | Modify | Construct the transcript cache best-effort and pass it into `AlphaVantageClient::new` only when Alpha Vantage is enabled |
+| `crates/scorpio-core/tests/app_runtime.rs` | Modify | Fix the `StorageConfig` struct literal using `..StorageConfig::default()` after the new field is added |
+| `AGENTS.md` | Modify | Document the new transcript cache database location, the `migrations/transcript_cache/` subdirectory, and the `cache_failure_count` observability surface |
 
 Notes for the implementing engineer:
 
-- Keep `TranscriptCacheStore` as a single focused file unless it grows well past what is comfortable to review in one pass.
+- Keep `TranscriptCacheStore` as a single focused file.
 - Do not introduce a `TranscriptCache` trait. The cache has one production implementation and one caller.
-- Keep the cacheability decision inside `TranscriptCacheStore::put()`. `AlphaVantageClient` should only know hit, miss, and best-effort writeback.
 - Keep cache hits ahead of `self.rate_limiter.acquire().await` so a local hit does not spend rate-limit budget or request latency.
-- The runtime config seam matters: `Config::load_from_user_path()` is rebuilt from `settings::PartialConfig`, so nested `[storage]` data from the user config file will be dropped unless this plan explicitly adds a storage-preserving path.
-- Normalize cache keys to uppercase at the storage boundary. `validate_symbol()` preserves caller casing in this repo, so without explicit normalization `AAPL` and `aapl` would double-store and miss the cache.
+- Cache only `TranscriptFetch::Found(_)`. All other variants bypass cache writes.
+- Normalize cache keys to uppercase at the storage boundary. `validate_symbol()` preserves caller casing in this repo.
+- The existing `SnapshotStore::new` keeps using `sqlx::migrate!()` (which defaults to `migrations/` and reads only top-level `.sql` files — sqlx does not recurse into subdirectories). No snapshot migrations move; no `SnapshotStore` code changes.
 
 ## Chunk 1: Persistence Layer
 
-### Task 1: Split SQLite migrations by store and add cache bootstrap
+### Task 1: Add cache migration and bootstrap store
 
 **Files:**
 - Create: `crates/scorpio-core/src/data/transcript_cache.rs`
 - Create: `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql`
-- Move: `crates/scorpio-core/migrations/0001_create_phase_snapshots.sql` -> `crates/scorpio-core/migrations/snapshots/0001_create_phase_snapshots.sql`
-- Move: `crates/scorpio-core/migrations/0002_add_symbol_and_schema_version.sql` -> `crates/scorpio-core/migrations/snapshots/0002_add_symbol_and_schema_version.sql`
-- Modify: `crates/scorpio-core/src/workflow/snapshot.rs` (`SnapshotStore::new`)
 - Modify: `crates/scorpio-core/src/data/mod.rs`
 - Test: `crates/scorpio-core/src/data/transcript_cache.rs`
 - Regression test: `crates/scorpio-core/src/workflow/snapshot/tests/path.rs`
@@ -93,7 +89,7 @@ Notes for the implementing engineer:
 
 - [ ] **Step 1: Export the new module first so the red test will actually compile into the crate**
 
-Before writing the first test, add the module declaration in `crates/scorpio-core/src/data/mod.rs`:
+Add the module declaration in `crates/scorpio-core/src/data/mod.rs`:
 
 ```rust
 pub mod transcript_cache;
@@ -127,47 +123,29 @@ Run:
 cargo nextest run -p scorpio-core --all-features -E 'test(new_creates_transcript_cache_table) | test(parent_directory_is_created) | test(save_and_load_round_trip)'
 ```
 
-Expected: FAIL with a compile error about `TranscriptCacheStore` / `transcript_cache` not existing yet.
+Expected: the new test FAILS with a compile error about `TranscriptCacheStore` / `transcript_cache` not existing yet. The two snapshot regression tests should still pass — confirming snapshots are unaffected.
 
-- [ ] **Step 4: Move the snapshot migrations without editing their contents**
+- [ ] **Step 4: Add the new transcript-cache migration**
 
-Create the new `snapshots/` directory and move the SQL files byte-for-byte. Use `git mv` so history stays readable:
-
-```bash
-git mv crates/scorpio-core/migrations/0001_create_phase_snapshots.sql crates/scorpio-core/migrations/snapshots/0001_create_phase_snapshots.sql
-git mv crates/scorpio-core/migrations/0002_add_symbol_and_schema_version.sql crates/scorpio-core/migrations/snapshots/0002_add_symbol_and_schema_version.sql
-```
-
-Then update `SnapshotStore::new` in `crates/scorpio-core/src/workflow/snapshot.rs` to use the explicit migration path:
-
-```rust
-sqlx::migrate!("migrations/snapshots")
-    .run(&pool)
-    .await
-```
-
-- [ ] **Step 5: Add the new transcript-cache migration**
-
-Create `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql` with the exact table shape from the spec:
+Create `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS transcript_cache (
-    symbol         TEXT    NOT NULL,
-    quarter        TEXT    NOT NULL CHECK (quarter GLOB '[0-9][0-9][0-9][0-9]Q[1-4]'),
-    payload_json   TEXT    NOT NULL,
-    schema_version INTEGER NOT NULL,
-    cached_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    symbol       TEXT NOT NULL,
+    quarter      TEXT NOT NULL CHECK (quarter GLOB '[0-9][0-9][0-9][0-9]Q[1-4]'),
+    payload_json TEXT NOT NULL,
+    cached_at    TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (symbol, quarter)
 );
 ```
 
-- [ ] **Step 6: Add the minimal `TranscriptCacheStore` bootstrap implementation**
+The new subdirectory lives alongside the existing flat snapshot migrations. `SnapshotStore::new`'s `sqlx::migrate!()` reads `migrations/*.sql` only (no recursion), so it will not pick up this file; `TranscriptCacheStore::new` reads `migrations/transcript_cache/*.sql` only via the explicit path argument.
+
+- [ ] **Step 5: Add the minimal `TranscriptCacheStore` bootstrap implementation**
 
 In `crates/scorpio-core/src/data/transcript_cache.rs`, add only enough code to open the database, apply the two SQLite pragmas, run the new migration, and satisfy the bootstrap test:
 
 ```rust
-pub const TRANSCRIPT_CACHE_SCHEMA_VERSION: i64 = 1;
-
 #[derive(Clone, Debug)]
 pub struct TranscriptCacheStore {
     pool: SqlitePool,
@@ -213,9 +191,9 @@ impl TranscriptCacheStore {
 }
 ```
 
-Also add a private `resolve_db_path()` helper in the same file. Mirror `SnapshotStore` path validation rules; do not extract a shared generic helper for two call sites.
+Also add a private `resolve_db_path()` helper in the same file. Mirror `SnapshotStore` path validation rules (non-empty, no null bytes, no bare traversal, no dot-only); do not extract a shared generic helper for two call sites.
 
-- [ ] **Step 7: Run the bootstrap and snapshot regression tests again**
+- [ ] **Step 6: Run the bootstrap and snapshot regression tests again**
 
 Run:
 
@@ -223,24 +201,24 @@ Run:
 cargo nextest run -p scorpio-core --all-features -E 'test(new_creates_transcript_cache_table) | test(parent_directory_is_created) | test(save_and_load_round_trip)'
 ```
 
-Expected: PASS.
+Expected: PASS. Confirms the new cache store opens cleanly and the snapshot store is unaffected by the new subdirectory.
 
-- [ ] **Step 8: Commit the bootstrap slice**
+- [ ] **Step 7: Commit the bootstrap slice**
 
 ```bash
-git add crates/scorpio-core/migrations/snapshots/0001_create_phase_snapshots.sql crates/scorpio-core/migrations/snapshots/0002_add_symbol_and_schema_version.sql crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql crates/scorpio-core/src/workflow/snapshot.rs crates/scorpio-core/src/data/mod.rs crates/scorpio-core/src/data/transcript_cache.rs
-git commit -m "refactor(storage): split snapshot and transcript migrations"
+git add crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql crates/scorpio-core/src/data/mod.rs crates/scorpio-core/src/data/transcript_cache.rs
+git commit -m "feat(data): add transcript cache bootstrap store"
 ```
 
-### Task 2: Implement transcript cache write policy and quarter-age logic
+### Task 2: Implement transcript cache reads and writes
 
 **Files:**
 - Modify: `crates/scorpio-core/src/data/transcript_cache.rs`
 - Test: `crates/scorpio-core/src/data/transcript_cache.rs`
 
-- [ ] **Step 1: Write the failing write-policy tests**
+- [ ] **Step 1: Write the failing read/write tests**
 
-Add these tests to `crates/scorpio-core/src/data/transcript_cache.rs`:
+Define `test_store()` (opens a fresh `TranscriptCacheStore` against `tempfile::tempdir()`) and `sample_found(symbol, quarter)` (returns a `TranscriptFetch::Found` payload) helpers in the same test module first, then add the tests:
 
 ```rust
 #[tokio::test]
@@ -254,123 +232,32 @@ async fn put_and_get_round_trip_found() {
 }
 
 #[tokio::test]
-async fn put_and_get_normalize_symbol_case() {
-    let store = test_store().await;
-    let fetch = sample_found("AAPL", "2025Q1");
-
-    store.put("aapl", "2025Q1", &fetch).await.expect("put");
-
-    assert_eq!(store.get("AAPL", "2025Q1").await, Some(fetch.clone()));
-    assert_eq!(store.get("aapl", "2025Q1").await, Some(fetch));
-}
-
-#[tokio::test]
-async fn put_caches_old_not_published() {
+async fn put_skips_negative_outcomes() {
     let store = test_store().await;
 
-    store
-        .put_with_today(
-            "AAPL",
-            "2025Q1",
-            &TranscriptFetch::NotPublished,
-            NaiveDate::from_ymd_opt(2026, 5, 16).unwrap(),
-        )
-        .await
-        .expect("put");
+    store.put("AAPL", "2025Q1", &TranscriptFetch::NotPublished).await.expect("put");
+    store.put("AAPL", "2025Q2", &TranscriptFetch::Throttled).await.expect("put");
+    store.put("AAPL", "2025Q3", &TranscriptFetch::Unavailable).await.expect("put");
 
-    assert_eq!(
-        store.get("AAPL", "2025Q1").await,
-        Some(TranscriptFetch::NotPublished)
-    );
-}
-
-#[tokio::test]
-async fn put_skips_recent_not_published_throttled_and_unavailable() {
-    let store = test_store().await;
-
-    store
-        .put_with_today(
-            "AAPL",
-            "2026Q1",
-            &TranscriptFetch::NotPublished,
-            NaiveDate::from_ymd_opt(2026, 5, 16).unwrap(),
-        )
-        .await
-        .expect("put");
-    store
-        .put("AAPL", "2025Q2", &TranscriptFetch::Throttled)
-        .await
-        .expect("put");
-    store
-        .put("AAPL", "2025Q3", &TranscriptFetch::Unavailable)
-        .await
-        .expect("put");
-
-    assert!(store.get("AAPL", "2026Q1").await.is_none());
+    assert!(store.get("AAPL", "2025Q1").await.is_none());
     assert!(store.get("AAPL", "2025Q2").await.is_none());
     assert!(store.get("AAPL", "2025Q3").await.is_none());
 }
-
-#[test]
-fn quarter_is_old_enough_to_cache_not_published_handles_boundaries() {
-    let today = NaiveDate::from_ymd_opt(2026, 5, 16).unwrap();
-
-    assert!(quarter_is_old_enough_to_cache_not_published("2025Q4", today));
-    assert!(!quarter_is_old_enough_to_cache_not_published("2026Q1", today));
-}
 ```
 
-Add a small local `test_store()` helper and `sample_found()` helper to keep the test module readable.
+Symbol casing is normalized inside `put`/`get` (`to_ascii_uppercase()`) so the cache key is canonical. The production call path goes through `validate_symbol()` first, which today preserves caller casing — the uppercase normalization is a one-liner defensive guard, but a dedicated case-mixing test is out of scope.
 
-- [ ] **Step 2: Run the write-policy tests to verify failure**
+- [ ] **Step 2: Run the tests to verify failure**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_caches_old_not_published) | test(put_skips_recent_not_published_throttled_and_unavailable) | test(quarter_is_old_enough_to_cache_not_published_handles_boundaries)'
+cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_skips_negative_outcomes)'
 ```
 
-Expected: FAIL because `put`, `put_with_today`, and the quarter-age helper are still missing.
+Expected: FAIL because `put()` does not exist yet.
 
-- [ ] **Step 3: Add the minimal quarter parser and age helper**
-
-Keep the logic private to this file. Do not introduce a shared date helper for one cache store.
-
-```rust
-fn quarter_is_old_enough_to_cache_not_published(quarter: &str, today: NaiveDate) -> bool {
-    let Some((year, quarter_num)) = parse_quarter(quarter) else {
-        return false;
-    };
-
-    let quarter_end = match quarter_num {
-        1 => NaiveDate::from_ymd_opt(year, 3, 31).unwrap(),
-        2 => NaiveDate::from_ymd_opt(year, 6, 30).unwrap(),
-        3 => NaiveDate::from_ymd_opt(year, 9, 30).unwrap(),
-        4 => NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
-        _ => return false,
-    };
-
-    quarter_end
-        .checked_add_days(chrono::Days::new(90))
-        .is_some_and(|threshold| threshold <= today)
-}
-```
-
-Use byte-level parsing for `parse_quarter()`; do not bring in a regex crate for a six-character format check.
-
-Add one exact-threshold assertion so the implementation matches the spec's `>= 90 days ago` rule:
-
-```rust
-#[test]
-fn quarter_is_old_enough_to_cache_not_published_is_inclusive_at_ninety_days() {
-    let today = NaiveDate::from_ymd_opt(2025, 6, 29).unwrap();
-    assert!(quarter_is_old_enough_to_cache_not_published("2025Q1", today));
-}
-```
-
-- [ ] **Step 4: Implement cache writes with the policy owned by `put()`**
-
-Add `put()` and a small `put_with_today()` test seam so the quarter-age tests stay deterministic:
+- [ ] **Step 3: Implement `put()` and the happy-path `get()`**
 
 ```rust
 pub async fn put(
@@ -379,48 +266,27 @@ pub async fn put(
     quarter: &str,
     fetch: &TranscriptFetch,
 ) -> Result<(), TradingError> {
-    self.put_with_today(symbol, quarter, fetch, Utc::now().date_naive())
-        .await
-}
-
-async fn put_with_today(
-    &self,
-    symbol: &str,
-    quarter: &str,
-    fetch: &TranscriptFetch,
-    today: NaiveDate,
-) -> Result<(), TradingError> {
     validate_quarter_for_storage(quarter)?;
-    let normalized_symbol = symbol.to_ascii_uppercase();
 
-    let should_cache = match fetch {
-        TranscriptFetch::Found(_) => true,
-        TranscriptFetch::NotPublished => {
-            quarter_is_old_enough_to_cache_not_published(quarter, today)
-        }
-        TranscriptFetch::Throttled | TranscriptFetch::Unavailable => false,
-    };
-
-    if !should_cache {
+    if !matches!(fetch, TranscriptFetch::Found(_)) {
         return Ok(());
     }
 
+    let normalized_symbol = symbol.to_ascii_uppercase();
     let payload_json = serde_json::to_string(fetch)
         .with_context(|| "failed to serialize transcript cache payload")
         .map_err(TradingError::Storage)?;
 
     sqlx::query(
-        "INSERT INTO transcript_cache (symbol, quarter, payload_json, schema_version)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO transcript_cache (symbol, quarter, payload_json)
+         VALUES (?, ?, ?)
          ON CONFLICT(symbol, quarter) DO UPDATE SET
              payload_json = excluded.payload_json,
-             schema_version = excluded.schema_version,
              cached_at = datetime('now')",
     )
     .bind(&normalized_symbol)
     .bind(quarter)
     .bind(&payload_json)
-    .bind(TRANSCRIPT_CACHE_SCHEMA_VERSION)
     .execute(&self.pool)
     .await
     .with_context(|| format!("failed to write transcript cache entry {symbol} {quarter}"))
@@ -428,21 +294,11 @@ async fn put_with_today(
 
     Ok(())
 }
-```
 
-Add a small `validate_quarter_for_storage()` helper that enforces the canonical `YYYYQN` shape before cacheability gating. This is required so malformed input like `"2025q1"` fails fast even for `TranscriptFetch::NotPublished`, instead of being silently skipped before the SQL `CHECK` constraint is reached.
-
-Also normalize the symbol with `to_ascii_uppercase()` before every SQL read/write bind so the cache key is canonical regardless of caller casing.
-
-- [ ] **Step 5: Implement the happy-path `get()` read**
-
-Replace the bootstrap stub with a real lookup:
-
-```rust
 pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> {
     let normalized_symbol = symbol.to_ascii_uppercase();
-    let row = sqlx::query_as::<_, (String, i64)>(
-        "SELECT payload_json, schema_version FROM transcript_cache
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT payload_json FROM transcript_cache
          WHERE symbol = ? AND quarter = ?",
     )
     .bind(&normalized_symbol)
@@ -451,31 +307,27 @@ pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> 
     .await
     .ok()??;
 
-    let (payload_json, _schema_version) = row;
+    let (payload_json,) = row;
     serde_json::from_str(&payload_json).ok()
 }
 ```
 
-This is intentionally only the happy path. The next task will harden version mismatch, deserialization failure, and query-failure behavior.
+Add a small `validate_quarter_for_storage()` helper enforcing the canonical `YYYYQN` shape before any SQL runs. This makes `put("AAPL", "2025q1", ...)` fail fast even for negative outcomes, instead of being silently skipped before the SQL `CHECK` constraint is reached.
 
-- [ ] **Step 6: Run the write-policy tests again**
+This `get()` is the happy path only; Task 3 hardens it.
 
-Run:
-
-```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_caches_old_not_published) | test(put_skips_recent_not_published_throttled_and_unavailable) | test(quarter_is_old_enough_to_cache_not_published_handles_boundaries)'
-```
+- [ ] **Step 4: Run the read/write tests again**
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the write-policy slice**
+- [ ] **Step 5: Commit the read/write slice**
 
 ```bash
 git add crates/scorpio-core/src/data/transcript_cache.rs
-git commit -m "feat(data): add transcript cache write policy"
+git commit -m "feat(data): implement transcript cache reads and writes"
 ```
 
-### Task 3: Harden transcript cache reads, overwrite semantics, and test seams
+### Task 3: Harden cache reads, overwrite semantics, and test seam
 
 **Files:**
 - Modify: `crates/scorpio-core/src/data/transcript_cache.rs`
@@ -483,31 +335,20 @@ git commit -m "feat(data): add transcript cache write policy"
 
 - [ ] **Step 1: Write the failing resilience tests**
 
-Add these tests to `crates/scorpio-core/src/data/transcript_cache.rs`:
+Add a `sample_found_with_speaker(symbol, quarter, speaker)` helper that returns a `Found` with a specific speaker so the overwrite test asserts an actual payload change. Then add:
 
 ```rust
 #[tokio::test]
 async fn put_overwrites_existing_entry() {
     let store = test_store().await;
 
-    store
-        .put("AAPL", "2025Q1", &sample_found("AAPL", "2025Q1"))
-        .await
-        .expect("first put");
-    store
-        .put_with_today(
-            "AAPL",
-            "2025Q1",
-            &TranscriptFetch::NotPublished,
-            NaiveDate::from_ymd_opt(2026, 5, 16).unwrap(),
-        )
-        .await
-        .expect("second put");
+    let first = sample_found("AAPL", "2025Q1");
+    store.put("AAPL", "2025Q1", &first).await.expect("first put");
 
-    assert_eq!(
-        store.get("AAPL", "2025Q1").await,
-        Some(TranscriptFetch::NotPublished)
-    );
+    let second = sample_found_with_speaker("AAPL", "2025Q1", "Luca Maestri");
+    store.put("AAPL", "2025Q1", &second).await.expect("second put");
+
+    assert_eq!(store.get("AAPL", "2025Q1").await, Some(second));
 }
 
 #[tokio::test]
@@ -515,33 +356,12 @@ async fn get_treats_corrupt_payload_as_cache_miss() {
     let store = test_store().await;
 
     sqlx::query(
-        "INSERT INTO transcript_cache (symbol, quarter, payload_json, schema_version)
-         VALUES (?, ?, ?, ?)",
+        "INSERT INTO transcript_cache (symbol, quarter, payload_json)
+         VALUES (?, ?, ?)",
     )
     .bind("AAPL")
     .bind("2025Q1")
     .bind("not valid json")
-    .bind(TRANSCRIPT_CACHE_SCHEMA_VERSION)
-    .execute(&store.pool)
-    .await
-    .expect("seed row");
-
-    assert!(store.get("AAPL", "2025Q1").await.is_none());
-}
-
-#[tokio::test]
-async fn get_treats_version_mismatch_as_cache_miss() {
-    let store = test_store().await;
-    let payload = serde_json::to_string(&sample_found("AAPL", "2025Q1")).unwrap();
-
-    sqlx::query(
-        "INSERT INTO transcript_cache (symbol, quarter, payload_json, schema_version)
-         VALUES (?, ?, ?, ?)",
-    )
-    .bind("AAPL")
-    .bind("2025Q1")
-    .bind(payload)
-    .bind(TRANSCRIPT_CACHE_SCHEMA_VERSION + 1)
     .execute(&store.pool)
     .await
     .expect("seed row");
@@ -576,27 +396,25 @@ async fn two_store_instances_can_open_the_same_db_path() {
 }
 ```
 
-Use an explicitly old quarter in this test. The point is to confirm ordinary upsert semantics for a cacheable `NotPublished` row, not to bless downgrading `Found` over a recent non-cacheable miss.
-
 - [ ] **Step 2: Run the resilience tests to verify failure**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(put_overwrites_existing_entry) | test(get_treats_corrupt_payload_as_cache_miss) | test(get_treats_version_mismatch_as_cache_miss) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
+cargo nextest run -p scorpio-core --all-features -E 'test(put_overwrites_existing_entry) | test(get_treats_corrupt_payload_as_cache_miss) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
 ```
 
-Expected: FAIL because `get()` still silently `ok()`s everything. Some other tests in this group may already pass from earlier tasks; the important red signal here is that corrupt rows and version-mismatch rows are not yet treated as sanitized cache misses.
+Expected: FAIL because `get()` still silently `ok()`s everything. Some tests may already pass from Task 2; the important red signal is that corrupt rows are not yet treated as sanitized cache misses with logs.
 
 - [ ] **Step 3: Harden `get()` so cache failures degrade to misses with sanitized WARN logs**
 
-Replace the happy-path implementation with explicit handling for query errors, schema-version mismatch, and deserialization failure:
+Replace the happy-path implementation with explicit handling for query errors and deserialization failure:
 
 ```rust
 pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> {
     let normalized_symbol = symbol.to_ascii_uppercase();
-    let row = match sqlx::query_as::<_, (String, i64)>(
-        "SELECT payload_json, schema_version FROM transcript_cache
+    let row = match sqlx::query_as::<_, (String,)>(
+        "SELECT payload_json FROM transcript_cache
          WHERE symbol = ? AND quarter = ?",
     )
     .bind(&normalized_symbol)
@@ -611,20 +429,9 @@ pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> 
         }
     };
 
-    let Some((payload_json, stored_version)) = row else {
+    let Some((payload_json,)) = row else {
         return None;
     };
-
-    if stored_version != TRANSCRIPT_CACHE_SCHEMA_VERSION {
-        warn!(
-            symbol,
-            quarter,
-            stored = stored_version,
-            current = TRANSCRIPT_CACHE_SCHEMA_VERSION,
-            "transcript cache version mismatch"
-        );
-        return None;
-    }
 
     match serde_json::from_str::<TranscriptFetch>(&payload_json) {
         Ok(fetch) => Some(fetch),
@@ -636,7 +443,7 @@ pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> 
 }
 ```
 
-Do not log raw `serde_json` error text.
+Do not log raw `serde_json` error text — it can echo payload bytes. The `cache_failure_count` counter on `AlphaVantageClient` (added in Chunk 2) is the operator-facing signal for chronic failures.
 
 - [ ] **Step 4: Add the test-only store failure seam**
 
@@ -649,14 +456,14 @@ pub(crate) async fn close_for_test(&self) {
 }
 ```
 
-This seam is preparation for Chunk 2's client-level cache-fallback tests; it is not required for the failure expectation in this chunk.
+This seam is required for Chunk 2's `fetch_transcript_uses_api_when_cache_is_unavailable` test, which verifies the client falls back to the API and bumps `cache_failure_count` when the cache pool is closed.
 
 - [ ] **Step 5: Re-run the resilience tests and one earlier happy-path test**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_and_get_normalize_symbol_case) | test(put_overwrites_existing_entry) | test(get_treats_corrupt_payload_as_cache_miss) | test(get_treats_version_mismatch_as_cache_miss) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
+cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_overwrites_existing_entry) | test(get_treats_corrupt_payload_as_cache_miss) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
 ```
 
 Expected: PASS.
@@ -671,6 +478,8 @@ git commit -m "feat(data): harden transcript cache reads"
 ## Chunk 2: Alpha Vantage Integration
 
 ### Task 4: Add optional cache wiring to `AlphaVantageClient`
+
+> Depends on Tasks 1–3: requires `TranscriptCacheStore`, its public API (`new`, `put`, `get`), and the `close_for_test` seam.
 
 **Files:**
 - Modify: `crates/scorpio-core/src/data/alpha_vantage.rs`
@@ -718,9 +527,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(fetch_transcript_retur
 
 Expected: FAIL because `AlphaVantageClient` does not yet accept a cache and `new_with_base_url()` still takes three arguments.
 
-- [ ] **Step 3: Add the optional cache field and update constructors**
-
-Modify the struct and constructor signatures in `crates/scorpio-core/src/data/alpha_vantage.rs`:
+- [ ] **Step 3: Add the optional cache field, observability counter, and update constructors**
 
 ```rust
 pub struct AlphaVantageClient {
@@ -729,6 +536,7 @@ pub struct AlphaVantageClient {
     http: reqwest::Client,
     base_url: String,
     cache: Option<TranscriptCacheStore>,
+    cache_failure_count: AtomicU64,
     // existing counters...
 }
 
@@ -744,6 +552,14 @@ fn new_with_base_url(
     base_url: String,
     cache: Option<TranscriptCacheStore>,
 ) -> Self
+```
+
+Add a public accessor and surface the counter in the existing `Debug` impl so chronic cache failures are visible without `RUST_LOG=debug`:
+
+```rust
+pub fn cache_failure_count(&self) -> u64 {
+    self.cache_failure_count.load(Ordering::Relaxed)
+}
 ```
 
 Keep `for_test()` cache-free:
@@ -782,8 +598,8 @@ debug!(symbol, quarter = as_of_date, "transcript cache miss, fetching from Alpha
 Important:
 
 - Leave `validate_symbol` and `validate_quarter` ahead of the cache so invalid input still fails fast.
-- Do not increment `found_count` / `not_published_count` on cache hits; those counters should continue to describe provider outcomes, not local reads.
-- Do not add a `with_cache()` builder. The constructor parameter makes call sites explicit and prevents partial wiring.
+- Do not increment `found_count` / `not_published_count` on cache hits; those counters continue to describe provider outcomes, not local reads.
+- Do not add a `with_cache()` builder. The constructor parameter makes call sites explicit.
 
 - [ ] **Step 5: Run the cache-hit and constructor tests again**
 
@@ -802,11 +618,10 @@ git add crates/scorpio-core/src/data/alpha_vantage.rs
 git commit -m "feat(alpha-vantage): add transcript cache reads"
 ```
 
-### Task 5: Cache successful API results and ignore cache failures
+### Task 5: Cache successful API results with best-effort writeback and observability
 
 **Files:**
 - Modify: `crates/scorpio-core/src/data/alpha_vantage.rs`
-- Regression seam: `crates/scorpio-core/src/data/transcript_cache.rs` (`close_for_test` already added in Task 3)
 - Test: `crates/scorpio-core/src/data/alpha_vantage.rs`
 
 - [ ] **Step 1: Write the failing integration-style cache tests**
@@ -841,6 +656,7 @@ async fn fetch_transcript_caches_found_results_after_first_api_call() {
     assert!(matches!(first, TranscriptFetch::Found(_)));
     assert_eq!(first, second);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(client.cache_failure_count(), 0);
 }
 
 #[tokio::test]
@@ -867,10 +683,11 @@ async fn fetch_transcript_uses_api_when_cache_is_unavailable() {
 
     assert_eq!(result, TranscriptFetch::NotPublished);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(client.cache_failure_count() > 0);
 }
 ```
 
-The first test must exercise the primary `Found` path, not just `NotPublished`. That is the main steady-state cache win this feature exists to provide, and unlike `NotPublished` it is not date-sensitive.
+The first test exercises the primary `Found` path. The second test asserts that closed-pool failures bump the observability counter, so chronic failure is visible to operators without scanning warn logs.
 
 - [ ] **Step 2: Run the integration-style tests to verify failure**
 
@@ -880,15 +697,16 @@ Run:
 cargo nextest run -p scorpio-core --all-features -E 'test(fetch_transcript_caches_found_results_after_first_api_call) | test(fetch_transcript_uses_api_when_cache_is_unavailable)'
 ```
 
-Expected: FAIL because `fetch_transcript()` still returns the API result without writing it back to the cache.
+Expected: FAIL because `fetch_transcript()` still returns the API result without writing it back to the cache, and the failure counter is never incremented.
 
-- [ ] **Step 3: Add best-effort cache writeback after the API result is known**
+- [ ] **Step 3: Add best-effort cache writeback with counter bumps**
 
 At the end of `fetch_transcript()`, after `outcome` is computed and before the final `Ok(outcome)`, add:
 
 ```rust
 if let Some(cache) = &self.cache {
     if let Err(_err) = cache.put(symbol, as_of_date, &outcome).await {
+        self.cache_failure_count.fetch_add(1, Ordering::Relaxed);
         warn!(
             symbol,
             quarter = as_of_date,
@@ -899,11 +717,32 @@ if let Some(cache) = &self.cache {
 }
 ```
 
-Do not move the quarter-age rule into this client. `put()` already owns it.
+Also bump `cache_failure_count` from the two warn paths inside `TranscriptCacheStore::get()` — but `get` lives in another module and the counter is on `AlphaVantageClient`, so do it at the call site instead:
+
+```rust
+if let Some(cache) = &self.cache {
+    match cache.get(symbol, as_of_date).await {
+        Some(cached) => {
+            debug!(symbol, quarter = as_of_date, "transcript cache hit");
+            return Ok(cached);
+        }
+        None => {
+            // Either a real miss or a sanitized warn-degraded failure.
+            // The store distinguishes them in its own logs; the client
+            // bumps the counter on writeback failure (below). Read-side
+            // failures are rare and visible via warn logs.
+        }
+    }
+}
+```
+
+(Read-failure observability is intentionally lighter than write-failure: a corrupted-row read is not a system health signal, while sustained write failures indicate disk or permissions problems.)
+
+The cacheability rule (only `Found`) already lives in `TranscriptCacheStore::put()`; `AlphaVantageClient` only forwards the outcome.
 
 - [ ] **Step 4: Add the tiny loopback server helper in the test module**
 
-Use the pattern already present in `crates/scorpio-cli/src/cli/update.rs` rather than adding a new mocking library:
+Use the pattern already present in `crates/scorpio-cli/src/cli/update.rs:898` rather than adding a new mocking library:
 
 ```rust
 fn spawn_transcript_server(body: &'static str, calls: Arc<AtomicUsize>) -> String {
@@ -912,6 +751,7 @@ fn spawn_transcript_server(body: &'static str, calls: Arc<AtomicUsize>) -> Strin
 
     std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept");
+        let _ = std::io::Read::read(&mut stream, &mut [0u8; 1024]);
         calls.fetch_add(1, Ordering::SeqCst);
 
         let response = format!(
@@ -940,7 +780,7 @@ Expected: PASS.
 
 ```bash
 git add crates/scorpio-core/src/data/alpha_vantage.rs
-git commit -m "feat(alpha-vantage): cache transcript fetch results"
+git commit -m "feat(alpha-vantage): cache transcript fetch results with observability"
 ```
 
 ## Chunk 3: Runtime Wiring, Docs, and Verification
@@ -949,12 +789,10 @@ git commit -m "feat(alpha-vantage): cache transcript fetch results"
 
 **Files:**
 - Modify: `crates/scorpio-core/src/config.rs`
-- Modify: `crates/scorpio-core/src/settings.rs`
 - Modify: `crates/scorpio-core/src/data/transcript_cache.rs`
 - Modify: `crates/scorpio-core/src/app/mod.rs`
 - Modify: `crates/scorpio-core/tests/app_runtime.rs`
 - Test: `crates/scorpio-core/src/config.rs`
-- Test: `crates/scorpio-core/src/settings.rs`
 
 - [ ] **Step 1: Write the failing storage-config tests**
 
@@ -993,77 +831,49 @@ fn storage_config_transcript_cache_can_be_overridden_via_env() {
 }
 
 #[test]
-fn load_storage_reads_both_storage_paths_from_user_config() {
+fn load_storage_honors_transcript_cache_env_override() {
     let _guard = ENV_LOCK.lock().unwrap();
     let home = tempfile::tempdir().expect("temp home");
     let config_dir = home.path().join(".scorpio-analyst");
     std::fs::create_dir_all(&config_dir).expect("config dir");
-    std::fs::write(
-        config_dir.join("config.toml"),
-        r#"
-[storage]
-snapshot_db_path = "/tmp/report.db"
-transcript_cache_db_path = "/tmp/transcript-cache.db"
-
-[llm]
-quick_thinking_provider = "definitely-invalid-provider"
-"#,
-    )
-    .expect("write config");
+    std::fs::write(config_dir.join("config.toml"), MINIMAL_CONFIG_TOML).expect("write config");
 
     unsafe {
         std::env::set_var("HOME", home.path());
+        std::env::set_var(
+            "SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH",
+            "/tmp/env-only-transcript.db",
+        );
     }
     let result = Config::load_storage();
     unsafe {
         std::env::remove_var("HOME");
+        std::env::remove_var("SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH");
     }
 
-    let storage = result.expect("storage-only loading should ignore unrelated runtime fields");
-    assert_eq!(storage.snapshot_db_path, "/tmp/report.db");
-    assert_eq!(storage.transcript_cache_db_path, "/tmp/transcript-cache.db");
-}
-
-#[test]
-fn load_from_user_path_preserves_storage_config_from_user_file() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        r#"
-quick_thinking_provider = "openai"
-quick_thinking_model = "gpt-4o-mini"
-deep_thinking_provider = "openai"
-deep_thinking_model = "o3"
-
-[storage]
-snapshot_db_path = "/tmp/report.db"
-transcript_cache_db_path = "/tmp/transcript-cache.db"
-"#,
-    )
-    .unwrap();
-
-    let cfg = Config::load_from_user_path(&path).expect("config should load");
-
-    assert_eq!(cfg.storage.snapshot_db_path, "/tmp/report.db");
-    assert_eq!(cfg.storage.transcript_cache_db_path, "/tmp/transcript-cache.db");
+    let storage = result.expect("storage loading should succeed");
+    assert_eq!(
+        storage.transcript_cache_db_path,
+        "/tmp/env-only-transcript.db"
+    );
 }
 ```
+
+The third test specifically verifies env-var symmetry through `Config::load_storage()` (the env-only path), not just `Config::load_from()`, so the new field is honored through the same builder pipeline as `snapshot_db_path`.
 
 - [ ] **Step 2: Run the storage-config tests to verify failure**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcript_cache_defaults_to_tilde_path) | test(storage_config_transcript_cache_can_be_overridden_via_env) | test(load_storage_reads_both_storage_paths_from_user_config) | test(load_from_user_path_preserves_storage_config_from_user_file)'
+cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcript_cache_defaults_to_tilde_path) | test(storage_config_transcript_cache_can_be_overridden_via_env) | test(load_storage_honors_transcript_cache_env_override)'
 ```
 
-Expected: FAIL because `StorageConfig::transcript_cache_db_path` does not exist yet and `load_from_user_path()` does not currently preserve nested `[storage]` config from the user file.
+Expected: FAIL because `StorageConfig::transcript_cache_db_path` does not exist yet.
 
-- [ ] **Step 3: Extend `StorageConfig` and simplify `Config::load_storage()`**
+- [ ] **Step 3: Extend `StorageConfig`**
 
-In `crates/scorpio-core/src/config.rs`, add the new field and default:
+In `crates/scorpio-core/src/config.rs`, add the new field, default, and update the `Default` impl:
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
@@ -1077,47 +887,20 @@ pub struct StorageConfig {
 fn default_transcript_cache_db_path() -> String {
     "~/.scorpio-analyst/transcript_cache.db".to_string()
 }
-```
 
-Also update `impl Default for StorageConfig`.
-
-Then remove the snapshot-only early return from `Config::load_storage()` instead of extending it. The builder already deserializes `StorageOnlyConfig`; deleting the special case keeps both storage fields symmetrical and avoids another one-off branch.
-
-- [ ] **Step 4: Preserve nested `[storage]` values when loading full runtime config from the user file**
-
-`Config::load_from_user_path()` currently loads `settings::PartialConfig` and then rebuilds runtime config from `partial_to_nested_toml_non_secrets()`, which only emits `[llm]` and `[providers]`. If you do nothing, a user file with `[storage] transcript_cache_db_path = ...` will still be dropped in production `Config::load()`.
-
-Use the minimal fix:
-
-- extend `crate::settings::PartialConfig` with two new flat optional fields:
-
-```rust
-pub snapshot_db_path: Option<String>,
-pub transcript_cache_db_path: Option<String>,
-```
-
-- extend `UserConfigFile` with a nested storage section so manually-authored user config files can deserialize correctly:
-
-```rust
-#[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
-struct UserConfigStorage {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    snapshot_db_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    transcript_cache_db_path: Option<String>,
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_db_path: default_snapshot_db_path(),
+            transcript_cache_db_path: default_transcript_cache_db_path(),
+        }
+    }
 }
 ```
 
-- add `storage: UserConfigStorage` to `UserConfigFile` with `#[serde(default, skip_serializing_if = "UserConfigStorage::is_empty")]`
-- map `UserConfigFile.storage.*` to and from the new flat `PartialConfig` fields in the existing `From<UserConfigFile> for PartialConfig` and `From<&PartialConfig> for UserConfigFile` impls
-- teach `partial_to_nested_toml_non_secrets()` to emit a `[storage]` table when either value is present
-- add a focused round-trip test in `crates/scorpio-core/src/settings.rs` for the new fields
+That is the entire `StorageConfig` change. Do not modify `PartialConfig`, `UserConfigFile`, or `partial_to_nested_toml_non_secrets()` — user-file `[storage]` overrides are not in scope for this plan. (The same pre-plan limitation already applies to `snapshot_db_path`; users override via env vars.) `Config::load_storage()` already parses `[storage]` directly from the user file via `StorageOnlyConfig`, so default + env-var overrides work without further surgery.
 
-For the user-config boundary, keep `PartialConfig` flat because the setup flow and existing tests already reason about a flat struct. The persisted TOML may contain a nested `[storage]` section, just like it already contains nested `[providers.*]` sections.
-
-Keep this storage support narrow. Do not redesign the whole settings format.
-
-- [ ] **Step 5: Add `TranscriptCacheStore::from_config()`**
+- [ ] **Step 4: Add `TranscriptCacheStore::from_config()`**
 
 Back in `crates/scorpio-core/src/data/transcript_cache.rs`, add:
 
@@ -1130,7 +913,7 @@ pub async fn from_config(config: &Config) -> Result<Self, TradingError> {
 
 Keep this thin. Do not move unrelated config logic into the store.
 
-- [ ] **Step 6: Wire the cache into `AnalysisRuntime::new()` only when Alpha Vantage is enabled**
+- [ ] **Step 5: Wire the cache into `AnalysisRuntime::new()` only when Alpha Vantage is enabled**
 
 In `crates/scorpio-core/src/app/mod.rs`, keep the existing `if cfg.api.alpha_vantage_api_key.is_some()` guard. Inside that branch, build the cache best-effort, warn on failure, then pass it into the client constructor:
 
@@ -1148,9 +931,9 @@ match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter, transcript_cach
 }
 ```
 
-Do not create the store outside the Alpha Vantage branch. Without an Alpha Vantage key, transcript enrichment is already disabled, so eagerly opening the cache is wasted work and can emit pointless warnings.
+Do not create the store outside the Alpha Vantage branch. Without an Alpha Vantage key, transcript enrichment is already disabled, so eagerly opening the cache is wasted work and emits pointless warnings.
 
-- [ ] **Step 7: Fix the `StorageConfig` struct literal in the runtime integration test**
+- [ ] **Step 6: Fix the `StorageConfig` struct literal in the runtime integration test**
 
 Update `crates/scorpio-core/tests/app_runtime.rs` to use the new defaulted field rather than spelling both fields manually:
 
@@ -1163,64 +946,41 @@ storage: StorageConfig {
 
 This keeps the test focused on snapshot-store failure instead of transcript-cache configuration noise.
 
-- [ ] **Step 8: Add the `settings.rs` round-trip test for the new storage fields**
-
-In `crates/scorpio-core/src/settings.rs`, add:
-
-```rust
-#[test]
-fn storage_paths_round_trip_through_user_config_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let mut partial = PartialConfig::default();
-    partial.snapshot_db_path = Some("/tmp/report.db".into());
-    partial.transcript_cache_db_path = Some("/tmp/transcript-cache.db".into());
-
-    save_user_config_at(&partial, &path).expect("save");
-    let loaded = load_user_config_at(&path).expect("load");
-
-    assert_eq!(loaded.snapshot_db_path, Some("/tmp/report.db".into()));
-    assert_eq!(
-        loaded.transcript_cache_db_path,
-        Some("/tmp/transcript-cache.db".into())
-    );
-}
-```
-
-- [ ] **Step 9: Run the focused config, runtime, and cache tests again**
+- [ ] **Step 7: Run the focused config, runtime, and cache tests**
 
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcript_cache_defaults_to_tilde_path) | test(storage_config_transcript_cache_can_be_overridden_via_env) | test(load_storage_reads_both_storage_paths_from_user_config) | test(load_from_user_path_preserves_storage_config_from_user_file) | test(storage_paths_round_trip_through_user_config_file) | test(new_wraps_snapshot_store_initialization_failures) | test(fetch_transcript_caches_found_results_after_first_api_call)'
+cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcript_cache_defaults_to_tilde_path) | test(storage_config_transcript_cache_can_be_overridden_via_env) | test(load_storage_honors_transcript_cache_env_override) | test(new_wraps_snapshot_store_initialization_failures) | test(fetch_transcript_caches_found_results_after_first_api_call)'
 ```
+
+`new_wraps_snapshot_store_initialization_failures` is a pre-existing regression test in `tests/app_runtime.rs`; this filter runs it to confirm the new `StorageConfig` field and the optional cache wiring do not break runtime assembly.
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit the runtime wiring slice**
+- [ ] **Step 8: Commit the runtime wiring slice**
 
 ```bash
-git add crates/scorpio-core/src/config.rs crates/scorpio-core/src/settings.rs crates/scorpio-core/src/data/transcript_cache.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/tests/app_runtime.rs
+git add crates/scorpio-core/src/config.rs crates/scorpio-core/src/data/transcript_cache.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/tests/app_runtime.rs
 git commit -m "feat(runtime): wire transcript cache configuration"
 ```
 
 ### Task 7: Update docs, run full verification, and do a manual smoke pass
 
 **Files:**
-- Modify: `CLAUDE.md`
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Update the repository docs that describe SQLite stores**
+- [ ] **Step 1: Update `AGENTS.md` storage section**
 
-In both `CLAUDE.md` and `AGENTS.md`, update the storage/migration sections so they describe:
+Update the storage/migration section in `AGENTS.md` to describe:
 
-- `crates/scorpio-core/migrations/snapshots/`
-- `crates/scorpio-core/migrations/transcript_cache/`
-- `SnapshotStore` using `sqlx::migrate!("migrations/snapshots")`
-- `TranscriptCacheStore` using `sqlx::migrate!("migrations/transcript_cache")`
-- The dedicated cache file `~/.scorpio-analyst/transcript_cache.db`
+- `crates/scorpio-core/migrations/` (existing, flat) for snapshot migrations
+- `crates/scorpio-core/migrations/transcript_cache/` (new subdirectory) for cache migrations
+- `SnapshotStore` continues to use `sqlx::migrate!()` (defaults to `migrations/`); `TranscriptCacheStore` uses `sqlx::migrate!("migrations/transcript_cache")`
+- The dedicated cache file `~/.scorpio-analyst/transcript_cache.db`, overridable via `SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH`
+- `AlphaVantageClient::cache_failure_count` is exposed in its `Debug` impl as the operator-facing signal for chronic cache failure (storage layer falls back to direct API calls on failure)
 
-Keep the wording short and factual. This is a doc-accuracy pass, not a narrative rewrite.
+Keep the wording short and factual. This is a doc-accuracy pass, not a narrative rewrite. `CLAUDE.md` does not need a parallel update — the convention applies to one new subdirectory in one crate's storage layer, not project-wide.
 
 - [ ] **Step 2: Run the required repository-wide verification commands**
 
@@ -1236,7 +996,7 @@ Expected: all three commands exit 0.
 
 - [ ] **Step 3: Run a manual smoke check with debug logging**
 
-Use any symbol that currently resolves to a published transcript in your environment. `AAPL` is a reasonable starting point if your local config has the required keys. The quarter is resolved internally by the existing analysis flow; you are validating cache hit/miss behavior for whatever quarter that run fetches.
+Use any symbol that currently resolves to a published transcript in your environment. `AAPL` is a reasonable starting point if your local config has the required keys.
 
 First run:
 
@@ -1263,8 +1023,8 @@ rm ~/.scorpio-analyst/transcript_cache.db
 - [ ] **Step 4: Commit the docs/verification slice**
 
 ```bash
-git add CLAUDE.md AGENTS.md
-git commit -m "docs(storage): document transcript cache migrations"
+git add AGENTS.md
+git commit -m "docs(storage): document transcript cache"
 ```
 
 ## Execution Handoff
