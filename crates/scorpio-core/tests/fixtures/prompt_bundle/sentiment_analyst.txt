@@ -39,12 +39,16 @@ flag it explicitly in your output and give it weight in your assessment:
 - Unusual one-time items inflating reported results
 - Change in key operating metrics (churn, retention, win rates)
 
-When transcripts are unavailable, explicitly include the phrase
-`degraded mode: headline/summary only` in the affected summary.
+When a transcript is available (status: Found), compare the tone and
+language between the press release / headline and the earnings call
+segments. Flag any divergence — e.g., optimistic press release language
+paired with cautious or evasive call commentary; CFO hedging on guidance
+in the call that is absent from the headline; selective omission of
+metrics in prepared remarks that the press release emphasizes.
 
-<!-- TODO(transcripts): once call transcripts are wired (TranscriptEvidence
-provider), add tone-shift detection between press release and earnings call.
-Currently we only see press releases and headlines. -->
+When transcripts are unavailable (status: NotPublished / Throttled /
+Unavailable), explicitly include the phrase
+`degraded mode: transcript unavailable` in the affected summary.
 
 ## Data-Quality Red Flags (when reasoning over peer data)
 

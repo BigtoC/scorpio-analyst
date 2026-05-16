@@ -19,15 +19,20 @@
 //! - `FinnhubClient::fetch_company_news`
 //! - `FinnhubClient::get_structured_news`
 //! - `FinnhubClient::get_market_news`
+//! - `FinnhubClient::fetch_earnings_calendar`
 
 use chrono::{Duration, Utc};
 use scorpio_core::{config::ApiConfig, data::FinnhubClient, rate_limit::SharedRateLimiter};
 use secrecy::SecretString;
 
 /// Well-known liquid equity used as the primary test subject.
-const EQUITY_SYMBOL: &str = "AAPL";
+const EQUITY_SYMBOL: &str = "GLW";
 /// Number of calendar days in the look-back window for company news.
 const LOOKBACK_DAYS: i64 = 30;
+/// Number of calendar days in the look-back window for the earnings calendar
+/// (mirrors the transcript-quarter resolution path in
+/// `workflow::pipeline::runtime::resolve_transcript_quarter`).
+const EARNINGS_CALENDAR_LOOKBACK_DAYS: i64 = 120;
 
 struct Results {
     pass: usize,
@@ -100,6 +105,7 @@ async fn main() {
         &ApiConfig {
             finnhub_api_key: Some(SecretString::from(api_key)),
             fred_api_key: None,
+            alpha_vantage_api_key: None,
         },
         SharedRateLimiter::new("finnhub", 10),
     )
@@ -230,6 +236,61 @@ async fn main() {
             r.check(
                 "get_market_news returns at least one article",
                 !news.articles.is_empty(),
+            );
+        }
+    }
+    println!();
+
+    section(
+        7,
+        &format!("FinnhubClient::fetch_earnings_calendar ({EQUITY_SYMBOL})"),
+    );
+    let earnings_from = (today - Duration::days(EARNINGS_CALENDAR_LOOKBACK_DAYS))
+        .format("%Y-%m-%d")
+        .to_string();
+    info(&format!("window: {earnings_from} → {to}"));
+    match client
+        .fetch_earnings_calendar(&earnings_from, &to, Some(EQUITY_SYMBOL))
+        .await
+    {
+        Err(e) => {
+            eprintln!("  FAIL  fetch_earnings_calendar returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(releases) => {
+            info(&format!("{} earnings release(s)", releases.len()));
+            if let Some(latest) = releases
+                .iter()
+                .filter(|rel| rel.date.is_some())
+                .max_by(|a, b| a.date.cmp(&b.date))
+            {
+                info(&format!(
+                    "latest: symbol={:?} date={:?} year={:?} quarter={:?}",
+                    latest.symbol, latest.date, latest.year, latest.quarter,
+                ));
+            }
+            r.check("fetch_earnings_calendar completes successfully", true);
+            r.check_result(
+                "every release for AAPL matches the requested symbol",
+                if releases
+                    .iter()
+                    .all(|rel| rel.symbol.as_deref() == Some(EQUITY_SYMBOL))
+                {
+                    Ok(())
+                } else {
+                    Err("one or more releases had a mismatched or missing symbol".to_owned())
+                },
+            );
+            r.check_result(
+                "every release with a quarter has it in 1..=4",
+                if releases
+                    .iter()
+                    .all(|rel| rel.quarter.is_none_or(|q| (1..=4).contains(&q)))
+                {
+                    Ok(())
+                } else {
+                    Err("one or more releases had an out-of-range quarter".to_owned())
+                },
             );
         }
     }

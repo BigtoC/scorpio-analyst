@@ -936,6 +936,7 @@ mod tests {
             finnhub_rps: 0,
             fred_rps: 0,
             yahoo_finance_rps: 0,
+            alpha_vantage_rps: 0,
         };
         let client = YFinanceClient::from_config(&cfg);
         assert_eq!(client.limiter_label(), "yahoo_finance");
@@ -952,6 +953,7 @@ mod tests {
             finnhub_rps: 0,
             fred_rps: 0,
             yahoo_finance_rps: 5,
+            alpha_vantage_rps: 0,
         };
         let client = YFinanceClient::from_config(&cfg);
         assert_eq!(client.limiter_label(), "yahoo_finance");

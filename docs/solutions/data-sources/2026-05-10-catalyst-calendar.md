@@ -49,14 +49,14 @@ Created `crates/scorpio-core/src/data/adapters/catalysts.rs`:
 
 FRED release IDs (verified at `fred.stlouisfed.org/releases/`):
 
-| Release         | ID  | Impact |
-|-----------------|-----|--------|
-| CPI             | 10  | H      |
-| Nonfarm Payrolls| 50  | H      |
-| FOMC Decision   | 101 | H      |
-| GDP             | 53  | M      |
-| ISM Mfg         | 21  | M      |
-| Retail Sales    | 14  | M      |
+| Release          | ID  | Impact |
+|------------------|-----|--------|
+| CPI              | 10  | H      |
+| Nonfarm Payrolls | 50  | H      |
+| FOMC Decision    | 101 | H      |
+| GDP              | 53  | M      |
+| ISM Mfg          | 21  | M      |
+| Retail Sales     | 14  | M      |
 
 ### Tier 2 (`SecEdgarClient` + `SecEdgar8kProvider` + `Tier2CatalystProvider`)
 
@@ -101,7 +101,7 @@ Created `crates/scorpio-core/src/data/sec_edgar.rs`:
 
 3. **`items` field in EDGAR submissions JSON** — the field is a string per filing (e.g., `"2.02"` or `"1.01, 2.01"`), not an array. Deserialize with `#[serde(default)]` because some older records omit it entirely. Normalize `", "` → `","` before splitting.
 
-4. **SEC EDGAR EDGAR lookback of 14 days** — 8-K filings may arrive several days after the underlying event (shareholder votes, Reg FD disclosures). The lookback window ensures recently filed events appear in the catalyst block even when the analyst runs the day after the event.
+4. **SEC EDGAR lookback of 14 days** — 8-K filings may arrive several days after the underlying event (shareholder votes, Reg FD disclosures). The lookback window ensures recently filed events appear in the catalyst block even when the analyst runs the day after the event.
 
 5. **`_MACRO` sentinel symbol** — FOMC, CPI, GDP, etc. apply to all tickers. The prompt renderer interleaves macro events with per-ticker events sorted by `event_date`. Dedup key is `(symbol, event_date, category)` — macro events from FRED and SEC EDGAR don't collide because their symbols differ.
 
@@ -114,3 +114,7 @@ The following remain out of scope pending a separate plan:
 - Conferences and investor-day calendars — no free structured feed; SEC EDGAR item 7.01 announces them but does not project the forward date
 
 Track these in a future Tier 3 plan.
+
+## Related
+
+- [Finnhub `EarningsRelease.quarter` is the reported quarter, not the announcement quarter](../logic-errors/finnhub-earnings-release-quarter-semantics-2026-05-16.md) — same Finnhub endpoint (`/calendar/earnings`), different code path: that doc covers backward-looking transcript-quarter resolution; this doc covers forward-looking catalyst projection. Don't conflate the two when reading runtime logs.

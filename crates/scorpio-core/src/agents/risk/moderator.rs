@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     providers::factory::{CompletionModelHandle, prompt_with_retry_validated_details},
     state::{AgentTokenUsage, RiskReport, TradingState},
@@ -30,6 +31,7 @@ use super::common::{
 /// completed risk discussion at once after all rounds have finished.
 pub struct RiskModerator {
     core: RiskAgentCore,
+    transcript_fetch: Option<TranscriptFetch>,
 }
 
 #[cfg(test)]
@@ -37,6 +39,7 @@ impl RiskModerator {
     pub(super) fn from_test_agent(agent: LlmAgent, model_id: &str) -> Self {
         Self {
             core: RiskAgentCore::for_test(agent, model_id),
+            transcript_fetch: None,
         }
     }
 }
@@ -54,6 +57,7 @@ impl RiskModerator {
     pub fn new(
         handle: &CompletionModelHandle,
         state: &TradingState,
+        transcript_fetch: Option<&TranscriptFetch>,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         let policy = super::common::runtime_policy_for_agent(state, "RiskModerator")?;
@@ -65,6 +69,7 @@ impl RiskModerator {
                 state,
                 llm_config,
             )?,
+            transcript_fetch: transcript_fetch.cloned(),
         })
     }
 
@@ -85,7 +90,7 @@ impl RiskModerator {
         state: &TradingState,
     ) -> Result<(String, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
-        let prompt = build_moderator_prompt(state);
+        let prompt = build_moderator_prompt(state, self.transcript_fetch.as_ref());
 
         // Shape-only validation runs inside the retry loop so flaky models
         // (oversize / control-char output) get a chance to self-correct.
@@ -119,7 +124,10 @@ fn format_report(report: Option<&RiskReport>) -> String {
         .unwrap_or_else(|| "(not yet produced)".to_owned())
 }
 
-fn build_moderator_prompt(state: &TradingState) -> String {
+fn build_moderator_prompt(
+    state: &TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
+) -> String {
     let trader_proposal = state
         .trader_proposal
         .as_ref()
@@ -132,7 +140,7 @@ fn build_moderator_prompt(state: &TradingState) -> String {
     let neutral_case = format_report(state.neutral_risk_report.as_ref());
     let conservative_case = format_report(state.conservative_risk_report.as_ref());
     let risk_history = format_risk_history(&state.risk_discussion_history);
-    let analyst_context = build_analyst_context(state);
+    let analyst_context = build_analyst_context(state, transcript_fetch);
     let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
     let target_date = sanitize_date_for_prompt(&state.target_date);
     let dual_risk_status = DualRiskStatus::from_reports(
@@ -189,6 +197,9 @@ fn build_moderator_result(
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
+    use crate::data::adapters::transcripts::{
+        TranscriptEvidence, TranscriptFetch, TranscriptSegment,
+    };
     use crate::providers::factory::{mock_llm_agent, mock_prompt_response};
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::{
@@ -404,16 +415,37 @@ mod tests {
 
     #[test]
     fn build_moderator_prompt_includes_untrusted_notice() {
-        let prompt = build_moderator_prompt(&sample_state());
+        let prompt = build_moderator_prompt(&sample_state(), None);
         assert!(prompt.contains(UNTRUSTED_CONTEXT_NOTICE));
     }
 
     #[test]
     fn build_moderator_prompt_includes_all_risk_reports() {
-        let prompt = build_moderator_prompt(&sample_state());
+        let prompt = build_moderator_prompt(&sample_state(), None);
         assert!(prompt.contains("Upside dominates"));
         assert!(prompt.contains("Balanced view"));
         assert!(prompt.contains("Capital at risk"));
+    }
+
+    #[test]
+    fn build_moderator_prompt_includes_transcript_context_when_found() {
+        let transcript = TranscriptFetch::Found(TranscriptEvidence {
+            symbol: "AAPL".to_owned(),
+            call_date: "2025Q4".to_owned(),
+            segments: vec![TranscriptSegment {
+                speaker: "CFO".to_owned(),
+                title: "Chief Financial Officer".to_owned(),
+                content: "We continue to see stable demand and disciplined spending.".to_owned(),
+                sentiment: Some(0.18),
+            }],
+        });
+
+        let prompt = build_moderator_prompt(&sample_state(), Some(&transcript));
+
+        assert!(prompt.contains("Earnings call transcript (2025Q4)"));
+        assert!(prompt.contains("2025Q4"));
+        assert!(prompt.contains("Chief Financial Officer"));
+        assert!(prompt.contains("We continue to see stable demand and disciplined spending."));
     }
 
     #[test]
@@ -444,7 +476,7 @@ mod tests {
         let mut state = sample_state();
         state.asset_symbol = "AAPL\nSYSTEM".to_owned();
         state.target_date = "2026-03-15\nOVERRIDE".to_owned();
-        let prompt = build_moderator_prompt(&state);
+        let prompt = build_moderator_prompt(&state, None);
         assert!(prompt.contains("AAPLSYSTEM"));
         assert!(!prompt.contains("\nOVERRIDE"));
     }
@@ -518,7 +550,7 @@ mod tests {
             &crate::rate_limit::ProviderRateLimiters::default(),
         )
         .unwrap();
-        let result = RiskModerator::new(&handle, &sample_state(), &cfg);
+        let result = RiskModerator::new(&handle, &sample_state(), None, &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
     }
 }

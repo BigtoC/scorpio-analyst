@@ -96,6 +96,16 @@ impl SharedRateLimiter {
         Some(Self::new("yahoo_finance", cfg.yahoo_finance_rps))
     }
 
+    /// Create an Alpha Vantage rate limiter from `RateLimitConfig`.
+    ///
+    /// Returns `None` when `cfg.alpha_vantage_rps == 0` (disabled).
+    pub fn alpha_vantage_from_config(cfg: &RateLimitConfig) -> Option<Self> {
+        if cfg.alpha_vantage_rps == 0 {
+            return None;
+        }
+        Some(Self::new("alpha_vantage", cfg.alpha_vantage_rps))
+    }
+
     /// Wait until a single permit becomes available. This is cancel-safe.
     pub async fn acquire(&self) {
         if let Some(inner) = &self.inner {
@@ -312,6 +322,7 @@ mod tests {
             finnhub_rps: 30,
             fred_rps: 0,
             yahoo_finance_rps: 0,
+            alpha_vantage_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_some());
@@ -324,6 +335,7 @@ mod tests {
             finnhub_rps: 0,
             fred_rps: 0,
             yahoo_finance_rps: 0,
+            alpha_vantage_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_none());
@@ -355,6 +367,7 @@ mod tests {
             finnhub_rps: 0,
             fred_rps: 0,
             yahoo_finance_rps: 5,
+            alpha_vantage_rps: 0,
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
         assert!(limiter.is_some(), "non-zero rps should produce a limiter");
@@ -371,8 +384,34 @@ mod tests {
             finnhub_rps: 0,
             fred_rps: 0,
             yahoo_finance_rps: 0,
+            alpha_vantage_rps: 0,
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
+        assert!(limiter.is_none(), "rps=0 should disable the limiter");
+    }
+
+    #[test]
+    fn alpha_vantage_from_config_returns_some_when_rps_nonzero() {
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 0,
+            alpha_vantage_rps: 1,
+        };
+        let limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg);
+        assert!(limiter.is_some(), "non-zero rps should produce a limiter");
+        assert_eq!(limiter.unwrap().label(), "alpha_vantage");
+    }
+
+    #[test]
+    fn alpha_vantage_from_config_returns_none_when_rps_zero() {
+        let cfg = RateLimitConfig {
+            finnhub_rps: 0,
+            fred_rps: 0,
+            yahoo_finance_rps: 0,
+            alpha_vantage_rps: 0,
+        };
+        let limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg);
         assert!(limiter.is_none(), "rps=0 should disable the limiter");
     }
 

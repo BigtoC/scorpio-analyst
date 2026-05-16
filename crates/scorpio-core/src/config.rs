@@ -36,9 +36,6 @@ fn default_analysis_pack() -> String {
 /// section continue to work with current behaviour unchanged.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DataEnrichmentConfig {
-    /// Whether to fetch earnings-call transcript evidence.
-    #[serde(default)]
-    pub enable_transcripts: bool,
     /// Whether to fetch analyst consensus estimates evidence.
     #[serde(default)]
     pub enable_consensus_estimates: bool,
@@ -65,7 +62,6 @@ fn default_enrichment_fetch_timeout_secs() -> u64 {
 impl Default for DataEnrichmentConfig {
     fn default() -> Self {
         Self {
-            enable_transcripts: false,
             enable_consensus_estimates: false,
             enable_event_news: false,
             max_evidence_age_hours: default_max_evidence_age_hours(),
@@ -161,6 +157,8 @@ pub struct ApiConfig {
     pub finnhub_api_key: Option<SecretString>,
     #[serde(skip)]
     pub fred_api_key: Option<SecretString>,
+    #[serde(skip)]
+    pub alpha_vantage_api_key: Option<SecretString>,
 }
 
 /// Per-provider LLM settings: API key, optional base URL override, and rate limit (RPM).
@@ -322,6 +320,12 @@ pub struct RateLimitConfig {
     /// Yahoo Finance requests per second (0 = disabled; default: 10).
     #[serde(default = "default_yahoo_finance_rps")]
     pub yahoo_finance_rps: u32,
+    /// Alpha Vantage requests per second (0 = disabled; default: 1).
+    ///
+    /// Free-tier accounts are 25 requests/day. The default of 1 rps keeps
+    /// burst behavior polite without burning through the daily quota.
+    #[serde(default = "default_alpha_vantage_rps")]
+    pub alpha_vantage_rps: u32,
 }
 
 fn default_finnhub_rps() -> u32 {
@@ -333,6 +337,9 @@ fn default_fred_rps() -> u32 {
 fn default_yahoo_finance_rps() -> u32 {
     30
 }
+fn default_alpha_vantage_rps() -> u32 {
+    1
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -340,6 +347,7 @@ impl Default for RateLimitConfig {
             finnhub_rps: default_finnhub_rps(),
             fred_rps: default_fred_rps(),
             yahoo_finance_rps: default_yahoo_finance_rps(),
+            alpha_vantage_rps: default_alpha_vantage_rps(),
         }
     }
 }
@@ -403,6 +411,10 @@ impl std::fmt::Debug for ApiConfig {
         f.debug_struct("ApiConfig")
             .field("finnhub_api_key", &secret_display(&self.finnhub_api_key))
             .field("fred_api_key", &secret_display(&self.fred_api_key))
+            .field(
+                "alpha_vantage_api_key",
+                &secret_display(&self.alpha_vantage_api_key),
+            )
             .finish()
     }
 }
@@ -520,6 +532,9 @@ impl Config {
         if let Some(k) = &partial.fred_api_key {
             cfg.api.fred_api_key = Some(SecretString::from(k.clone()));
         }
+        if let Some(k) = &partial.alpha_vantage_api_key {
+            cfg.api.alpha_vantage_api_key = Some(SecretString::from(k.clone()));
+        }
 
         // Env var secrets override file secrets (env wins); warn on collision.
         macro_rules! inject_env_override {
@@ -572,6 +587,11 @@ impl Config {
             "finnhub"
         );
         inject_env_override!(cfg.api.fred_api_key, "SCORPIO_FRED_API_KEY", "fred");
+        inject_env_override!(
+            cfg.api.alpha_vantage_api_key,
+            "SCORPIO_ALPHA_VANTAGE_API_KEY",
+            "alpha_vantage"
+        );
 
         if cfg.providers.copilot.base_url.is_some() {
             return Err(anyhow::anyhow!(
@@ -613,6 +633,7 @@ impl Config {
         cfg.providers.deepseek.api_key = secret_from_env("SCORPIO_DEEPSEEK_API_KEY");
         cfg.providers.xiaomimimo.api_key = secret_from_env("SCORPIO_XIAOMIMIMO_API_KEY");
         cfg.api.fred_api_key = secret_from_env("SCORPIO_FRED_API_KEY");
+        cfg.api.alpha_vantage_api_key = secret_from_env("SCORPIO_ALPHA_VANTAGE_API_KEY");
 
         if cfg.providers.copilot.base_url.is_some() {
             return Err(anyhow::anyhow!(
@@ -1008,6 +1029,7 @@ deep_thinking_model = "o3"
         let api = ApiConfig {
             finnhub_api_key: Some(SecretString::from("ct_finnhub_key")),
             fred_api_key: None,
+            alpha_vantage_api_key: None,
         };
         let debug_output = format!("{api:?}");
         assert!(
@@ -1029,6 +1051,34 @@ deep_thinking_model = "o3"
         assert!(
             debug_output.contains("fred_api_key"),
             "debug output should include fred_api_key field"
+        );
+        assert!(
+            debug_output.contains("alpha_vantage_api_key"),
+            "debug output should include alpha_vantage_api_key field"
+        );
+    }
+
+    #[test]
+    fn api_config_alpha_vantage_key_defaults_to_none() {
+        let cfg = ApiConfig::default();
+        assert!(cfg.alpha_vantage_api_key.is_none());
+    }
+
+    #[test]
+    fn api_config_debug_redacts_alpha_vantage_secret() {
+        let api = ApiConfig {
+            finnhub_api_key: None,
+            fred_api_key: None,
+            alpha_vantage_api_key: Some(SecretString::from("av_secret_xyz")),
+        };
+        let debug_output = format!("{api:?}");
+        assert!(
+            !debug_output.contains("av_secret_xyz"),
+            "must not leak alpha vantage secret value"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "should redact alpha vantage key"
         );
     }
 
@@ -1416,7 +1466,6 @@ fetch_timeout_secs = 0
     #[test]
     fn enrichment_config_defaults_are_all_disabled() {
         let cfg = DataEnrichmentConfig::default();
-        assert!(!cfg.enable_transcripts);
         assert!(!cfg.enable_consensus_estimates);
         assert!(!cfg.enable_event_news);
         assert_eq!(cfg.max_evidence_age_hours, 48);
@@ -1427,25 +1476,9 @@ fetch_timeout_secs = 0
         let _guard = ENV_LOCK.lock().unwrap();
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("config should load");
-        assert!(!cfg.enrichment.enable_transcripts);
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
-    }
-
-    #[test]
-    fn enrichment_env_override_sets_enable_transcripts() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
-        unsafe {
-            std::env::set_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS", "true");
-        }
-        let result = Config::load_from(&path);
-        unsafe {
-            std::env::remove_var("SCORPIO__ENRICHMENT__ENABLE_TRANSCRIPTS");
-        }
-        let cfg = result.expect("config should load with enrichment env override");
-        assert!(cfg.enrichment.enable_transcripts);
     }
 
     #[test]
@@ -1467,7 +1500,6 @@ fetch_timeout_secs = 0
     fn config_without_enrichment_section_uses_defaults() {
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("should load without enrichment section");
-        assert!(!cfg.enrichment.enable_transcripts);
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);

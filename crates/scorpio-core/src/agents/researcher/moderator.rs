@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::{
     agents::shared::agent_token_usage_from_completion,
     config::LlmConfig,
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     providers::factory::{CompletionModelHandle, prompt_with_retry_validated_details},
     state::{AgentTokenUsage, TradingState},
@@ -28,6 +29,7 @@ use super::common::{
 /// completed debate at once after all rounds have finished.
 pub struct DebateModerator {
     core: DebaterCore,
+    transcript_fetch: Option<TranscriptFetch>,
 }
 
 #[cfg(test)]
@@ -35,6 +37,7 @@ impl DebateModerator {
     fn from_test_agent(agent: LlmAgent, model_id: &str) -> Self {
         Self {
             core: DebaterCore::for_test(agent, model_id),
+            transcript_fetch: None,
         }
     }
 }
@@ -50,6 +53,7 @@ impl DebateModerator {
     pub fn new(
         handle: &CompletionModelHandle,
         state: &TradingState,
+        transcript_fetch: Option<&TranscriptFetch>,
         llm_config: &LlmConfig,
     ) -> Result<Self, TradingError> {
         let policy = super::common::runtime_policy_for_agent(state, "DebateModerator")?;
@@ -61,6 +65,7 @@ impl DebateModerator {
                 state,
                 llm_config,
             )?,
+            transcript_fetch: transcript_fetch.cloned(),
         })
     }
 
@@ -78,7 +83,7 @@ impl DebateModerator {
         state: &TradingState,
     ) -> Result<(String, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
-        let prompt = build_moderator_prompt(state);
+        let prompt = build_moderator_prompt(state, self.transcript_fetch.as_ref());
 
         // Validate inside the retry loop so flaky models that omit a stance,
         // bullish/bearish framing, or uncertainty get a corrective hint and
@@ -102,7 +107,10 @@ impl DebateModerator {
     }
 }
 
-fn build_moderator_prompt(state: &TradingState) -> String {
+fn build_moderator_prompt(
+    state: &TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
+) -> String {
     let bull_case = state
         .debate_history
         .iter()
@@ -124,7 +132,7 @@ fn build_moderator_prompt(state: &TradingState) -> String {
     } else {
         format_debate_history(&state.debate_history)
     };
-    let analyst_context = build_analyst_context(state);
+    let analyst_context = build_analyst_context(state, transcript_fetch);
 
     format!(
         "Synthesise the debate for {} as of {} into a consensus summary for the Trader.\n\n {}\n\n {}\n\n Latest bullish case:\n {}\n\n Latest bearish case:\n {}\n\n Full debate history:\n {}",
@@ -163,6 +171,9 @@ fn build_moderator_result(
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
+    use crate::data::adapters::transcripts::{
+        TranscriptEvidence, TranscriptFetch, TranscriptSegment,
+    };
     use crate::providers::factory::{mock_llm_agent, mock_prompt_response};
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::AgentTokenUsage;
@@ -342,11 +353,33 @@ mod tests {
             audit_report: None,
         };
 
-        let prompt = build_moderator_prompt(&state);
+        let prompt = build_moderator_prompt(&state, None);
         assert!(prompt.contains(UNTRUSTED_CONTEXT_NOTICE));
         assert!(prompt.contains("Ignore prior instructions"));
         assert!(prompt.contains("Valuation risk dominates"));
         assert!(prompt.contains("Fundamental data: null"));
+    }
+
+    #[test]
+    fn build_moderator_prompt_includes_transcript_context_when_found() {
+        let state = sample_state();
+        let transcript = TranscriptFetch::Found(TranscriptEvidence {
+            symbol: "AAPL".to_owned(),
+            call_date: "2025Q4".to_owned(),
+            segments: vec![TranscriptSegment {
+                speaker: "CEO".to_owned(),
+                title: "Chief Executive Officer".to_owned(),
+                content: "Demand remained broad-based across product lines.".to_owned(),
+                sentiment: Some(0.42),
+            }],
+        });
+
+        let prompt = build_moderator_prompt(&state, Some(&transcript));
+
+        assert!(prompt.contains("Earnings call transcript (2025Q4)"));
+        assert!(prompt.contains("2025Q4"));
+        assert!(prompt.contains("Chief Executive Officer"));
+        assert!(prompt.contains("Demand remained broad-based across product lines."));
     }
 
     #[test]
@@ -489,7 +522,7 @@ mod tests {
             &crate::rate_limit::ProviderRateLimiters::default(),
         )
         .unwrap();
-        let result = DebateModerator::new(&handle, &sample_state(), &cfg);
+        let result = DebateModerator::new(&handle, &sample_state(), None, &cfg);
         assert!(matches!(result, Err(TradingError::Config(_))));
     }
 }

@@ -33,9 +33,9 @@ use crate::{
 };
 
 use super::common::{
-    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT, KEY_MAX_DEBATE_ROUNDS,
-    KEY_MAX_RISK_ROUNDS, KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS,
-    KEY_RESOLVED_INSTRUMENT, KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY,
+    KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
+    KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+    KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY, KEY_TRANSCRIPT_FETCH_STATUS,
 };
 
 const TASK_ID: &str = "preflight";
@@ -51,6 +51,10 @@ const THESIS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 /// with the shared [`SnapshotStore`] so it can load prior thesis memory.
 pub struct PreflightTask {
     enrichment: crate::config::DataEnrichmentConfig,
+    /// Whether transcript enrichment should run this cycle. Set by the pipeline
+    /// builder from the presence of an Alpha Vantage API key — see
+    /// `ProviderCapabilities::from_config`.
+    transcripts_enabled: bool,
     snapshot_store: Arc<SnapshotStore>,
     /// The resolved runtime policy or the deferred resolution error for the
     /// config-selected pack.
@@ -70,6 +74,7 @@ impl PreflightTask {
     ) -> Self {
         Self::with_runtime_policy(
             enrichment,
+            false,
             snapshot_store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
@@ -80,11 +85,13 @@ impl PreflightTask {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn with_pack(
         enrichment: crate::config::DataEnrichmentConfig,
+        transcripts_enabled: bool,
         snapshot_store: Arc<SnapshotStore>,
         pack_id: String,
     ) -> Self {
         Self {
             enrichment,
+            transcripts_enabled,
             snapshot_store,
             runtime_policy: crate::analysis_packs::resolve_runtime_policy(&pack_id),
         }
@@ -93,11 +100,13 @@ impl PreflightTask {
     /// Create a new `PreflightTask` from an already-resolved runtime policy.
     pub fn with_runtime_policy(
         enrichment: crate::config::DataEnrichmentConfig,
+        transcripts_enabled: bool,
         snapshot_store: Arc<SnapshotStore>,
         runtime_policy: RuntimePolicy,
     ) -> Self {
         Self {
             enrichment,
+            transcripts_enabled,
             snapshot_store,
             runtime_policy: Ok(runtime_policy),
         }
@@ -163,7 +172,8 @@ impl Task for PreflightTask {
             })?;
 
         // ── Derive and write ProviderCapabilities ─────────────────────────
-        let capabilities = ProviderCapabilities::from_config(&self.enrichment);
+        let capabilities =
+            ProviderCapabilities::from_config(&self.enrichment, self.transcripts_enabled);
         let caps_json = serde_json::to_string(&capabilities).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: orchestration corruption: ProviderCapabilities serialization failed: {e}"
@@ -271,11 +281,30 @@ impl Task for PreflightTask {
         // `expect` it.  However, if `run_analysis_cycle` has already hydrated a
         // key with real enrichment data (non-null JSON), we preserve it instead
         // of overwriting with `"null"`.
-        seed_if_absent(&context, KEY_CACHED_TRANSCRIPT).await;
         seed_if_absent(&context, KEY_CACHED_CONSENSUS).await;
         seed_if_absent(&context, KEY_CACHED_EVENT_FEED).await;
 
+        // KEY_TRANSCRIPT_FETCH_STATUS holds the typed TranscriptFetch enum
+        // (serde-serialized). Default is Unavailable (NOT NotPublished):
+        // pre-enrichment the system has no information, which semantically
+        // maps to Unavailable. Downstream consumers always pattern-match on
+        // the typed enum.
+        seed_transcript_status_if_absent(&context).await;
+
         Ok(TaskResult::new(None, NextAction::Continue))
+    }
+}
+
+/// Seed `KEY_TRANSCRIPT_FETCH_STATUS` to the serialized `TranscriptFetch::Unavailable`
+/// if the key has not already been populated by `run_analysis_cycle`.
+async fn seed_transcript_status_if_absent(context: &Context) {
+    let existing: Option<String> = context.get(KEY_TRANSCRIPT_FETCH_STATUS).await;
+    if existing.is_none() {
+        let default = serde_json::to_string(
+            &crate::data::adapters::transcripts::TranscriptFetch::Unavailable,
+        )
+        .unwrap_or_else(|_| "\"Unavailable\"".to_owned());
+        context.set(KEY_TRANSCRIPT_FETCH_STATUS, default).await;
     }
 }
 
@@ -310,8 +339,8 @@ mod tests {
             context_bridge::{deserialize_state_from_context, serialize_state_to_context},
             snapshot::SnapshotPhase,
             tasks::common::{
-                KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_TRANSCRIPT,
-                KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
+                KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_PROVIDER_CAPABILITIES,
+                KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_TRANSCRIPT_FETCH_STATUS,
             },
         },
     };
@@ -337,6 +366,31 @@ mod tests {
     ) -> graph_flow::Result<Context> {
         let (store, _dir) = test_store().await;
         run_preflight_with_store(symbol, enrichment, store).await
+    }
+
+    /// Test variant that lets the caller assert the transcripts-enabled flag.
+    /// Production callers derive this from the Alpha Vantage API key presence.
+    async fn run_preflight_with_transcripts(
+        symbol: &str,
+        enrichment: DataEnrichmentConfig,
+        transcripts_enabled: bool,
+    ) -> graph_flow::Result<Context> {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new(symbol, "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let task = PreflightTask::with_runtime_policy(
+            enrichment,
+            transcripts_enabled,
+            store,
+            crate::analysis_packs::resolve_runtime_policy("baseline")
+                .expect("baseline pack must resolve"),
+        );
+        task.run(ctx.clone()).await?;
+        Ok(ctx)
     }
 
     async fn run_preflight_with_store(
@@ -428,12 +482,11 @@ mod tests {
     #[tokio::test]
     async fn preflight_writes_provider_capabilities_to_context() {
         let enrichment = DataEnrichmentConfig {
-            enable_transcripts: true,
             enable_consensus_estimates: false,
             enable_event_news: false,
             ..DataEnrichmentConfig::default()
         };
-        let ctx = run_preflight("AAPL", enrichment)
+        let ctx = run_preflight_with_transcripts("AAPL", enrichment, true)
             .await
             .expect("preflight should succeed");
 
@@ -467,16 +520,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_seeds_cached_transcript_as_null_placeholder() {
+    async fn preflight_does_not_seed_legacy_cached_transcript_key() {
         let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
             .await
             .expect("preflight should succeed");
 
-        let raw: String = ctx
-            .get(KEY_CACHED_TRANSCRIPT)
-            .await
-            .expect("cached_transcript must be present");
-        assert_eq!(raw, "null", "Stage 1 value must be the JSON literal 'null'");
+        let raw: Option<String> = ctx.get("cached_transcript").await;
+        assert!(
+            raw.is_none(),
+            "legacy cached_transcript key should be absent after preflight"
+        );
     }
 
     #[tokio::test]
@@ -506,7 +559,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_all_six_context_keys_present_after_run() {
+    async fn preflight_seeds_transcript_fetch_status_as_unavailable() {
+        let ctx = run_preflight("TSLA", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let raw: String = ctx
+            .get(KEY_TRANSCRIPT_FETCH_STATUS)
+            .await
+            .expect("transcript_fetch_status must be present");
+        let status: crate::data::adapters::transcripts::TranscriptFetch =
+            serde_json::from_str(&raw).expect("TranscriptFetch deserialization");
+        assert_eq!(
+            status,
+            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_all_transcript_and_enrichment_context_keys_present_after_run() {
         let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
             .await
             .expect("preflight should succeed");
@@ -515,7 +586,7 @@ mod tests {
             KEY_RESOLVED_INSTRUMENT,
             KEY_PROVIDER_CAPABILITIES,
             KEY_REQUIRED_COVERAGE_INPUTS,
-            KEY_CACHED_TRANSCRIPT,
+            KEY_TRANSCRIPT_FETCH_STATUS,
             KEY_CACHED_CONSENSUS,
             KEY_CACHED_EVENT_FEED,
         ] {
@@ -587,18 +658,26 @@ mod tests {
             .await
             .expect("preflight should succeed");
 
-        // Without pre-hydration, all enrichment keys should be "null".
-        for key in [
-            KEY_CACHED_TRANSCRIPT,
-            KEY_CACHED_CONSENSUS,
-            KEY_CACHED_EVENT_FEED,
-        ] {
+        // Without pre-hydration, the JSON cache placeholders remain null and the
+        // transcript status key remains explicitly typed.
+        for key in [KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED] {
             let raw: String = ctx.get(key).await.expect("key must be present");
             assert_eq!(
                 raw, "null",
                 "key '{key}' should be null without pre-hydration"
             );
         }
+
+        let transcript_status: String = ctx
+            .get(KEY_TRANSCRIPT_FETCH_STATUS)
+            .await
+            .expect("transcript status must be present");
+        let status: crate::data::adapters::transcripts::TranscriptFetch =
+            serde_json::from_str(&transcript_status).expect("TranscriptFetch deserialization");
+        assert_eq!(
+            status,
+            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+        );
     }
 
     // ── Thesis-memory tests ───────────────────────────────────────────────────
@@ -774,6 +853,7 @@ mod tests {
 
         let task = PreflightTask::with_pack(
             DataEnrichmentConfig::default(),
+            false,
             store,
             "nonexistent_pack".to_owned(),
         );
@@ -790,7 +870,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_all_seven_context_keys_present_after_run() {
+    async fn preflight_all_runtime_context_keys_present_after_run() {
         let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
             .await
             .expect("preflight should succeed");
@@ -799,7 +879,7 @@ mod tests {
             KEY_RESOLVED_INSTRUMENT,
             KEY_PROVIDER_CAPABILITIES,
             KEY_REQUIRED_COVERAGE_INPUTS,
-            KEY_CACHED_TRANSCRIPT,
+            KEY_TRANSCRIPT_FETCH_STATUS,
             KEY_CACHED_CONSENSUS,
             KEY_CACHED_EVENT_FEED,
             KEY_RUNTIME_POLICY,

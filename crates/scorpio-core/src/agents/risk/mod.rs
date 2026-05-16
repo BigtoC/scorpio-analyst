@@ -39,6 +39,7 @@ use common::{redact_text_for_storage, serialize_risk_report_context};
 
 use crate::{
     config::Config,
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     providers::factory::CompletionModelHandle,
     state::{AgentTokenUsage, DebateMessage, RiskReport, TradingState},
@@ -230,15 +231,16 @@ where
 ///   the discussion immediately. Schema violations are propagated unchanged.
 pub async fn run_risk_discussion(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<Vec<AgentTokenUsage>, TradingError> {
     let max_rounds = config.llm.max_risk_rounds;
     let mut executor = RealRiskExecutor {
-        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
-        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
-        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
-        moderator: RiskModerator::new(handle, state, &config.llm)?,
+        aggressive: AggressiveRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     run_risk_discussion_with_executor(state, max_rounds, &mut executor).await
@@ -259,6 +261,7 @@ pub async fn run_risk_discussion(
 /// - Returns [`TradingError`] on LLM failure.
 pub async fn run_aggressive_risk_turn(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
@@ -268,10 +271,10 @@ pub async fn run_aggressive_risk_turn(
         });
     }
     let mut executor = RealRiskExecutor {
-        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
-        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
-        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
-        moderator: RiskModerator::new(handle, state, &config.llm)?,
+        aggressive: AggressiveRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let prior_conservative = serialize_risk_report_context(state.conservative_risk_report.as_ref());
@@ -307,6 +310,7 @@ pub async fn run_aggressive_risk_turn(
 /// - Returns [`TradingError`] on LLM failure.
 pub async fn run_conservative_risk_turn(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
@@ -317,10 +321,10 @@ pub async fn run_conservative_risk_turn(
         });
     }
     let mut executor = RealRiskExecutor {
-        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
-        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
-        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
-        moderator: RiskModerator::new(handle, state, &config.llm)?,
+        aggressive: AggressiveRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let agg_context = serialize_risk_report_context(state.aggressive_risk_report.as_ref());
@@ -352,6 +356,7 @@ pub async fn run_conservative_risk_turn(
 /// - Returns [`TradingError`] on LLM failure.
 pub async fn run_neutral_risk_turn(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
@@ -361,10 +366,10 @@ pub async fn run_neutral_risk_turn(
         });
     }
     let mut executor = RealRiskExecutor {
-        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
-        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
-        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
-        moderator: RiskModerator::new(handle, state, &config.llm)?,
+        aggressive: AggressiveRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let agg_context = serialize_risk_report_context(state.aggressive_risk_report.as_ref());
@@ -395,6 +400,7 @@ pub async fn run_neutral_risk_turn(
 /// - Returns [`TradingError`] on LLM failure.
 pub async fn run_risk_moderation(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
@@ -404,10 +410,10 @@ pub async fn run_risk_moderation(
         });
     }
     let mut executor = RealRiskExecutor {
-        aggressive: AggressiveRiskAgent::new(handle, state, &config.llm)?,
-        conservative: ConservativeRiskAgent::new(handle, state, &config.llm)?,
-        neutral: NeutralRiskAgent::new(handle, state, &config.llm)?,
-        moderator: RiskModerator::new(handle, state, &config.llm)?,
+        aggressive: AggressiveRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        conservative: ConservativeRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        neutral: NeutralRiskAgent::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: RiskModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let (synthesis, usage) = executor.moderate(state).await?;

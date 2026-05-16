@@ -19,6 +19,7 @@
 //! - `YFinanceClient::get_quarterly_shares`
 //! - `YFinanceClient::get_earnings_trend`
 //! - `YFinanceClient::get_profile`
+//! - `YFinanceClient::fetch_calendar`
 //!
 //! Also exercises the ETF degradation path via `SPY` to confirm that
 //! financial statement fetchers return `None`/empty gracefully and that
@@ -36,7 +37,7 @@ use scorpio_core::domain::Symbol;
 use yfinance_rs::profile::Profile;
 
 /// Well-known liquid equity used as the primary test subject.
-const EQUITY_SYMBOL: &str = "AAPL";
+const EQUITY_SYMBOL: &str = "GLW";
 /// Well-known ETF used to validate the fund-style degradation path.
 const ETF_SYMBOL: &str = "SPY";
 /// Number of calendar days in the look-back window used for OHLCV checks.
@@ -609,6 +610,50 @@ async fn main() {
         }
     }
     r.check("fetch_consensus(SPY) completes without panic", true);
+    println!();
+
+    // ── 11. fetch_calendar (AAPL + SPY) ──────────────────────────────────────
+
+    section(
+        11,
+        &format!("YFinanceClient::fetch_calendar ({EQUITY_SYMBOL} + {ETF_SYMBOL})"),
+    );
+
+    match client.fetch_calendar(EQUITY_SYMBOL).await {
+        None => {
+            warn("fetch_calendar(AAPL) returned None (acceptable degradation)");
+        }
+        Some(cal) => {
+            info(&format!(
+                "AAPL calendar: {} earnings dates, ex_div={:?}, div_pay={:?}",
+                cal.earnings_dates.len(),
+                cal.ex_dividend_date,
+                cal.dividend_payment_date,
+            ));
+            r.check(
+                "AAPL calendar has at least one earnings date or dividend field",
+                !cal.earnings_dates.is_empty()
+                    || cal.ex_dividend_date.is_some()
+                    || cal.dividend_payment_date.is_some(),
+            );
+        }
+    }
+
+    // SPY: an ETF has no earnings calendar; None or sparse fields are acceptable.
+    match client.fetch_calendar(ETF_SYMBOL).await {
+        None => {
+            info("SPY calendar: None (expected for ETF)");
+        }
+        Some(cal) => {
+            info(&format!(
+                "SPY calendar: {} earnings dates, ex_div={:?}, div_pay={:?}",
+                cal.earnings_dates.len(),
+                cal.ex_dividend_date,
+                cal.dividend_payment_date,
+            ));
+        }
+    }
+    r.check("fetch_calendar(SPY) completes without panic", true);
     println!();
 
     // ── Summary ───────────────────────────────────────────────────────────────

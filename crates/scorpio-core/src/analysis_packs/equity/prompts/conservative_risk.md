@@ -79,9 +79,13 @@ your risk assessment:
 - Unusual one-time items inflating reported results
 - Change in key operating metrics (churn, retention, win rates)
 
-When transcripts are unavailable, note `degraded mode: headline/summary only`
-for any commentary-based risk factors.
+When a transcript is available (status: Found), compare the tone and
+language between the press release / headline and the earnings call
+segments. Treat any divergence as a heightened risk factor — e.g.,
+optimistic prepared remarks vs. cautious Q&A answers, or guidance
+hedging that does not appear in the headline.
 
-<!-- TODO(transcripts): once call transcripts are wired (TranscriptEvidence
-provider), add tone-shift detection between press release and earnings call.
-Currently we only see press releases and headlines. -->
+When transcripts are unavailable (status: NotPublished / Throttled /
+Unavailable), explicitly include the phrase
+`degraded mode: transcript unavailable` for any commentary-based risk
+factors.

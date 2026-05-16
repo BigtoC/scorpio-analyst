@@ -14,7 +14,9 @@ use crate::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
             accounting::debate_moderator_accounting,
-            common::{DEBATE_USAGE_PREFIX, KEY_DEBATE_ROUND, write_round_usage},
+            common::{
+                DEBATE_USAGE_PREFIX, KEY_DEBATE_ROUND, load_transcript_fetch, write_round_usage,
+            },
             runtime::{load_state, save_state, task_error},
         },
     },
@@ -49,14 +51,22 @@ impl Task for BullishResearcherTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
         let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 
-        let usage = run_bullish_researcher_turn(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to run bullish turn", error))?;
+        let usage = run_bullish_researcher_turn(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run bullish turn", error))?;
 
         write_round_usage(&context, DEBATE_USAGE_PREFIX, this_round, "bull", &usage)
             .await
@@ -98,14 +108,22 @@ impl Task for BearishResearcherTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
         let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 
-        let usage = run_bearish_researcher_turn(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to run bearish turn", error))?;
+        let usage = run_bearish_researcher_turn(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run bearish turn", error))?;
 
         write_round_usage(&context, DEBATE_USAGE_PREFIX, this_round, "bear", &usage)
             .await
@@ -158,10 +176,18 @@ impl Task for DebateModeratorTask {
         info!(task = Self::TASK_ID, phase = 2, "task started");
         let phase_start = std::time::Instant::now();
         let mut state = load_state(Self::TASK_NAME, &context).await?;
+        let transcript_fetch = load_transcript_fetch(&context).await.map_err(|error| {
+            task_error(Self::TASK_NAME, "failed to load transcript status", error)
+        })?;
 
-        let mod_usage = run_debate_moderation(&mut state, &self.config, &self.handle)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to run moderation", error))?;
+        let mod_usage = run_debate_moderation(
+            &mut state,
+            Some(&transcript_fetch),
+            &self.config,
+            &self.handle,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to run moderation", error))?;
 
         let is_final =
             debate_moderator_accounting(&context, &mut state, &mod_usage, &phase_start).await;

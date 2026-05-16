@@ -96,6 +96,7 @@ async fn pipeline_try_new_entry_task_is_preflight() {
         FinnhubClient::for_test(),
         FredClient::for_test(),
         dummy_yfinance(),
+        None,
         snapshot_store,
         CompletionModelHandle::for_test(),
         CompletionModelHandle::for_test(),

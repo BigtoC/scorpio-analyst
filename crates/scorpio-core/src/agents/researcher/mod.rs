@@ -26,6 +26,7 @@ pub use moderator::DebateModerator;
 
 use crate::{
     config::Config,
+    data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     providers::factory::CompletionModelHandle,
     state::{AgentTokenUsage, DebateMessage, TradingState},
@@ -150,14 +151,15 @@ where
 /// the debate immediately. Schema violations are also propagated unchanged.
 pub async fn run_researcher_debate(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<Vec<AgentTokenUsage>, TradingError> {
     let max_rounds = config.llm.max_debate_rounds;
     let mut executor = RealDebateExecutor {
-        bull: BullishResearcher::new(handle, state, &config.llm)?,
-        bear: BearishResearcher::new(handle, state, &config.llm)?,
-        moderator: DebateModerator::new(handle, state, &config.llm)?,
+        bull: BullishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     run_researcher_debate_with_executor(state, max_rounds, &mut executor).await
@@ -174,13 +176,14 @@ pub async fn run_researcher_debate(
 /// Returns [`TradingError`] on LLM failure or schema violation.
 pub async fn run_bullish_researcher_turn(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
     let mut executor = RealDebateExecutor {
-        bull: BullishResearcher::new(handle, state, &config.llm)?,
-        bear: BearishResearcher::new(handle, state, &config.llm)?,
-        moderator: DebateModerator::new(handle, state, &config.llm)?,
+        bull: BullishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let bear_latest = state
@@ -208,13 +211,14 @@ pub async fn run_bullish_researcher_turn(
 /// Returns [`TradingError`] on LLM failure or schema violation.
 pub async fn run_bearish_researcher_turn(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
     let mut executor = RealDebateExecutor {
-        bull: BullishResearcher::new(handle, state, &config.llm)?,
-        bear: BearishResearcher::new(handle, state, &config.llm)?,
-        moderator: DebateModerator::new(handle, state, &config.llm)?,
+        bull: BullishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let bull_latest = state
@@ -242,13 +246,14 @@ pub async fn run_bearish_researcher_turn(
 /// Returns [`TradingError`] on LLM failure or schema violation.
 pub async fn run_debate_moderation(
     state: &mut TradingState,
+    transcript_fetch: Option<&TranscriptFetch>,
     config: &Config,
     handle: &CompletionModelHandle,
 ) -> Result<AgentTokenUsage, TradingError> {
     let mut executor = RealDebateExecutor {
-        bull: BullishResearcher::new(handle, state, &config.llm)?,
-        bear: BearishResearcher::new(handle, state, &config.llm)?,
-        moderator: DebateModerator::new(handle, state, &config.llm)?,
+        bull: BullishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        bear: BearishResearcher::new(handle, state, transcript_fetch, &config.llm)?,
+        moderator: DebateModerator::new(handle, state, transcript_fetch, &config.llm)?,
     };
 
     let (consensus, usage) = executor.moderate(state).await?;

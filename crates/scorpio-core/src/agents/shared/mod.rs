@@ -14,8 +14,8 @@ pub(crate) use prompt::{
     UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_analyst_context_body,
     build_catalyst_calendar_block, build_data_quality_context, build_enrichment_context,
     build_evidence_context, build_pack_context, build_thesis_memory_context,
-    redact_secret_like_values, sanitize_date_for_prompt, sanitize_prompt_context,
-    sanitize_symbol_for_prompt, serialize_prompt_value,
+    build_transcript_context, redact_secret_like_values, sanitize_date_for_prompt,
+    sanitize_prompt_context, sanitize_symbol_for_prompt, serialize_prompt_value,
 };
 pub(crate) use technical_projection::compact_technical_report;
 pub(crate) use usage::agent_token_usage_from_completion;

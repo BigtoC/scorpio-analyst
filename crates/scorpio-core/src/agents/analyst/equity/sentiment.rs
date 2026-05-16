@@ -14,11 +14,13 @@ use std::time::Instant;
 use rig::tool::ToolDyn;
 
 use crate::{
-    agents::shared::agent_token_usage_from_completion,
+    agents::shared::{
+        UNTRUSTED_CONTEXT_NOTICE, agent_token_usage_from_completion, build_transcript_context,
+    },
     analysis_packs::RuntimePolicy,
     config::LlmConfig,
     constants::SENTIMENT_ANALYST_MAX_TURNS,
-    data::{FinnhubClient, GetCachedNews, GetNews},
+    data::{FinnhubClient, GetCachedNews, GetNews, adapters::transcripts::TranscriptFetch},
     error::{RetryPolicy, TradingError},
     providers::factory::{CompletionModelHandle, build_agent_with_tools},
     state::{AgentTokenUsage, NewsData, SentimentData, TradingState},
@@ -64,6 +66,11 @@ pub struct SentimentAnalyst {
     /// [`GetCachedNews`] tool is bound instead of the live [`GetNews`] tool,
     /// saving one Finnhub API call per cycle.
     cached_news: Option<Arc<NewsData>>,
+    /// Earnings-call transcript fetch outcome loaded by the analyst task
+    /// from `KEY_TRANSCRIPT_FETCH_STATUS`. Rendered into the user prompt as
+    /// untrusted context so the LLM can ground "transcript available / not"
+    /// claims required by the Theme C management red-flags rules.
+    transcript_fetch: Option<TranscriptFetch>,
 }
 
 impl SentimentAnalyst {
@@ -76,6 +83,9 @@ impl SentimentAnalyst {
     /// - `llm_config` – LLM configuration, used for timeout.
     /// - `cached_news` – optional pre-fetched news; when `Some`, the live
     ///   [`GetNews`] tool is replaced with a zero-cost [`GetCachedNews`] tool.
+    /// - `transcript_fetch` – outcome of the per-cycle Alpha Vantage transcript
+    ///   fetch; rendered into the user prompt so the LLM can satisfy the
+    ///   Theme C "status: Found / Unavailable" contract.
     pub fn new(
         handle: CompletionModelHandle,
         finnhub: FinnhubClient,
@@ -83,6 +93,7 @@ impl SentimentAnalyst {
         policy: &RuntimePolicy,
         llm_config: &LlmConfig,
         cached_news: Option<Arc<NewsData>>,
+        transcript_fetch: Option<TranscriptFetch>,
     ) -> Self {
         let runtime = analyst_runtime_config(&state.asset_symbol, &state.target_date, llm_config);
         let system_prompt =
@@ -97,6 +108,7 @@ impl SentimentAnalyst {
             timeout: runtime.timeout,
             retry_policy: runtime.retry_policy,
             cached_news,
+            transcript_fetch,
         }
     }
 
@@ -126,11 +138,18 @@ impl SentimentAnalyst {
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
-        let prompt = format!(
+        let base_prompt = format!(
             "Fetch and analyse recent news for {} as of {} using the available tools, \
              then produce a SentimentData JSON object.",
             self.symbol, self.target_date
         );
+        let prompt = match &self.transcript_fetch {
+            Some(fetch) => format!(
+                "{base_prompt}\n\n{UNTRUSTED_CONTEXT_NOTICE}\n\n{}",
+                build_transcript_context(fetch),
+            ),
+            None => base_prompt,
+        };
 
         let outcome = run_analyst_inference(
             &agent,

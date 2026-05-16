@@ -4,11 +4,51 @@ use serde::{Deserialize, Serialize};
 use super::derived::ScenarioValuation;
 
 /// The action direction for a trade proposal.
+///
+/// `Buy`/`Sell`/`Hold` are emitted by the Trader Agent (and downstream agents
+/// that mirror trader output). `Overweight`/`Underweight` are conviction-graded
+/// directional actions that **only the Fund Manager** is permitted to emit, to
+/// distinguish full-conviction directional calls (`Buy`/`Sell`) from sized
+/// adjustments. Downstream code that reasons about trade direction should
+/// route through [`TradeAction::direction`] rather than equality so the two
+/// vocabularies stay aligned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TradeAction {
     Buy,
     Sell,
     Hold,
+    /// Fund-manager-only graded variant. Market semantics are defined by the
+    /// fund-manager prompt (`analysis_packs/.../fund_manager.md`); directional
+    /// bucket is fixed by [`TradeAction::direction`].
+    Overweight,
+    /// Fund-manager-only graded variant. Market semantics are defined by the
+    /// fund-manager prompt (`analysis_packs/.../fund_manager.md`); directional
+    /// bucket is fixed by [`TradeAction::direction`].
+    Underweight,
+}
+
+/// Coarse trade-direction bucket used for same-direction comparisons that
+/// must collapse `Buy`/`Overweight` and `Sell`/`Underweight` into a single
+/// concept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradeDirection {
+    Bullish,
+    Bearish,
+    Neutral,
+}
+
+impl TradeAction {
+    /// Map an action to its directional bucket.
+    ///
+    /// `Buy` and `Overweight` are both `Bullish`; `Sell` and `Underweight`
+    /// are both `Bearish`; `Hold` is `Neutral`.
+    pub fn direction(&self) -> TradeDirection {
+        match self {
+            TradeAction::Buy | TradeAction::Overweight => TradeDirection::Bullish,
+            TradeAction::Sell | TradeAction::Underweight => TradeDirection::Bearish,
+            TradeAction::Hold => TradeDirection::Neutral,
+        }
+    }
 }
 
 /// A structured trade proposal emitted by the Trader Agent.

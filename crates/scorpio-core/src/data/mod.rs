@@ -27,6 +27,7 @@
 //! | [`adapters`] | Enrichment adapter contracts, [`ProviderCapabilities`], and concrete providers |
 
 pub mod adapters;
+pub mod alpha_vantage;
 pub mod entity;
 pub mod finnhub;
 pub mod fred;
@@ -41,6 +42,7 @@ pub use adapters::catalysts::{
     CatalystCalendarProvider, CatalystEvent, SecEdgar8kProvider, Tier1CatalystProvider,
     Tier2CatalystProvider,
 };
+pub use alpha_vantage::AlphaVantageClient;
 pub use entity::{ResolvedInstrument, resolve_symbol};
 pub use finnhub::{
     FinnhubClient, GetCachedNews, GetEarnings, GetFundamentals, GetInsiderTransactions,

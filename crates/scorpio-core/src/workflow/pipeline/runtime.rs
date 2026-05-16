@@ -1,8 +1,8 @@
-use std::sync::Arc;
-
+use chrono::{Duration, NaiveDate};
 use graph_flow::{
     ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage, Session, SessionStorage,
 };
+use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -33,7 +33,8 @@ use crate::{
         tasks::{
             FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
             KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
-            NewsAnalystTask, SentimentAnalystTask, TechnicalAnalystTask,
+            KEY_TRANSCRIPT_FETCH_STATUS, NewsAnalystTask, SentimentAnalystTask,
+            TechnicalAnalystTask,
         },
     },
 };
@@ -448,6 +449,22 @@ pub async fn run_analysis_cycle(
         }
     };
 
+    // Transcript enrichment: fail-open. Any failure paths (no client, fetch
+    // error, timeout, schema problems) collapse to `TranscriptFetch::Unavailable`
+    // so the pipeline can complete in degraded mode rather than abort.
+    let transcript_fetch: crate::data::adapters::transcripts::TranscriptFetch = if enrichment_intent
+        .transcripts
+    {
+        if let Some(ref av_client) = pipeline.alpha_vantage {
+            hydrate_transcript(av_client, &pipeline.finnhub, &symbol, &date, fetch_timeout).await
+        } else {
+            warn!("transcripts enabled but AlphaVantageClient not constructed");
+            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+        }
+    } else {
+        crate::data::adapters::transcripts::TranscriptFetch::Unavailable
+    };
+
     // Persist enrichment results on state for downstream consumers.
     initial_state.enrichment_event_news = EnrichmentState {
         status: if enrichment_intent.event_news {
@@ -504,6 +521,16 @@ pub async fn run_analysis_cycle(
         info!(symbol = %consensus.symbol, "hydrated consensus-estimates enrichment");
         session.context.set(KEY_CACHED_CONSENSUS, json).await;
     }
+
+    // KEY_TRANSCRIPT_FETCH_STATUS holds the serde-serialized `TranscriptFetch`.
+    // Readers MUST deserialize back to the typed enum (no raw string matching)
+    // so adding a variant is a compile error at every consumer.
+    let status_json =
+        serde_json::to_string(&transcript_fetch).unwrap_or_else(|_| "\"Unavailable\"".to_owned());
+    session
+        .context
+        .set(KEY_TRANSCRIPT_FETCH_STATUS, status_json)
+        .await;
 
     storage
         .save(session)
@@ -819,6 +846,159 @@ pub(super) fn apply_consensus_half_life_policy(
                 status: EnrichmentStatus::FetchFailed("timeout".to_owned()),
                 payload: prior_payload.cloned(),
             }
+        }
+    }
+}
+
+/// Resolve the target fiscal quarter for transcript fetching from Finnhub's
+/// earnings-calendar endpoint queried backward.
+///
+/// The returned `"YYYYQN"` is the **reported** quarter, taken directly from
+/// Finnhub's `year`/`quarter` fields (see [`select_transcript_quarter`]).
+///
+/// Returns `None` when Finnhub returns no recent earnings releases for
+/// the symbol, or all releases lack `year`/`quarter` fields. The caller
+/// writes `TranscriptFetch::Unavailable` in that case rather than guessing.
+async fn resolve_transcript_quarter(
+    finnhub: &FinnhubClient,
+    symbol: &str,
+    as_of_date: &str,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    // Look back ~120 days to ensure we catch the most recent earnings release
+    // even with reporting-lag variance.
+    let lookback_days = 120;
+    info!(
+        symbol,
+        lookback_days, as_of_date, "resolving transcript quarter from Finnhub earnings calendar"
+    );
+    let as_of = NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d").ok()?;
+    let from = (as_of - Duration::days(lookback_days))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    resolve_transcript_quarter_from_fetch(
+        symbol,
+        timeout,
+        finnhub.fetch_earnings_calendar(&from, as_of_date, Some(symbol)),
+        as_of,
+    )
+    .await
+}
+
+fn select_transcript_quarter(
+    releases: &[finnhub::models::calendar::EarningsRelease],
+    as_of: NaiveDate,
+) -> Option<String> {
+    releases
+        .iter()
+        .filter_map(|r| match (r.year, r.quarter, r.date.as_deref()) {
+            (Some(y), Some(q), Some(d)) if (1..=4).contains(&q) => {
+                let release_date = NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()?;
+                if release_date > as_of {
+                    return None;
+                }
+                Some((release_date, y, q))
+            }
+            _ => None,
+        })
+        .max_by_key(|(date, ..)| *date)
+        .map(|(_d, y, q)| format!("{y}Q{q}"))
+}
+
+async fn resolve_transcript_quarter_from_fetch<F>(
+    symbol: &str,
+    timeout: std::time::Duration,
+    fetch: F,
+    as_of: NaiveDate,
+) -> Option<String>
+where
+    F: std::future::Future<
+            Output = Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
+        >,
+{
+    let releases = match tokio::time::timeout(timeout, fetch).await {
+        Ok(Ok(releases)) => releases,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                symbol,
+                error = %error,
+                "transcript quarter resolution failed (fail-open)"
+            );
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(
+                symbol,
+                timeout_secs = timeout.as_secs_f64(),
+                "transcript quarter resolution timed out (fail-open)"
+            );
+            return None;
+        }
+    };
+
+    let recent = select_transcript_quarter(releases.as_ref(), as_of);
+
+    if let Some(q) = &recent {
+        tracing::info!(
+            symbol,
+            quarter = %q,
+            source = "finnhub_earnings_calendar",
+            "transcript quarter resolved"
+        );
+    } else {
+        tracing::debug!(symbol, "no recent earnings release in window");
+    }
+    recent
+}
+
+/// Fetch transcript enrichment with an outer timeout boundary.
+///
+/// Returns the [`TranscriptFetch`] enum directly — every consumer gets
+/// compile-checked exhaustiveness via match.
+async fn hydrate_transcript(
+    av_client: &crate::data::alpha_vantage::AlphaVantageClient,
+    finnhub: &FinnhubClient,
+    symbol: &str,
+    as_of_date: &str,
+    timeout: std::time::Duration,
+) -> crate::data::adapters::transcripts::TranscriptFetch {
+    use crate::data::adapters::transcripts::TranscriptFetch;
+    use crate::data::adapters::transcripts::TranscriptProvider;
+
+    let Some(quarter) = resolve_transcript_quarter(finnhub, symbol, as_of_date, timeout).await
+    else {
+        return TranscriptFetch::Unavailable;
+    };
+
+    let result = tokio::time::timeout(timeout, av_client.fetch_transcript(symbol, &quarter)).await;
+
+    match result {
+        Ok(Ok(outcome)) => {
+            match &outcome {
+                TranscriptFetch::Found(ev) => tracing::info!(
+                    symbol, quarter = %quarter, segments = ev.segments.len(),
+                    "transcript enrichment: available"
+                ),
+                TranscriptFetch::NotPublished => tracing::debug!(
+                    symbol, quarter = %quarter, "transcript enrichment: not published"
+                ),
+                TranscriptFetch::Throttled => {
+                    tracing::warn!(symbol, "transcript enrichment: throttled")
+                }
+                TranscriptFetch::Unavailable => {
+                    tracing::warn!(symbol, "transcript enrichment: unavailable")
+                }
+            }
+            outcome
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(symbol, error = %e, "transcript enrichment: fetch error (fail-open)");
+            TranscriptFetch::Unavailable
+        }
+        Err(_) => {
+            tracing::warn!(symbol, "transcript enrichment: outer timeout (fail-open)");
+            TranscriptFetch::Unavailable
         }
     }
 }
@@ -1249,5 +1429,150 @@ mod catalyst_hydration_tests {
 
         assert_eq!(state.status, EnrichmentStatus::Available);
         assert_eq!(state.payload, Some(vec![]));
+    }
+}
+
+#[cfg(test)]
+mod transcript_quarter_tests {
+    use std::{future, sync::Arc, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn select_transcript_quarter_returns_reported_quarter_of_latest_release() {
+        let releases = vec![
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("AAPL".to_owned()),
+                date: Some("2026-04-25".to_owned()),
+                hour: None,
+                year: Some(2026),
+                quarter: Some(1),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("AAPL".to_owned()),
+                date: Some("2026-07-25".to_owned()),
+                hour: None,
+                year: Some(2026),
+                quarter: Some(2),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("AAPL".to_owned()),
+                date: Some("2026-08-01".to_owned()),
+                hour: None,
+                year: None,
+                quarter: None,
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+        ];
+
+        // Latest valid release is 2026-07-25 with reported quarter Q2;
+        // the release with missing year/quarter is filtered out.
+        let as_of = NaiveDate::from_ymd_opt(2026, 8, 1).expect("valid date");
+        assert_eq!(
+            select_transcript_quarter(&releases, as_of),
+            Some("2026Q2".to_owned())
+        );
+    }
+
+    #[test]
+    fn select_transcript_quarter_glw_release_on_2026_04_28_returns_2026q1() {
+        let releases = vec![finnhub::models::calendar::EarningsRelease {
+            symbol: Some("GLW".to_owned()),
+            date: Some("2026-04-28".to_owned()),
+            hour: Some("bmo".to_owned()),
+            year: Some(2026),
+            quarter: Some(1),
+            eps_estimate: Some(0.6968),
+            eps_actual: Some(0.7),
+            revenue_estimate: Some(4_305_870_107.0),
+            revenue_actual: Some(4_345_000_000.0),
+        }];
+
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
+        assert_eq!(
+            select_transcript_quarter(&releases, as_of),
+            Some("2026Q1".to_owned())
+        );
+    }
+
+    #[test]
+    fn select_transcript_quarter_skips_release_in_the_future() {
+        // Two releases: a past one (Q1 reported, dated 2026-01-30) and an
+        // upcoming one (Q2 reported, dated 2026-07-25). With as_of = 2026-05-15
+        // the future Q2 release must be filtered out, so the function returns
+        // the prior Q1 release.
+        let releases = vec![
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("GLW".to_owned()),
+                date: Some("2026-01-30".to_owned()),
+                hour: None,
+                year: Some(2025),
+                quarter: Some(4),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+            finnhub::models::calendar::EarningsRelease {
+                symbol: Some("GLW".to_owned()),
+                date: Some("2026-07-25".to_owned()),
+                hour: None,
+                year: Some(2026),
+                quarter: Some(2),
+                eps_estimate: None,
+                eps_actual: None,
+                revenue_estimate: None,
+                revenue_actual: None,
+            },
+        ];
+
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
+        assert_eq!(
+            select_transcript_quarter(&releases, as_of),
+            Some("2025Q4".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_transcript_quarter_from_fetch_returns_none_on_fetch_error() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
+        let result = resolve_transcript_quarter_from_fetch(
+            "AAPL",
+            Duration::from_secs(1),
+            future::ready(Err(TradingError::RateLimitExceeded {
+                provider: "finnhub".to_owned(),
+            })),
+            as_of,
+        )
+        .await;
+
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_transcript_quarter_from_fetch_times_out() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 15).expect("valid date");
+        let result = resolve_transcript_quarter_from_fetch(
+            "AAPL",
+            Duration::from_millis(1),
+            future::pending::<
+                Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
+            >(),
+            as_of,
+        )
+        .await;
+
+        assert_eq!(result, None);
     }
 }
