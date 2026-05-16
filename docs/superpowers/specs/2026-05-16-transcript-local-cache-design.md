@@ -27,13 +27,13 @@ Cache earnings call transcripts locally in SQLite so that repeated analyses for 
 ## Architecture
 
 ```
-                    ┌─────────────────────────┐
-                    │    AlphaVantageClient    │
-                    │                          │
- fetch_transcript() │   ┌───────────────────┐  │
- ──────────────────►│   │ TranscriptCache   │  │
-                    │   │ Store (SQLite)    │  │
-                    │   └────────┬──────────┘  │
+                    ┌───────────────────────────┐
+                    │    AlphaVantageClient     │
+                    │                           │
+ fetch_transcript() │   ┌───────────────────┐   │ 
+ ──────────────────►│   │ TranscriptCache   │   │
+                    │   │ Store (SQLite)    │   │
+                    │   └────────┬──────────┘   │
                     │            │              │
                     │    ┌───────▼──────┐       │
                     │    │ Cache HIT?   │       │
@@ -49,7 +49,7 @@ Cache earnings call transcripts locally in SQLite so that repeated analyses for 
                     │            │              │
                     │            ▼              │
                     │        Return             │
-                    └──────────────────────────-┘
+                    └───────────────────────────┘
 ```
 
 ## Components
