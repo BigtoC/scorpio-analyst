@@ -55,16 +55,16 @@ Out of scope for this plan:
 
 ## File Structure
 
-| File | Action | Responsibility |
-|------|--------|----------------|
-| `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql` | Create | Define the transcript cache table keyed by `(symbol, quarter)` with payload JSON |
-| `crates/scorpio-core/src/data/transcript_cache.rs` | Create | Own `TranscriptCacheStore`, uppercase symbol normalization, SQLite open/setup, cache read/write, and focused store tests |
-| `crates/scorpio-core/src/data/mod.rs` | Modify | Expose the new `transcript_cache` module |
-| `crates/scorpio-core/src/data/alpha_vantage.rs` | Modify | Add optional cache wiring, cache hit/miss flow, `cache_failure_count` counter, integration-style cache tests |
-| `crates/scorpio-core/src/config.rs` | Modify | Add `StorageConfig::transcript_cache_db_path` with `serde(default)` and update the `Default` impl; add focused storage-config tests |
-| `crates/scorpio-core/src/app/mod.rs` | Modify | Construct the transcript cache best-effort and pass it into `AlphaVantageClient::new` only when Alpha Vantage is enabled |
-| `crates/scorpio-core/tests/app_runtime.rs` | Modify | Fix the `StorageConfig` struct literal using `..StorageConfig::default()` after the new field is added |
-| `AGENTS.md` | Modify | Document the new transcript cache database location, the `migrations/transcript_cache/` subdirectory, and the `cache_failure_count` observability surface |
+| File                                                                               | Action | Responsibility                                                                                                                                            |
+|------------------------------------------------------------------------------------|--------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql` | Create | Define the transcript cache table keyed by `(symbol, quarter)` with payload JSON                                                                          |
+| `crates/scorpio-core/src/data/transcript_cache.rs`                                 | Create | Own `TranscriptCacheStore`, uppercase symbol normalization, SQLite open/setup, cache read/write, and focused store tests                                  |
+| `crates/scorpio-core/src/data/mod.rs`                                              | Modify | Expose the new `transcript_cache` module                                                                                                                  |
+| `crates/scorpio-core/src/data/alpha_vantage.rs`                                    | Modify | Add optional cache wiring, cache hit/miss flow, `cache_failure_count` counter, integration-style cache tests                                              |
+| `crates/scorpio-core/src/config.rs`                                                | Modify | Add `StorageConfig::transcript_cache_db_path` with `serde(default)` and update the `Default` impl; add focused storage-config tests                       |
+| `crates/scorpio-core/src/app/mod.rs`                                               | Modify | Construct the transcript cache best-effort and pass it into `AlphaVantageClient::new` only when Alpha Vantage is enabled                                  |
+| `crates/scorpio-core/tests/app_runtime.rs`                                         | Modify | Fix the `StorageConfig` struct literal using `..StorageConfig::default()` after the new field is added                                                    |
+| `AGENTS.md`                                                                        | Modify | Document the new transcript cache database location, the `migrations/transcript_cache/` subdirectory, and the `cache_failure_count` observability surface |
 
 Notes for the implementing engineer:
 
@@ -218,7 +218,30 @@ git commit -m "feat(data): add transcript cache bootstrap store"
 
 - [ ] **Step 1: Write the failing read/write tests**
 
-Define `test_store()` (opens a fresh `TranscriptCacheStore` against `tempfile::tempdir()`) and `sample_found(symbol, quarter)` (returns a `TranscriptFetch::Found` payload) helpers in the same test module first, then add the tests:
+First define `test_store()` and `sample_found()` helpers in the test module so the tests below compile:
+
+```rust
+async fn test_store() -> TranscriptCacheStore {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("transcript-cache.db");
+    // Leak the TempDir for the lifetime of the test pool so the file
+    // is not deleted while the connection is open. Tests are short-lived;
+    // tempfile cleans up on process exit.
+    std::mem::forget(dir);
+    TranscriptCacheStore::new(Some(&path))
+        .await
+        .expect("store should open")
+}
+
+fn sample_found(symbol: &str, quarter: &str) -> TranscriptFetch {
+    // Construct a minimal Found payload using whatever the existing
+    // TranscriptFetch::Found tuple/struct shape requires. Mirror the
+    // payload pattern already used in alpha_vantage.rs tests.
+    TranscriptFetch::Found(/* ... single TranscriptEvidence ... */)
+}
+```
+
+Then add the tests:
 
 ```rust
 #[tokio::test]
@@ -529,6 +552,8 @@ Expected: FAIL because `AlphaVantageClient` does not yet accept a cache and `new
 
 - [ ] **Step 3: Add the optional cache field, observability counter, and update constructors**
 
+Add the field and counter to the struct (the existing imports already pull in `AtomicU64` and `Ordering` per the other counters in this file):
+
 ```rust
 pub struct AlphaVantageClient {
     key: SecretString,
@@ -537,29 +562,54 @@ pub struct AlphaVantageClient {
     base_url: String,
     cache: Option<TranscriptCacheStore>,
     cache_failure_count: AtomicU64,
-    // existing counters...
+    // existing counters (found_count, not_published_count, throttled_count, ...) stay as-is
 }
+```
 
+Update both constructor signatures and their field-init blocks:
+
+```rust
 pub fn new(
     api: &ApiConfig,
     limiter: SharedRateLimiter,
     cache: Option<TranscriptCacheStore>,
-) -> Result<Self, TradingError>
+) -> Result<Self, TradingError> {
+    // ...existing setup...
+    Ok(Self {
+        // ...existing field inits...
+        cache,
+        cache_failure_count: AtomicU64::new(0),
+    })
+}
 
 fn new_with_base_url(
     key: SecretString,
     limiter: SharedRateLimiter,
     base_url: String,
     cache: Option<TranscriptCacheStore>,
-) -> Self
+) -> Self {
+    Self {
+        // ...existing field inits...
+        cache,
+        cache_failure_count: AtomicU64::new(0),
+    }
+}
 ```
 
-Add a public accessor and surface the counter in the existing `Debug` impl so chronic cache failures are visible without `RUST_LOG=debug`:
+The existing field literals in both constructors are exhaustive (no `..Default::default()` fallback) — both initializer lines are required or you'll hit `E0063: missing field cache_failure_count`.
+
+Add a public accessor:
 
 ```rust
 pub fn cache_failure_count(&self) -> u64 {
     self.cache_failure_count.load(Ordering::Relaxed)
 }
+```
+
+The existing `Debug` impl in this file is hand-rolled (not auto-derived). Add one more `.field(...)` line to it:
+
+```rust
+.field("cache_failure_count", &self.cache_failure_count.load(Ordering::Relaxed))
 ```
 
 Keep `for_test()` cache-free:
@@ -667,8 +717,12 @@ async fn fetch_transcript_uses_api_when_cache_is_unavailable() {
     cache.close_for_test().await;
     let calls = Arc::new(AtomicUsize::new(0));
 
+    // Use a Found-shaped body so the writeback path actually touches the
+    // closed pool. `put()` early-returns Ok for NotPublished/Throttled/
+    // Unavailable outcomes (cacheability policy), so an empty-transcript
+    // body would never reach the pool and the counter would never bump.
     let base_url = spawn_transcript_server(
-        r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[]}"#,
+        r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[{"speaker":"Tim Cook","title":"CEO","content":"Hello","sentiment":0.5}]}"#,
         Arc::clone(&calls),
     );
 
@@ -681,7 +735,7 @@ async fn fetch_transcript_uses_api_when_cache_is_unavailable() {
 
     let result = client.fetch_transcript("AAPL", "2025Q1").await.expect("api fallback");
 
-    assert_eq!(result, TranscriptFetch::NotPublished);
+    assert!(matches!(result, TranscriptFetch::Found(_)));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(client.cache_failure_count() > 0);
 }
@@ -717,28 +771,11 @@ if let Some(cache) = &self.cache {
 }
 ```
 
-Also bump `cache_failure_count` from the two warn paths inside `TranscriptCacheStore::get()` — but `get` lives in another module and the counter is on `AlphaVantageClient`, so do it at the call site instead:
-
-```rust
-if let Some(cache) = &self.cache {
-    match cache.get(symbol, as_of_date).await {
-        Some(cached) => {
-            debug!(symbol, quarter = as_of_date, "transcript cache hit");
-            return Ok(cached);
-        }
-        None => {
-            // Either a real miss or a sanitized warn-degraded failure.
-            // The store distinguishes them in its own logs; the client
-            // bumps the counter on writeback failure (below). Read-side
-            // failures are rare and visible via warn logs.
-        }
-    }
-}
-```
-
-(Read-failure observability is intentionally lighter than write-failure: a corrupted-row read is not a system health signal, while sustained write failures indicate disk or permissions problems.)
+The cache-hit `if let` block introduced in Task 4 Step 4 stays as-is — do not rewrite it. This step only adds the writeback at the end of `fetch_transcript()`.
 
 The cacheability rule (only `Found`) already lives in `TranscriptCacheStore::put()`; `AlphaVantageClient` only forwards the outcome.
+
+**Counter semantics:** `cache_failure_count` tracks **write** failures only. Read-side failures (corrupt payload, query error) emit sanitized `warn!` logs from `TranscriptCacheStore::get()` but do not bump the counter. Rationale: a corrupted row is one extra API call; a sustained write failure indicates a disk or permissions problem that operators need to see at a glance. The AGENTS.md update (Task 7 Step 1) must reflect this — the counter is not a complete cache-health signal.
 
 - [ ] **Step 4: Add the tiny loopback server helper in the test module**
 
@@ -871,9 +908,11 @@ cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcr
 
 Expected: FAIL because `StorageConfig::transcript_cache_db_path` does not exist yet.
 
-- [ ] **Step 3: Extend `StorageConfig`**
+- [ ] **Step 3: Extend `StorageConfig` and remove the snapshot-only early return**
 
-In `crates/scorpio-core/src/config.rs`, add the new field, default, and update the `Default` impl:
+In `crates/scorpio-core/src/config.rs`:
+
+1. Add the new field to the `StorageConfig` struct:
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
@@ -887,7 +926,11 @@ pub struct StorageConfig {
 fn default_transcript_cache_db_path() -> String {
     "~/.scorpio-analyst/transcript_cache.db".to_string()
 }
+```
 
+2. **Replace** the existing `impl Default for StorageConfig` (currently around `config.rs:368`) with:
+
+```rust
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -898,7 +941,20 @@ impl Default for StorageConfig {
 }
 ```
 
-That is the entire `StorageConfig` change. Do not modify `PartialConfig`, `UserConfigFile`, or `partial_to_nested_toml_non_secrets()` — user-file `[storage]` overrides are not in scope for this plan. (The same pre-plan limitation already applies to `snapshot_db_path`; users override via env vars.) `Config::load_storage()` already parses `[storage]` directly from the user file via `StorageOnlyConfig`, so default + env-var overrides work without further surgery.
+(Do not add a second `impl Default` — `E0119: conflicting implementations`.)
+
+3. **Remove** the early-return inside `Config::load_storage()` at approximately `config.rs:454-456`:
+
+```rust
+// BEFORE — delete this block:
+if let Ok(snapshot_db_path) = std::env::var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH") {
+    return Ok(StorageConfig { snapshot_db_path });
+}
+```
+
+The early-return constructs `StorageConfig` with a single named field — that becomes a compile error (`E0063: missing field transcript_cache_db_path`) the moment the new field is added. Removing it is also correct on the merits: `SCORPIO__STORAGE__SNAPSHOT_DB_PATH` is already covered by the subsequent `config::Environment::with_prefix("SCORPIO").separator("__")` builder, so the early-return was redundant defense-in-depth.
+
+That is the entire `config.rs` change. Do not modify `PartialConfig`, `UserConfigFile`, or `partial_to_nested_toml_non_secrets()` — user-file `[storage]` overrides are not in scope for this plan. (The same pre-plan limitation already applies to `snapshot_db_path`; users override via env vars.) `Config::load_storage()` already parses `[storage]` directly from the user file via `StorageOnlyConfig`, so default + env-var overrides work without further surgery.
 
 - [ ] **Step 4: Add `TranscriptCacheStore::from_config()`**
 
@@ -978,7 +1034,7 @@ Update the storage/migration section in `AGENTS.md` to describe:
 - `crates/scorpio-core/migrations/transcript_cache/` (new subdirectory) for cache migrations
 - `SnapshotStore` continues to use `sqlx::migrate!()` (defaults to `migrations/`); `TranscriptCacheStore` uses `sqlx::migrate!("migrations/transcript_cache")`
 - The dedicated cache file `~/.scorpio-analyst/transcript_cache.db`, overridable via `SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH`
-- `AlphaVantageClient::cache_failure_count` is exposed in its `Debug` impl as the operator-facing signal for chronic cache failure (storage layer falls back to direct API calls on failure)
+- `AlphaVantageClient::cache_failure_count` is exposed in its `Debug` impl as the operator-facing signal for chronic cache **write** failure (storage layer falls back to direct API calls on failure). Read-side failures (corrupt payload, query error) emit sanitized `warn!` logs but do not increment this counter — a `cache_failure_count == 0` does NOT mean the cache is fully healthy, only that writes are succeeding
 
 Keep the wording short and factual. This is a doc-accuracy pass, not a narrative rewrite. `CLAUDE.md` does not need a parallel update — the convention applies to one new subdirectory in one crate's storage layer, not project-wide.
 
