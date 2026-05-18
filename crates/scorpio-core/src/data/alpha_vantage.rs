@@ -16,6 +16,7 @@ use crate::data::adapters::transcripts::{
     TranscriptEvidence, TranscriptFetch, TranscriptProvider, TranscriptSegment,
 };
 use crate::data::symbol::validate_symbol;
+use crate::data::transcript_cache::TranscriptCacheStore;
 use crate::error::TradingError;
 use crate::rate_limit::SharedRateLimiter;
 
@@ -36,6 +37,8 @@ pub struct AlphaVantageClient {
     rate_limiter: SharedRateLimiter,
     http: reqwest::Client,
     base_url: String,
+    cache: Option<TranscriptCacheStore>,
+    cache_failure_count: AtomicU64,
     found_count: AtomicU64,
     not_published_count: AtomicU64,
     throttled_count: AtomicU64,
@@ -67,6 +70,10 @@ impl std::fmt::Debug for AlphaVantageClient {
                 "auth_failures",
                 &self.auth_failure_count.load(Ordering::Relaxed),
             )
+            .field(
+                "cache_failure_count",
+                &self.cache_failure_count.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -94,7 +101,11 @@ impl AlphaVantageClient {
     /// Construct a new client. Returns `Err(TradingError::Config)` if no key is configured.
     ///
     /// **Security:** The error path uses a static literal — no key material is interpolated.
-    pub fn new(api: &ApiConfig, limiter: SharedRateLimiter) -> Result<Self, TradingError> {
+    pub fn new(
+        api: &ApiConfig,
+        limiter: SharedRateLimiter,
+        cache: Option<TranscriptCacheStore>,
+    ) -> Result<Self, TradingError> {
         let key = api
             .alpha_vantage_api_key
             .as_ref()
@@ -111,6 +122,8 @@ impl AlphaVantageClient {
                 .build()
                 .map_err(|e| TradingError::Config(anyhow::anyhow!("reqwest client build: {e}")))?,
             base_url: BASE_URL.to_owned(),
+            cache,
+            cache_failure_count: AtomicU64::new(0),
             found_count: AtomicU64::new(0),
             not_published_count: AtomicU64::new(0),
             throttled_count: AtomicU64::new(0),
@@ -132,15 +145,23 @@ impl AlphaVantageClient {
             SecretString::from("test-dummy-key"),
             SharedRateLimiter::disabled("test"),
             "http://127.0.0.1:1/query".to_owned(),
+            None,
         )
     }
 
-    fn new_with_base_url(key: SecretString, limiter: SharedRateLimiter, base_url: String) -> Self {
+    fn new_with_base_url(
+        key: SecretString,
+        limiter: SharedRateLimiter,
+        base_url: String,
+        cache: Option<TranscriptCacheStore>,
+    ) -> Self {
         Self {
             key,
             rate_limiter: limiter,
             http: reqwest::Client::new(),
             base_url,
+            cache,
+            cache_failure_count: AtomicU64::new(0),
             found_count: AtomicU64::new(0),
             not_published_count: AtomicU64::new(0),
             throttled_count: AtomicU64::new(0),
@@ -149,6 +170,11 @@ impl AlphaVantageClient {
             auth_failure_count: AtomicU64::new(0),
             auth_failure_logged: AtomicBool::new(false),
         }
+    }
+
+    /// Return the number of cache write failures observed.
+    pub fn cache_failure_count(&self) -> u64 {
+        self.cache_failure_count.load(Ordering::Relaxed)
     }
 
     /// Validate the quarter format (`"YYYYQN"` where N is 1-4) using byte
@@ -368,6 +394,18 @@ impl TranscriptProvider for AlphaVantageClient {
         validate_symbol(symbol)?;
         Self::validate_quarter(as_of_date)?;
 
+        if let Some(cache) = &self.cache {
+            if let Some(cached) = cache.get(symbol, as_of_date).await {
+                debug!(symbol, quarter = as_of_date, "transcript cache hit");
+                return Ok(cached);
+            }
+            info!(
+                symbol,
+                quarter = as_of_date,
+                "transcript cache miss, fetching from Alpha Vantage"
+            );
+        }
+
         debug!(
             provider = "alpha_vantage",
             limiter = %self.rate_limiter.label(),
@@ -501,6 +539,19 @@ impl TranscriptProvider for AlphaVantageClient {
         };
 
         self.record_outcome(&outcome);
+
+        if let Some(cache) = &self.cache
+            && let Err(_err) = cache.put(symbol, as_of_date, &outcome).await
+        {
+            self.cache_failure_count.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                symbol,
+                quarter = as_of_date,
+                error.kind = "storage",
+                "transcript cache put failed"
+            );
+        }
+
         info!(
             provider = "alpha_vantage",
             symbol,
@@ -524,8 +575,8 @@ mod tests {
         let mut api = ApiConfig::default();
         let secret = "AVKEY-DO-NOT-LEAK-123";
         api.alpha_vantage_api_key = Some(SecretString::from(secret));
-        let client =
-            AlphaVantageClient::new(&api, SharedRateLimiter::disabled("test")).expect("construct");
+        let client = AlphaVantageClient::new(&api, SharedRateLimiter::disabled("test"), None)
+            .expect("construct");
         let debug = format!("{client:?}");
         assert!(
             !debug.contains(secret),
@@ -536,7 +587,8 @@ mod tests {
     #[test]
     fn constructor_missing_key_uses_static_error_message() {
         let api = ApiConfig::default();
-        let err = AlphaVantageClient::new(&api, SharedRateLimiter::disabled("test")).unwrap_err();
+        let err =
+            AlphaVantageClient::new(&api, SharedRateLimiter::disabled("test"), None).unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("SCORPIO_ALPHA_VANTAGE_API_KEY is not set"),
@@ -760,5 +812,248 @@ mod tests {
         client.escalate_auth_failure(reqwest::StatusCode::FORBIDDEN);
         assert_eq!(client.auth_failure_count.load(Ordering::Relaxed), 2);
         assert!(client.auth_failure_logged.load(Ordering::Relaxed));
+    }
+
+    // ── Cache integration ──────────────────────────────────────────────
+
+    use crate::data::transcript_cache::TranscriptCacheStore;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    fn sample_found(symbol: &str, quarter: &str) -> TranscriptFetch {
+        TranscriptFetch::Found(TranscriptEvidence {
+            symbol: symbol.to_owned(),
+            call_date: quarter.to_owned(),
+            segments: vec![TranscriptSegment {
+                speaker: "Tim Cook".to_owned(),
+                title: "CEO".to_owned(),
+                content: "Hello everyone.".to_owned(),
+                sentiment: Some(0.5),
+            }],
+        })
+    }
+
+    fn spawn_transcript_server(
+        status_line: &'static str,
+        body: &'static str,
+        calls: Arc<AtomicUsize>,
+        expected_requests: usize,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+
+        std::thread::spawn(move || {
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = std::io::Read::read(&mut stream, &mut [0u8; 1024]);
+                calls.fetch_add(1, Ordering::SeqCst);
+
+                let response = format!(
+                    "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                std::io::Write::write_all(&mut stream, response.as_bytes()).expect("write");
+            }
+        });
+
+        format!("http://{addr}/query")
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_returns_cached_result_before_network() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let cached = sample_found("AAPL", "2025Q1");
+
+        cache
+            .put("AAPL", "2025Q1", &cached)
+            .await
+            .expect("seed cache");
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            "http://127.0.0.1:1/query".to_owned(),
+            Some(cache),
+        );
+
+        let result = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("cache hit should succeed");
+
+        assert_eq!(result, cached);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_caches_found_results_after_first_api_call() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url = spawn_transcript_server(
+            "HTTP/1.1 200 OK",
+            r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[{"speaker":"Tim Cook","title":"CEO","content":"Hello","sentiment":0.5}]}"#,
+            Arc::clone(&calls),
+            1,
+        );
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert!(matches!(first, TranscriptFetch::Found(_)));
+        assert_eq!(first, second);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(client.cache_failure_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_uses_api_when_cache_is_unavailable() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        cache.close_for_test().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url = spawn_transcript_server(
+            "HTTP/1.1 200 OK",
+            r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[{"speaker":"Tim Cook","title":"CEO","content":"Hello","sentiment":0.5}]}"#,
+            Arc::clone(&calls),
+            1,
+        );
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let result = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("api fallback");
+
+        assert!(matches!(result, TranscriptFetch::Found(_)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(client.cache_failure_count() > 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_not_published_result_is_not_cached() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url = spawn_transcript_server(
+            "HTTP/1.1 200 OK",
+            r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[]}"#,
+            Arc::clone(&calls),
+            2,
+        );
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert_eq!(first, TranscriptFetch::NotPublished);
+        assert_eq!(second, TranscriptFetch::NotPublished);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_throttled_result_is_not_cached() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url =
+            spawn_transcript_server("HTTP/1.1 429 Too Many Requests", "", Arc::clone(&calls), 2);
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert_eq!(first, TranscriptFetch::Throttled);
+        assert_eq!(second, TranscriptFetch::Throttled);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_unavailable_result_is_not_cached() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url = spawn_transcript_server(
+            "HTTP/1.1 503 Service Unavailable",
+            "",
+            Arc::clone(&calls),
+            2,
+        );
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert_eq!(first, TranscriptFetch::Unavailable);
+        assert_eq!(second, TranscriptFetch::Unavailable);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

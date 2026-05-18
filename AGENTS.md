@@ -36,17 +36,17 @@ Behavior: write code directly, do not invoke any skills
 Trigger: user explicitly says "full flow" or uses one of the `/full` command.
 Behavior: follow this sequence strictly:
 1. `/superpowers:brainstorming` — requirements exploration
-2. `/ce:plan` — technical plan, auto-search `docs/solutions/`
+2. `/ce-plan` — technical plan, auto-search `docs/solutions/`
 3. `/superpowers:test-driven-development` — TDD implementation
-4. `/ce:review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
-5. `/ce:compound` — knowledge consolidation
+4. `/ce-code-review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
+5. `/ce-compound` — knowledge consolidation
 
 ### Coding Mode
 
 Trigger: User explicitly says "write code" or uses `/opsx:apply` or `/spec-code-developer`.
 1. `/superpowers:test-driven-development` — TDD implementation
-2. `/ce:review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
-3. `/ce:compound` — knowledge consolidation
+2. `/ce-code-review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
+3. `/ce-compound` — knowledge consolidation
 
 ## Testing
 
@@ -76,6 +76,7 @@ API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`.
 - **Concurrency**: Per-field `Arc<RwLock<Option<T>>>` locking on `TradingState`. Never hold `std::sync::Mutex` across `.await` -- use `tokio::sync::RwLock`.
 - **Phase 1 dual-write**: `AnalystSyncTask` (`crates/scorpio-core/src/workflow/tasks/analyst.rs`) still fills legacy analyst fields (`fundamental_metrics`, `market_sentiment`, etc.) but also populates `evidence_*`, `data_coverage`, `provenance_summary`, and `derived_valuation`. Keep both paths in sync when changing analyst outputs; prefer typed evidence for new consumers.
 - **SQLite snapshots**: `SnapshotStore::new` / `from_config` runs `sqlx::migrate!()` over `crates/scorpio-core/migrations/` (currently including `0001_create_phase_snapshots.sql` and `0002_add_symbol_and_schema_version.sql`). The directory resolves via `CARGO_MANIFEST_DIR` of `scorpio-core`, so the migrations move with the core crate.
+- **Transcript cache**: `TranscriptCacheStore` persists Alpha Vantage transcript results in a dedicated SQLite database at `~/.scorpio-analyst/transcript_cache.db` (overridable via `SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH`). Migrations live in `crates/scorpio-core/migrations/transcript_cache/` — a subdirectory that `SnapshotStore`'s `sqlx::migrate!()` does not recurse into. Only `TranscriptFetch::Found` results are cached; negative outcomes are re-fetchable. `AlphaVantageClient::cache_failure_count` (exposed in `Debug` impl) tracks **write** failures only — read-side failures emit sanitized `warn!` logs but do not bump the counter.
 - **TradingState schema evolution**: `TradingState` is serialized into `phase_snapshots.trading_state_json`. Every new
   field **must** have `#[serde(default)]` or existing snapshots will fail to deserialize. When a field is renamed,
   removed, or its type changes incompatibly, bump `THESIS_MEMORY_SCHEMA_VERSION` in
