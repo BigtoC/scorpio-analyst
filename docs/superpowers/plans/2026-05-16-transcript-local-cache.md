@@ -1,6 +1,6 @@
 # Earnings Call Transcript Local Cache Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Persist stable Alpha Vantage transcript results in a dedicated local SQLite cache so repeated analyses for the same symbol and quarter skip the external API call entirely.
 
@@ -22,7 +22,7 @@
 - Work in a dedicated worktree.
 - Keep Rust/code changes inside `crates/scorpio-core`; the only planned edit outside it is the doc update in `AGENTS.md`. `scorpio-cli` stays untouched.
 - Follow `@superpowers:test-driven-development` discipline for each task.
-- After implementation, run `@ce:review`, then capture the cache pattern in `@ce:compound`.
+- After implementation, run `/ce-code-review`, then capture the cache pattern in `/ce-compound`.
 - Use `cargo nextest`, not `cargo test`.
 - Full verification must end with:
 
@@ -87,7 +87,7 @@ Notes for the implementing engineer:
 - Regression test: `crates/scorpio-core/src/workflow/snapshot/tests/path.rs`
 - Regression test: `crates/scorpio-core/src/workflow/snapshot/tests/core_roundtrip.rs`
 
-- [ ] **Step 1: Export the new module first so the red test will actually compile into the crate**
+- [x] **Step 1: Export the new module first so the red test will actually compile into the crate**
 
 Add the module declaration in `crates/scorpio-core/src/data/mod.rs`:
 
@@ -97,7 +97,7 @@ pub mod transcript_cache;
 
 This is a prerequisite for TDD in this repo: without the export, the new file is not in the module tree and the failing test will not be compiled.
 
-- [ ] **Step 2: Write the failing bootstrap test**
+- [x] **Step 2: Write the failing bootstrap test**
 
 Add this test near the bottom of the new `crates/scorpio-core/src/data/transcript_cache.rs` file. Keep the file intentionally incomplete for now so the test fails to compile.
 
@@ -115,7 +115,7 @@ async fn new_creates_transcript_cache_table() {
 }
 ```
 
-- [ ] **Step 3: Run the bootstrap and snapshot regression tests to verify failure**
+- [x] **Step 3: Run the bootstrap and snapshot regression tests to verify failure**
 
 Run:
 
@@ -125,7 +125,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(new_creates_transcript
 
 Expected: the new test FAILS with a compile error about `TranscriptCacheStore` / `transcript_cache` not existing yet. The two snapshot regression tests should still pass — confirming snapshots are unaffected.
 
-- [ ] **Step 4: Add the new transcript-cache migration**
+- [x] **Step 4: Add the new transcript-cache migration**
 
 Create `crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql`:
 
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS transcript_cache (
 
 The new subdirectory lives alongside the existing flat snapshot migrations. `SnapshotStore::new`'s `sqlx::migrate!()` reads `migrations/*.sql` only (no recursion), so it will not pick up this file; `TranscriptCacheStore::new` reads `migrations/transcript_cache/*.sql` only via the explicit path argument.
 
-- [ ] **Step 5: Add the minimal `TranscriptCacheStore` bootstrap implementation**
+- [x] **Step 5: Add the minimal `TranscriptCacheStore` bootstrap implementation**
 
 In `crates/scorpio-core/src/data/transcript_cache.rs`, add only enough code to open the database, apply the two SQLite pragmas, run the new migration, and satisfy the bootstrap test:
 
@@ -193,7 +193,7 @@ impl TranscriptCacheStore {
 
 Also add a private `resolve_db_path()` helper in the same file. Mirror `SnapshotStore` path validation rules (non-empty, no null bytes, no bare traversal, no dot-only); do not extract a shared generic helper for two call sites.
 
-- [ ] **Step 6: Run the bootstrap and snapshot regression tests again**
+- [x] **Step 6: Run the bootstrap and snapshot regression tests again**
 
 Run:
 
@@ -203,7 +203,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(new_creates_transcript
 
 Expected: PASS. Confirms the new cache store opens cleanly and the snapshot store is unaffected by the new subdirectory.
 
-- [ ] **Step 7: Commit the bootstrap slice**
+- [x] **Step 7: Commit the bootstrap slice**
 
 ```bash
 git add crates/scorpio-core/migrations/transcript_cache/0001_create_transcript_cache.sql crates/scorpio-core/src/data/mod.rs crates/scorpio-core/src/data/transcript_cache.rs
@@ -216,7 +216,7 @@ git commit -m "feat(data): add transcript cache bootstrap store"
 - Modify: `crates/scorpio-core/src/data/transcript_cache.rs`
 - Test: `crates/scorpio-core/src/data/transcript_cache.rs`
 
-- [ ] **Step 1: Write the failing read/write tests**
+- [x] **Step 1: Write the failing read/write tests**
 
 First define `test_store()` and `sample_found()` helpers in the test module so the tests below compile:
 
@@ -270,7 +270,7 @@ async fn put_skips_negative_outcomes() {
 
 Symbol casing is normalized inside `put`/`get` (`to_ascii_uppercase()`) so the cache key is canonical. The production call path goes through `validate_symbol()` first, which today preserves caller casing — the uppercase normalization is a one-liner defensive guard, but a dedicated case-mixing test is out of scope.
 
-- [ ] **Step 2: Run the tests to verify failure**
+- [x] **Step 2: Run the tests to verify failure**
 
 Run:
 
@@ -280,7 +280,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip
 
 Expected: FAIL because `put()` does not exist yet.
 
-- [ ] **Step 3: Implement `put()` and the happy-path `get()`**
+- [x] **Step 3: Implement `put()` and the happy-path `get()`**
 
 ```rust
 pub async fn put(
@@ -339,11 +339,11 @@ Add a small `validate_quarter_for_storage()` helper enforcing the canonical `YYY
 
 This `get()` is the happy path only; Task 3 adds explicit query/deserialization warning paths and the test seam needed by the client integration tests.
 
-- [ ] **Step 4: Run the read/write tests again**
+- [x] **Step 4: Run the read/write tests again**
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the read/write slice**
+- [x] **Step 5: Commit the read/write slice**
 
 ```bash
 git add crates/scorpio-core/src/data/transcript_cache.rs
@@ -356,7 +356,7 @@ git commit -m "feat(data): implement transcript cache reads and writes"
 - Modify: `crates/scorpio-core/src/data/transcript_cache.rs`
 - Test: `crates/scorpio-core/src/data/transcript_cache.rs`
 
-- [ ] **Step 1: Write the failing resilience tests**
+- [x] **Step 1: Write the failing resilience tests**
 
 Add a `sample_found_with_speaker(symbol, quarter, speaker)` helper that returns a `Found` with a specific speaker so the overwrite test asserts an actual payload change. Reuse the small `SharedLogBuffer` test-helper pattern already present in `crates/scorpio-core/src/providers/factory/error.rs` so the corrupt-payload test can assert on warning output without adding a dependency. Then add:
 
@@ -439,7 +439,7 @@ async fn two_store_instances_can_open_the_same_db_path() {
 }
 ```
 
-- [ ] **Step 2: Run the resilience tests to verify failure**
+- [x] **Step 2: Run the resilience tests to verify failure**
 
 Run:
 
@@ -449,7 +449,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(put_overwrites_existin
 
 Expected: FAIL because Task 2's `get()` still silently `ok()`s deserialization failures, so the corrupt-row test sees no warning output yet. The overwrite and shared-path tests may already pass from Task 2; the important red signal is the missing sanitized warn.
 
-- [ ] **Step 3: Harden `get()` so cache failures degrade to misses with sanitized WARN logs**
+- [x] **Step 3: Harden `get()` so cache failures degrade to misses with sanitized WARN logs**
 
 Replace the happy-path implementation with explicit handling for query errors and deserialization failure:
 
@@ -488,7 +488,7 @@ pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> 
 
 Do not log raw `serde_json` error text — it can echo payload bytes. `AlphaVantageClient::cache_failure_count` (added in Chunk 2) is only the operator-facing signal for chronic write failures; read-side cache failures rely on these sanitized warn logs.
 
-- [ ] **Step 4: Add the test-only store failure seam**
+- [x] **Step 4: Add the test-only store failure seam**
 
 Mirror the existing `SnapshotStore::close_for_test()` pattern so `AlphaVantageClient` tests can force cache read/write failures without adding a trait abstraction:
 
@@ -501,7 +501,7 @@ pub(crate) async fn close_for_test(&self) {
 
 This seam is required for Chunk 2's `fetch_transcript_uses_api_when_cache_is_unavailable` test, which verifies the client falls back to the API and bumps `cache_failure_count` when the cache pool is closed.
 
-- [ ] **Step 5: Re-run the resilience tests and one earlier happy-path test**
+- [x] **Step 5: Re-run the resilience tests and one earlier happy-path test**
 
 Run:
 
@@ -511,7 +511,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the hardened store slice**
+- [x] **Step 6: Commit the hardened store slice**
 
 ```bash
 git add crates/scorpio-core/src/data/transcript_cache.rs
@@ -528,7 +528,7 @@ git commit -m "feat(data): harden transcript cache reads"
 - Modify: `crates/scorpio-core/src/data/alpha_vantage.rs`
 - Test: `crates/scorpio-core/src/data/alpha_vantage.rs`
 
-- [ ] **Step 1: Write the failing cache-hit test**
+- [x] **Step 1: Write the failing cache-hit test**
 
 Add this test to `crates/scorpio-core/src/data/alpha_vantage.rs`:
 
@@ -560,7 +560,7 @@ async fn fetch_transcript_returns_cached_result_before_network() {
 
 Also add a `sample_found()` helper to this test module so the transcript payload is not repeated inline.
 
-- [ ] **Step 2: Run the cache-hit test to verify failure**
+- [x] **Step 2: Run the cache-hit test to verify failure**
 
 Run:
 
@@ -570,7 +570,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(fetch_transcript_retur
 
 Expected: FAIL because `AlphaVantageClient` does not yet accept a cache and `new_with_base_url()` still takes three arguments.
 
-- [ ] **Step 3: Add the optional cache field, observability counter, and update constructors**
+- [x] **Step 3: Add the optional cache field, observability counter, and update constructors**
 
 Add the field and counter to the struct (the existing imports already pull in `AtomicU64` and `Ordering` per the other counters in this file):
 
@@ -647,7 +647,7 @@ pub fn for_test() -> Self {
 
 Update the two existing constructor tests in this file to pass `None` into `AlphaVantageClient::new(...)`.
 
-- [ ] **Step 4: Add the cache hit/miss path before the rate limiter**
+- [x] **Step 4: Add the cache hit/miss path before the rate limiter**
 
 Inside `fetch_transcript()`, keep input validation first, then add the cache lookup before `self.rate_limiter.acquire().await`:
 
@@ -671,7 +671,7 @@ Important:
 - Do not increment `found_count` / `not_published_count` on cache hits; those counters continue to describe provider outcomes, not local reads.
 - Do not add a `with_cache()` builder. The constructor parameter makes call sites explicit.
 
-- [ ] **Step 5: Run the cache-hit and constructor tests again**
+- [x] **Step 5: Run the cache-hit and constructor tests again**
 
 Run:
 
@@ -681,7 +681,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(fetch_transcript_retur
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the cache-hit slice**
+- [x] **Step 6: Commit the cache-hit slice**
 
 ```bash
 git add crates/scorpio-core/src/data/alpha_vantage.rs
@@ -694,7 +694,7 @@ git commit -m "feat(alpha-vantage): add transcript cache reads"
 - Modify: `crates/scorpio-core/src/data/alpha_vantage.rs`
 - Test: `crates/scorpio-core/src/data/alpha_vantage.rs`
 
-- [ ] **Step 1: Write the failing integration-style cache tests**
+- [x] **Step 1: Write the failing integration-style cache tests**
 
 Add a tiny loopback HTTP helper in the `alpha_vantage.rs` test module using `std::net::TcpListener`; do not add `wiremock` or another new dev dependency.
 
@@ -763,7 +763,7 @@ async fn fetch_transcript_uses_api_when_cache_is_unavailable() {
 
 The first test exercises the primary `Found` path. The second test asserts that closed-pool failures bump the observability counter, so chronic failure is visible to operators without scanning warn logs.
 
-- [ ] **Step 2: Run the integration-style tests to verify failure**
+- [x] **Step 2: Run the integration-style tests to verify failure**
 
 Run:
 
@@ -773,7 +773,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(fetch_transcript_cache
 
 Expected: FAIL because `fetch_transcript()` still returns the API result without writing it back to the cache, and the failure counter is never incremented.
 
-- [ ] **Step 3: Add best-effort cache writeback with counter bumps**
+- [x] **Step 3: Add best-effort cache writeback with counter bumps**
 
 At the end of `fetch_transcript()`, after `outcome` is computed and before the final `Ok(outcome)`, add:
 
@@ -797,7 +797,7 @@ The cacheability rule (only `Found`) already lives in `TranscriptCacheStore::put
 
 **Counter semantics:** `cache_failure_count` tracks **write** failures only. Read-side failures (corrupt payload, query error) emit sanitized `warn!` logs from `TranscriptCacheStore::get()` but do not bump the counter. Rationale: a corrupted row is one extra API call; a sustained write failure indicates a disk or permissions problem that operators need to see at a glance. The AGENTS.md update (Task 7 Step 1) must reflect this — the counter is not a complete cache-health signal.
 
-- [ ] **Step 4: Add the tiny loopback server helper in the test module**
+- [x] **Step 4: Add the tiny loopback server helper in the test module**
 
 Use the pattern already present in `crates/scorpio-cli/src/cli/update.rs:898` rather than adding a new mocking library:
 
@@ -823,7 +823,7 @@ fn spawn_transcript_server(body: &'static str, calls: Arc<AtomicUsize>) -> Strin
 }
 ```
 
-- [ ] **Step 5: Run the integration-style tests again**
+- [x] **Step 5: Run the integration-style tests again**
 
 Run:
 
@@ -833,7 +833,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(fetch_transcript_retur
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the writeback slice**
+- [x] **Step 6: Commit the writeback slice**
 
 ```bash
 git add crates/scorpio-core/src/data/alpha_vantage.rs
@@ -851,7 +851,7 @@ git commit -m "feat(alpha-vantage): cache transcript fetch results with observab
 - Modify: `crates/scorpio-core/tests/app_runtime.rs`
 - Test: `crates/scorpio-core/src/config.rs`
 
-- [ ] **Step 1: Write the failing storage-config tests**
+- [x] **Step 1: Write the failing storage-config tests**
 
 Add these tests to `crates/scorpio-core/src/config.rs`:
 
@@ -918,7 +918,7 @@ fn load_storage_honors_transcript_cache_env_override() {
 
 The third test specifically verifies env-var symmetry through `Config::load_storage()` (the env-only path), not just `Config::load_from()`, so the new field is honored through the same builder pipeline as `snapshot_db_path`.
 
-- [ ] **Step 2: Run the storage-config tests to verify failure**
+- [x] **Step 2: Run the storage-config tests to verify failure**
 
 Run:
 
@@ -928,7 +928,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcr
 
 Expected: FAIL because `StorageConfig::transcript_cache_db_path` does not exist yet.
 
-- [ ] **Step 3: Extend `StorageConfig` and remove the snapshot-only early return**
+- [x] **Step 3: Extend `StorageConfig` and remove the snapshot-only early return**
 
 In `crates/scorpio-core/src/config.rs`:
 
@@ -976,7 +976,7 @@ The early-return constructs `StorageConfig` with a single named field — that b
 
 That is the entire `config.rs` change. Do not modify `PartialConfig`, `UserConfigFile`, or `partial_to_nested_toml_non_secrets()` — user-file `[storage]` overrides are not in scope for this plan. (The same pre-plan limitation already applies to `snapshot_db_path`; users override via env vars.) `Config::load_storage()` already parses `[storage]` directly from the user file via `StorageOnlyConfig`, so default + env-var overrides work without further surgery.
 
-- [ ] **Step 4: Add `TranscriptCacheStore::from_config()`**
+- [x] **Step 4: Add `TranscriptCacheStore::from_config()`**
 
 Back in `crates/scorpio-core/src/data/transcript_cache.rs`, add:
 
@@ -989,7 +989,7 @@ pub async fn from_config(config: &Config) -> Result<Self, TradingError> {
 
 Keep this thin. Do not move unrelated config logic into the store.
 
-- [ ] **Step 5: Wire the cache into `AnalysisRuntime::new()` only when Alpha Vantage is enabled**
+- [x] **Step 5: Wire the cache into `AnalysisRuntime::new()` only when Alpha Vantage is enabled**
 
 In `crates/scorpio-core/src/app/mod.rs`, keep the existing `if cfg.api.alpha_vantage_api_key.is_some()` guard. Inside that branch, build the cache best-effort, warn on failure, then pass it into the client constructor:
 
@@ -1009,7 +1009,7 @@ match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter, transcript_cach
 
 Do not create the store outside the Alpha Vantage branch. Without an Alpha Vantage key, transcript enrichment is already disabled, so eagerly opening the cache is wasted work and emits pointless warnings.
 
-- [ ] **Step 6: Fix the `StorageConfig` struct literal in the runtime integration test**
+- [x] **Step 6: Fix the `StorageConfig` struct literal in the runtime integration test**
 
 Update `crates/scorpio-core/tests/app_runtime.rs` to use the new defaulted field rather than spelling both fields manually:
 
@@ -1022,7 +1022,7 @@ storage: StorageConfig {
 
 This keeps the test focused on snapshot-store failure instead of transcript-cache configuration noise.
 
-- [ ] **Step 7: Run the focused config, runtime, and cache tests**
+- [x] **Step 7: Run the focused config, runtime, and cache tests**
 
 Run:
 
@@ -1034,7 +1034,7 @@ cargo nextest run -p scorpio-core --all-features -E 'test(storage_config_transcr
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the runtime wiring slice**
+- [x] **Step 8: Commit the runtime wiring slice**
 
 ```bash
 git add crates/scorpio-core/src/config.rs crates/scorpio-core/src/data/transcript_cache.rs crates/scorpio-core/src/app/mod.rs crates/scorpio-core/tests/app_runtime.rs
@@ -1046,7 +1046,7 @@ git commit -m "feat(runtime): wire transcript cache configuration"
 **Files:**
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Update `AGENTS.md` storage section**
+- [x] **Step 1: Update `AGENTS.md` storage section**
 
 Update the storage/migration section in `AGENTS.md` to describe:
 
@@ -1058,7 +1058,7 @@ Update the storage/migration section in `AGENTS.md` to describe:
 
 Keep the wording short and factual. This is a doc-accuracy pass, not a narrative rewrite. `CLAUDE.md` does not need a parallel update — the convention applies to one new subdirectory in one crate's storage layer, not project-wide.
 
-- [ ] **Step 2: Run the required repository-wide verification commands**
+- [x] **Step 2: Run the required repository-wide verification commands**
 
 Run, in order:
 
@@ -1070,7 +1070,7 @@ cargo nextest run --workspace --all-features --locked --no-fail-fast
 
 Expected: all three commands exit 0.
 
-- [ ] **Step 3: Run a manual smoke check with debug logging**
+- [x] **Step 3: Run a manual smoke check with debug logging**
 
 Use any symbol that currently resolves to a published transcript in your environment. `AAPL` is a reasonable starting point if your local config has the required keys.
 
@@ -1096,7 +1096,7 @@ If you need to force a refetch during testing:
 rm ~/.scorpio-analyst/transcript_cache.db
 ```
 
-- [ ] **Step 4: Commit the docs/verification slice**
+- [x] **Step 4: Commit the docs/verification slice**
 
 ```bash
 git add AGENTS.md
@@ -1107,5 +1107,5 @@ git commit -m "docs(storage): document transcript cache"
 
 - Implement this plan with `@superpowers:subagent-driven-development`.
 - Keep the commits in task order; do not batch Chunk 1 into one giant commit.
-- After the last task, run `@ce:review` before opening a PR.
-- After merge readiness, capture the store/migration pattern with `@ce:compound` so the next SQLite-backed cache does not repeat this archaeology.
+- After the last task, run `/ce-code-review` before opening a PR.
+- After merge readiness, capture the store/migration pattern with `/ce-compound` so the next SQLite-backed cache does not repeat this archaeology.
