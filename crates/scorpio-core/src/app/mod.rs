@@ -124,7 +124,7 @@ impl AnalysisRuntime {
         let alpha_vantage = if cfg.api.alpha_vantage_api_key.is_some() {
             let av_limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg.rate_limits)
                 .unwrap_or_else(|| SharedRateLimiter::disabled("alpha_vantage"));
-            match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter) {
+            match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter, None) {
                 Ok(client) => {
                     tracing::info!("Alpha Vantage client constructed for transcript enrichment");
                     Some(client)
