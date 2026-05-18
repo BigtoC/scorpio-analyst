@@ -834,21 +834,28 @@ mod tests {
         })
     }
 
-    fn spawn_transcript_server(body: &'static str, calls: Arc<AtomicUsize>) -> String {
+    fn spawn_transcript_server(
+        status_line: &'static str,
+        body: &'static str,
+        calls: Arc<AtomicUsize>,
+        expected_requests: usize,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local addr");
 
         std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let _ = std::io::Read::read(&mut stream, &mut [0u8; 1024]);
-            calls.fetch_add(1, Ordering::SeqCst);
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = std::io::Read::read(&mut stream, &mut [0u8; 1024]);
+                calls.fetch_add(1, Ordering::SeqCst);
 
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-                body.len(),
-                body,
-            );
-            std::io::Write::write_all(&mut stream, response.as_bytes()).expect("write");
+                let response = format!(
+                    "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                std::io::Write::write_all(&mut stream, response.as_bytes()).expect("write");
+            }
         });
 
         format!("http://{addr}/query")
@@ -889,8 +896,10 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
 
         let base_url = spawn_transcript_server(
+            "HTTP/1.1 200 OK",
             r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[{"speaker":"Tim Cook","title":"CEO","content":"Hello","sentiment":0.5}]}"#,
             Arc::clone(&calls),
+            1,
         );
 
         let client = AlphaVantageClient::new_with_base_url(
@@ -924,8 +933,10 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
 
         let base_url = spawn_transcript_server(
+            "HTTP/1.1 200 OK",
             r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[{"speaker":"Tim Cook","title":"CEO","content":"Hello","sentiment":0.5}]}"#,
             Arc::clone(&calls),
+            1,
         );
 
         let client = AlphaVantageClient::new_with_base_url(
@@ -943,5 +954,106 @@ mod tests {
         assert!(matches!(result, TranscriptFetch::Found(_)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(client.cache_failure_count() > 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_not_published_result_is_not_cached() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url = spawn_transcript_server(
+            "HTTP/1.1 200 OK",
+            r#"{"symbol":"AAPL","quarter":"2025Q1","transcript":[]}"#,
+            Arc::clone(&calls),
+            2,
+        );
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert_eq!(first, TranscriptFetch::NotPublished);
+        assert_eq!(second, TranscriptFetch::NotPublished);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_throttled_result_is_not_cached() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url =
+            spawn_transcript_server("HTTP/1.1 429 Too Many Requests", "", Arc::clone(&calls), 2);
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert_eq!(first, TranscriptFetch::Throttled);
+        assert_eq!(second, TranscriptFetch::Throttled);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn fetch_transcript_unavailable_result_is_not_cached() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("transcript-cache.db");
+        let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let base_url = spawn_transcript_server(
+            "HTTP/1.1 503 Service Unavailable",
+            "",
+            Arc::clone(&calls),
+            2,
+        );
+
+        let client = AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            Some(cache),
+        );
+
+        let first = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("first call");
+        let second = client
+            .fetch_transcript("AAPL", "2025Q1")
+            .await
+            .expect("second call");
+
+        assert_eq!(first, TranscriptFetch::Unavailable);
+        assert_eq!(second, TranscriptFetch::Unavailable);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }
