@@ -36,6 +36,7 @@ pub mod routing;
 pub mod sec_edgar;
 pub mod symbol;
 pub mod traits;
+pub mod transcript_cache;
 pub mod yfinance;
 
 pub use adapters::catalysts::{
