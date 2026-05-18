@@ -20,6 +20,7 @@ use scorpio_core::workflow::SnapshotStore;
 use scorpio_core::workflow::test_support::{
     deserialize_state_from_context, serialize_state_to_context,
 };
+use secrecy::SecretString;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -193,4 +194,48 @@ async fn new_wraps_snapshot_store_initialization_failures() {
         format!("{err:#}").contains("failed to initialize snapshot storage"),
         "runtime should preserve snapshot-store context; got {err:#}"
     );
+}
+
+#[tokio::test]
+async fn new_continues_when_transcript_cache_initialization_fails() {
+    let snapshot_dir = tempfile::tempdir().expect("temp snapshot dir");
+    let snapshot_path = snapshot_dir.path().join("phase-snapshots.db");
+
+    let api = ApiConfig {
+        finnhub_api_key: Some(SecretString::from("test-finnhub-key")),
+        fred_api_key: Some(SecretString::from("test-fred-key")),
+        alpha_vantage_api_key: Some(SecretString::from("test-alpha-vantage-key")),
+    };
+
+    let mut providers = ProvidersConfig::default();
+    providers.openai.api_key = Some(SecretString::from("test-openai-key"));
+
+    let cfg = Config {
+        llm: LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 0,
+            max_risk_rounds: 0,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: TradingConfig::default(),
+        api,
+        providers,
+        storage: StorageConfig {
+            snapshot_db_path: snapshot_path.display().to_string(),
+            transcript_cache_db_path: "/dev/null/scorpio-transcript-cache.db".to_owned(),
+        },
+        rate_limits: RateLimitConfig::default(),
+        enrichment: DataEnrichmentConfig::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+
+    AnalysisRuntime::new(cfg)
+        .await
+        .expect("runtime should degrade gracefully when transcript cache init fails");
 }
