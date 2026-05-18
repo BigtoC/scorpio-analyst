@@ -128,8 +128,9 @@ impl AnalysisRuntime {
             let transcript_cache =
                 match crate::data::transcript_cache::TranscriptCacheStore::from_config(&cfg).await {
                     Ok(store) => Some(store),
-                    Err(_err) => {
+                    Err(err) => {
                         tracing::warn!(
+                            error = %err,
                             error.kind = "config",
                             "failed to initialize transcript cache; continuing without cache"
                         );
