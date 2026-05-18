@@ -103,6 +103,7 @@ Notes:
 - Register a free account and get the financial data APIs key :
   - [Finnhub](https://finnhub.io/) for market data and news
   - [FRED](https://fred.stlouisfed.org/) for economic indicators
+  - [Alpha Vantage](https://www.alphavantage.co/) for earnings call transcripts (optional — without a key the pipeline runs in degraded mode with no transcripts)
   - `yfinance` is used through the bundled Rust client and does not require an API key
 
 ### 1. Configure secrets
@@ -127,6 +128,8 @@ SCORPIO_XIAOMIMIMO_API_KEY=your-xiaomimimo-key-here
 # Financial data APIs
 SCORPIO_FINNHUB_API_KEY=your-finnhub-key-here
 SCORPIO_FRED_API_KEY=your-fred-api-key-here
+# Alpha Vantage — optional, enables earnings call transcript enrichment
+SCORPIO_ALPHA_VANTAGE_API_KEY=your-alpha-vantage-key-here
 ```
 
 Only the keys for providers selected by `scorpio setup` or `SCORPIO__LLM__...` env vars are required at runtime.
