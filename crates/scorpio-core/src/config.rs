@@ -359,16 +359,25 @@ pub struct StorageConfig {
     /// Supports `~/` and `$HOME/` expansion at call-site via [`expand_path`].
     #[serde(default = "default_snapshot_db_path")]
     pub snapshot_db_path: String,
+    /// Path to the SQLite transcript cache database.
+    /// Supports `~/` and `$HOME/` expansion at call-site via [`expand_path`].
+    #[serde(default = "default_transcript_cache_db_path")]
+    pub transcript_cache_db_path: String,
 }
 
 fn default_snapshot_db_path() -> String {
     "~/.scorpio-analyst/phase_snapshots.db".to_string()
 }
 
+fn default_transcript_cache_db_path() -> String {
+    "~/.scorpio-analyst/transcript_cache.db".to_string()
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             snapshot_db_path: default_snapshot_db_path(),
+            transcript_cache_db_path: default_transcript_cache_db_path(),
         }
     }
 }
@@ -449,10 +458,6 @@ impl Config {
         if let Ok(path) = crate::settings::user_config_path() {
             crate::settings::load_user_config_at(&path)?;
             builder = builder.add_source(config::File::from(path).required(false));
-        }
-
-        if let Ok(snapshot_db_path) = std::env::var("SCORPIO__STORAGE__SNAPSHOT_DB_PATH") {
-            return Ok(StorageConfig { snapshot_db_path });
         }
 
         let settings = builder
@@ -1317,6 +1322,68 @@ quick_thinking_provider = "definitely-invalid-provider"
 
         let err = result.expect_err("malformed config should still fail");
         assert!(err.to_string().contains("failed to parse config file"));
+    }
+
+    #[test]
+    fn storage_config_transcript_cache_defaults_to_tilde_path() {
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        let cfg = Config::load_from(&path).expect("config should load");
+
+        assert_eq!(
+            cfg.storage.transcript_cache_db_path,
+            "~/.scorpio-analyst/transcript_cache.db"
+        );
+    }
+
+    #[test]
+    fn storage_config_transcript_cache_can_be_overridden_via_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+
+        unsafe {
+            std::env::set_var(
+                "SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH",
+                "/tmp/transcript-cache.db",
+            );
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH");
+        }
+
+        let cfg = result.expect("config should load");
+        assert_eq!(
+            cfg.storage.transcript_cache_db_path,
+            "/tmp/transcript-cache.db"
+        );
+    }
+
+    #[test]
+    fn load_storage_honors_transcript_cache_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().expect("temp home");
+        let config_dir = home.path().join(".scorpio-analyst");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        std::fs::write(config_dir.join("config.toml"), MINIMAL_CONFIG_TOML).expect("write config");
+
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::set_var(
+                "SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH",
+                "/tmp/env-only-transcript.db",
+            );
+        }
+        let result = Config::load_storage();
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH");
+        }
+
+        let storage = result.expect("storage loading should succeed");
+        assert_eq!(
+            storage.transcript_cache_db_path,
+            "/tmp/env-only-transcript.db"
+        );
     }
 
     #[test]

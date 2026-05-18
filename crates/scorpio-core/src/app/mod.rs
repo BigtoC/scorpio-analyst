@@ -124,7 +124,20 @@ impl AnalysisRuntime {
         let alpha_vantage = if cfg.api.alpha_vantage_api_key.is_some() {
             let av_limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg.rate_limits)
                 .unwrap_or_else(|| SharedRateLimiter::disabled("alpha_vantage"));
-            match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter, None) {
+
+            let transcript_cache =
+                match crate::data::transcript_cache::TranscriptCacheStore::from_config(&cfg).await {
+                    Ok(store) => Some(store),
+                    Err(_err) => {
+                        tracing::warn!(
+                            error.kind = "config",
+                            "failed to initialize transcript cache; continuing without cache"
+                        );
+                        None
+                    }
+                };
+
+            match crate::data::AlphaVantageClient::new(&cfg.api, av_limiter, transcript_cache) {
                 Ok(client) => {
                     tracing::info!("Alpha Vantage client constructed for transcript enrichment");
                     Some(client)

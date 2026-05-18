@@ -178,6 +178,7 @@ async fn new_wraps_snapshot_store_initialization_failures() {
         providers: ProvidersConfig::default(),
         storage: StorageConfig {
             snapshot_db_path: "/dev/null/scorpio-phase-snapshots.db".to_owned(),
+            ..StorageConfig::default()
         },
         rate_limits: RateLimitConfig::default(),
         enrichment: DataEnrichmentConfig::default(),

@@ -65,6 +65,12 @@ impl TranscriptCacheStore {
         Ok(Self { pool })
     }
 
+    /// Open the cache from application config.
+    pub async fn from_config(config: &crate::config::Config) -> Result<Self, TradingError> {
+        let path = crate::config::expand_path(&config.storage.transcript_cache_db_path);
+        Self::new(Some(&path)).await
+    }
+
     /// Store a transcript fetch result in the cache.
     ///
     /// Only `TranscriptFetch::Found` results are cached. Negative outcomes
@@ -150,7 +156,6 @@ impl TranscriptCacheStore {
 
     /// Close the underlying pool. Test-only seam for forcing cache failures.
     #[cfg(test)]
-    #[expect(dead_code)]
     pub(crate) async fn close_for_test(&self) {
         self.pool.close().await;
     }
