@@ -112,7 +112,8 @@ impl TranscriptCacheStore {
 
     /// Retrieve a cached transcript fetch result.
     ///
-    /// Returns `None` on cache miss, query error, or deserialization failure.
+    /// Returns `None` on cache miss, query error, deserialization failure, or
+    /// any row whose payload is not a matching `TranscriptFetch::Found(_)`.
     /// Read-side failures emit sanitized `warn!` logs but do not propagate
     /// errors to the caller.
     pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> {
@@ -141,7 +142,13 @@ impl TranscriptCacheStore {
         let (payload_json,) = row?;
 
         match serde_json::from_str::<TranscriptFetch>(&payload_json) {
-            Ok(fetch) => Some(fetch),
+            Ok(TranscriptFetch::Found(evidence))
+                if evidence.symbol.eq_ignore_ascii_case(&normalized_symbol)
+                    && evidence.call_date == quarter =>
+            {
+                Some(TranscriptFetch::Found(evidence))
+            }
+            Ok(_) => None,
             Err(_err) => {
                 warn!(
                     symbol,
@@ -352,6 +359,63 @@ mod tests {
         assert!(store.get("AAPL", "2025Q1").await.is_none());
         assert!(store.get("AAPL", "2025Q2").await.is_none());
         assert!(store.get("AAPL", "2025Q3").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_treats_cached_negative_outcome_as_miss() {
+        let store = test_store().await;
+        let payload_json = serde_json::to_string(&TranscriptFetch::NotPublished).expect("json");
+
+        sqlx::query(
+            "INSERT INTO transcript_cache (symbol, quarter, payload_json)
+             VALUES (?, ?, ?)",
+        )
+        .bind("AAPL")
+        .bind("2025Q1")
+        .bind(&payload_json)
+        .execute(&store.pool)
+        .await
+        .expect("seed row");
+
+        assert!(store.get("AAPL", "2025Q1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_rejects_cached_found_with_mismatched_symbol() {
+        let store = test_store().await;
+        let payload_json = serde_json::to_string(&sample_found("MSFT", "2025Q1")).expect("json");
+
+        sqlx::query(
+            "INSERT INTO transcript_cache (symbol, quarter, payload_json)
+             VALUES (?, ?, ?)",
+        )
+        .bind("AAPL")
+        .bind("2025Q1")
+        .bind(&payload_json)
+        .execute(&store.pool)
+        .await
+        .expect("seed row");
+
+        assert!(store.get("AAPL", "2025Q1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_rejects_cached_found_with_mismatched_quarter() {
+        let store = test_store().await;
+        let payload_json = serde_json::to_string(&sample_found("AAPL", "2024Q4")).expect("json");
+
+        sqlx::query(
+            "INSERT INTO transcript_cache (symbol, quarter, payload_json)
+             VALUES (?, ?, ?)",
+        )
+        .bind("AAPL")
+        .bind("2025Q1")
+        .bind(&payload_json)
+        .execute(&store.pool)
+        .await
+        .expect("seed row");
+
+        assert!(store.get("AAPL", "2025Q1").await.is_none());
     }
 
     // ── Resilience ────────────────────────────────────────────────────
