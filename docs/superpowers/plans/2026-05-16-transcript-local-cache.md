@@ -4,7 +4,7 @@
 
 **Goal:** Persist stable Alpha Vantage transcript results in a dedicated local SQLite cache so repeated analyses for the same symbol and quarter skip the external API call entirely.
 
-**Architecture:** Add a new `TranscriptCacheStore` in `scorpio-core::data` that owns its own SQLite database, migrations, and uppercase-symbol normalization. The store caches only `TranscriptFetch::Found` results — negative outcomes (`NotPublished`, `Throttled`, `Unavailable`) bypass the cache and stay re-fetchable. Cache failures degrade silently to direct API calls with a `cache_failure_count` counter on `AlphaVantageClient` so chronic failure is observable without `RUST_LOG=debug`. Caching is fully internal to `AlphaVantageClient` by injecting an optional store at construction time, so the `TranscriptProvider` trait and all downstream callers remain unchanged; runtime startup degrades gracefully to uncached API calls if the cache cannot be opened.
+**Architecture:** Add a new `TranscriptCacheStore` in `scorpio-core::data` that owns its own SQLite database, migrations, and uppercase-symbol normalization. The store caches only `TranscriptFetch::Found` results — negative outcomes (`NotPublished`, `Throttled`, `Unavailable`) bypass the cache and stay re-fetchable. Cache write failures degrade silently to direct API calls and increment `AlphaVantageClient::cache_failure_count`; read-side cache failures degrade to cache misses with sanitized `warn!` logs. Caching is fully internal to `AlphaVantageClient` by injecting an optional store at construction time, so the `TranscriptProvider` trait and all downstream callers remain unchanged; runtime startup degrades gracefully to uncached API calls if the cache cannot be opened.
 
 **Tech Stack:** Rust 2024, `sqlx` SQLite migrations, `serde`/`serde_json`, `reqwest`, `tokio`, `tracing`, existing `Config`/`AnalysisRuntime`/`SharedRateLimiter` patterns. No new dependencies.
 
@@ -337,7 +337,7 @@ pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> 
 
 Add a small `validate_quarter_for_storage()` helper enforcing the canonical `YYYYQN` shape before any SQL runs. This makes `put("AAPL", "2025q1", ...)` fail fast even for negative outcomes, instead of being silently skipped before the SQL `CHECK` constraint is reached.
 
-This `get()` is the happy path only; Task 3 hardens it.
+This `get()` is the happy path only; Task 3 adds explicit query/deserialization warning paths and the test seam needed by the client integration tests.
 
 - [ ] **Step 4: Run the read/write tests again**
 
@@ -358,7 +358,7 @@ git commit -m "feat(data): implement transcript cache reads and writes"
 
 - [ ] **Step 1: Write the failing resilience tests**
 
-Add a `sample_found_with_speaker(symbol, quarter, speaker)` helper that returns a `Found` with a specific speaker so the overwrite test asserts an actual payload change. Then add:
+Add a `sample_found_with_speaker(symbol, quarter, speaker)` helper that returns a `Found` with a specific speaker so the overwrite test asserts an actual payload change. Reuse the small `SharedLogBuffer` test-helper pattern already present in `crates/scorpio-core/src/providers/factory/error.rs` so the corrupt-payload test can assert on warning output without adding a dependency. Then add:
 
 ```rust
 #[tokio::test]
@@ -374,22 +374,42 @@ async fn put_overwrites_existing_entry() {
     assert_eq!(store.get("AAPL", "2025Q1").await, Some(second));
 }
 
-#[tokio::test]
-async fn get_treats_corrupt_payload_as_cache_miss() {
-    let store = test_store().await;
+#[test]
+fn get_logs_sanitized_warn_for_corrupt_payload() {
+    let logs = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .without_time()
+        .with_writer(logs.clone())
+        .finish();
 
-    sqlx::query(
-        "INSERT INTO transcript_cache (symbol, quarter, payload_json)
-         VALUES (?, ?, ?)",
-    )
-    .bind("AAPL")
-    .bind("2025Q1")
-    .bind("not valid json")
-    .execute(&store.pool)
-    .await
-    .expect("seed row");
+    tracing::subscriber::with_default(subscriber, || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
 
-    assert!(store.get("AAPL", "2025Q1").await.is_none());
+        runtime.block_on(async {
+            let store = test_store().await;
+
+            sqlx::query(
+                "INSERT INTO transcript_cache (symbol, quarter, payload_json)
+                 VALUES (?, ?, ?)",
+            )
+            .bind("AAPL")
+            .bind("2025Q1")
+            .bind("not valid json")
+            .execute(&store.pool)
+            .await
+            .expect("seed row");
+
+            assert!(store.get("AAPL", "2025Q1").await.is_none());
+        });
+    });
+
+    let output = logs.contents();
+    assert!(output.contains("transcript cache deserialize failed"));
+    assert!(!output.contains("not valid json"));
 }
 
 #[tokio::test]
@@ -424,10 +444,10 @@ async fn two_store_instances_can_open_the_same_db_path() {
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(put_overwrites_existing_entry) | test(get_treats_corrupt_payload_as_cache_miss) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
+cargo nextest run -p scorpio-core --all-features -E 'test(put_overwrites_existing_entry) | test(get_logs_sanitized_warn_for_corrupt_payload) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
 ```
 
-Expected: FAIL because `get()` still silently `ok()`s everything. Some tests may already pass from Task 2; the important red signal is that corrupt rows are not yet treated as sanitized cache misses with logs.
+Expected: FAIL because Task 2's `get()` still silently `ok()`s deserialization failures, so the corrupt-row test sees no warning output yet. The overwrite and shared-path tests may already pass from Task 2; the important red signal is the missing sanitized warn.
 
 - [ ] **Step 3: Harden `get()` so cache failures degrade to misses with sanitized WARN logs**
 
@@ -466,7 +486,7 @@ pub async fn get(&self, symbol: &str, quarter: &str) -> Option<TranscriptFetch> 
 }
 ```
 
-Do not log raw `serde_json` error text — it can echo payload bytes. The `cache_failure_count` counter on `AlphaVantageClient` (added in Chunk 2) is the operator-facing signal for chronic failures.
+Do not log raw `serde_json` error text — it can echo payload bytes. `AlphaVantageClient::cache_failure_count` (added in Chunk 2) is only the operator-facing signal for chronic write failures; read-side cache failures rely on these sanitized warn logs.
 
 - [ ] **Step 4: Add the test-only store failure seam**
 
@@ -486,7 +506,7 @@ This seam is required for Chunk 2's `fetch_transcript_uses_api_when_cache_is_una
 Run:
 
 ```bash
-cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_overwrites_existing_entry) | test(get_treats_corrupt_payload_as_cache_miss) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
+cargo nextest run -p scorpio-core --all-features -E 'test(put_and_get_round_trip_found) | test(put_overwrites_existing_entry) | test(get_logs_sanitized_warn_for_corrupt_payload) | test(put_rejects_invalid_quarter_at_storage_boundary) | test(two_store_instances_can_open_the_same_db_path)'
 ```
 
 Expected: PASS.
