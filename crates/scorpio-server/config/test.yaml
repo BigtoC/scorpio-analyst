@@ -1,0 +1,17 @@
+# scorpio-server — test configuration.
+#
+# `loco_rs::testing::request::<App>` loads this file when booting the app under
+# `cargo test`. The OpenAPI initializer is intentionally omitted (and `app.rs`
+# skips it when `ctx.environment == Test`) to avoid the global-state bleed
+# documented in loco-openapi-Initializer's README.
+
+logger:
+  enable: false
+  pretty_backtrace: false
+  level: error
+  format: compact
+
+server:
+  port: 5555
+  binding: localhost
+  host: http://localhost

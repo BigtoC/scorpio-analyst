@@ -1,0 +1,46 @@
+[package]
+name = "scorpio-server"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "scorpio-server"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP server framework (scorpio-server crate). Loco owns routing, config,
+# bootstrap, and the binary CLI; loco-openapi mounts utoipa-derived specs and
+# the Scalar visualizer. axum stays in the workspace because Loco's prelude
+# re-exports its routing types, and we still pull them in the server crate.
+loco-rs = { version = "0.16", default-features = false, features = ["cli"] }
+loco-openapi = { version = "0.1", default-features = false, features = ["scalar"] }
+
+# Async runtime + trait helpers required by `impl Hooks for App`.
+tokio.workspace = true
+async-trait.workspace = true
+
+# Used by the health response struct (Serialize + utoipa ToSchema).
+serde.workspace = true
+
+# `#[debug_handler]` and `utoipa_axum::routes!` resolve `axum` at the crate
+# root, so we need a direct dep even though loco_rs's prelude re-exports the
+# types we touch by name.
+axum = "0.8"
+
+[dev-dependencies]
+# `loco-rs/testing` exposes the `request::<App>(...)` helper that boots the
+# Hooks impl with the Test environment and hands us an axum-test `TestServer`.
+# Keep `default-features = false` so cargo's feature unification across normal
+# and dev deps does not pull `with-db` (which would force `truncate`/`seed` on
+# the `Hooks` impl).
+loco-rs = { version = "0.16", default-features = false, features = ["cli", "testing"] }
+serde_json.workspace = true
+serial_test = "3"
+tokio = { workspace = true }
