@@ -1,45 +1,22 @@
-use std::net::SocketAddr;
+//! `scorpio-server` binary entry point.
+//!
+//! Delegates all CLI surface (subcommands, environment selection, port/binding
+//! overrides) to Loco's built-in CLI. The most common invocations are:
+//!
+//! ```text
+//! scorpio-server start                       # bind per config/<env>.yaml
+//! scorpio-server start -b 0.0.0.0 -p 8088    # override binding/port
+//! scorpio-server routes                      # print every mounted route
+//! scorpio-server doctor                      # validate configuration
+//! ```
+//!
+//! Environment selection follows Loco: set `LOCO_ENV=production` (or pass
+//! `--environment production`) to load `config/production.yaml`.
 
-use anyhow::{Context, Result};
-use clap::Parser;
-use tokio::net::TcpListener;
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-
-/// scorpio-server — HTTP API surface for the scorpio analyst pipeline.
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Bind address.
-    #[arg(long, env = "SCORPIO_SERVER_HOST", default_value = "0.0.0.0")]
-    host: String,
-
-    /// Port to listen on.
-    #[arg(long, env = "SCORPIO_SERVER_PORT", default_value_t = 8088)]
-    port: u16,
-}
+use loco_rs::cli;
+use scorpio_server::app::App;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
-    let args = Args::parse();
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port)
-        .parse()
-        .with_context(|| format!("invalid bind address {}:{}", args.host, args.port))?;
-
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind {addr}"))?;
-    info!(%addr, "scorpio-server listening");
-
-    axum::serve(listener, scorpio_server::app())
-        .await
-        .context("axum::serve returned an error")?;
-
-    Ok(())
+async fn main() -> loco_rs::Result<()> {
+    cli::main::<App>().await
 }
