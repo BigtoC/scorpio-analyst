@@ -16,3 +16,4 @@
 .worktrees/
 .claude/worktrees/**
 .context/
+.antigravitycli/
