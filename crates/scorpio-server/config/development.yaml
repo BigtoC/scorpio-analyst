@@ -1,0 +1,23 @@
+# scorpio-server — development configuration.
+#
+# Loco loads this file when LOCO_ENV is unset or set to "development". Override
+# any value at runtime via the documented environment variables (PORT, BINDING,
+# LOG_LEVEL) or by passing `-b/-p` flags to `scorpio-server start`.
+
+logger:
+  enable: true
+  pretty_backtrace: true
+  level: {{ get_env(name="LOG_LEVEL", default="debug") }}
+  format: compact
+
+server:
+  # 8088 matches the port the pre-Loco scorpio-server binary listened on.
+  port: {{ get_env(name="PORT", default="8088") }}
+  binding: {{ get_env(name="BINDING", default="0.0.0.0") }}
+  host: http://localhost
+
+initializers:
+  openapi:
+    scalar:
+      url: /api/scalar
+      spec_json_url: /scalar/openapi.json

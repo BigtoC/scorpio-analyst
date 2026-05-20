@@ -1,0 +1,22 @@
+# scorpio-server — production configuration.
+#
+# Loco loads this file when LOCO_ENV=production. Production deployments should
+# pin PORT/BINDING explicitly; the defaults match the development profile so a
+# bare `scorpio-server start` still comes up sanely inside the container image.
+
+logger:
+  enable: true
+  pretty_backtrace: false
+  level: {{ get_env(name="LOG_LEVEL", default="info") }}
+  format: json
+
+server:
+  port: {{ get_env(name="PORT", default="8088") }}
+  binding: {{ get_env(name="BINDING", default="0.0.0.0") }}
+  host: http://localhost
+
+initializers:
+  openapi:
+    scalar:
+      url: /scalar
+      spec_json_url: /scalar/openapi.json
