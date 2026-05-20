@@ -4,9 +4,9 @@
 
 **Goal:** Create a new `scorpio-server` binary+library crate in the workspace exposing an axum HTTP server with a single `GET /health` endpoint, configurable host/port, and a Docker build, without depending on `scorpio-core`.
 
-**Architecture:** A new crate at `crates/scorpio-server/` split into a thin `main.rs` (clap arg parsing, tokio runtime, bind, serve) and a `lib.rs` (router builder + health handler) so the router can be unit-tested via `tower::ServiceExt::oneshot` and embedded by future surfaces. The crate is autodiscovered by the existing `members = ["crates/*"]` glob — no root `Cargo.toml` member edits required, only one new workspace dependency entry (`axum`) plus a dev-dependency entry for `tower`.
+**Architecture:** A new crate at `crates/scorpio-server/` split into a thin `main.rs` (clap arg parsing, tokio runtime, bind, serve) and a `lib.rs` (router builder + health handler) so the router can be unit-tested via `tower::ServiceExt::oneshot` and embedded by future surfaces. The crate is autodiscovered by the existing `members = ["crates/*"]` glob — no root `Cargo.toml` member edits required, only one new workspace dependency entry (`axum`); `tower` stays crate-local as a dev-dependency for the router test.
 
-**Tech Stack:** Rust 1.93+ / edition 2024, axum 0.8, tokio (workspace), clap derive (workspace), serde + serde_json (workspace), tracing + tracing-subscriber (workspace), anyhow (workspace), tower (dev, workspace).
+**Tech Stack:** Rust 1.93+ / edition 2024, axum 0.8, tokio (workspace), clap derive (workspace), serde + serde_json (workspace), tracing + tracing-subscriber (workspace), anyhow (workspace), tower (dev, crate-local).
 
 **Source of truth:** `docs/superpowers/specs/2026-05-19-scorpio-server-setup-design.md`. The spec's Dockerfile lists `rust:1.83-slim`; this plan uses `rust:1.93-slim` because the workspace's `edition = "2024"` requires Rust ≥ 1.85 (CLAUDE.md states 1.93+).
 
@@ -15,33 +15,33 @@
 ## File Structure
 
 **Created:**
-- `crates/scorpio-server/Cargo.toml` — new crate manifest; library + binary targets; consumes workspace deps.
+- `crates/scorpio-server/Cargo.toml` — new crate manifest; library + binary targets; consumes workspace deps plus a crate-local `tower` dev-dependency.
 - `crates/scorpio-server/src/lib.rs` — `pub fn app() -> Router` + `async fn health() -> Json<Value>` + a `#[tokio::test]` unit test that hits `/health` via `tower::ServiceExt::oneshot`.
 - `crates/scorpio-server/src/main.rs` — `#[derive(Parser)]` CLI args (`--host`, `--port` + `SCORPIO_SERVER_HOST` / `SCORPIO_SERVER_PORT` env), `#[tokio::main] async fn main() -> anyhow::Result<()>`, initialises tracing, binds a `TcpListener`, calls `axum::serve(listener, scorpio_server::app())`.
 - `crates/scorpio-server/Dockerfile` — multi-stage build using `rust:1.93-slim` builder and `debian:bookworm-slim` runtime, exposing port 8088 and `ENTRYPOINT ["scorpio-server"]`.
 
 **Modified:**
-- `Cargo.toml` (workspace root) — append `axum = "0.8"` and `tower = { version = "0.5", default-features = false, features = ["util"] }` to `[workspace.dependencies]`. **No `members` edit** — the existing `members = ["crates/*"]` glob picks the new crate up automatically.
+- `Cargo.toml` (workspace root) — append `axum = "0.8"` to `[workspace.dependencies]`. **No `members` edit** — the existing `members = ["crates/*"]` glob picks the new crate up automatically.
+- `Cargo.lock` (workspace root) — refresh once the new crate consumes `axum` so later `--locked` verification and Docker builds stay reproducible.
 
 **Not modified:** No existing crate is touched. `scorpio-core`, `scorpio-cli`, and `scorpio-reporters` continue to build unchanged.
 
 ---
 
-## Task 1: Add `axum` and `tower` to workspace dependencies
+## Task 1: Add `axum` to workspace dependencies
 
 **Files:**
 - Modify: `Cargo.toml` (workspace root)
 
-- [ ] **Step 1: Add `axum` and dev-only `tower` entries to `[workspace.dependencies]`**
+Before running any `cargo` command in this plan, verify `protoc --version` prints a version string. If the command is missing, install the protobuf compiler using the repo's documented instructions (`brew install protobuf` on macOS; `apt-get install protobuf-compiler` in CI/Linux environments) before continuing.
 
-Open `Cargo.toml` at the workspace root and insert the following two lines into the `[workspace.dependencies]` table. Place them near the bottom of the table, immediately before the `# Dev-only` comment so they sit with general runtime/utility deps; the exact position is not load-bearing but keep the file tidy:
+- [ ] **Step 1: Add `axum` to `[workspace.dependencies]`**
+
+Open `Cargo.toml` at the workspace root and insert the following line into the `[workspace.dependencies]` table. Place it near the bottom of the table, immediately before the `# Dev-only` comment so it sits with general runtime/utility deps; the exact position is not load-bearing but keep the file tidy:
 
 ```toml
 # HTTP server framework (scorpio-server crate)
 axum = "0.8"
-
-# Tower middleware ecosystem — dev-only for axum router unit tests (`oneshot`).
-tower = { version = "0.5", default-features = false, features = ["util"] }
 ```
 
 - [ ] **Step 2: Verify workspace still resolves**
@@ -53,7 +53,7 @@ Expected: exits 0 with no output. (We use `cargo metadata` here instead of `carg
 
 ```bash
 git add Cargo.toml
-git commit -m "build(workspace): add axum and tower to workspace dependencies"
+git commit -m "build(workspace): add axum to workspace dependencies"
 ```
 
 ---
@@ -112,33 +112,38 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 # `ServiceExt::oneshot` for unit-testing the axum Router without a TCP bind.
-tower.workspace = true
+tower = { version = "0.5", default-features = false, features = ["util"] }
 ```
 
-- [ ] **Step 3: Verify the new crate is picked up by the workspace glob**
+- [ ] **Step 3: Refresh `Cargo.lock` now that the new crate consumes `axum`**
+
+Run: `cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml > /dev/null`
+Expected: exits 0 with no output and refreshes `Cargo.lock` so later `--locked` verification sees the new dependency graph.
+
+- [ ] **Step 4: Verify the new crate is picked up by the workspace glob**
 
 Run: `cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | grep -o '"name":"scorpio-server"'`
 Expected output (exactly): `"name":"scorpio-server"`
 
 If empty, the `members = ["crates/*"]` glob did not pick up the new directory — re-check the path. Do **not** edit the root manifest to add an explicit member entry; the glob is the intended mechanism.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/scorpio-server/Cargo.toml
+git add crates/scorpio-server/Cargo.toml Cargo.lock
 git commit -m "feat(scorpio-server): scaffold crate manifest with lib + bin targets"
 ```
 
 ---
 
-## Task 3: Write the failing unit test for the `/health` endpoint
+## Task 3: Write the `/health` endpoint test before the implementation
 
 **Files:**
 - Create: `crates/scorpio-server/src/lib.rs`
 
 - [ ] **Step 1: Create `crates/scorpio-server/src/lib.rs` with the test only**
 
-The library file starts with only the unit test — this is the failing-test step of TDD. The test imports `app` and `health` from the crate root via `super::*`, so the test will fail to compile (which is the expected red state) until Task 4 adds the implementation.
+The library file starts with only the unit test so Task 4 can add the smallest implementation that makes it pass. The test imports `app` and `health` from the crate root via `super::*`; after writing this file, continue directly into Task 4 rather than pausing for a red-state compile/commit checkpoint.
 
 ```rust
 //! # scorpio-server
@@ -181,22 +186,6 @@ mod tests {
     }
 }
 ```
-
-- [ ] **Step 2: Run the test and confirm it fails to compile**
-
-Run: `cargo test -p scorpio-server --lib`
-Expected: compilation error referencing `app` (e.g. `error[E0425]: cannot find function 'app' in this scope`). This is the intended red state.
-
-If the error is anything other than "`app` is not defined" (or equivalent), stop and diagnose — that means the dev-dep wiring is wrong, not the missing implementation.
-
-- [ ] **Step 3: Commit the failing test**
-
-```bash
-git add crates/scorpio-server/src/lib.rs
-git commit -m "test(scorpio-server): add failing /health endpoint test"
-```
-
----
 
 ## Task 4: Implement `app()` and `health()` to make the test pass
 
@@ -254,6 +243,7 @@ git commit -m "feat(scorpio-server): add app() router with /health endpoint"
 
 Create the file with this content. Notes:
 - `clap`'s `env` attribute reads `SCORPIO_SERVER_HOST` / `SCORPIO_SERVER_PORT` automatically when the corresponding flag is absent, satisfying the spec's "env var override" requirement without manual env lookups.
+- This bootstrap crate intentionally uses standalone `SCORPIO_SERVER_HOST` / `SCORPIO_SERVER_PORT` env vars instead of the repo-wide `SCORPIO__...` config pipeline so the initial scaffold can stay independent of `scorpio-core`. Revisit this once the server needs shared runtime settings or begins consuming core configuration.
 - `default_value_t = 8088` (vs `default_value`) keeps the port as a typed `u16` instead of going through a string round-trip.
 - The address parse uses `format!("{host}:{port}")` then `.parse::<SocketAddr>()` so any malformed host bubbles up through `anyhow::Result` rather than panicking.
 - `EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))` mirrors the spec's "tracing-subscriber" dep usage and gives a sensible default when `RUST_LOG` is unset.
@@ -356,7 +346,7 @@ git commit -m "feat(scorpio-server): add main binary with clap host/port args"
 
 - [ ] **Step 1: Write `crates/scorpio-server/Dockerfile`**
 
-The spec lists `rust:1.83-slim`, but the workspace uses `edition = "2024"` which requires Rust ≥ 1.85; CLAUDE.md states 1.93+. Using `rust:1.93-slim` keeps the Dockerfile in sync with what `cargo build` requires locally. The build context is the workspace root, so `COPY Cargo.toml Cargo.lock ./` plus `COPY crates/ crates/` reproduces the full workspace inside the image.
+The spec lists `rust:1.83-slim`, but the workspace uses `edition = "2024"` which requires Rust ≥ 1.85; CLAUDE.md states 1.93+. Using `rust:1.93-slim` keeps the Dockerfile in sync with what `cargo build` requires locally. The build context is the workspace root, so `COPY Cargo.toml Cargo.lock ./` plus `COPY crates/ crates/` reproduces the full workspace inside the image. Because the container serves a public port, the runtime stage should drop privileges and run as a dedicated non-root user; port 8088 is above 1024, so no extra capabilities are needed.
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -364,13 +354,15 @@ FROM rust:1.93-slim AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-RUN cargo build --release -p scorpio-server
+RUN cargo build --locked --release -p scorpio-server
 
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --user-group --create-home --home-dir /var/lib/scorpio-server scorpio
 COPY --from=builder /app/target/release/scorpio-server /usr/local/bin/scorpio-server
+USER scorpio:scorpio
 EXPOSE 8088
 ENTRYPOINT ["scorpio-server"]
 ```
@@ -380,7 +372,7 @@ ENTRYPOINT ["scorpio-server"]
 Run: `docker build -f crates/scorpio-server/Dockerfile -t scorpio-server:dev .`
 Expected: ends with `Successfully tagged scorpio-server:dev` (or the buildkit equivalent `naming to docker.io/library/scorpio-server:dev`). Build time will be several minutes on a cold cache because the builder stage compiles the full workspace.
 
-If Docker is not available in the development environment, skip this step and **note in the commit message that the Dockerfile is unverified**; do not block on this verification.
+If Docker is unavailable in the current development environment, pause Task 6 and hand Steps 2-4 to a Docker-capable environment. Do **not** proceed to Step 5 or count Task 6 as complete until those verification steps pass there.
 
 - [ ] **Step 3: Smoke-test the image**
 
@@ -393,7 +385,7 @@ docker stop scorpio-server-smoke
 test $EXIT -eq 0 && echo "DOCKER SMOKE OK"
 ```
 
-Expected: `{"status":"ok"}` followed by `DOCKER SMOKE OK`. Skip with a note if Docker is unavailable, as in Step 2.
+Expected: `{"status":"ok"}` followed by `DOCKER SMOKE OK`.
 
 - [ ] **Step 4: Verify the env-var override path through the image**
 
@@ -406,9 +398,9 @@ docker stop scorpio-server-env
 test $EXIT -eq 0 && echo "DOCKER ENV OK"
 ```
 
-Expected: `{"status":"ok"}` followed by `DOCKER ENV OK`. This confirms `SCORPIO_SERVER_PORT` is wired through clap into the bind address. Skip with a note if Docker is unavailable.
+Expected: `{"status":"ok"}` followed by `DOCKER ENV OK`. This confirms `SCORPIO_SERVER_PORT` is wired through clap into the bind address.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit after Docker verification passes**
 
 ```bash
 git add crates/scorpio-server/Dockerfile
@@ -431,12 +423,12 @@ Expected: exits 0 with no output.
 Run: `cargo clippy --workspace --all-targets -- -D warnings`
 Expected: exits 0 with no warnings. This mirrors `.github/workflows/tests.yml`.
 
-- [ ] **Step 3: Run the full workspace test suite (matches CI)**
+- [ ] **Step 3: Run the full workspace nextest suite (matches CI)**
 
-Run: `cargo test --workspace --all-features --locked --no-fail-fast`
+Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 Expected: exits 0; all tests across `scorpio-core`, `scorpio-cli`, `scorpio-reporters`, and the new `scorpio-server` pass.
 
-If `cargo nextest` is installed (CI uses it), the equivalent invocation is `cargo nextest run --workspace --all-features --locked --no-fail-fast`. Either is acceptable here.
+If `cargo nextest` is unavailable locally, install it or switch to the repo's standard development environment before treating this plan as complete. `cargo test` can still be useful for local debugging, but it is not a CI-equivalent substitute for this final gate.
 
 - [ ] **Step 4: Commit any formatting fixes if Step 1 caught any**
 
@@ -453,22 +445,22 @@ Otherwise skip this step.
 
 ## Acceptance Criteria (spec → task map)
 
-| Spec requirement                                                          | Implemented by                                   |
-|---------------------------------------------------------------------------|--------------------------------------------------|
-| New `scorpio-server` binary crate in workspace                            | Task 2 (manifest + dir), Task 5 (bin)            |
-| `GET /health` returns `{"status": "ok"}` with HTTP 200                    | Tasks 3 + 4 (test + impl)                        |
-| CLI args `--host` / `--port` with defaults `0.0.0.0` / `8088`             | Task 5 (clap derive)                             |
-| Env overrides `SCORPIO_SERVER_HOST` / `SCORPIO_SERVER_PORT`               | Task 5 (`clap` `env` attr) + Task 6 verification |
-| Library + thin binary split (`lib.rs` exposes `app()`; `main.rs` thin)    | Tasks 2, 4, 5                                    |
-| `axum = "0.8"` added; other deps reused from workspace                    | Tasks 1, 2                                       |
-| `anyhow::Result<()>` from `main` matching `scorpio-cli` convention        | Task 5                                           |
-| Unit test using `oneshot` for `/health`                                   | Tasks 3 + 4                                      |
-| `members = ["crates/*"]` glob auto-includes the new crate; no member edit | Task 2 Step 3 (verification)                     |
-| Multi-stage Dockerfile at `crates/scorpio-server/Dockerfile`              | Task 6                                           |
-| `EXPOSE 8088`, `ENTRYPOINT ["scorpio-server"]`                            | Task 6                                           |
-| Env-configurable port through Docker (`-e SCORPIO_SERVER_PORT=9000`)      | Task 6 Step 4                                    |
-| No `scorpio-core` dependency (deferred to future work)                    | Task 2 (deps list excludes it)                   |
-| No CORS / auth / rate-limit middleware (non-goal)                         | Task 4 (router has only `/health`)               |
+| Spec requirement                                                            | Implemented by                                   |
+|-----------------------------------------------------------------------------|--------------------------------------------------|
+| New `scorpio-server` binary crate in workspace                              | Task 2 (manifest + dir), Task 5 (bin)            |
+| `GET /health` returns `{"status": "ok"}` with HTTP 200                      | Tasks 3 + 4 (test + impl)                        |
+| CLI args `--host` / `--port` with defaults `0.0.0.0` / `8088`               | Task 5 (clap derive)                             |
+| Env overrides `SCORPIO_SERVER_HOST` / `SCORPIO_SERVER_PORT`                 | Task 5 (`clap` `env` attr) + Task 6 verification |
+| Library + thin binary split (`lib.rs` exposes `app()`; `main.rs` thin)      | Tasks 2, 4, 5                                    |
+| `axum = "0.8"` added to workspace deps; `tower` stays crate-local for tests | Tasks 1, 2                                       |
+| `anyhow::Result<()>` from `main` matching `scorpio-cli` convention          | Task 5                                           |
+| Unit test using `oneshot` for `/health`                                     | Tasks 3 + 4                                      |
+| `members = ["crates/*"]` glob auto-includes the new crate; no member edit   | Task 2 Step 3 (verification)                     |
+| Multi-stage Dockerfile at `crates/scorpio-server/Dockerfile`                | Task 6                                           |
+| `EXPOSE 8088`, `ENTRYPOINT ["scorpio-server"]`                              | Task 6                                           |
+| Env-configurable port through Docker (`-e SCORPIO_SERVER_PORT=9000`)        | Task 6 Step 4                                    |
+| No `scorpio-core` dependency (deferred to future work)                      | Task 2 (deps list excludes it)                   |
+| No CORS / auth / rate-limit middleware (non-goal)                           | Task 4 (router has only `/health`)               |
 
 ---
 
@@ -481,3 +473,13 @@ The following are intentionally not addressed by this plan and must not be added
 - Endpoints other than `GET /health`.
 - WebSocket or SSE support.
 - TCP-level integration tests (the in-process `oneshot` test is sufficient for this scope).
+
+## Deferred / Open Questions
+
+### From 2026-05-20 review
+
+- **Seven separate commits are oversized for a one-endpoint scaffold** — Tasks 1-7 (P2, scope-guardian, confidence 100)
+
+  The goal is a small isolated crate with one route, but the plan turns it into a long sequence of micro-commits plus an optional formatting-only commit. That adds review and history overhead without delivering additional user-facing scope.
+
+  <!-- dedup-key: section="tasks 17" title="seven separate commits are oversized for a oneendpoint scaffold" evidence="Task 1 — \"Step 3: Commit\"" -->
