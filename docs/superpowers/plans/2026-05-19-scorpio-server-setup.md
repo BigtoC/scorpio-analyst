@@ -138,7 +138,7 @@ git commit -m "feat(scorpio-server): scaffold crate manifest with lib + bin targ
 
 - [ ] **Step 1: Create `crates/scorpio-server/src/lib.rs` with the test only**
 
-The library file starts with only the unit test and an empty module — this is the failing-test step of TDD. The test imports `app` and `health` from the crate root via `super::*`, so the test will fail to compile (which is the expected red state) until Task 4 adds the implementation.
+The library file starts with only the unit test — this is the failing-test step of TDD. The test imports `app` and `health` from the crate root via `super::*`, so the test will fail to compile (which is the expected red state) until Task 4 adds the implementation.
 
 ```rust
 //! # scorpio-server
@@ -419,7 +419,7 @@ git commit -m "build(scorpio-server): add multi-stage Dockerfile"
 
 ## Task 7: Full-workspace verification
 
-**Files:** none modified — verification only.
+**Files:** none modified unless Step 4 applies formatting fixes.
 
 - [ ] **Step 1: Run the project-wide formatting check**
 
