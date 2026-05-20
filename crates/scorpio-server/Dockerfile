@@ -10,7 +10,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --user-group --create-home --home-dir /var/lib/scorpio-server scorpio
+# Loco resolves `config/<env>.yaml` relative to the current working directory,
+# so we copy the crate's config tree into the runtime image and run from there.
+WORKDIR /var/lib/scorpio-server
 COPY --from=builder /app/target/release/scorpio-server /usr/local/bin/scorpio-server
+COPY --from=builder /app/crates/scorpio-server/config ./config
+ENV LOCO_ENV=production
 USER scorpio:scorpio
 EXPOSE 8088
-ENTRYPOINT ["scorpio-server"]
+ENTRYPOINT ["scorpio-server", "start"]
