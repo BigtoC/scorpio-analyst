@@ -29,10 +29,18 @@ async-trait.workspace = true
 # Used by the health response struct (Serialize + utoipa ToSchema).
 serde.workspace = true
 
+# `#[debug_handler]` and `utoipa_axum::routes!` resolve `axum` at the crate
+# root, so we need a direct dep even though loco_rs's prelude re-exports the
+# types we touch by name.
+axum = "0.8"
+
 [dev-dependencies]
 # `loco-rs/testing` exposes the `request::<App>(...)` helper that boots the
 # Hooks impl with the Test environment and hands us an axum-test `TestServer`.
-loco-rs = { version = "0.16", features = ["testing"] }
+# Keep `default-features = false` so cargo's feature unification across normal
+# and dev deps does not pull `with-db` (which would force `truncate`/`seed` on
+# the `Hooks` impl).
+loco-rs = { version = "0.16", default-features = false, features = ["cli", "testing"] }
 serde_json.workspace = true
 serial_test = "3"
 tokio = { workspace = true }
