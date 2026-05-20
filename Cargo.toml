@@ -84,6 +84,9 @@ semver = "1"
 sha2 = "0.11"
 hex = "0.4"
 
+# HTTP server framework (scorpio-server crate)
+axum = "0.8"
+
 # Dev-only
 proptest = "1"
 mockall = "0.13"
