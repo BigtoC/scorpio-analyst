@@ -16,8 +16,10 @@ pub struct ExecutionStatus {
     pub action: TradeAction,
     pub rationale: String,
     pub decided_at: String,
-    /// Tactical entry guidance, e.g. "BUY on any dip below $570–$575".
-    /// Required when the recommendation is Hold or Sell.
+    /// Action-conditional entry guidance. For Buy/Overweight/Hold this is a laddered
+    /// tier plan (e.g. "Tier 1 (40%) on dip to $530-535 …; cancel below $490"); for
+    /// Underweight/Sell this is a re-entry condition (price level or thesis-change
+    /// criterion). Required for every action and enforced by `validate_execution_status`.
     #[serde(default)]
     pub entry_guidance: Option<String>,
     /// Suggested position sizing, e.g. "5–12% of portfolio (add 2–4% on weakness)".
