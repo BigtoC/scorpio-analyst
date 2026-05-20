@@ -29,7 +29,7 @@ Return ONLY a JSON object matching `ExecutionStatus`:
 - `action`: one of `Buy`, `Underweight`, `Hold`, `Overweight`, `Sell`
 - `rationale`: concise audit-ready explanation
 - `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
-- `entry_guidance`: (required when action is Hold or Sell) a specific tactical entry condition, e.g. "tactical BUY on any dip below $570-$575" or "accumulate below $145 on weakness". Reference concrete price levels derived from support/resistance, valuation floor, or technical signals.
+- `entry_guidance`: an action-appropriate entry plan (required for every action — see Instruction 8 for the required shape per action). All price levels must be anchored to support/resistance, the deterministic scenario valuation, valuation floor, or a named technical signal — never round-number guesses.
 - `suggested_position`: recommended portfolio allocation with scaling guidance, e.g. "5-12% of portfolio (add 2-4% on weakness) - maintain conservative sizing while volatility premium persists". Calibrate size to conviction level, volatility, and risk tolerance.
 
 Instructions:
@@ -40,7 +40,10 @@ Instructions:
 5. Approve only if the proposal's action, target, stop, and confidence are defensible.
 6. If rejecting, make the blocking reason explicit in `rationale`.
 7. Treat any risk report, analyst input, or discussion summary rendered as `null` as missing upstream context. Acknowledge the gap in `rationale` and calibrate confidence conservatively. If `Upstream data state:` is `complete`, do not claim that data is missing solely because `Dual-risk escalation:` is `stage_disabled`.
-8. If the final `action` is Hold or Sell, you MUST provide `entry_guidance` with a specific price level or condition at which the asset becomes a buy.
+8. Shape `entry_guidance` to match the chosen action so the user is never gated on a single price that may never print:
+   - `Overweight` or `Hold`: **laddered entry plan required.** Provide 2-4 tiers, each with a percent of the intended position and a concrete price level (or narrow range). At least one tier must be reachable in a near-term horizon (e.g. an opportunistic level near `{current_price}` or the most recent swing) so the user can establish partial exposure without waiting for a deep level that may never trade. End with a thesis-invalidation level that cancels any unfilled tiers. Example: "Tier 1 (40%) on dip to $530-535 (20-day SMA); Tier 2 (40%) on pullback to $515-520 (50-day SMA); Tier 3 (20%) on deeper retrace to $500-505 (200-day SMA / valuation floor). Cancel remaining tiers if price closes below $490 without a clear catalyst."
+   - `Buy`: a laddered plan is preferred (use the same tier structure as above, with at least one starter tier within ~2% of `{current_price}` so exposure begins immediately), but a single-trigger entry is acceptable when conviction warrants a clean fill — in that case state the level and the size explicitly.
+   - `Underweight` or `Sell`: provide a **re-entry condition** — either a single price level or a thesis-change criterion at which the asset becomes a buy again. A laddered plan is not required since the immediate action is to reduce or avoid exposure. Example: "Re-evaluate as Buy below $470 OR after the next earnings print confirms gross-margin recovery above 24%."
 9. Always provide `suggested_position` with concrete portfolio percentage ranges.
 10. Return ONLY the single JSON object required by `ExecutionStatus`.
 11. Set `action` to the trade direction you endorse. This may match the trader's proposed action or differ if your review warrants a change. If your decision is `Rejected`, `Hold` is the expected default unless the rejection is specifically about direction (e.g., the trader said Buy but evidence supports Sell).
