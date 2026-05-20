@@ -243,13 +243,13 @@ fn readme_build_from_source_matches_workspace_cli_flow() {
 }
 
 #[test]
-fn workspace_metadata_exposes_single_cli_bin_and_core_examples() {
+fn workspace_metadata_exposes_expected_bins_and_core_examples() {
     let metadata = cargo_metadata();
     let packages = metadata["packages"]
         .as_array()
         .expect("cargo metadata must include packages array");
 
-    let bin_targets: Vec<&Value> = packages
+    let mut bin_names: Vec<&str> = packages
         .iter()
         .flat_map(|package| package["targets"].as_array().into_iter().flatten())
         .filter(|target| {
@@ -257,17 +257,14 @@ fn workspace_metadata_exposes_single_cli_bin_and_core_examples() {
                 .as_array()
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")))
         })
+        .filter_map(|target| target["name"].as_str())
         .collect();
+    bin_names.sort();
 
     assert_eq!(
-        bin_targets.len(),
-        1,
-        "workspace should expose exactly one binary target so repo-root `cargo run -- ...` stays unambiguous"
-    );
-    assert_eq!(
-        bin_targets[0]["name"].as_str(),
-        Some("scorpio-cli"),
-        "workspace binary target should remain the CLI package target"
+        bin_names,
+        vec!["scorpio-cli", "scorpio-server"],
+        "workspace should expose exactly the known binary targets; any additional bin must be added here deliberately"
     );
 
     let core = packages
