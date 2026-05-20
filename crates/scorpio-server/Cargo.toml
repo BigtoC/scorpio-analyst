@@ -15,26 +15,24 @@ name = "scorpio-server"
 path = "src/main.rs"
 
 [dependencies]
-# HTTP framework
-axum.workspace = true
+# HTTP server framework (scorpio-server crate). Loco owns routing, config,
+# bootstrap, and the binary CLI; loco-openapi mounts utoipa-derived specs and
+# the Scalar visualizer. axum stays in the workspace because Loco's prelude
+# re-exports its routing types, and we still pull them in the server crate.
+loco-rs = { version = "0.16", default-features = false, features = ["cli"] }
+loco-openapi = { version = "0.1", default-features = false, features = ["scalar"] }
 
-# Async runtime (binary entry point + axum::serve)
+# Async runtime + trait helpers required by `impl Hooks for App`.
 tokio.workspace = true
+async-trait.workspace = true
 
-# Serialization (Json response body)
+# Used by the health response struct (Serialize + utoipa ToSchema).
 serde.workspace = true
-serde_json.workspace = true
-
-# CLI argument parsing
-clap.workspace = true
-
-# Error handling (main returns anyhow::Result, matching scorpio-cli convention)
-anyhow.workspace = true
-
-# Observability
-tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
-# `ServiceExt::oneshot` for unit-testing the axum Router without a TCP bind.
-tower = { version = "0.5", default-features = false, features = ["util"] }
+# `loco-rs/testing` exposes the `request::<App>(...)` helper that boots the
+# Hooks impl with the Test environment and hands us an axum-test `TestServer`.
+loco-rs = { version = "0.16", features = ["testing"] }
+serde_json.workspace = true
+serial_test = "3"
+tokio = { workspace = true }
