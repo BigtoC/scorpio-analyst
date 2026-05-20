@@ -1,0 +1,40 @@
+[package]
+name = "scorpio-server"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "scorpio-server"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP framework
+axum.workspace = true
+
+# Async runtime (binary entry point + axum::serve)
+tokio.workspace = true
+
+# Serialization (Json response body)
+serde.workspace = true
+serde_json.workspace = true
+
+# CLI argument parsing
+clap.workspace = true
+
+# Error handling (main returns anyhow::Result, matching scorpio-cli convention)
+anyhow.workspace = true
+
+# Observability
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# `ServiceExt::oneshot` for unit-testing the axum Router without a TCP bind.
+tower = { version = "0.5", default-features = false, features = ["util"] }
