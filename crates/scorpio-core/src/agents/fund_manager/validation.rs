@@ -96,6 +96,19 @@ fn validate_execution_status(status: &ExecutionStatus) -> Result<(), TradingErro
             message: "FundManager: rationale contains disallowed control characters".to_owned(),
         });
     }
+    if status
+        .entry_guidance
+        .as_deref()
+        .is_none_or(|s| s.trim().is_empty())
+    {
+        return Err(TradingError::SchemaViolation {
+            message: format!(
+                "FundManager: entry_guidance is required for action {:?} \
+                 (laddered tier plan for Buy/Overweight/Hold, re-entry condition for Underweight/Sell)",
+                status.action
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -394,7 +407,7 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "Approved.\nRisk:\tWithin bounds.".to_owned(),
             decided_at: "2026-03-15".to_owned(),
-            entry_guidance: None,
+            entry_guidance: Some("Tier 1 (100%) at market.".to_owned()),
             suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
@@ -407,7 +420,9 @@ mod tests {
             action: TradeAction::Buy,
             rationale: "The proposal is well-supported by all available evidence.".to_owned(),
             decided_at: "2026-03-15T00:00:00Z".to_owned(),
-            entry_guidance: None,
+            entry_guidance: Some(
+                "Tier 1 (50%) at market $540; Tier 2 (50%) on dip to $520.".to_owned(),
+            ),
             suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
@@ -420,10 +435,70 @@ mod tests {
             action: TradeAction::Hold,
             rationale: "The stop-loss is too wide relative to the evidence quality.".to_owned(),
             decided_at: "2026-03-15T00:00:00Z".to_owned(),
-            entry_guidance: None,
+            entry_guidance: Some(
+                "Tier 1 (50%) on pullback to $530; Tier 2 (50%) on retrace to $510. Cancel below $495."
+                    .to_owned(),
+            ),
             suggested_position: None,
         };
         assert!(validate_execution_status(&status).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_missing_entry_guidance_for_buy() {
+        let status = ExecutionStatus {
+            decision: Decision::Approved,
+            action: TradeAction::Buy,
+            rationale: "All evidence supports a buy.".to_owned(),
+            decided_at: "2026-03-15T00:00:00Z".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
+        };
+        let err = validate_execution_status(&status)
+            .expect_err("missing entry_guidance must fail validation");
+        match err {
+            TradingError::SchemaViolation { message } => {
+                assert!(
+                    message.contains("entry_guidance is required"),
+                    "error must mention entry_guidance requirement: {message}"
+                );
+            }
+            other => panic!("expected SchemaViolation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_whitespace_only_entry_guidance() {
+        let status = ExecutionStatus {
+            decision: Decision::Approved,
+            action: TradeAction::Hold,
+            rationale: "Wait for confirmation.".to_owned(),
+            decided_at: "2026-03-15T00:00:00Z".to_owned(),
+            entry_guidance: Some("   \n\t  ".to_owned()),
+            suggested_position: None,
+        };
+        assert!(matches!(
+            validate_execution_status(&status),
+            Err(TradingError::SchemaViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_requires_entry_guidance_for_sell() {
+        // Sell still requires entry_guidance — the contract is a re-entry condition,
+        // not a tier plan, but the field must be present and non-empty.
+        let status = ExecutionStatus {
+            decision: Decision::Approved,
+            action: TradeAction::Sell,
+            rationale: "Thesis broken; exit.".to_owned(),
+            decided_at: "2026-03-15T00:00:00Z".to_owned(),
+            entry_guidance: None,
+            suggested_position: None,
+        };
+        assert!(matches!(
+            validate_execution_status(&status),
+            Err(TradingError::SchemaViolation { .. })
+        ));
     }
 
     #[test]

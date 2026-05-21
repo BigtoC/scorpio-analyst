@@ -163,43 +163,43 @@ fn populated_state() -> TradingState {
 }
 
 fn approved_json() -> String {
-    r#"{"decision":"Approved","action":"Buy","rationale":"All risk checks passed. Proposal is well-supported by analyst data.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Buy","rationale":"All risk checks passed. Proposal is well-supported by analyst data.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn approved_json_without_decided_at() -> String {
-    r#"{"decision":"Approved","action":"Buy","rationale":"All risk checks passed. Proposal is well-supported by analyst data."}"#.to_owned()
+    r#"{"decision":"Approved","action":"Buy","rationale":"All risk checks passed. Proposal is well-supported by analyst data.","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn approved_json_with_missing_data_ack() -> String {
-    r#"{"decision":"Approved","action":"Hold","rationale":"Approved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Hold","rationale":"Approved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn approved_json_with_missing_risk_data_ack() -> String {
-    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because the upstream inputs required for dual-risk evaluation are missing.\nApproved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because the upstream inputs required for dual-risk evaluation are missing.\nApproved with reduced confidence because one or more upstream inputs are missing.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn approved_json_with_stage_disabled_ack() -> String {
-    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: stage-disabled because max_risk_rounds = 0 disabled the risk stage for this run.\nApproved using analyst and trader inputs without risk-stage outputs.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: stage-disabled because max_risk_rounds = 0 disabled the risk stage for this run.\nApproved using analyst and trader inputs without risk-stage outputs.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn dual_violation_approved_json() -> String {
-    r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: overridden because valuation support and explicit stop tightening offset the flagged downside.\nApproved with Buy on reduced size.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: overridden because valuation support and explicit stop tightening offset the flagged downside.\nApproved with Buy on reduced size.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn dual_violation_rejected_json() -> String {
-    r#"{"decision":"Rejected","action":"Hold","rationale":"Dual-risk escalation: upheld because both conservative reviewers identified a thesis-breaking downside scenario.\nBlocking evidence outweighs the trader proposal.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Rejected","action":"Hold","rationale":"Dual-risk escalation: upheld because both conservative reviewers identified a thesis-breaking downside scenario.\nBlocking evidence outweighs the trader proposal.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn dual_violation_deferred_json() -> String {
-    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: deferred because downside confirmation risk remains unresolved.\nApproved with Hold while waiting for confirmation.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: deferred because downside confirmation risk remains unresolved.\nApproved with Hold while waiting for confirmation.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn dual_unknown_json() -> String {
-    r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: indeterminate because the Neutral risk report is missing.\nDecision uses partial upstream context.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: indeterminate because the Neutral risk report is missing.\nDecision uses partial upstream context.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn rejected_json() -> String {
-    r#"{"decision":"Rejected","action":"Hold","rationale":"Insufficient supporting evidence for the proposed position size.","decided_at":"2026-03-15"}"#.to_owned()
+    r#"{"decision":"Rejected","action":"Hold","rationale":"Insufficient supporting evidence for the proposed position size.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#.to_owned()
 }
 
 fn make_prompt_response(json: &str, usage: Usage) -> PromptResponse {
@@ -499,7 +499,7 @@ async fn rejected_execution_status_written_to_state() {
 #[tokio::test]
 async fn schema_violation_on_invalid_decision_value_from_llm() {
     let mut state = populated_state();
-    let bad_json = r#"{"decision":"Maybe","action":"Buy","rationale":"Seems fine.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Maybe","action":"Buy","rationale":"Seems fine.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let inference = StubInference::new(vec![Ok(make_prompt_response(bad_json, nonzero_usage()))]);
     let agent = fund_manager_for_test();
     let result = agent.run_with_inference(&mut state, true, &inference).await;
@@ -553,7 +553,7 @@ async fn validator_aware_retry_recovers_when_first_response_is_unparseable() {
 async fn decided_at_is_overwritten_with_runtime_timestamp() {
     let mut state = populated_state();
     // LLM returns a far-past decided_at.
-    let stale_json = r#"{"decision":"Approved","action":"Buy","rationale":"Looks good.","decided_at":"1900-01-01T00:00:00Z"}"#;
+    let stale_json = r#"{"decision":"Approved","action":"Buy","rationale":"Looks good.","decided_at":"1900-01-01T00:00:00Z","entry_guidance":"Tier 1 (100%) at market."}"#;
     let inference = StubInference::new(vec![Ok(make_prompt_response(stale_json, nonzero_usage()))]);
     let agent = fund_manager_for_test();
     agent
@@ -1285,7 +1285,7 @@ fn dual_risk_present_rejects_missing_first_line_prefix() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"The evidence does not support approval.\nNo prefix here.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"The evidence does not support approval.\nNo prefix here.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1305,7 +1305,7 @@ fn dual_risk_present_rejects_wrong_disposition_for_approved_hold() {
     use crate::agents::risk::DualRiskStatus;
 
     // Approved+Hold must use "deferred", not "upheld"
-    let bad_json = r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: upheld because something.\nApproved with Hold.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: upheld because something.\nApproved with Hold.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1324,7 +1324,7 @@ fn dual_risk_present_rejects_prefix_when_not_first_line() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"Some prose first.\nDual-risk escalation: upheld because something.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"Some prose first.\nDual-risk escalation: upheld because something.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1343,7 +1343,7 @@ fn dual_risk_present_rejects_lowercase_prefix_variant() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"dual-risk escalation: upheld because something.\nBody text.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"dual-risk escalation: upheld because something.\nBody text.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1362,7 +1362,7 @@ fn dual_risk_present_rejects_mixed_case_prefix_variant() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"Dual-Risk Escalation: upheld because something.\nBody text.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"Dual-Risk Escalation: upheld because something.\nBody text.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1381,7 +1381,7 @@ fn dual_risk_present_rejects_em_dash_prefix_variant() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"Dual-risk escalation \u2014 upheld because something.\nBody text.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"Dual-risk escalation \u2014 upheld because something.\nBody text.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1400,7 +1400,7 @@ fn dual_risk_present_rejects_markdown_fenced_prefix() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"**Dual-risk escalation: upheld because something.**\nBody text.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"**Dual-risk escalation: upheld because something.**\nBody text.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1419,7 +1419,7 @@ fn dual_risk_present_rejects_two_leading_newlines_before_prefix() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"\n\nDual-risk escalation: upheld because something.\nBody.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Hold","rationale":"\n\nDual-risk escalation: upheld because something.\nBody.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1438,7 +1438,7 @@ fn dual_risk_present_allows_single_leading_newline_before_prefix() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let json = r#"{"decision":"Rejected","action":"Hold","rationale":"\nDual-risk escalation: upheld because both conservative reviewers identified a thesis-breaking downside scenario.\nBlocking evidence outweighs the trader proposal.","decided_at":"2026-03-15"}"#;
+    let json = r#"{"decision":"Rejected","action":"Hold","rationale":"\nDual-risk escalation: upheld because both conservative reviewers identified a thesis-breaking downside scenario.\nBlocking evidence outweighs the trader proposal.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         json,
         false,
@@ -1458,7 +1458,7 @@ fn dual_risk_present_rejects_same_direction_reject_for_buy() {
     use crate::agents::risk::DualRiskStatus;
 
     // Trader proposed Buy and FM also says Buy but Rejected — same-direction reject is invalid
-    let bad_json = r#"{"decision":"Rejected","action":"Buy","rationale":"Dual-risk escalation: upheld because both reviewers flagged a violation.\nBlocking evidence outweighs the trader proposal.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Buy","rationale":"Dual-risk escalation: upheld because both reviewers flagged a violation.\nBlocking evidence outweighs the trader proposal.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1477,7 +1477,7 @@ fn dual_risk_present_rejects_same_direction_reject_for_sell() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Rejected","action":"Sell","rationale":"Dual-risk escalation: upheld because both reviewers flagged a violation.\nBlocking evidence.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Rejected","action":"Sell","rationale":"Dual-risk escalation: upheld because both reviewers flagged a violation.\nBlocking evidence.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1516,7 +1516,7 @@ fn dual_risk_present_allows_rejected_direction_when_trader_proposed_hold() {
     use crate::agents::risk::DualRiskStatus;
 
     // Trader proposed Hold — same-direction constraint does not apply
-    let json = r#"{"decision":"Rejected","action":"Sell","rationale":"Dual-risk escalation: upheld because both conservative reviewers identified a thesis-breaking downside scenario.\nBlocking evidence.","decided_at":"2026-03-15"}"#;
+    let json = r#"{"decision":"Rejected","action":"Sell","rationale":"Dual-risk escalation: upheld because both conservative reviewers identified a thesis-breaking downside scenario.\nBlocking evidence.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         json,
         false,
@@ -1548,7 +1548,7 @@ fn dual_risk_unknown_requires_indeterminate_prefix() {
     );
 
     // wrong prefix for Unknown should fail
-    let bad_json = r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: overridden because something.\nBody.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Approved","action":"Buy","rationale":"Dual-risk escalation: overridden because something.\nBody.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let bad_result = parse_and_validate_execution_status(
         bad_json,
         false,
@@ -1567,7 +1567,7 @@ fn dual_risk_absent_rejects_first_line_escalation_prefix() {
     use super::validation::parse_and_validate_execution_status;
     use crate::agents::risk::DualRiskStatus;
 
-    let bad_json = r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because analyst inputs are missing.\nApproved with reduced confidence because technical inputs are unavailable.","decided_at":"2026-03-15"}"#;
+    let bad_json = r#"{"decision":"Approved","action":"Hold","rationale":"Dual-risk escalation: indeterminate because analyst inputs are missing.\nApproved with reduced confidence because technical inputs are unavailable.","decided_at":"2026-03-15","entry_guidance":"Tier 1 (100%) at market."}"#;
     let result = parse_and_validate_execution_status(
         bad_json,
         true,

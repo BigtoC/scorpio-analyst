@@ -1,9 +1,11 @@
 # AGENTS.md
 
-Rust-native multi-agent LLM trading system. Cargo workspace with two active crates under `crates/`:
+Rust-native multi-agent LLM trading system. Cargo workspace with four active crates under `crates/`:
 
 - `scorpio-core` — shared runtime/domain logic (agents, workflow, providers, data clients, state, indicators, analysis packs, errors, observability, rate limiting, config, settings file boundary, async application facade).
-- `scorpio-cli` — binary crate hosting the clap/inquire command surface, setup wizard, update notices, terminal banner, and terminal report formatting. Depends on `scorpio-core`.
+- `scorpio-cli` — binary crate hosting the clap/inquire command surface, setup wizard, update notices, terminal banner, and dispatch for `analyze`, `report`, and `upgrade`. Depends on `scorpio-core` and `scorpio-reporters`.
+- `scorpio-reporters` — shared output/reporting crate (reporter trait, reporter chain, terminal rendering, JSON artifacts). Depends on `scorpio-core`; consumed by `scorpio-cli`.
+- `scorpio-server` — Loco-based HTTP/OpenAPI surface with environment-specific YAML config under `crates/scorpio-server/config/`.
 
 Edition 2024 (Rust 1.93+).
 
@@ -18,6 +20,8 @@ cargo nextest run --workspace --all-features --locked --no-fail-fast   # CI step
 CI uses **nextest**, not `cargo test`. Run all three in order before claiming work is done.
 
 Quick smoke run: `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL`
+
+Other useful focused loops: `cargo run -p scorpio-cli -- report list`, `cargo run -p scorpio-server -- start`
 
 ## Build prerequisite
 
@@ -51,10 +55,12 @@ Trigger: User explicitly says "write code" or uses `/opsx:apply` or `/spec-code-
 ## Testing
 
 - Core integration tests live in `crates/scorpio-core/tests/` (pipeline, state, workflow, foundation, app facade); CLI integration tests live in `crates/scorpio-cli/tests/` (release-archive contract only).
+- Reporter integration tests live in `crates/scorpio-reporters/tests/` (reporter chain, JSON artifact, terminal rendering); server integration tests live in `crates/scorpio-server/tests/` (`health` end-to-end).
 - Integration tests require the `test-helpers` feature flag: `cargo nextest run --workspace --features test-helpers`. The feature's canonical home is `scorpio-core`; `scorpio-cli` declares `test-helpers = ["scorpio-core/test-helpers"]` as a forwarder so `cargo test -p scorpio-cli --all-features` still enables the gated helpers.
 - CI runs `--workspace --all-features`, which includes `test-helpers`.
 - Integration tests use `tempfile` for SQLite snapshot databases -- no external services needed.
 - Test support modules live in `crates/scorpio-core/tests/support/` and are included via `#[path = "support/..."]`.
+- `scorpio-server` skips `OpenapiInitializerWithSetup` in `Environment::Test` (`crates/scorpio-server/src/app.rs`) to avoid process-global route bleed across tests.
 
 ## Configuration
 
@@ -70,7 +76,7 @@ API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`.
 
 ## Architecture gotchas
 
-- **Crate boundary**: `scorpio-core` owns the runtime/domain surface; `scorpio-cli` is a consumer. New contributors should prefer `scorpio_core::app::AnalysisRuntime` and `scorpio_core::settings` as entry points; broader direct module imports remain available only where the extraction slice still needs them. No module inside `scorpio-core` may depend on anything under `scorpio_cli`.
+- **Crate boundary**: `scorpio-core` owns the runtime/domain surface; `scorpio-reporters` owns reporter traits/rendering; `scorpio-cli` and `scorpio-server` are consumers. New contributors should prefer `scorpio_core::app::AnalysisRuntime` and `scorpio_core::settings` as runtime entry points, `scorpio_reporters::{Reporter, ReporterChain}` for output extensions, and `crates/scorpio-server/src/controllers/health.rs` + `crates/scorpio-server/src/app.rs` as the canonical HTTP endpoint pattern. Broader direct module imports remain available only where the extraction slice still needs them. No module inside `scorpio-core` may depend on anything under `scorpio_cli`, `scorpio_reporters`, or `scorpio_server`.
 - **State passing**: Agents read/write typed fields on `TradingState` via `graph_flow::Context`, not chat buffers. Adding a new data field means updating `TradingState` and the relevant state module in `crates/scorpio-core/src/state/`.
 - **Phase 0 preflight**: The graph starts at `PreflightTask` (`crates/scorpio-core/src/workflow/tasks/preflight.rs`), not analyst fan-out. It canonicalizes the symbol, loads prior thesis memory, resolves `analysis_pack` into `TradingState.analysis_runtime_policy`, and seeds context keys such as `KEY_RESOLVED_INSTRUMENT`, `KEY_PROVIDER_CAPABILITIES`, `KEY_REQUIRED_COVERAGE_INPUTS`, and `KEY_RUNTIME_POLICY`.
 - **Concurrency**: Per-field `Arc<RwLock<Option<T>>>` locking on `TradingState`. Never hold `std::sync::Mutex` across `.await` -- use `tokio::sync::RwLock`.
@@ -83,18 +89,22 @@ API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`.
   `crates/scorpio-core/src/workflow/snapshot/thesis.rs` — this explicitly retires old rows rather than silently skipping them at runtime.
 - **Custom Copilot provider**: `crates/scorpio-core/src/providers/copilot.rs` + `crates/scorpio-core/src/providers/acp.rs` implement a custom `rig` provider over JSON-RPC 2.0/NDJSON via `copilot --acp --stdio`.
 - **Dual-tier models**: `ModelTier::QuickThinking` (analysts) vs `ModelTier::DeepThinking` (researchers, trader, risk, fund manager). Configured in the runtime `[llm]` settings from the user config / env merge.
+- **Reporter split**: `scorpio analyze` builds a `ReporterChain` in `crates/scorpio-cli/src/cli/analyze.rs`; terminal/JSON implementations live in `crates/scorpio-reporters/` and run concurrently via `ReporterChain::run_all`. Add new output legs by implementing `scorpio_reporters::Reporter` first, then wiring CLI selection. `scorpio report` lives in `crates/scorpio-cli/src/cli/report.rs`, reads persisted snapshots through `SnapshotStore::from_runtime_storage()`, and does not require API keys.
+- **HTTP server surface**: `scorpio-server` is a separate Loco app. Route registration lives in `crates/scorpio-server/src/app.rs`; documented handlers should follow `crates/scorpio-server/src/controllers/health.rs` (`#[utoipa::path]` + `#[debug_handler]` + `openapi(get(handler), routes!(handler))`).
 
 ## Adding things
 
-| Task                  | Files to touch                                                                                                                                                                                                 |
-|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| New agent             | `crates/scorpio-core/src/agents/<role>/`, `crates/scorpio-core/src/workflow/tasks/`                                                                                                                            |
-| New data source       | `crates/scorpio-core/src/data/`, expose via `#[tool]` macro                                                                                                                                                    |
-| New indicator         | `crates/scorpio-core/src/indicators/core_math.rs` + `crates/scorpio-core/src/indicators/tools.rs`                                                                                                              |
-| New LLM provider      | Extend `ProviderId` in `crates/scorpio-core/src/providers/mod.rs`, add case in `crates/scorpio-core/src/providers/factory/`                                                                                    |
-| New analysis pack     | Add `PackId` variant in `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs`, add match arm in `crates/scorpio-core/src/analysis_packs/builtin.rs`                                                     |
-| New CLI subcommand    | Add variant to `Commands` in `crates/scorpio-cli/src/cli/mod.rs`, create `crates/scorpio-cli/src/cli/<name>.rs`, dispatch in `crates/scorpio-cli/src/main.rs`                                                  |
-| New wizard config key | Add field to `PartialConfig` in `crates/scorpio-core/src/settings.rs`, add step in `crates/scorpio-cli/src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `crates/scorpio-core/src/config.rs` |
+| Task                  | Files to touch                                                                                                                                                                                                                  |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| New agent             | `crates/scorpio-core/src/agents/<role>/`, `crates/scorpio-core/src/workflow/tasks/`                                                                                                                                             |
+| New data source       | `crates/scorpio-core/src/data/`, expose via `#[tool]` macro                                                                                                                                                                     |
+| New indicator         | `crates/scorpio-core/src/indicators/core_math.rs` + `crates/scorpio-core/src/indicators/tools.rs`                                                                                                                               |
+| New LLM provider      | Extend `ProviderId` in `crates/scorpio-core/src/providers/mod.rs`, add case in `crates/scorpio-core/src/providers/factory/`                                                                                                     |
+| New analysis pack     | Add `PackId` variant in `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs`, add match arm in `crates/scorpio-core/src/analysis_packs/builtin.rs`                                                                      |
+| New CLI subcommand    | Add variant to `Commands` in `crates/scorpio-cli/src/cli/mod.rs`, create `crates/scorpio-cli/src/cli/<name>.rs`, dispatch in `crates/scorpio-cli/src/main.rs`                                                                   |
+| New reporter          | Implement `scorpio_reporters::Reporter` in `crates/scorpio-reporters/src/`, wire selection in `crates/scorpio-cli/src/cli/analyze.rs`, add tests in `crates/scorpio-reporters/tests/`                                           |
+| New HTTP endpoint     | Create `crates/scorpio-server/src/controllers/<name>.rs`, re-export in `crates/scorpio-server/src/controllers/mod.rs`, wire its `routes()` into `crates/scorpio-server/src/app.rs`, add `crates/scorpio-server/tests/<name>.rs` |
+| New wizard config key | Add field to `PartialConfig` in `crates/scorpio-core/src/settings.rs`, add step in `crates/scorpio-cli/src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `crates/scorpio-core/src/config.rs`                  |
 
 ## Coding conventions
 
@@ -124,3 +134,4 @@ When to invoke `/ce:compound`:
 - `CLAUDE.md` -- comprehensive project context (architecture, dependencies, design decisions)
 - `.github/instructions/rust.instructions.md` -- Rust coding conventions (auto-applied to `**/*.rs`)
 - `README.md` -- current execution graph, CLI usage, known limitations, and OpenSpec workflow shortcuts
+- `crates/scorpio-server/README.md` -- server-specific build/run/config/OpenAPI conventions and the canonical endpoint wiring pattern

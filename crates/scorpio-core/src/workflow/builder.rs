@@ -60,7 +60,13 @@ pub fn build_graph_from_pack(
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
 ) -> Arc<Graph> {
-    let graph = Arc::new(Graph::new("trading_pipeline"));
+    // graph-flow's default per-task wall-clock timeout is 300s, which trips
+    // the analyst fan-out under realistic LLM latency. The inner per-attempt
+    // budget is governed by `analyst_timeout_secs` + retry policy; this outer
+    // graph-level timeout just needs to be large enough not to fire first.
+    let mut graph = Graph::new("trading_pipeline");
+    graph.set_task_timeout(Duration::from_secs(600));
+    let graph = Arc::new(graph);
     let runtime_policy = resolve_runtime_policy_for_manifest(pack)
         .expect("build_graph_from_pack requires a valid analysis pack manifest");
 

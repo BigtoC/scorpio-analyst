@@ -632,7 +632,7 @@ Return ONLY a JSON object matching `ExecutionStatus`:
 - `action`: one of `Buy`, `Sell`, `Hold`
 - `rationale`: concise audit-ready explanation
 - `decided_at`: use `{current_date}` unless the runtime provides a more precise timestamp
-- `entry_guidance`: (required when action is Hold or Sell) a specific tactical entry condition
+- `entry_guidance`: an action-appropriate entry plan (required for every action — see Instruction 8 for the required shape per action)
 - `suggested_position`: recommended portfolio allocation with scaling guidance
 
 Instructions:
@@ -650,8 +650,18 @@ Instructions:
 6. If rejecting, make the blocking reason explicit in `rationale`.
 7. If any risk report or analyst input is missing, acknowledge the gap in `rationale` and calibrate confidence
    conservatively.
-8. If the final `action` is Hold or Sell, provide `entry_guidance` with a specific price level or condition at which the
-   asset becomes a buy.
+8. Shape `entry_guidance` to match the chosen action so the user is never gated on a single price that may never print:
+   - `Overweight` or `Hold`: **laddered entry plan required.** Provide 2-4 tiers, each with a percent of the intended
+     position and a concrete price level (or narrow range). At least one tier must be reachable in a near-term horizon
+     (e.g. an opportunistic level near `{current_price}` or the most recent swing) so the user can establish partial
+     exposure without waiting for a deep level that may never trade. End with a thesis-invalidation level that cancels
+     any unfilled tiers.
+   - `Buy`: a laddered plan is preferred (with at least one starter tier within ~2% of `{current_price}`), but a
+     single-trigger entry is acceptable when conviction warrants a clean fill — in that case state the level and the
+     size explicitly.
+   - `Underweight` or `Sell`: provide a **re-entry condition** (single price level or thesis-change criterion) at
+     which the asset becomes a buy again. A laddered plan is not required since the immediate action is to reduce or
+     avoid exposure.
 9. Always provide `suggested_position` with concrete portfolio percentage ranges.
 10. Return ONLY the single JSON object required by `ExecutionStatus`.
 11. Set `action` to the trade direction you endorse. This may match the trader's proposed action or differ if your
