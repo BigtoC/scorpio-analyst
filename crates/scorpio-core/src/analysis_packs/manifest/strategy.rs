@@ -18,6 +18,8 @@ pub enum StrategyFocus {
 pub enum ValuationAssessment {
     /// Full deterministic valuation (DCF, multiples) for corporate equities.
     Full,
-    /// Valuation not assessed — explicit fallback for ETFs, indices, etc.
+    /// ETF-native valuation (premium/discount + composition + tracking).
+    Etf,
+    /// Valuation not assessed — explicit fallback for indices, unknown shapes, etc.
     NotAssessed,
 }

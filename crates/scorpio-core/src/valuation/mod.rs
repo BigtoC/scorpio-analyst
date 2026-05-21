@@ -39,6 +39,8 @@ use crate::state::{AssetShape, DerivedValuation};
 pub enum ValuatorId {
     /// Equity default — composes DCF + multiples + forward P/E + PEG.
     EquityDefault,
+    /// ETF premium/discount + composition + tracking valuator.
+    EtfPremiumDiscount,
     /// Placeholder — crypto tokenomics-based valuation.
     CryptoTokenomics,
     /// Placeholder — network-value-based crypto valuation.

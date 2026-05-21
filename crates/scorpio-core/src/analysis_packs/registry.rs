@@ -20,6 +20,10 @@ use crate::workflow::build_run_topology;
 pub fn resolve_pack(id: PackId) -> AnalysisPackManifest {
     match id {
         PackId::Baseline => equity::baseline_pack(),
+        // ETF manifest + builder wiring land in Task 6. `PackId::EtfBaseline`
+        // can only come from runtime classification (added in Task 11), so
+        // until Task 6 ships the manifest this arm is unreachable in CI.
+        PackId::EtfBaseline => unimplemented!("EtfBaseline manifest lands in Task 6"),
         // Registered but not user-selectable — see `PackId::from_str`.
         PackId::CryptoDigitalAsset => crypto::digital_asset_pack(),
     }

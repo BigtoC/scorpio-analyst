@@ -82,15 +82,34 @@ impl AnalysisPackManifest {
 
     /// Resolve the effective valuation assessment for a given asset shape.
     ///
-    /// Corporate equities use the pack's `default_valuation` policy.
-    /// All other shapes resolve to `NotAssessed`. The match is exhaustive so a
-    /// new `AssetShape` variant becomes a compile error here, forcing an
-    /// explicit policy decision rather than silently routing to `NotAssessed`.
+    /// The match is exhaustive on `AssetShape` so a new variant becomes a
+    /// compile error here, forcing an explicit policy decision rather than
+    /// silently routing to `NotAssessed`. The inner match on
+    /// `self.default_valuation` is also exhaustive so adding a new
+    /// `ValuationAssessment` variant likewise becomes a compile error.
+    ///
+    /// Routing rules:
+    /// - `CorporateEquity` honours the pack's `default_valuation` for both
+    ///   `Full` and `Etf` packs (`Etf` packs fall back to `Full` here,
+    ///   matching the "ETF packs can still cover their issuer equity
+    ///   sleeve" contract).
+    /// - `Fund` resolves to `Etf` only when the pack opts in via
+    ///   `default_valuation == Etf`; equity packs keep the existing
+    ///   `Fund → NotAssessed` behaviour.
+    /// - All other shapes resolve to `NotAssessed`.
     pub fn resolve_valuation(&self, shape: &AssetShape) -> ValuationAssessment {
         match shape {
-            AssetShape::CorporateEquity => self.default_valuation,
-            AssetShape::Fund
-            | AssetShape::Unknown
+            AssetShape::CorporateEquity => match self.default_valuation {
+                ValuationAssessment::Full | ValuationAssessment::Etf => ValuationAssessment::Full,
+                ValuationAssessment::NotAssessed => ValuationAssessment::NotAssessed,
+            },
+            AssetShape::Fund => match self.default_valuation {
+                ValuationAssessment::Etf => ValuationAssessment::Etf,
+                ValuationAssessment::Full | ValuationAssessment::NotAssessed => {
+                    ValuationAssessment::NotAssessed
+                }
+            },
+            AssetShape::Unknown
             | AssetShape::NativeChainAsset
             | AssetShape::Erc20Token
             | AssetShape::Stablecoin
