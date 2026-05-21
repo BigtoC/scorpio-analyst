@@ -932,3 +932,116 @@ fn workflow_non_task_graph_error_redacts_credentials() {
         other => panic!("expected TradingError::GraphFlow, got: {other:?}"),
     }
 }
+
+// --- Task 15: ETF pack routing + topology integration tests ---
+//
+// These exercise the runtime pack classifier's fallback paths and the
+// ETF baseline pack's manifest shape (analyst topology + valuator
+// selection). They live in the integration-test file (not the
+// `pack_classifier::tests` unit module) to assert end-to-end consistency
+// between the classifier and the resolved pack manifest.
+
+#[test]
+fn classify_with_no_profile_falls_back_to_baseline_with_reason() {
+    use scorpio_core::workflow::pack_classifier::{RuntimePackSelection, classify_runtime_pack};
+    let result = classify_runtime_pack(None, None);
+    assert_eq!(
+        result,
+        RuntimePackSelection::BaselineFallback {
+            reason: "profile_lookup_unavailable",
+        }
+    );
+}
+
+#[test]
+fn etf_baseline_pack_drives_same_four_analyst_topology() {
+    use scorpio_core::analysis_packs::{PackId, resolve_pack};
+    let pack = resolve_pack(PackId::EtfBaseline);
+    assert_eq!(pack.required_inputs.len(), 4);
+    assert_eq!(
+        pack.required_inputs,
+        vec!["fundamentals", "sentiment", "news", "technical"]
+    );
+}
+
+#[test]
+fn etf_baseline_routes_fund_shape_to_etf_valuator() {
+    use scorpio_core::analysis_packs::{PackId, resolve_pack};
+    use scorpio_core::state::AssetShape;
+    use scorpio_core::valuation::ValuatorId;
+    let pack = resolve_pack(PackId::EtfBaseline);
+    assert_eq!(
+        pack.valuator_selection.get(&AssetShape::Fund).copied(),
+        Some(ValuatorId::EtfPremiumDiscount)
+    );
+}
+
+#[test]
+fn etf_baseline_pack_id_canonicalizes_to_etf_baseline() {
+    use scorpio_core::analysis_packs::{PackId, resolve_pack};
+    let pack = resolve_pack(PackId::EtfBaseline);
+    assert_eq!(pack.id, PackId::EtfBaseline);
+    assert_eq!(pack.id.as_str(), "etf_baseline");
+}
+
+// Optional classifier tests that require constructing a `Profile::Fund`
+// fixture. The unit-test module in `workflow/pack_classifier.rs` already
+// uses this exact construction pattern, so it's safe to mirror here for
+// end-to-end coverage that goes through the public crate surface.
+
+#[test]
+fn unsupported_fund_shape_falls_back_with_reason() {
+    use scorpio_core::data::yfinance::etf::FundInfo;
+    use scorpio_core::workflow::pack_classifier::{RuntimePackSelection, classify_runtime_pack};
+    use yfinance_rs::profile::{Fund, Profile};
+
+    let profile = Profile::Fund(Fund {
+        name: "Generic Mutual Fund".to_owned(),
+        family: None,
+        kind: Default::default(),
+        isin: None,
+    });
+    let fund_info = FundInfo {
+        symbol: "VFIAX".into(),
+        category: None,
+        fund_family: None,
+        expense_ratio: None,
+        total_assets: None,
+        leverage_factor: None,
+        fund_kind: Some("mutual_fund".into()),
+        stated_benchmark: None,
+    };
+    let result = classify_runtime_pack(Some(&profile), Some(&fund_info));
+    assert_eq!(
+        result,
+        RuntimePackSelection::BaselineFallback {
+            reason: "unsupported_fund_shape",
+        }
+    );
+}
+
+#[test]
+fn supported_etf_fund_routes_to_etf_baseline() {
+    use scorpio_core::data::yfinance::etf::FundInfo;
+    use scorpio_core::workflow::pack_classifier::{RuntimePackSelection, classify_runtime_pack};
+    use yfinance_rs::profile::{Fund, Profile};
+
+    let profile = Profile::Fund(Fund {
+        name: "SPDR S&P 500 ETF Trust".to_owned(),
+        family: Some("State Street Global Advisors".to_owned()),
+        kind: Default::default(),
+        isin: None,
+    });
+    let fund_info = FundInfo {
+        symbol: "SPY".into(),
+        category: None,
+        fund_family: None,
+        expense_ratio: None,
+        total_assets: None,
+        leverage_factor: None,
+        fund_kind: Some("etf".into()),
+        stated_benchmark: None,
+    };
+    let result = classify_runtime_pack(Some(&profile), Some(&fund_info));
+    assert_eq!(result, RuntimePackSelection::EtfBaseline);
+}
