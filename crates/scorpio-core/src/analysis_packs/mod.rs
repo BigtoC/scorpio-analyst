@@ -19,6 +19,7 @@
 mod completeness;
 mod crypto;
 mod equity;
+mod etf;
 mod manifest;
 mod registry;
 mod selection;
