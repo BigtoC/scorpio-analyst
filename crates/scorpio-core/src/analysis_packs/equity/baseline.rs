@@ -67,11 +67,11 @@ fn baseline_prompt_bundle() -> PromptBundle {
             &[THEME_C_MANAGEMENT_RED_FLAGS, theme_h_summary.as_str()],
         ),
         news_analyst: with_analyst_runtime_contract_sections(
-            include_str!("prompts/news_analyst.md"),
+            include_str!("../common/prompts/news_analyst.md"),
             &[THEME_C_MANAGEMENT_RED_FLAGS, theme_h_summary.as_str()],
         ),
         technical_analyst: with_analyst_runtime_contract_sections(
-            include_str!("prompts/technical_analyst.md"),
+            include_str!("../common/prompts/technical_analyst.md"),
             &[theme_h_summary.as_str()],
         ),
         bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
@@ -102,7 +102,9 @@ fn baseline_prompt_bundle() -> PromptBundle {
         fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/fund_manager.md"
         ))),
-        auditor: Cow::Borrowed(trim_trailing_newline(include_str!("prompts/auditor.md"))),
+        auditor: Cow::Borrowed(trim_trailing_newline(include_str!(
+            "../common/prompts/auditor.md"
+        ))),
     }
 }
 

@@ -14,8 +14,7 @@ use super::super::{
 const ETF_RUNTIME_CONTRACT: &str = include_str!("prompts/etf_runtime_contract.md");
 const ETF_FAILURE_MODES: &str = include_str!("prompts/etf_failure_modes.md");
 
-// Shared scaffolding reused directly from the equity prompt directory for the
-// first shippable ETF slice. Tasks 3-4 later move these paths to `common/`.
+// Shared scaffolding reused from the cross-pack `common/` prompt directory.
 const COMMON_ANALYST_CONTRACT: &str = include_str!("../common/prompts/analyst_runtime_contract.md");
 const ETF_LEVERAGE_WARNING: &str = include_str!("prompts/etf_leverage_warning.md");
 
@@ -85,15 +84,15 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
 
         // Tier 2 — shared prompt + ETF delta.
         news_analyst: compose_etf_section(
-            include_str!("../equity/prompts/news_analyst.md"),
+            include_str!("../common/prompts/news_analyst.md"),
             &[include_str!("prompts/etf_macro_sector_focus.md")],
         ),
         technical_analyst: compose_etf_section(
-            include_str!("../equity/prompts/technical_analyst.md"),
+            include_str!("../common/prompts/technical_analyst.md"),
             &[include_str!("prompts/etf_tracking_options_focus.md")],
         ),
         auditor: compose_etf_section(
-            include_str!("../equity/prompts/auditor.md"),
+            include_str!("../common/prompts/auditor.md"),
             &[include_str!("prompts/etf_landmines.md")],
         ),
 
