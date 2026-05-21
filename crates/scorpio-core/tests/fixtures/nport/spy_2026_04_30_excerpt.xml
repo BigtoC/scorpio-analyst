@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/nport">
+  <formData>
+    <genInfo>
+      <regName>SPDR S&amp;P 500 ETF Trust</regName>
+    </genInfo>
+    <invstOrSecs>
+      <invstOrSec>
+        <name>APPLE INC</name>
+        <cusip>037833100</cusip>
+        <pctVal>7.21</pctVal>
+        <valUSD>40123456789.00</valUSD>
+        <issuerType>Information Technology</issuerType>
+      </invstOrSec>
+      <invstOrSec>
+        <name>MICROSOFT CORP</name>
+        <cusip>594918104</cusip>
+        <pctVal>6.85</pctVal>
+        <valUSD>38234567890.00</valUSD>
+        <issuerType>Information Technology</issuerType>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NVIDIA CORP</name>
+        <cusip>67066G104</cusip>
+        <pctVal>5.92</pctVal>
+        <valUSD>33012345678.00</valUSD>
+        <issuerType>Information Technology</issuerType>
+      </invstOrSec>
+    </invstOrSecs>
+    <benchmarkName>S&amp;P 500 Index</benchmarkName>
+  </formData>
+</edgarSubmission>

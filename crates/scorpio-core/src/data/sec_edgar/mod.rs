@@ -21,7 +21,11 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{error::TradingError, rate_limit::SharedRateLimiter};
+use crate::{
+    data::sec_edgar_nport::NPortHoldings, error::TradingError, rate_limit::SharedRateLimiter,
+};
+
+pub mod nport;
 
 /// SEC EDGAR fair-use User-Agent. Hardcoded per policy — no config required.
 const SEC_EDGAR_USER_AGENT: &str = "Scorpio Analyst scorpio@ledgerlylab.com";
@@ -433,6 +437,107 @@ impl SecEdgarClient {
             },
         }
     }
+
+    /// Resolve a fund ticker to a zero-padded 10-digit CIK string.
+    ///
+    /// Fail-soft: returns `None` when the underlying [`lookup_cik`] call
+    /// fails or the ticker is not in the EDGAR `company_tickers.json` map.
+    pub async fn resolve_fund_cik(&self, ticker: &str) -> Option<String> {
+        match self.lookup_cik(ticker).await {
+            Ok(Some(cik)) => Some(format!("{cik:010}")),
+            _ => None,
+        }
+    }
+
+    /// Fetch the most recent N-PORT-P filing for a fund CIK and parse it.
+    ///
+    /// Fail-soft: returns `None` on transport errors, non-SEC document URLs,
+    /// parse failures, or when no N-PORT-P filing exists within the window
+    /// `[today - max_age_days, today]`.
+    pub async fn fetch_latest_nport_p(
+        &self,
+        cik: &str,
+        max_age_days: u32,
+    ) -> Option<NPortHoldings> {
+        let parsed_cik: u32 = cik.trim_start_matches('0').parse().ok()?;
+        let today = chrono::Utc::now().date_naive();
+        let earliest = today - chrono::Duration::days(max_age_days as i64);
+        let filings = self
+            .fetch_recent_filings(
+                parsed_cik,
+                &["NPORT-P"],
+                &earliest.to_string(),
+                &today.to_string(),
+            )
+            .await
+            .ok()?;
+        let latest = filings.first()?;
+        if !is_allowed_sec_document_url(&latest.primary_doc_url) {
+            tracing::warn!(
+                url = %latest.primary_doc_url,
+                "skipping non-SEC or non-HTTPS N-PORT document url"
+            );
+            return None;
+        }
+        let filing_date =
+            chrono::NaiveDate::parse_from_str(&latest.filing_date, "%Y-%m-%d").ok()?;
+        let xml = self.fetch_document_text(&latest.primary_doc_url).await?;
+        nport::parse_nport_p(&xml, filing_date)
+    }
+
+    /// Fetch a raw filing document body. Fail-soft: returns `None` on any
+    /// transport error or non-200 response.
+    async fn fetch_document_text(&self, url: &str) -> Option<String> {
+        {
+            let breaker = self.breaker.lock().await;
+            if breaker.is_open() {
+                tracing::debug!(
+                    url,
+                    "SEC EDGAR circuit breaker open; skipping document fetch"
+                );
+                return None;
+            }
+        }
+        self.limiter.acquire().await;
+        match self.http.get(url).await {
+            Ok((200, body)) => {
+                self.breaker.lock().await.record_success();
+                Some(body)
+            }
+            Ok((status, _)) => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    url,
+                    http_status = status,
+                    "non-200 N-PORT-P document fetch"
+                );
+                None
+            }
+            Err(e) => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    url,
+                    error = %e,
+                    "N-PORT-P document transport error"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Allowlist guard: only fetch document bodies from official SEC archives over
+/// HTTPS. Protects against scheme/host substitution if `primary_doc_url` is
+/// ever derived from untrusted input.
+fn is_allowed_sec_document_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && matches!(parsed.host_str(), Some("sec.gov" | "www.sec.gov"))
+        && parsed.path().starts_with("/Archives/")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -855,5 +960,112 @@ mod tests {
             .await
             .expect("must return Ok, not Err");
         assert!(filings.is_empty());
+    }
+
+    // ── N-PORT-P resolution + fetch ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resolve_fund_cik_returns_zero_padded_string_for_known_ticker() {
+        let json =
+            r#"{"0": {"cik_str": 884394, "ticker": "SPY", "title": "SPDR S&P 500 ETF Trust"}}"#;
+        let mut mock_http = MockEdgarHttp::new();
+        mock_http
+            .expect_get()
+            .returning(move |_url| Ok((200, json.to_owned())));
+
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
+        let cik = client.resolve_fund_cik("SPY").await;
+        assert_eq!(cik.as_deref(), Some("0000884394"));
+    }
+
+    #[tokio::test]
+    async fn resolve_fund_cik_returns_none_for_unknown_ticker() {
+        let json = r#"{"0": {"cik_str": 884394, "ticker": "SPY", "title": "SPDR"}}"#;
+        let mut mock_http = MockEdgarHttp::new();
+        mock_http
+            .expect_get()
+            .returning(move |_url| Ok((200, json.to_owned())));
+
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
+        let cik = client.resolve_fund_cik("ZZZNOTREAL").await;
+        assert!(cik.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_latest_nport_p_returns_none_when_no_filings_in_window() {
+        // submissions response with one filing well outside the requested window.
+        let body = r#"{
+            "cik": "0000884394",
+            "filings": {
+                "recent": {
+                    "accessionNumber": ["0000884394-20-000001"],
+                    "filingDate": ["2020-01-01"],
+                    "form": ["NPORT-P"],
+                    "primaryDocument": ["primary_doc.xml"]
+                }
+            }
+        }"#;
+        let mut mock_http = MockEdgarHttp::new();
+        mock_http
+            .expect_get()
+            .returning(move |_url| Ok((200, body.to_owned())));
+
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
+        // max_age_days = 90 → 2020-01-01 is far outside the window from "today".
+        let result = client.fetch_latest_nport_p("0000884394", 90).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_latest_nport_p_returns_none_for_unparseable_cik() {
+        let mock_http = MockEdgarHttp::new();
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
+        let result = client.fetch_latest_nport_p("not-a-number", 90).await;
+        assert!(result.is_none());
+    }
+
+    // ── URL allowlist ────────────────────────────────────────────────────────
+
+    #[test]
+    fn allowed_sec_document_url_accepts_canonical_archives_url() {
+        let url =
+            "https://www.sec.gov/Archives/edgar/data/884394/000088439426000123/primary_doc.xml";
+        assert!(is_allowed_sec_document_url(url));
+    }
+
+    #[test]
+    fn allowed_sec_document_url_accepts_data_subdomain_when_archives_path() {
+        // data.sec.gov is not in the allowlist; only sec.gov / www.sec.gov.
+        let url = "https://data.sec.gov/Archives/edgar/data/884394/foo.xml";
+        assert!(!is_allowed_sec_document_url(url));
+    }
+
+    #[test]
+    fn allowed_sec_document_url_rejects_http_scheme() {
+        let url =
+            "http://www.sec.gov/Archives/edgar/data/884394/000088439426000123/primary_doc.xml";
+        assert!(!is_allowed_sec_document_url(url));
+    }
+
+    #[test]
+    fn allowed_sec_document_url_rejects_foreign_host() {
+        let url = "https://evil.example.com/Archives/edgar/data/884394/primary_doc.xml";
+        assert!(!is_allowed_sec_document_url(url));
+    }
+
+    #[test]
+    fn allowed_sec_document_url_rejects_non_archives_path() {
+        let url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany";
+        assert!(!is_allowed_sec_document_url(url));
+    }
+
+    #[test]
+    fn allowed_sec_document_url_rejects_garbage() {
+        assert!(!is_allowed_sec_document_url("not-a-url"));
+        assert!(!is_allowed_sec_document_url(""));
     }
 }
