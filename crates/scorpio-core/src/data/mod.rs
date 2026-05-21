@@ -34,6 +34,7 @@ pub mod fred;
 mod provider_impls;
 pub mod routing;
 pub mod sec_edgar;
+pub mod sec_edgar_nport;
 pub mod symbol;
 pub mod traits;
 pub mod transcript_cache;
@@ -51,6 +52,7 @@ pub use finnhub::{
 };
 pub use fred::{FredClient, GetEconomicIndicators};
 pub use sec_edgar::{FilingHeader, SecEdgarClient};
+pub use sec_edgar_nport::{NPortHoldingRow, NPortHoldings, NPortSectorRow};
 #[cfg(any(test, feature = "test-helpers"))]
 pub use yfinance::StubbedFinancialResponses;
 pub use yfinance::{

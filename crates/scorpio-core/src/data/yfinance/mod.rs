@@ -10,12 +10,14 @@
 //! | [`financials`]| Quarterly financial statement, earnings trend, and profile fetchers |
 
 mod client;
+pub mod etf;
 pub mod financials;
 pub mod news;
 pub mod ohlcv;
 pub mod options;
 pub mod price;
 
+pub use etf::{EtfQuote, FundInfo, is_supported_etf_kind};
 pub use news::YFinanceNewsProvider;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use ohlcv::StubbedFinancialResponses;

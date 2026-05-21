@@ -743,6 +743,11 @@ fn derive_runtime_valuation(
             shares: valuation_inputs.shares.as_deref(),
             earnings_trend: valuation_inputs.trend.as_deref(),
             current_price,
+            etf_quote: None,
+            etf_fund_info: None,
+            etf_holdings: None,
+            etf_ohlcv: None,
+            etf_benchmark_ohlcv: None,
         },
         &provisional.asset_shape,
     )

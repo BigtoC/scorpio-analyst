@@ -88,4 +88,11 @@ pub struct ValuationInputs<'a> {
     pub shares: Option<&'a [yfinance_rs::fundamentals::ShareCount]>,
     pub earnings_trend: Option<&'a [yfinance_rs::analysis::EarningsTrendRow]>,
     pub current_price: Option<f64>,
+
+    // ETF inputs (None when active pack != EtfBaseline)
+    pub etf_quote: Option<&'a crate::data::yfinance::etf::EtfQuote>,
+    pub etf_fund_info: Option<&'a crate::data::yfinance::etf::FundInfo>,
+    pub etf_holdings: Option<&'a crate::data::sec_edgar_nport::NPortHoldings>,
+    pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
+    pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 }
