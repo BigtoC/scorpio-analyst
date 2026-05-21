@@ -19,9 +19,11 @@
 //! - Crypto variants (`CryptoTokenomics`, `CryptoNetworkValue`) are
 //!   registered but return `NotAssessed` until the crypto pack lands.
 pub mod equity;
+pub mod etf;
 pub mod registry;
 
 pub use equity::EquityDefaultValuator;
+pub use etf::EtfPremiumDiscountValuator;
 pub use registry::ValuatorRegistry;
 
 use serde::{Deserialize, Serialize};

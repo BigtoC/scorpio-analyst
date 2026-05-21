@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{EquityDefaultValuator, Valuator, ValuatorId};
+use super::{EquityDefaultValuator, EtfPremiumDiscountValuator, Valuator, ValuatorId};
 
 /// Central catalog of valuation strategies the pipeline knows about.
 #[derive(Clone, Default)]
@@ -39,6 +39,16 @@ impl ValuatorRegistry {
         reg.register(Arc::new(EquityDefaultValuator));
         reg
     }
+
+    /// ETF-baseline registry — registers the ETF premium/discount valuator
+    /// in addition to the equity default. Phase 1.
+    #[must_use]
+    pub fn etf_baseline() -> Self {
+        let mut reg = Self::new();
+        reg.register(Arc::new(EquityDefaultValuator));
+        reg.register(Arc::new(EtfPremiumDiscountValuator));
+        reg
+    }
 }
 
 #[cfg(test)]
@@ -56,5 +66,18 @@ mod tests {
     fn unknown_id_returns_none() {
         let reg = ValuatorRegistry::equity_baseline();
         assert!(reg.get(ValuatorId::CryptoTokenomics).is_none());
+    }
+
+    #[test]
+    fn etf_baseline_registers_equity_default_and_etf_premium_discount() {
+        let reg = ValuatorRegistry::etf_baseline();
+        assert_eq!(
+            reg.get(ValuatorId::EquityDefault).expect("equity").id(),
+            ValuatorId::EquityDefault
+        );
+        assert_eq!(
+            reg.get(ValuatorId::EtfPremiumDiscount).expect("etf").id(),
+            ValuatorId::EtfPremiumDiscount
+        );
     }
 }
