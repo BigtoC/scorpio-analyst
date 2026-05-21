@@ -54,7 +54,7 @@
 
 This is purely additive — no behaviour changes. The new variant defaults are inert until the valuator lands. Keep the Phase 2 GEX placeholder as planned so the variant signature stays stable across the later expansion.
 
-- [ ] **Step 1: Add the new struct definitions to `state/derived.rs`**
+- [x] **Step 1: Add the new struct definitions to `state/derived.rs`**
 
 Append the following block immediately above the existing `# ─── Tests ───` divider (around line 200), keeping all existing types untouched:
 
@@ -197,7 +197,7 @@ pub struct EtfValuation {
 }
 ```
 
-- [ ] **Step 2: Add the new `ScenarioValuation::Etf` variant**
+- [x] **Step 2: Add the new `ScenarioValuation::Etf` variant**
 
 Edit the `ScenarioValuation` enum in the same file. Insert the new variant **between** `CorporateEquity(...)` and `NotAssessed { reason }` so old `not_assessed` snapshots continue to deserialize unchanged:
 
@@ -224,7 +224,7 @@ pub enum ScenarioValuation {
 }
 ```
 
-- [ ] **Step 3: Re-export the new types from `state/mod.rs`**
+- [x] **Step 3: Re-export the new types from `state/mod.rs`**
 
 Open `crates/scorpio-core/src/state/mod.rs` and extend the existing `pub use derived::{...}` (or per-type) re-exports so external callers can write `use scorpio_core::state::{EtfValuation, PremiumSnapshot, ...}`. Add:
 
@@ -237,7 +237,7 @@ pub use derived::{
 
 (Match the existing `pub use derived::{...}` style — open the file and merge into the existing line.)
 
-- [ ] **Step 4: Add unit tests for the additive variant**
+- [x] **Step 4: Add unit tests for the additive variant**
 
 Append to the `mod tests` block at the bottom of `state/derived.rs`:
 
@@ -312,7 +312,7 @@ fn etf_data_availability_defaults_to_unavailable_and_unknown_age_band() {
 }
 ```
 
-- [ ] **Step 5: Run tests + commit**
+- [x] **Step 5: Run tests + commit**
 
 ```bash
 cargo test -p scorpio-core --lib state::derived -- --nocapture
@@ -334,7 +334,7 @@ Expected: all new tests pass; pre-existing 16 `state::derived::tests` still pass
 - Modify: `crates/scorpio-core/src/analysis_packs/manifest/schema.rs` (extend `resolve_valuation` match)
 - Modify: `crates/scorpio-core/src/valuation/mod.rs`
 
-- [ ] **Step 1: Extend `PackId` to include the ETF baseline**
+- [x] **Step 1: Extend `PackId` to include the ETF baseline**
 
 Edit `analysis_packs/manifest/pack_id.rs`:
 
@@ -375,7 +375,7 @@ impl std::str::FromStr for PackId {
 }
 ```
 
-- [ ] **Step 2: Extend `ValuationAssessment`**
+- [x] **Step 2: Extend `ValuationAssessment`**
 
 Edit `analysis_packs/manifest/strategy.rs`:
 
@@ -392,7 +392,7 @@ pub enum ValuationAssessment {
 }
 ```
 
-- [ ] **Step 3: Extend `resolve_valuation` to honour Fund → Etf when the pack opts in**
+- [x] **Step 3: Extend `resolve_valuation` to honour Fund → Etf when the pack opts in**
 
 Edit `analysis_packs/manifest/schema.rs`. Update the body of `resolve_valuation` so that a pack whose `default_valuation == Etf` returns `Etf` for `AssetShape::Fund`. The signature stays the same:
 
@@ -420,7 +420,7 @@ pub fn resolve_valuation(&self, shape: &AssetShape) -> ValuationAssessment {
 
 The existing equity-baseline test (`baseline_pack_etf_gets_not_assessed`) keeps passing — baseline ships `default_valuation = Full`, so Fund still resolves to `NotAssessed` for it.
 
-- [ ] **Step 4: Add `ValuatorId::EtfPremiumDiscount`**
+- [x] **Step 4: Add `ValuatorId::EtfPremiumDiscount`**
 
 Edit `valuation/mod.rs`. Add the variant to the existing `#[non_exhaustive]` enum (additive, safe). Position it next to `EquityDefault`:
 
@@ -437,7 +437,7 @@ pub enum ValuatorId {
 }
 ```
 
-- [ ] **Step 5: Sanity tests**
+- [x] **Step 5: Sanity tests**
 
 Append to `pack_id.rs` tests (create `#[cfg(test)] mod tests` block if absent):
 
@@ -465,7 +465,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 6: Build, run all pack tests, commit**
+- [x] **Step 6: Build, run all pack tests, commit**
 
 ```bash
 cargo test -p scorpio-core --lib analysis_packs
@@ -491,7 +491,7 @@ This is post-feature cleanup. Run it only after the first ETF routing/valuation/
 
 Tier 1 = bit-for-bit identical content used by both packs. The byte-content guard test in Task 16 will confirm equity bytes are unchanged.
 
-- [ ] **Step 1: Create the new module skeleton**
+- [x] **Step 1: Create the new module skeleton**
 
 ```bash
 mkdir -p crates/scorpio-core/src/analysis_packs/common/prompts
@@ -507,7 +507,7 @@ Write `crates/scorpio-core/src/analysis_packs/common/mod.rs`:
 //! does not register it anywhere — the consuming pack chooses to pull it in.
 ```
 
-- [ ] **Step 2: Move the 6 Tier-1 files into the common directory**
+- [x] **Step 2: Move the 6 Tier-1 files into the common directory**
 
 ```bash
 git mv crates/scorpio-core/src/analysis_packs/equity/prompts/analyst_runtime_contract.md \
@@ -524,11 +524,11 @@ git mv crates/scorpio-core/src/analysis_packs/equity/prompts/bearish_researcher.
        crates/scorpio-core/src/analysis_packs/common/prompts/
 ```
 
-- [ ] **Step 3: Declare the new module**
+- [x] **Step 3: Declare the new module**
 
 Edit `crates/scorpio-core/src/analysis_packs/mod.rs` and add `mod common;` next to the other `mod` declarations (it has no public surface — pack manifests pull files via `include_str!`).
 
-- [ ] **Step 4: Update the include paths in both pack manifests**
+- [x] **Step 4: Update the include paths in both pack manifests**
 
 Edit `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` and rewrite the six affected `include_str!` paths (lines 19–22 and 76–84 in the current file) so they point at the common directory. Replace this block at the top of the file:
 
@@ -587,7 +587,7 @@ risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
 ))),
 ```
 
-- [ ] **Step 5: Build + run existing equity tests**
+- [x] **Step 5: Build + run existing equity tests**
 
 ```bash
 cargo test -p scorpio-core --lib analysis_packs::equity
@@ -598,7 +598,7 @@ cargo clippy -p scorpio-core --all-targets -- -D warnings
 
 Expected: all existing equity-baseline tests pass — the renamed files produce byte-identical content via `include_str!`. If `prompt_bundle_regression_gate` has cached fixture bytes that no longer match because of trailing-newline drift, that means a `git mv` accidentally re-encoded the file. Investigate; do not regenerate fixtures yet — the regression gate is meant to catch exactly this.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/analysis_packs/common/ crates/scorpio-core/src/analysis_packs/equity/baseline.rs crates/scorpio-core/src/analysis_packs/mod.rs crates/scorpio-core/src/analysis_packs/equity/prompts/
@@ -618,7 +618,7 @@ This is also post-feature cleanup. Run it after Task 3, still after the first ET
 
 Tier 2 prompts are byte-identical between equity and ETF today; the ETF pack will later compose against them with small deltas. The equity baseline keeps composing them via `with_analyst_runtime_contract_sections` exactly as before.
 
-- [ ] **Step 1: Move the files**
+- [x] **Step 1: Move the files**
 
 ```bash
 git mv crates/scorpio-core/src/analysis_packs/equity/prompts/news_analyst.md \
@@ -629,7 +629,7 @@ git mv crates/scorpio-core/src/analysis_packs/equity/prompts/auditor.md \
        crates/scorpio-core/src/analysis_packs/common/prompts/
 ```
 
-- [ ] **Step 2: Update both pack manifests**
+- [x] **Step 2: Update both pack manifests**
 
 Edit `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` and rewrite the four affected `include_str!` calls inside `baseline_prompt_bundle()`:
 
@@ -665,7 +665,7 @@ auditor: compose_etf_section(
 ),
 ```
 
-- [ ] **Step 3: Build + test**
+- [x] **Step 3: Build + test**
 
 ```bash
 cargo test -p scorpio-core --lib analysis_packs::equity
@@ -675,7 +675,7 @@ cargo test -p scorpio-core --test prompt_bundle_regression_gate
 
 Expected: PASS. Same byte-identity contract as Task 3.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/scorpio-core/src/analysis_packs/
@@ -703,13 +703,13 @@ git commit -m "refactor(prompts): extract 3 Tier-2 composition-base prompts to c
 
 Each new prompt must preserve the standard placeholders the renderer relies on (`{ticker}`, `{current_date}`, `{analysis_emphasis}`). The baseline equity asset test (`baseline_pack_populates_prompt_bundle_slots_with_runtime_placeholders` in `equity/baseline.rs`) checks that every analyst/researcher/risk slot keeps `{ticker}` and `{current_date}` — write the ETF equivalents accordingly.
 
-- [ ] **Step 1: Bootstrap directories**
+- [x] **Step 1: Bootstrap directories**
 
 ```bash
 mkdir -p crates/scorpio-core/src/analysis_packs/etf/prompts
 ```
 
-- [ ] **Step 2: Write `etf_runtime_contract.md`**
+- [x] **Step 2: Write `etf_runtime_contract.md`**
 
 Shared scaffolding section appended to every ETF analyst slot. Echoes the discipline of `analyst_runtime_contract.md` but tailored to ETF evidence.
 
@@ -735,7 +735,7 @@ Reason about the **wrapper**, not just the price line.
   drift.
 ```
 
-- [ ] **Step 3: Write `etf_failure_modes.md`**
+- [x] **Step 3: Write `etf_failure_modes.md`**
 
 Cross-cutting failure-mode reminder injected into every ETF analyst + risk slot.
 
@@ -760,7 +760,7 @@ Cross-cutting failure-mode reminder injected into every ETF analyst + risk slot.
   false signal.
 ```
 
-- [ ] **Step 4: Write `etf_leverage_warning.md`**
+- [x] **Step 4: Write `etf_leverage_warning.md`**
 
 Conditionally injected by runtime prompt substitution into `trader.md` and the three ETF risk prompts when `leverage_factor != 1.0`. Lives as a static file so the manifest stays leverage-agnostic.
 
@@ -775,7 +775,7 @@ deterministic-fallback "extreme risk" condition unless explicit hedging
 context is supplied in the trader proposal.
 ```
 
-- [ ] **Step 5: Write `composition_analyst.md`** (Tier 3, slot `fundamental_analyst`)
+- [x] **Step 5: Write `composition_analyst.md`** (Tier 3, slot `fundamental_analyst`)
 
 ```markdown
 # ETF Composition Analyst
@@ -803,7 +803,7 @@ If `composition` is `None`, do NOT invent holdings. State explicitly that
 N-PORT-P data is unavailable and explain what that means for the analysis.
 ```
 
-- [ ] **Step 6: Write `flow_premium_analyst.md`** (Tier 3, slot `sentiment_analyst`)
+- [x] **Step 6: Write `flow_premium_analyst.md`** (Tier 3, slot `sentiment_analyst`)
 
 ```markdown
 # ETF Flow & Premium Analyst
@@ -830,7 +830,7 @@ NAV is unavailable (`flags.nav_available = false`), state that premium
 analysis is impossible this run and stop.
 ```
 
-- [ ] **Step 7: Write `etf_macro_sector_focus.md`** (Tier 2 delta; first slice composes with `equity/prompts/news_analyst.md`, Tasks 3-4 later move it to `common/prompts/news_analyst.md`)
+- [x] **Step 7: Write `etf_macro_sector_focus.md`** (Tier 2 delta; first slice composes with `equity/prompts/news_analyst.md`, Tasks 3-4 later move it to `common/prompts/news_analyst.md`)
 
 ```markdown
 ## ETF macro & sector lens
@@ -846,7 +846,7 @@ Beyond company-specific catalysts, prioritise:
 Ignore single-name news unless it concerns a top-5 holding by weight.
 ```
 
-- [ ] **Step 8: Write `etf_tracking_options_focus.md`** (Tier 2 delta; first slice composes with `equity/prompts/technical_analyst.md`, Tasks 3-4 later move it to `common/prompts/technical_analyst.md`)
+- [x] **Step 8: Write `etf_tracking_options_focus.md`** (Tier 2 delta; first slice composes with `equity/prompts/technical_analyst.md`, Tasks 3-4 later move it to `common/prompts/technical_analyst.md`)
 
 ```markdown
 ## ETF tracking & options lens
@@ -862,7 +862,7 @@ In addition to standard technicals:
   in evidence. (Phase 2 will add dealer-gamma analysis.)
 ```
 
-- [ ] **Step 9: Write `etf_landmines.md`** (Tier 2 delta; first slice composes with `equity/prompts/auditor.md`, Tasks 3-4 later move it to `common/prompts/auditor.md`)
+- [x] **Step 9: Write `etf_landmines.md`** (Tier 2 delta; first slice composes with `equity/prompts/auditor.md`, Tasks 3-4 later move it to `common/prompts/auditor.md`)
 
 ```markdown
 ## ETF-specific audit landmines
@@ -877,7 +877,7 @@ In addition to standard technicals:
   ex-dividend adjustment had occurred.
 ```
 
-- [ ] **Step 10: Write `trader.md`** (Tier 3, ETF-specific trader)
+- [x] **Step 10: Write `trader.md`** (Tier 3, ETF-specific trader)
 
 ```markdown
 # Trader — ETF Baseline
@@ -907,7 +907,7 @@ composition, tracking, distribution.
   current pricing.
 ```
 
-- [ ] **Step 11: Write `conservative_risk.md`** (Tier 3, ETF-specific)
+- [x] **Step 11: Write `conservative_risk.md`** (Tier 3, ETF-specific)
 
 ```markdown
 # Conservative Risk — ETF Baseline
@@ -933,7 +933,7 @@ If none apply, lead with the bullet `no_deterministic_flag` and proceed to
 the qualitative assessment.
 ```
 
-- [ ] **Step 12: Write `neutral_risk.md`** (Tier 3, ETF-specific)
+- [x] **Step 12: Write `neutral_risk.md`** (Tier 3, ETF-specific)
 
 ```markdown
 # Neutral Risk — ETF Baseline
@@ -957,7 +957,7 @@ Discuss:
   rebalance cadence (daily-reset leverage vs multi-day hold).
 ```
 
-- [ ] **Step 13: Write `aggressive_risk.md`** (Tier 3, ETF-specific)
+- [x] **Step 13: Write `aggressive_risk.md`** (Tier 3, ETF-specific)
 
 ```markdown
 # Aggressive Risk — ETF Baseline
@@ -977,7 +977,7 @@ on `{current_date}`.
   index trackers) does NOT diminish a price-action-driven thesis.
 ```
 
-- [ ] **Step 14: Write `fund_manager.md`** (Tier 3, ETF dual-risk semantics)
+- [x] **Step 14: Write `fund_manager.md`** (Tier 3, ETF dual-risk semantics)
 
 ```markdown
 # Fund Manager — ETF Baseline
@@ -1008,7 +1008,7 @@ Otherwise, weigh the analyst, debate, and risk-stage output normally.
   exposure, reject and ask for re-analysis when N-PORT data refreshes.
 ```
 
-- [ ] **Step 15: Sanity check the placeholders before continuing**
+- [x] **Step 15: Sanity check the placeholders before continuing**
 
 ```bash
 grep -L "{ticker}" crates/scorpio-core/src/analysis_packs/etf/prompts/composition_analyst.md crates/scorpio-core/src/analysis_packs/etf/prompts/flow_premium_analyst.md crates/scorpio-core/src/analysis_packs/etf/prompts/trader.md crates/scorpio-core/src/analysis_packs/etf/prompts/{aggressive,conservative,neutral}_risk.md crates/scorpio-core/src/analysis_packs/etf/prompts/fund_manager.md
@@ -1018,7 +1018,7 @@ grep -L "{current_date}" crates/scorpio-core/src/analysis_packs/etf/prompts/comp
 # Expected: empty
 ```
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```bash
 git add crates/scorpio-core/src/analysis_packs/etf/prompts/
@@ -1035,7 +1035,7 @@ git commit -m "feat(etf): add ETF-specific prompt assets (analysts, risk, trader
 - Modify: `crates/scorpio-core/src/analysis_packs/mod.rs` (declare `mod etf;`)
 - Modify: `crates/scorpio-core/src/analysis_packs/registry.rs` (register `PackId::EtfBaseline → etf::etf_baseline_pack()`, add to `REGISTERED_PACKS`)
 
-- [ ] **Step 1: Create the module skeleton**
+- [x] **Step 1: Create the module skeleton**
 
 Write `crates/scorpio-core/src/analysis_packs/etf/mod.rs`:
 
@@ -1050,7 +1050,7 @@ mod baseline;
 pub use baseline::etf_baseline_pack;
 ```
 
-- [ ] **Step 2: Write `etf/baseline.rs`**
+- [x] **Step 2: Write `etf/baseline.rs`**
 
 Mirror the structure of `equity/baseline.rs` exactly. The composition helpers (`compose_etf_analyst`, `compose_etf_section`, `compose_etf_risk`) are local to this module — they share the underlying `compose_prompt_sections` primitive by inlining the same logic. (Do not pull the equity helpers into a shared crate-level module — keeps pack manifests self-contained.)
 
@@ -1301,7 +1301,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2b: Wire leveraged / inverse warning injection at runtime**
+- [x] **Step 2b: Wire leveraged / inverse warning injection at runtime**
 
 In the ETF pack's runtime prompt-materialization path, call
 `append_leverage_warning_if_needed(...)` for `trader`, `aggressive_risk`,
@@ -1309,7 +1309,7 @@ In the ETF pack's runtime prompt-materialization path, call
 substitution. The warning is conditional runtime behavior, not part of the
 static bundle for plain ETFs.
 
-- [ ] **Step 3: Wire into the pack module + registry**
+- [x] **Step 3: Wire into the pack module + registry**
 
 Edit `crates/scorpio-core/src/analysis_packs/mod.rs` and add `mod etf;` alongside the existing `mod` lines.
 
@@ -1334,11 +1334,11 @@ const REGISTERED_PACKS: &[PackId] = &[
 ];
 ```
 
-- [ ] **Step 4: Update the existing registry test that enumerates packs**
+- [x] **Step 4: Update the existing registry test that enumerates packs**
 
 In `analysis_packs/registry.rs::tests`, extend `registered_packs_match_resolve_pack_arms` to assert `PackId::EtfBaseline` is contained, and confirm `pack_diagnostics_returns_empty_today` still holds (the ETF pack must be complete under the fully-enabled topology).
 
-- [ ] **Step 5: Build, test, commit**
+- [x] **Step 5: Build, test, commit**
 
 ```bash
 cargo test -p scorpio-core --lib analysis_packs
@@ -1361,7 +1361,7 @@ Expected: every ETF pack test from Step 2 passes, `pack_diagnostics()` stays emp
 
 Defining the types first lets every downstream task compile against a stable interface.
 
-- [ ] **Step 1: Create `data/yfinance/etf.rs` with placeholder types**
+- [x] **Step 1: Create `data/yfinance/etf.rs` with placeholder types**
 
 ```rust
 //! ETF-specific yfinance types — quote, fund info, leverage detection.
@@ -1414,7 +1414,7 @@ pub fn is_supported_etf_kind(kind: &str) -> bool {
 
 Then add `pub mod etf;` to `crates/scorpio-core/src/data/yfinance/mod.rs` and re-export `EtfQuote`, `FundInfo`, `is_supported_etf_kind`.
 
-- [ ] **Step 2: Create `data/sec_edgar_nport.rs`**
+- [x] **Step 2: Create `data/sec_edgar_nport.rs`**
 
 Refactor `sec_edgar.rs` into a directory only if you must — for this slice keep the existing flat `sec_edgar.rs` and create a sibling file `sec_edgar_nport.rs` instead. Path:
 
@@ -1459,7 +1459,7 @@ pub struct NPortHoldings {
 
 Register in `data/mod.rs`: add `pub mod sec_edgar_nport;` and re-export `NPortHoldings`.
 
-- [ ] **Step 3: Extend `ValuationInputs<'a>`**
+- [x] **Step 3: Extend `ValuationInputs<'a>`**
 
 Edit `crates/scorpio-core/src/valuation/mod.rs`. Add the new optional fields **after** the existing equity inputs:
 
@@ -1483,7 +1483,7 @@ pub struct ValuationInputs<'a> {
 }
 ```
 
-- [ ] **Step 4: Fix the one existing call site**
+- [x] **Step 4: Fix the one existing call site**
 
 `crates/scorpio-core/src/workflow/tasks/analyst.rs` constructs `ValuationInputs` inside `derive_runtime_valuation` (around line 738). Add the four new ETF fields as `None`:
 
@@ -1526,7 +1526,7 @@ let inputs = ValuationInputs {
 };
 ```
 
-- [ ] **Step 5: Build + commit**
+- [x] **Step 5: Build + commit**
 
 ```bash
 cargo check -p scorpio-core
@@ -1544,7 +1544,7 @@ git commit -m "feat(valuation): extend ValuationInputs with optional ETF fields"
 
 Each method returns `Option<T>` and degrades fail-soft per the existing yfinance pattern (`get_quarterly_cashflow`, etc.).
 
-- [ ] **Step 1: Add `get_quote`**
+- [x] **Step 1: Add `get_quote`**
 
 Append to `data/yfinance/etf.rs`:
 
@@ -1608,7 +1608,7 @@ impl YFinanceClient {
 
 Note: the `yfinance_rs` 0.7 surface for `Ticker::quote()` / `Ticker::info()` may differ from this sketch — when implementing, open `~/.cargo/registry/src/.../yfinance-rs-0.7.*/src/ticker.rs` (the crate is already in `Cargo.lock`) and read the actual return types. Field names like `nav_price`, `regular_market_volume`, etc. may need adjustment. The plan's contract is the **return type** (`Option<EtfQuote>`); how its fields are populated is a small implementation detail.
 
-- [ ] **Step 2: Add `get_fund_info`**
+- [x] **Step 2: Add `get_fund_info`**
 
 ```rust
 impl YFinanceClient {
@@ -1668,7 +1668,7 @@ fn derive_leverage_factor(fund_name: Option<&str>, category: &Option<String>) ->
 
 Again, the `yfinance_rs::Info` field surface is the runtime spec — implement against the real fields after opening the crate locally.
 
-- [ ] **Step 3: Add `get_distribution_yield_ttm`**
+- [x] **Step 3: Add `get_distribution_yield_ttm`**
 
 ```rust
 impl YFinanceClient {
@@ -1703,7 +1703,7 @@ impl YFinanceClient {
 
 Add `use num_traits::ToPrimitive as _;` to the top of the file if `to_f64` requires it (it does for `rust_decimal` types).
 
-- [ ] **Step 4: Add unit tests with stubbed responses**
+- [x] **Step 4: Add unit tests with stubbed responses**
 
 Append to the same file. Mirror the stubbed-financials pattern in `data/yfinance/financials.rs`:
 
@@ -1749,7 +1749,7 @@ mod tests {
 
 The `get_quote` / `get_fund_info` integration tests live in the live smoke example (Task 18); CI tests cover only the pure helpers above.
 
-- [ ] **Step 5: Build + commit**
+- [x] **Step 5: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --lib data::yfinance::etf
@@ -1768,7 +1768,7 @@ git commit -m "feat(data): add yfinance ETF methods (get_quote, get_fund_info, g
 
 The existing `SecEdgarClient::lookup_cik` is already the implementation of "resolve a ticker → CIK". The plan calls for a thin wrapper named `resolve_fund_cik` that returns the zero-padded `Option<String>` form expected by `fetch_latest_nport_p`.
 
-- [ ] **Step 1: Create the directory + parser module**
+- [x] **Step 1: Create the directory + parser module**
 
 ```bash
 mkdir -p crates/scorpio-core/src/data/sec_edgar
@@ -1833,7 +1833,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Implement the XBRL parser**
+- [x] **Step 2: Implement the XBRL parser**
 
 Add `quick-xml = "0.36"` (or `roxmltree = "0.20"`) to `[workspace.dependencies]` in the root `Cargo.toml`, then to `scorpio-core/Cargo.toml`:
 
@@ -1990,7 +1990,7 @@ fn parse_nport_p_extracts_three_holdings_from_fixture() {
 }
 ```
 
-- [ ] **Step 3: Add `SecEdgarClient::resolve_fund_cik` and `fetch_latest_nport_p`**
+- [x] **Step 3: Add `SecEdgarClient::resolve_fund_cik` and `fetch_latest_nport_p`**
 
 In `crates/scorpio-core/src/data/sec_edgar/mod.rs`, append:
 
@@ -2067,7 +2067,7 @@ impl SecEdgarClient {
 }
 ```
 
-- [ ] **Step 4: Add tests covering the new surface**
+- [x] **Step 4: Add tests covering the new surface**
 
 Append to `sec_edgar/mod.rs::tests`:
 
@@ -2103,7 +2103,7 @@ async fn fetch_latest_nport_p_returns_none_when_no_filings_in_window() {
 }
 ```
 
-- [ ] **Step 5: Build + commit**
+- [x] **Step 5: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --lib data::sec_edgar
@@ -2124,7 +2124,7 @@ git commit -m "feat(data): add SEC EDGAR N-PORT-P fetch + XBRL parser"
 - Modify: `crates/scorpio-core/src/valuation/mod.rs` (re-export)
 - Modify: `crates/scorpio-core/src/valuation/registry.rs` (add `etf_baseline` factory)
 
-- [ ] **Step 1: Create `category_norms.rs` — band thresholds by category**
+- [x] **Step 1: Create `category_norms.rs` — band thresholds by category**
 
 ```rust
 //! Premium-band category norms.
@@ -2224,7 +2224,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Create `tracking_error.rs`**
+- [x] **Step 2: Create `tracking_error.rs`**
 
 ```rust
 //! ETF vs benchmark tracking error.
@@ -2316,7 +2316,7 @@ mod tests {
 
 Note: the `Candle` field names must match the real type in `data/yfinance/ohlcv.rs` (probably `timestamp`, `open`, `high`, `low`, `close`, `volume`); when implementing, open that file and confirm. Adjust the test stub accordingly.
 
-- [ ] **Step 3: Create `premium_discount.rs`**
+- [x] **Step 3: Create `premium_discount.rs`**
 
 ```rust
 //! Premium/discount valuator entry point.
@@ -2480,7 +2480,7 @@ fn build_composition(
 }
 ```
 
-- [ ] **Step 4: Create `valuation/etf/mod.rs`**
+- [x] **Step 4: Create `valuation/etf/mod.rs`**
 
 ```rust
 //! ETF valuators.
@@ -2495,7 +2495,7 @@ pub mod tracking_error;
 pub use premium_discount::EtfPremiumDiscountValuator;
 ```
 
-- [ ] **Step 5: Register valuator in `valuation/mod.rs` + `valuation/registry.rs`**
+- [x] **Step 5: Register valuator in `valuation/mod.rs` + `valuation/registry.rs`**
 
 Edit `valuation/mod.rs`:
 
@@ -2527,7 +2527,7 @@ impl ValuatorRegistry {
 
 Add the import: `use super::{EquityDefaultValuator, EtfPremiumDiscountValuator, Valuator, ValuatorId};`.
 
-- [ ] **Step 6: Unit tests for the valuator**
+- [x] **Step 6: Unit tests for the valuator**
 
 Append to `premium_discount.rs`:
 
@@ -2690,7 +2690,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 7: Build + commit**
+- [x] **Step 7: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --lib valuation::etf
@@ -2712,7 +2712,7 @@ git commit -m "feat(etf): add EtfPremiumDiscountValuator + category norms + trac
 
 The classifier itself is pure and synchronous given the data, but the I/O (`get_profile`, `get_fund_info`) happens in the per-run runtime path after symbol resolution, not in `TradingPipeline::new`. This slice relies on `EtfBaseline` sharing the baseline four-analyst topology, so graph construction stays static while runtime pack selection becomes run-specific state.
 
-- [ ] **Step 1: Create `pack_classifier.rs`**
+- [x] **Step 1: Create `pack_classifier.rs`**
 
 ```rust
 //! Runtime pack classification.
@@ -2822,14 +2822,14 @@ mod tests {
 
 Keep the lightweight unit tests here. Task 15 adds CI coverage for the supported ETF and unsupported-fund classifier paths via test fixtures/helpers instead of leaving those paths to live smoke only.
 
-- [ ] **Step 2: Re-export from `workflow/mod.rs`**
+- [x] **Step 2: Re-export from `workflow/mod.rs`**
 
 ```rust
 pub mod pack_classifier;
 pub use pack_classifier::{classify_runtime_pack, RuntimePackSelection};
 ```
 
-- [ ] **Step 3: Keep classification in the per-run runtime path and wire `SecEdgarClient` into the pipeline**
+- [x] **Step 3: Keep classification in the per-run runtime path and wire `SecEdgarClient` into the pipeline**
 
 In `crates/scorpio-core/src/workflow/pipeline/runtime.rs`, perform pack classification inside the per-run analysis path after symbol/profile resolution. Do **not** move symbol-specific `get_profile` / `get_fund_info` I/O into `TradingPipeline::new` or `build_graph_from_pack`; graph construction remains static in this slice.
 
@@ -2874,7 +2874,7 @@ pub struct AnalystSyncTask {
 
 Update `AnalystSyncTask::new` and `AnalystSyncTask::with_yfinance` to set `sec_edgar: None` (callers that don't supply one keep working — Task 13 actually consumes this field).
 
-- [ ] **Step 4: Update `build_graph_from_pack` to thread the new `SecEdgarClient` only**
+- [x] **Step 4: Update `build_graph_from_pack` to thread the new `SecEdgarClient` only**
 
 In `crates/scorpio-core/src/workflow/builder.rs`, extend `PipelineDeps`:
 
@@ -2904,7 +2904,7 @@ let analyst_sync = AnalystSyncTask::with_yfinance_and_edgar(
 
 Update every existing caller in `pipeline/runtime.rs` to construct a `SecEdgarClient` (the existing `Tier1CatalystProvider` already builds one — share it via `Arc`).
 
-- [ ] **Step 5: Routing context keys**
+- [x] **Step 5: Routing context keys**
 
 In `crates/scorpio-core/src/workflow/tasks/common.rs`, add:
 
@@ -2919,7 +2919,7 @@ pub const KEY_RUNTIME_PACK_ROUTE: &str = "routing.pack";
 pub const KEY_ROUTING_FALLBACK_REASON: &str = "routing.fallback_reason";
 ```
 
-- [ ] **Step 6: Build (no test required yet — wiring lands in next tasks)**
+- [x] **Step 6: Build (no test required yet — wiring lands in next tasks)**
 
 ```bash
 cargo check -p scorpio-core
@@ -2938,7 +2938,7 @@ git commit -m "feat(workflow): add pack classifier + plumb SecEdgarClient throug
 
 The current `PreflightTask::with_runtime_policy` receives an already-resolved policy. After Task 11 the *pack selection* is the caller's concern (it depends on async I/O the builder shouldn't do). So preflight's job here is purely to surface routing metadata into state + context.
 
-- [ ] **Step 1: Add field to `TradingState`**
+- [x] **Step 1: Add field to `TradingState`**
 
 In `crates/scorpio-core/src/state/trading_state.rs`, add to the `TradingState` struct:
 
@@ -2952,7 +2952,7 @@ pub etf_routing_fallback_reason: Option<String>,
 
 Mirror the same field in `TradingStateWire` and the `From<TradingStateWire>` impl.
 
-- [ ] **Step 2: Add constructor that carries routing reason**
+- [x] **Step 2: Add constructor that carries routing reason**
 
 In `preflight.rs`, add:
 
@@ -2992,7 +2992,7 @@ pub struct PreflightTask {
 
 Initialize the new field on the existing `new`, `with_pack`, `with_runtime_policy` constructors as `None`.
 
-- [ ] **Step 3: Write routing context keys + state field inside `run`**
+- [x] **Step 3: Write routing context keys + state field inside `run`**
 
 In `PreflightTask::run`, after the existing `state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());` line, add:
 
@@ -3012,7 +3012,7 @@ if let Some(reason) = self.routing_fallback_reason.as_deref() {
 }
 ```
 
-- [ ] **Step 4: Tests**
+- [x] **Step 4: Tests**
 
 Append to `preflight.rs::tests`:
 
@@ -3057,7 +3057,7 @@ async fn preflight_does_not_set_fallback_reason_for_matched_routing() {
 }
 ```
 
-- [ ] **Step 5: Build + commit**
+- [x] **Step 5: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --lib workflow::tasks::preflight
@@ -3076,7 +3076,7 @@ git commit -m "feat(workflow): preflight records ETF routing fallback reason in 
 
 When the active pack is `EtfBaseline`, fetch ETF quote, fund info, fund CIK, N-PORT-P, distribution yield, ETF OHLCV, and benchmark OHLCV (when source-provided benchmark is present). Stuff these into `ValuationInputs` and call the ETF valuator.
 
-- [ ] **Step 1: Extend the local `ValuationInputs` struct**
+- [x] **Step 1: Extend the local `ValuationInputs` struct**
 
 `workflow/tasks/analyst.rs` already declares a private `struct ValuationInputs` (around line 572) that mirrors the `valuation::ValuationInputs` fields. Add ETF storage:
 
@@ -3101,7 +3101,7 @@ struct ValuationInputs {
 }
 ```
 
-- [ ] **Step 2: Extend `fetch_valuation_inputs` to branch on active pack**
+- [x] **Step 2: Extend `fetch_valuation_inputs` to branch on active pack**
 
 ```rust
 async fn fetch_valuation_inputs(
@@ -3167,7 +3167,7 @@ async fn fetch_valuation_inputs(
 
 If `yfinance::get_ohlcv` doesn't exist with that exact signature (check `data/yfinance/ohlcv.rs`), use the existing equivalent (`fetch_ohlcv` / `get_history` / etc.) and adjust accordingly.
 
-- [ ] **Step 3: Pass `sec_edgar` and `pack_id` into the fetcher call site**
+- [x] **Step 3: Pass `sec_edgar` and `pack_id` into the fetcher call site**
 
 Inside `AnalystSyncTask::run`, locate the existing `fetch_valuation_inputs` call and update:
 
@@ -3186,7 +3186,7 @@ let valuation_inputs = fetch_valuation_inputs(
 ).await;
 ```
 
-- [ ] **Step 4: Route the ETF valuator through `derive_runtime_valuation`**
+- [x] **Step 4: Route the ETF valuator through `derive_runtime_valuation`**
 
 The existing `derive_runtime_valuation` already consults `policy.valuator_selection` and calls `ValuatorRegistry::equity_baseline()`. Replace that with a registry that knows the ETF valuator too:
 
@@ -3219,7 +3219,7 @@ valuator.assess(
 )
 ```
 
-- [ ] **Step 5: Post-process distribution yield into the composition**
+- [x] **Step 5: Post-process distribution yield into the composition**
 
 After `state.set_derived_valuation(...)`, fill in the distribution yield (which the valuator left as `None`):
 
@@ -3237,7 +3237,7 @@ if let Some(yld) = valuation_inputs.etf_distribution_yield_ttm_pct {
 
 Add a `derived_valuation_mut(&mut self) -> Option<&mut DerivedValuation>` accessor on `EquityState` / `TradingState` if not already present (mirror the read-side `derived_valuation` getter). Single line addition; check `state/equity.rs` for the existing accessor pattern.
 
-- [ ] **Step 6: Sanity test (logic-only)**
+- [x] **Step 6: Sanity test (logic-only)**
 
 Append to the `mod tests` block in `analyst.rs`:
 
@@ -3267,7 +3267,7 @@ fn baseline_routing_falls_back_to_equity_registry_without_etf_valuator() {
 }
 ```
 
-- [ ] **Step 7: Build + commit**
+- [x] **Step 7: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --lib workflow::tasks::analyst
@@ -3293,7 +3293,7 @@ sector summary (top two sector weights), tracking summary, and trust signals
 UTF-8 rendering is the default, but narrow-terminal and ASCII fallback
 behavior are part of the Phase 1 contract.
 
-- [ ] **Rendering policy**
+- [x] **Rendering policy**
 
 Add a small render-policy helper for Task 14 with this contract:
 
@@ -3303,7 +3303,7 @@ Add a small render-policy helper for Task 14 with this contract:
 
 Add tests for the narrow and ASCII fallback paths alongside the rich default.
 
-- [ ] **Step 1: Create `etf.rs` panel renderer**
+- [x] **Step 1: Create `etf.rs` panel renderer**
 
 ```rust
 //! ETF Valuation Snapshot panel renderer.
@@ -3545,7 +3545,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Dispatch in `valuation.rs`**
+- [x] **Step 2: Dispatch in `valuation.rs`**
 
 Edit `crates/scorpio-reporters/src/terminal/valuation.rs::write_valuation_body`:
 
@@ -3577,7 +3577,7 @@ match state.derived_valuation() {
 }
 ```
 
-- [ ] **Step 3: Add routing-fallback warning to the header**
+- [x] **Step 3: Add routing-fallback warning to the header**
 
 Locate `final_report.rs` and find where the analysis pack label is rendered. Add a user-facing copy map for routing fallback reasons and print the mapped warning when `state.etf_routing_fallback_reason` is `Some`:
 
@@ -3605,11 +3605,11 @@ Run the existing reporter tests:
 cargo test -p scorpio-reporters
 ```
 
-- [ ] **Step 4: Register the new submodule**
+- [x] **Step 4: Register the new submodule**
 
 In `crates/scorpio-reporters/src/terminal/mod.rs`, add `pub(crate) mod etf;` next to the existing `pub(crate) mod valuation;`.
 
-- [ ] **Step 5: Build + commit**
+- [x] **Step 5: Build + commit**
 
 ```bash
 cargo test -p scorpio-reporters
@@ -3627,7 +3627,7 @@ git commit -m "feat(reporters): add ETF Valuation Snapshot panel + routing-fallb
 
 The existing test asserts the baseline graph topology. We need three new tests: ETF symbol → EtfBaseline pack drives topology; unsupported fund shape → Baseline fallback with `unsupported_fund_shape` reason; `None` profile → Baseline fallback with `profile_lookup_unavailable` reason.
 
-- [ ] **Step 1: Read the existing test file to understand the helper pattern**
+- [x] **Step 1: Read the existing test file to understand the helper pattern**
 
 ```bash
 grep -n "fn " /Users/bigtochan/Documents/dev/BigtoC/scorpio-analyst/crates/scorpio-core/tests/workflow_pipeline_structure.rs | head -20
@@ -3635,7 +3635,7 @@ grep -n "fn " /Users/bigtochan/Documents/dev/BigtoC/scorpio-analyst/crates/scorp
 
 It likely uses `crate::workflow::build_graph_from_pack(...)` and asserts task IDs. Mirror that style.
 
-- [ ] **Step 2: Add classifier integration tests**
+- [x] **Step 2: Add classifier integration tests**
 
 ```rust
 #[test]
@@ -3686,7 +3686,7 @@ fn etf_baseline_routes_fund_shape_to_etf_valuator() {
 }
 ```
 
-- [ ] **Step 3: Build + commit**
+- [x] **Step 3: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --test workflow_pipeline_structure
@@ -3704,7 +3704,7 @@ git commit -m "test(etf): cover ETF pack routing topology + classifier fallback"
 
 The point of this task is twofold: (a) prove the equity baseline prompt bytes are byte-identical after the moves; (b) extend the regression gate to also assert ETF baseline completeness under all four topology shapes.
 
-- [ ] **Step 1: Run the gate**
+- [x] **Step 1: Run the gate**
 
 ```bash
 cargo test -p scorpio-core --test prompt_bundle_regression_gate -- --nocapture
@@ -3712,7 +3712,7 @@ cargo test -p scorpio-core --test prompt_bundle_regression_gate -- --nocapture
 
 If it passes — Tasks 3 and 4 didn't alter bytes; proceed to Step 2. If it fails, the failing diff will show which prompt drifted. Investigate (probably a trailing newline got dropped in a `git mv`); fix the source `.md` file, do NOT regenerate the fixture.
 
-- [ ] **Step 2: Add ETF completeness coverage**
+- [x] **Step 2: Add ETF completeness coverage**
 
 Append a new test:
 
@@ -3752,7 +3752,7 @@ fn resolve_runtime_policy_for_pack_id(id: scorpio_core::analysis_packs::PackId) 
 }
 ```
 
-- [ ] **Step 3: Decide how to address the test-only resolve hole**
+- [x] **Step 3: Decide how to address the test-only resolve hole**
 
 The public surface `resolve_runtime_policy` only accepts user-selectable strings, and ETF isn't selectable. Two options — pick one:
 
@@ -3768,7 +3768,7 @@ let policy = scorpio_core::analysis_packs::resolve_runtime_policy_for_manifest(&
 
 Go with Option A; it's smaller and doesn't affect the user-facing surface.
 
-- [ ] **Step 4: Build + commit**
+- [x] **Step 4: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --test prompt_bundle_regression_gate
@@ -3783,7 +3783,7 @@ git commit -m "test(etf): extend prompt-bundle regression gate for EtfBaseline c
 **Files:**
 - Modify: `crates/scorpio-core/tests/state_roundtrip.rs`
 
-- [ ] **Step 1: Add ETF variant + legacy-snapshot tests**
+- [x] **Step 1: Add ETF variant + legacy-snapshot tests**
 
 ```rust
 #[test]
@@ -3863,7 +3863,7 @@ fn legacy_corporate_equity_snapshot_unchanged_after_etf_variant_added() {
 
 (Adjust the minimal JSON to match the actual `TokenUsageTracker` default shape — open `state/token_usage.rs` if it doesn't deserialize with `phase_usages: []`.)
 
-- [ ] **Step 2: Build + commit**
+- [x] **Step 2: Build + commit**
 
 ```bash
 cargo test -p scorpio-core --test state_roundtrip
@@ -3882,7 +3882,7 @@ git commit -m "test(state): ETF variant + legacy-snapshot compat round-trip"
 
 These are run by hand (`cargo run -p scorpio-core --example etf_quote_live_test`), NOT in CI.
 
-- [ ] **Step 1: `etf_quote_live_test.rs`**
+- [x] **Step 1: `etf_quote_live_test.rs`**
 
 ```rust
 //! Manual live smoke: yfinance ETF surface methods.
@@ -3911,7 +3911,7 @@ async fn main() {
 }
 ```
 
-- [ ] **Step 2: `nport_live_test.rs`**
+- [x] **Step 2: `nport_live_test.rs`**
 
 ```rust
 //! Manual live smoke: SEC EDGAR N-PORT-P fetch.
@@ -3953,7 +3953,7 @@ async fn main() {
 }
 ```
 
-- [ ] **Step 3: `etf_pack_live_test.rs`**
+- [x] **Step 3: `etf_pack_live_test.rs`**
 
 ```rust
 //! Manual live smoke: end-to-end runtime classification + pack routing.
@@ -3986,7 +3986,7 @@ async fn main() {
 }
 ```
 
-- [ ] **Step 4: Verify examples compile**
+- [x] **Step 4: Verify examples compile**
 
 ```bash
 cargo build -p scorpio-core --examples
@@ -3994,7 +3994,7 @@ cargo build -p scorpio-core --examples
 
 (Don't run them in CI — they hit the network.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/
