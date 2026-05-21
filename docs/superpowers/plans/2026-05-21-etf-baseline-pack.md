@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a first-class `EtfBaseline` analysis pack so `scorpio analyze SPY` produces ETF-native analysis (premium/discount, composition when fresh N-PORT exists, source-provided-benchmark tracking, ETF report panel, routing-fallback warnings) instead of short-circuiting on `Profile::Fund`.
+**Goal:** Ship a first-class `EtfBaseline` analysis pack so `scorpio analyze SPY` produces ETF-native analysis (premium/discount, composition with filing-age qualification when N-PORT exists, source-provided-benchmark tracking, ETF report panel, routing-fallback warnings) instead of short-circuiting on `Profile::Fund`.
 
-**Architecture:** Add a new pack manifest and prompt bundle that lives alongside the existing equity baseline, extract 9 cross-cutting equity prompts into `analysis_packs/common/prompts/` so both packs share them by composition, add ETF-specific data adapters (yfinance quote/fund-info + SEC EDGAR N-PORT-P), an `EtfPremiumDiscountValuator`, and a `ScenarioValuation::Etf(...)` output variant. Routing classifies `Profile::Fund` symbols with a supported `fund_kind` to `PackId::EtfBaseline`; all other cases fall back to `PackId::Baseline` with a visible warning. Phase 2 (dealer GEX, options-heavy prompts) is **deferred**.
+**Architecture:** Add a new pack manifest and prompt bundle that lives alongside the existing equity baseline, start the first ETF slice by reusing the existing equity prompt assets directly, add ETF-specific data adapters (yfinance quote/fund-info + SEC EDGAR N-PORT-P), an `EtfPremiumDiscountValuator`, and a `ScenarioValuation::Etf(...)` output variant. Routing classifies symbols per run after symbol resolution: supported `Profile::Fund` symbols with a supported `fund_kind` route to `PackId::EtfBaseline`; unsupported fund-shaped cases fall back to `PackId::Baseline` with a visible warning; normal corporate-equity baseline runs are matched baseline, not ETF fallback warnings. After the ETF routing/valuation/reporting slice is green, extract 9 cross-cutting equity prompts into `analysis_packs/common/prompts/` so both packs share them by composition. Phase 2 (dealer GEX, options-heavy prompts) is **deferred**.
 
 **Tech Stack:** Rust 1.93 (edition 2024), `yfinance-rs` 0.7, existing `SecEdgarClient` (extended), `rig-core` 0.32 prompt bundle, `graph-flow` 0.5 topology, `serde`/`schemars` for state additive variants, `tokio` for I/O.
 
@@ -27,8 +27,8 @@
 
 1. **State variants** — `EtfValuation`, `ScenarioValuation::Etf`, `EtfDataAvailability`, support types in `state/derived.rs`
 2. **PackId + ValuatorId + ValuationAssessment** — additive variants
-3. **Common-prompts extraction (Tier 1)** — move 6 verbatim-shared equity prompts into `analysis_packs/common/prompts/`, update equity include paths
-4. **Common-prompts extraction (Tier 2)** — move 3 composition-base prompts (news, technical, auditor) into common pool
+3. **Common-prompts extraction (Tier 1, post-feature cleanup)** — move 6 verbatim-shared equity prompts into `analysis_packs/common/prompts/`, update equity + ETF include paths
+4. **Common-prompts extraction (Tier 2, post-feature cleanup)** — move 3 composition-base prompts (news, technical, auditor) into common pool and update both packs
 5. **ETF prompt assets** — write all new ETF-specific prompt `.md` files and ETF delta deltas
 6. **ETF pack manifest + builder** — `analysis_packs/etf/baseline.rs` + `mod.rs` + composition helpers + registry wiring
 7. **`ValuationInputs` extension + ETF input carriers** — extend the shared `ValuationInputs<'a>` carrier; add `EtfQuote`, `FundInfo`, `NPortHoldings` placeholder structs that downstream tasks fill
@@ -37,10 +37,10 @@
 10. **ETF valuator** — `valuation/etf/{premium_discount.rs, category_norms.rs, tracking_error.rs}` + registry registration
 11. **Runtime pack classifier + builder wiring** — `classify_runtime_pack`, plumb `SecEdgarClient` into `AnalystSyncTask`
 12. **Preflight: record routing reason + warning metadata** — write fallback reason into context, surface in state
-13. **`AnalystSyncTask` ETF input hydration** — fetch quote/fund-info/CIK/N-PORT/benchmark OHLCV when `pack == EtfBaseline`; call ETF valuator
-14. **Report rendering — ETF panel** — `terminal/etf.rs`, `valuation.rs` dispatch, routing-fallback header warning
+13. **`AnalystSyncTask` ETF input hydration** — fetch quote/fund-info/CIK/N-PORT/ETF + benchmark OHLCV when `pack == EtfBaseline`; call ETF valuator
+14. **Report rendering — ETF panel** — `terminal/etf.rs`, `valuation.rs` dispatch, richer ETF panel blocks, routing-fallback copy map
 15. **Routing + topology integration tests** — extend `workflow_pipeline_structure.rs`
-16. **Prompt-bundle regression gate** — ensure equity bytes unchanged after shared-prompt extraction; add EtfBaseline coverage
+16. **Prompt-bundle regression gate (post-extraction)** — ensure equity bytes unchanged after shared-prompt extraction; add EtfBaseline coverage
 17. **State serde round-trip** — ETF variant compat, old snapshot decode
 18. **Live smoke examples** — `etf_quote_live_test.rs`, `nport_live_test.rs`, `etf_pack_live_test.rs`
 
@@ -52,7 +52,7 @@
 - Modify: `crates/scorpio-core/src/state/derived.rs`
 - Modify: `crates/scorpio-core/src/state/mod.rs` (re-export new types)
 
-This is purely additive — no behaviour changes. The new variant defaults are inert until the valuator lands.
+This is purely additive — no behaviour changes. The new variant defaults are inert until the valuator lands. Keep the Phase 2 GEX placeholder as planned so the variant signature stays stable across the later expansion.
 
 - [ ] **Step 1: Add the new struct definitions to `state/derived.rs`**
 
@@ -143,8 +143,20 @@ pub struct GexSummary {
     pub near_term_expiration: chrono::NaiveDate,
 }
 
-/// Per-signal availability flags. Every flag defaults to `false`; the
-/// valuator flips them on as each input is observed.
+/// Filing-age qualification for N-PORT-backed holdings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldingsAgeBand {
+    Fresh,
+    Aging,
+    Stale,
+    #[default]
+    Unknown,
+}
+
+/// Per-signal availability flags plus holdings age-band qualification.
+/// Availability flags default to `false`; `holdings_age_band` defaults to
+/// `Unknown` until holdings land.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EtfDataAvailability {
     #[serde(default)]
@@ -154,7 +166,7 @@ pub struct EtfDataAvailability {
     #[serde(default)]
     pub holdings_present: bool,
     #[serde(default)]
-    pub holdings_fresh: bool,
+    pub holdings_age_band: HoldingsAgeBand,
     #[serde(default)]
     pub benchmark_resolved: bool,
     #[serde(default)]
@@ -219,7 +231,7 @@ Open `crates/scorpio-core/src/state/mod.rs` and extend the existing `pub use der
 ```rust
 pub use derived::{
     EtfComposition, EtfDataAvailability, EtfValuation, GexSummary, HoldingWeight,
-    PremiumBand, PremiumSnapshot, SectorWeight, TrackingError,
+    HoldingsAgeBand, PremiumBand, PremiumSnapshot, SectorWeight, TrackingError,
 };
 ```
 
@@ -288,12 +300,12 @@ fn legacy_not_assessed_snapshot_still_deserializes_after_etf_variant_added() {
 }
 
 #[test]
-fn etf_data_availability_defaults_to_all_false() {
+fn etf_data_availability_defaults_to_unavailable_and_unknown_age_band() {
     let flags = EtfDataAvailability::default();
     assert!(!flags.nav_available);
     assert!(!flags.bid_ask_available);
     assert!(!flags.holdings_present);
-    assert!(!flags.holdings_fresh);
+    assert_eq!(flags.holdings_age_band, HoldingsAgeBand::Unknown);
     assert!(!flags.benchmark_resolved);
     assert!(!flags.options_chain_present);
     assert!(!flags.expense_ratio_available);
@@ -468,11 +480,14 @@ Expected: all existing `analysis_packs::manifest::tests` pass; baseline pack sti
 
 ## Task 3: Promote 6 Tier-1 verbatim equity prompts to `analysis_packs/common/prompts/`
 
+This is post-feature cleanup. Run it only after the first ETF routing/valuation/reporting slice is green. Until then, the ETF pack reuses the existing equity prompt files directly so the user-visible ETF behavior lands before the prompt-asset refactor.
+
 **Files:**
 - Create: `crates/scorpio-core/src/analysis_packs/common/mod.rs`
 - Create: `crates/scorpio-core/src/analysis_packs/common/prompts/{analyst_runtime_contract,theme_h_sourcing_and_untrusted,debate_moderator,risk_moderator,bullish_researcher,bearish_researcher}.md` (moved, not retyped)
 - Modify: `crates/scorpio-core/src/analysis_packs/mod.rs` (declare new `common` submodule)
 - Modify: `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` (update `include_str!` paths)
+- Modify: `crates/scorpio-core/src/analysis_packs/etf/baseline.rs` (switch the first ETF slice from direct `equity/prompts/` reuse to `common/` paths)
 
 Tier 1 = bit-for-bit identical content used by both packs. The byte-content guard test in Task 16 will confirm equity bytes are unchanged.
 
@@ -513,7 +528,7 @@ git mv crates/scorpio-core/src/analysis_packs/equity/prompts/bearish_researcher.
 
 Edit `crates/scorpio-core/src/analysis_packs/mod.rs` and add `mod common;` next to the other `mod` declarations (it has no public surface — pack manifests pull files via `include_str!`).
 
-- [ ] **Step 4: Update the include paths in `equity/baseline.rs`**
+- [ ] **Step 4: Update the include paths in both pack manifests**
 
 Edit `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` and rewrite the six affected `include_str!` paths (lines 19–22 and 76–84 in the current file) so they point at the common directory. Replace this block at the top of the file:
 
@@ -552,10 +567,31 @@ risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
 ))),
 ```
 
+Then make the same path rewrite in `crates/scorpio-core/src/analysis_packs/etf/baseline.rs` for:
+
+```rust
+const COMMON_ANALYST_CONTRACT: &str =
+    include_str!("../common/prompts/analyst_runtime_contract.md");
+
+bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
+    "../common/prompts/bullish_researcher.md"
+))),
+bearish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
+    "../common/prompts/bearish_researcher.md"
+))),
+debate_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
+    "../common/prompts/debate_moderator.md"
+))),
+risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
+    "../common/prompts/risk_moderator.md"
+))),
+```
+
 - [ ] **Step 5: Build + run existing equity tests**
 
 ```bash
 cargo test -p scorpio-core --lib analysis_packs::equity
+cargo test -p scorpio-core --lib analysis_packs::etf
 cargo test -p scorpio-core --test prompt_bundle_regression_gate
 cargo clippy -p scorpio-core --all-targets -- -D warnings
 ```
@@ -573,9 +609,12 @@ git commit -m "refactor(prompts): extract 6 Tier-1 cross-cutting equity prompts 
 
 ## Task 4: Promote 3 Tier-2 composition-base prompts to `common/`
 
+This is also post-feature cleanup. Run it after Task 3, still after the first ETF routing/valuation/reporting slice is green.
+
 **Files:**
 - Move (git mv): `news_analyst.md`, `technical_analyst.md`, `auditor.md` from `equity/prompts/` to `common/prompts/`
 - Modify: `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` (4 `include_str!` paths)
+- Modify: `crates/scorpio-core/src/analysis_packs/etf/baseline.rs` (swap first-slice direct equity reuse to `common/` paths)
 
 Tier 2 prompts are byte-identical between equity and ETF today; the ETF pack will later compose against them with small deltas. The equity baseline keeps composing them via `with_analyst_runtime_contract_sections` exactly as before.
 
@@ -590,7 +629,7 @@ git mv crates/scorpio-core/src/analysis_packs/equity/prompts/auditor.md \
        crates/scorpio-core/src/analysis_packs/common/prompts/
 ```
 
-- [ ] **Step 2: Update equity include paths**
+- [ ] **Step 2: Update both pack manifests**
 
 Edit `crates/scorpio-core/src/analysis_packs/equity/baseline.rs` and rewrite the four affected `include_str!` calls inside `baseline_prompt_bundle()`:
 
@@ -609,10 +648,28 @@ auditor: Cow::Borrowed(trim_trailing_newline(include_str!(
 ))),
 ```
 
+Make the parallel path rewrite in `crates/scorpio-core/src/analysis_packs/etf/baseline.rs`:
+
+```rust
+news_analyst: compose_etf_section(
+    include_str!("../common/prompts/news_analyst.md"),
+    &[include_str!("prompts/etf_macro_sector_focus.md")],
+),
+technical_analyst: compose_etf_section(
+    include_str!("../common/prompts/technical_analyst.md"),
+    &[include_str!("prompts/etf_tracking_options_focus.md")],
+),
+auditor: compose_etf_section(
+    include_str!("../common/prompts/auditor.md"),
+    &[include_str!("prompts/etf_landmines.md")],
+),
+```
+
 - [ ] **Step 3: Build + test**
 
 ```bash
 cargo test -p scorpio-core --lib analysis_packs::equity
+cargo test -p scorpio-core --lib analysis_packs::etf
 cargo test -p scorpio-core --test prompt_bundle_regression_gate
 ```
 
@@ -669,9 +726,10 @@ Reason about the **wrapper**, not just the price line.
 - Treat NAV as end-of-prior-session unless explicitly stated otherwise.
   Premium/discount is `(market_price - nav) / nav * 100`, not relative to
   intraday iNAV (intraday NAV is out of scope this run).
-- If `flags.holdings_fresh = false`, qualify any composition statement with
-  the staleness window. If `flags.holdings_present = false`, do NOT invent
-  holdings — say composition is unavailable.
+- If `flags.holdings_age_band != Fresh`, qualify any composition statement
+  with both the age band and `holdings_age_days`. If
+  `flags.holdings_present = false`, do NOT invent holdings — say composition
+  is unavailable.
 - Tracking error is the rolling stdev of (`etf_return - benchmark_return`)
   annualised over the sample window. Do NOT extrapolate from a single day's
   drift.
@@ -689,7 +747,9 @@ Cross-cutting failure-mode reminder injected into every ETF analyst + risk slot.
   whenever `premium_pct` magnitude exceeds the category band's "Extreme"
   threshold.
 - **Composition staleness** — N-PORT-P filings have a 60-day legal lag.
-  Holdings older than 90 days may not reflect current exposure.
+  Phase 1 should qualify holdings with age bands: `fresh` (`<=45` days),
+  `aging` (`46-90` days), `stale` (`>90` days). Even `aging` data must be
+  qualified in plain language.
 - **Tracking drift vs index** — non-trivial tracking error can come from
   sampling, securities-lending offsets, or fees. Treat persistent drift as
   a structural cost, not noise.
@@ -702,7 +762,7 @@ Cross-cutting failure-mode reminder injected into every ETF analyst + risk slot.
 
 - [ ] **Step 4: Write `etf_leverage_warning.md`**
 
-Conditionally injected at substitution time when `leverage_factor != 1.0`. Lives as a static file so the manifest stays leverage-agnostic.
+Conditionally injected by runtime prompt substitution into `trader.md` and the three ETF risk prompts when `leverage_factor != 1.0`. Lives as a static file so the manifest stays leverage-agnostic.
 
 ```markdown
 ## ⚠ Leveraged / inverse product warning
@@ -735,8 +795,8 @@ solvency, and distribution behaviour.
    the broad market in plain language.
 3. **Cost profile**: state `expense_ratio_pct` and `distribution_yield_ttm_pct` if available; flag expense ratios >0.50%
    for index-tracking products.
-4. **Staleness audit**: if `flags.holdings_fresh = false`, lead the summary
-   with the staleness window (`holdings_age_days`) before any composition
+4. **Staleness audit**: if `flags.holdings_age_band != Fresh`, lead the
+   summary with the age band and `holdings_age_days` before any composition
    claim.
 
 If `composition` is `None`, do NOT invent holdings. State explicitly that
@@ -770,7 +830,7 @@ NAV is unavailable (`flags.nav_available = false`), state that premium
 analysis is impossible this run and stop.
 ```
 
-- [ ] **Step 7: Write `etf_macro_sector_focus.md`** (Tier 2 delta, composes with `common/prompts/news_analyst.md`)
+- [ ] **Step 7: Write `etf_macro_sector_focus.md`** (Tier 2 delta; first slice composes with `equity/prompts/news_analyst.md`, Tasks 3-4 later move it to `common/prompts/news_analyst.md`)
 
 ```markdown
 ## ETF macro & sector lens
@@ -786,7 +846,7 @@ Beyond company-specific catalysts, prioritise:
 Ignore single-name news unless it concerns a top-5 holding by weight.
 ```
 
-- [ ] **Step 8: Write `etf_tracking_options_focus.md`** (Tier 2 delta, composes with `common/prompts/technical_analyst.md`)
+- [ ] **Step 8: Write `etf_tracking_options_focus.md`** (Tier 2 delta; first slice composes with `equity/prompts/technical_analyst.md`, Tasks 3-4 later move it to `common/prompts/technical_analyst.md`)
 
 ```markdown
 ## ETF tracking & options lens
@@ -802,12 +862,12 @@ In addition to standard technicals:
   in evidence. (Phase 2 will add dealer-gamma analysis.)
 ```
 
-- [ ] **Step 9: Write `etf_landmines.md`** (Tier 2 delta, composes with `common/prompts/auditor.md`)
+- [ ] **Step 9: Write `etf_landmines.md`** (Tier 2 delta; first slice composes with `equity/prompts/auditor.md`, Tasks 3-4 later move it to `common/prompts/auditor.md`)
 
 ```markdown
 ## ETF-specific audit landmines
 
-- The proposal cites holdings older than 90 days without flagging staleness.
+- The proposal cites `aging` or `stale` holdings without qualifying the age band and filing age.
 - The proposal asserts a tracking-error magnitude without citing the sample
   window or annualisation.
 - The proposal applies a leveraged ETF (`leverage_factor != 1.0`) without
@@ -866,8 +926,8 @@ dual-risk contract):
 - `extreme_premium` — `premium_band == Extreme`.
 - `tracking_failure` — `te_pct_90d > 1.0` or `te_pct_1y > 0.50` on a passive product.
 - `leverage_decay` — `leverage_factor != 1.0` AND the proposal holds >1 day.
-- `stale_holdings` — `flags.holdings_fresh = false` AND the proposal cites
-  composition specifically.
+- `stale_holdings` — `flags.holdings_age_band == Stale` AND the proposal
+  cites composition specifically.
 
 If none apply, lead with the bullet `no_deterministic_flag` and proceed to
 the qualitative assessment.
@@ -1011,9 +1071,11 @@ use super::super::{
 const ETF_RUNTIME_CONTRACT: &str = include_str!("prompts/etf_runtime_contract.md");
 const ETF_FAILURE_MODES: &str = include_str!("prompts/etf_failure_modes.md");
 
-// Shared common-pool scaffolding reused from the common directory.
+// Shared scaffolding reused directly from the equity prompt directory for the
+// first shippable ETF slice. Tasks 3-4 later move these paths to `common/`.
 const COMMON_ANALYST_CONTRACT: &str =
-    include_str!("../common/prompts/analyst_runtime_contract.md");
+    include_str!("../equity/prompts/analyst_runtime_contract.md");
+const ETF_LEVERAGE_WARNING: &str = include_str!("prompts/etf_leverage_warning.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
     content.strip_suffix('\n').unwrap_or(content)
@@ -1037,7 +1099,7 @@ fn compose_etf_analyst(raw: &'static str) -> Cow<'static, str> {
     ))
 }
 
-/// Compose a Tier-2 reuse: common-pool prompt verbatim + small ETF deltas.
+/// Compose a Tier-2 reuse: shared prompt verbatim + small ETF deltas.
 fn compose_etf_section(raw: &'static str, deltas: &[&str]) -> Cow<'static, str> {
     let mut sections = vec![ETF_RUNTIME_CONTRACT, ETF_FAILURE_MODES];
     sections.extend_from_slice(deltas);
@@ -1052,38 +1114,52 @@ fn compose_etf_risk(raw: &'static str) -> Cow<'static, str> {
     ))
 }
 
+/// Runtime-only helper invoked after placeholder substitution. Trader + risk
+/// roles append the leverage warning when `leverage_factor != 1.0`.
+fn append_leverage_warning_if_needed(rendered: String, leverage_factor: Option<f64>) -> String {
+    if leverage_factor
+        .map(|factor| (factor - 1.0).abs() > f64::EPSILON)
+        .unwrap_or(false)
+    {
+        compose_prompt_sections(&rendered, &[ETF_LEVERAGE_WARNING])
+    } else {
+        rendered
+    }
+}
+
 fn etf_baseline_prompt_bundle() -> PromptBundle {
     PromptBundle {
         // Tier 3 — fully new ETF analysts.
         fundamental_analyst: compose_etf_analyst(include_str!("prompts/composition_analyst.md")),
         sentiment_analyst: compose_etf_analyst(include_str!("prompts/flow_premium_analyst.md")),
 
-        // Tier 2 — common-pool prompt + ETF delta.
+        // Tier 2 — shared prompt + ETF delta.
         news_analyst: compose_etf_section(
-            include_str!("../common/prompts/news_analyst.md"),
+            include_str!("../equity/prompts/news_analyst.md"),
             &[include_str!("prompts/etf_macro_sector_focus.md")],
         ),
         technical_analyst: compose_etf_section(
-            include_str!("../common/prompts/technical_analyst.md"),
+            include_str!("../equity/prompts/technical_analyst.md"),
             &[include_str!("prompts/etf_tracking_options_focus.md")],
         ),
         auditor: compose_etf_section(
-            include_str!("../common/prompts/auditor.md"),
+            include_str!("../equity/prompts/auditor.md"),
             &[include_str!("prompts/etf_landmines.md")],
         ),
 
-        // Tier 1 — verbatim reuse from common pool (no composition wrapping).
+        // Tier 1 — verbatim reuse from the equity prompt directory in the
+        // first slice (Tasks 3-4 later move these to `common/`).
         bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../common/prompts/bullish_researcher.md"
+            "../equity/prompts/bullish_researcher.md"
         ))),
         bearish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../common/prompts/bearish_researcher.md"
+            "../equity/prompts/bearish_researcher.md"
         ))),
         debate_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../common/prompts/debate_moderator.md"
+            "../equity/prompts/debate_moderator.md"
         ))),
         risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../common/prompts/risk_moderator.md"
+            "../equity/prompts/risk_moderator.md"
         ))),
 
         // Tier 3 — fully new ETF roles (trader, risk, fund manager).
@@ -1101,9 +1177,9 @@ pub fn etf_baseline_pack() -> AnalysisPackManifest {
         id: PackId::EtfBaseline,
         name: "ETF Baseline".to_owned(),
         description: "Phase 1 ETF-native analysis: premium/discount band, \
-                       composition/sector tilt when fresh N-PORT data is available, \
-                       and tracking error vs a source-provided benchmark. \
-                       Sources: yfinance + SEC EDGAR N-PORT-P (free tier)."
+                        composition/sector tilt with filing-age qualification when N-PORT data is available, \
+                        and tracking error vs a source-provided benchmark. \
+                        Sources: yfinance + SEC EDGAR N-PORT-P (free tier)."
             .to_owned(),
         required_inputs: vec![
             "fundamentals".to_owned(), // → Composition & Costs
@@ -1225,6 +1301,14 @@ mod tests {
 }
 ```
 
+- [ ] **Step 2b: Wire leveraged / inverse warning injection at runtime**
+
+In the ETF pack's runtime prompt-materialization path, call
+`append_leverage_warning_if_needed(...)` for `trader`, `aggressive_risk`,
+`conservative_risk`, `neutral_risk`, and `fund_manager` after placeholder
+substitution. The warning is conditional runtime behavior, not part of the
+static bundle for plain ETFs.
+
 - [ ] **Step 3: Wire into the pack module + registry**
 
 Edit `crates/scorpio-core/src/analysis_packs/mod.rs` and add `mod etf;` alongside the existing `mod` lines.
@@ -1273,7 +1357,7 @@ Expected: every ETF pack test from Step 2 passes, `pack_diagnostics()` stays emp
 **Files:**
 - Modify: `crates/scorpio-core/src/valuation/mod.rs`
 - Create: `crates/scorpio-core/src/data/yfinance/etf.rs` — defines `EtfQuote`, `FundInfo` types (just types; methods land in Task 8)
-- Create: `crates/scorpio-core/src/data/sec_edgar/nport_types.rs` — defines `NPortHoldings` (just types; methods land in Task 9)
+- Create: `crates/scorpio-core/src/data/sec_edgar_nport.rs` — defines `NPortHoldings` (just types; methods land in Task 9)
 
 Defining the types first lets every downstream task compile against a stable interface.
 
@@ -1330,7 +1414,7 @@ pub fn is_supported_etf_kind(kind: &str) -> bool {
 
 Then add `pub mod etf;` to `crates/scorpio-core/src/data/yfinance/mod.rs` and re-export `EtfQuote`, `FundInfo`, `is_supported_etf_kind`.
 
-- [ ] **Step 2: Create `data/sec_edgar/nport_types.rs`**
+- [ ] **Step 2: Create `data/sec_edgar_nport.rs`**
 
 Refactor `sec_edgar.rs` into a directory only if you must — for this slice keep the existing flat `sec_edgar.rs` and create a sibling file `sec_edgar_nport.rs` instead. Path:
 
@@ -1394,6 +1478,7 @@ pub struct ValuationInputs<'a> {
     pub etf_quote: Option<&'a crate::data::yfinance::etf::EtfQuote>,
     pub etf_fund_info: Option<&'a crate::data::yfinance::etf::FundInfo>,
     pub etf_holdings: Option<&'a crate::data::sec_edgar_nport::NPortHoldings>,
+    pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
     pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 }
 ```
@@ -1415,6 +1500,7 @@ valuator.assess(
         etf_quote: None,
         etf_fund_info: None,
         etf_holdings: None,
+        etf_ohlcv: None,
         etf_benchmark_ohlcv: None,
     },
     &provisional.asset_shape,
@@ -1435,6 +1521,7 @@ let inputs = ValuationInputs {
     etf_quote: None,
     etf_fund_info: None,
     etf_holdings: None,
+    etf_ohlcv: None,
     etf_benchmark_ohlcv: None,
 };
 ```
@@ -1676,7 +1763,7 @@ git commit -m "feat(data): add yfinance ETF methods (get_quote, get_fund_info, g
 ## Task 9: SEC EDGAR N-PORT-P client (`resolve_fund_cik`, `fetch_latest_nport_p`)
 
 **Files:**
-- Modify: `crates/scorpio-core/src/data/sec_edgar.rs` (add two methods)
+- Modify: `crates/scorpio-core/src/data/sec_edgar/mod.rs` (add two methods after the move in Step 1)
 - Create: `crates/scorpio-core/src/data/sec_edgar/nport.rs` (XBRL parser)
 
 The existing `SecEdgarClient::lookup_cik` is already the implementation of "resolve a ticker → CIK". The plan calls for a thin wrapper named `resolve_fund_cik` that returns the zero-padded `Option<String>` form expected by `fetch_latest_nport_p`.
@@ -1944,9 +2031,22 @@ impl SecEdgarClient {
             .await
             .ok()?;
         let latest = filings.first()?;
+        if !is_allowed_sec_document_url(&latest.primary_doc_url) {
+            tracing::warn!(url = %latest.primary_doc_url, "skipping non-SEC or non-HTTPS N-PORT document url");
+            return None;
+        }
         let filing_date = chrono::NaiveDate::parse_from_str(&latest.filing_date, "%Y-%m-%d").ok()?;
         let xml = self.fetch_document_text(&latest.primary_doc_url).await?;
         parse_nport_p(&xml, filing_date)
+    }
+
+    fn is_allowed_sec_document_url(url: &str) -> bool {
+        let Ok(parsed) = reqwest::Url::parse(url) else {
+            return false;
+        };
+        parsed.scheme() == "https"
+            && matches!(parsed.host_str(), Some("sec.gov" | "www.sec.gov"))
+            && parsed.path().starts_with("/Archives/")
     }
 
     /// Fetch a raw filing document body, fail-soft.
@@ -2266,16 +2366,9 @@ impl Valuator for EtfPremiumDiscountValuator {
             .etf_holdings
             .and_then(|h| build_composition(h, inputs.etf_fund_info, &mut flags));
 
-        let tracking = match (inputs.etf_fund_info, inputs.etf_benchmark_ohlcv) {
-            (Some(info), Some(bench)) if info.stated_benchmark.is_some() => {
+        let tracking = match (inputs.etf_fund_info, inputs.etf_ohlcv, inputs.etf_benchmark_ohlcv) {
+            (Some(info), Some(etf_ohlcv), Some(bench)) if info.stated_benchmark.is_some() => {
                 let symbol = info.stated_benchmark.as_deref().unwrap_or("^GSPC");
-                // ETF OHLCV is also Some in practice (analyst already fetched it);
-                // for the Phase 1 valuator we accept that only the benchmark is
-                // strictly required here — the ETF series is loaded by the analyst
-                // sync stage and merged in as part of inputs.etf_benchmark_ohlcv
-                // when fully wired in Task 13. Phase 1 returns None if ETF ohlcv
-                // is unavailable to the valuator.
-                let etf_ohlcv: &[crate::data::yfinance::Candle] = &[];
                 let te = compute_tracking_error(etf_ohlcv, bench, symbol);
                 if te.is_some() {
                     flags.benchmark_resolved = true;
@@ -2346,7 +2439,11 @@ fn build_composition(
     flags.holdings_present = !nport.holdings.is_empty();
     let today = chrono::Utc::now().date_naive();
     let age_days = (today - nport.filing_date).num_days().max(0) as u32;
-    flags.holdings_fresh = age_days <= 90;
+    flags.holdings_age_band = match age_days {
+        0..=45 => HoldingsAgeBand::Fresh,
+        46..=90 => HoldingsAgeBand::Aging,
+        _ => HoldingsAgeBand::Stale,
+    };
     if age_days > 180 {
         return None;
     }
@@ -2609,11 +2706,11 @@ git commit -m "feat(etf): add EtfPremiumDiscountValuator + category norms + trac
 **Files:**
 - Create: `crates/scorpio-core/src/workflow/pack_classifier.rs`
 - Modify: `crates/scorpio-core/src/workflow/mod.rs` (re-export)
-- Modify: `crates/scorpio-core/src/workflow/builder.rs` (call classifier before building graph; wire `SecEdgarClient` into `AnalystSyncTask`)
-- Modify: `crates/scorpio-core/src/workflow/pipeline/runtime.rs` (carry `SecEdgarClient` through pipeline construction)
+- Modify: `crates/scorpio-core/src/workflow/builder.rs` (thread `SecEdgarClient` into `AnalystSyncTask`)
+- Modify: `crates/scorpio-core/src/workflow/pipeline/runtime.rs` (classify per run after symbol resolution; carry `SecEdgarClient` through pipeline construction)
 - Modify: `crates/scorpio-core/src/workflow/tasks/common.rs` (new context keys for routing reason)
 
-The classifier itself is pure and synchronous given the data — the I/O (`get_profile`, `get_fund_info`) happens in `TradingPipeline::new` before calling the builder, so the builder gets a ready-made `RuntimePackSelection`.
+The classifier itself is pure and synchronous given the data, but the I/O (`get_profile`, `get_fund_info`) happens in the per-run runtime path after symbol resolution, not in `TradingPipeline::new`. This slice relies on `EtfBaseline` sharing the baseline four-analyst topology, so graph construction stays static while runtime pack selection becomes run-specific state.
 
 - [ ] **Step 1: Create `pack_classifier.rs`**
 
@@ -2630,8 +2727,11 @@ use yfinance_rs::profile::Profile;
 /// Outcome of runtime classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimePackSelection {
-    /// Use the baseline equity pack. `reason` is recorded in routing metadata.
-    Baseline { reason: &'static str },
+    /// Use the baseline pack as the expected, matched route (for corporate
+    /// equities and other non-ETF runs). No warning is surfaced.
+    BaselineMatched,
+    /// Use the baseline pack as a fallback from an ETF-oriented route.
+    BaselineFallback { reason: &'static str },
     /// Use the ETF baseline pack.
     EtfBaseline,
 }
@@ -2639,14 +2739,16 @@ pub enum RuntimePackSelection {
 impl RuntimePackSelection {
     pub fn pack_id(&self) -> PackId {
         match self {
-            RuntimePackSelection::Baseline { .. } => PackId::Baseline,
+            RuntimePackSelection::BaselineMatched
+            | RuntimePackSelection::BaselineFallback { .. } => PackId::Baseline,
             RuntimePackSelection::EtfBaseline => PackId::EtfBaseline,
         }
     }
 
     pub fn fallback_reason(&self) -> Option<&'static str> {
         match self {
-            RuntimePackSelection::Baseline { reason } => Some(reason),
+            RuntimePackSelection::BaselineMatched => None,
+            RuntimePackSelection::BaselineFallback { reason } => Some(reason),
             RuntimePackSelection::EtfBaseline => None,
         }
     }
@@ -2659,15 +2761,20 @@ pub fn classify_runtime_pack(
     match profile {
         Some(Profile::Fund(_)) => match fund_info.and_then(|info| info.fund_kind.as_deref()) {
             Some(kind) if is_supported_etf_kind(kind) => RuntimePackSelection::EtfBaseline,
-            _ => RuntimePackSelection::Baseline {
+            _ => RuntimePackSelection::BaselineFallback {
                 reason: "unsupported_fund_shape",
             },
         },
-        Some(Profile::Company(_)) => RuntimePackSelection::Baseline { reason: "corporate_equity" },
-        None => RuntimePackSelection::Baseline { reason: "profile_lookup_unavailable" },
+        Some(Profile::Company(_)) => RuntimePackSelection::BaselineMatched,
+        None => RuntimePackSelection::BaselineFallback {
+            reason: "profile_lookup_unavailable",
+        },
         // yfinance_rs::Profile is `#[non_exhaustive]` in the upstream crate.
-        // Future variants fall back to baseline so the pipeline doesn't break.
-        _ => RuntimePackSelection::Baseline { reason: "unknown_profile_shape" },
+        // Future variants fall back to baseline with a warning so the pipeline
+        // doesn't break silently.
+        _ => RuntimePackSelection::BaselineFallback {
+            reason: "unknown_profile_shape",
+        },
     }
 }
 
@@ -2695,7 +2802,7 @@ mod tests {
     #[test]
     fn no_profile_falls_back_with_lookup_unavailable_reason() {
         let result = classify_runtime_pack(None, None);
-        assert_eq!(result, RuntimePackSelection::Baseline {
+        assert_eq!(result, RuntimePackSelection::BaselineFallback {
             reason: "profile_lookup_unavailable",
         });
     }
@@ -2706,14 +2813,14 @@ mod tests {
         // a profile, we don't override the safety fallback.
         let info = fund_info(Some("etf"));
         let result = classify_runtime_pack(None, Some(&info));
-        assert_eq!(result, RuntimePackSelection::Baseline {
+        assert_eq!(result, RuntimePackSelection::BaselineFallback {
             reason: "profile_lookup_unavailable",
         });
     }
 }
 ```
 
-(Profile::Fund variant tests live in the live smoke example, since constructing one requires hitting yfinance internals.)
+Keep the lightweight unit tests here. Task 15 adds CI coverage for the supported ETF and unsupported-fund classifier paths via test fixtures/helpers instead of leaving those paths to live smoke only.
 
 - [ ] **Step 2: Re-export from `workflow/mod.rs`**
 
@@ -2722,7 +2829,9 @@ pub mod pack_classifier;
 pub use pack_classifier::{classify_runtime_pack, RuntimePackSelection};
 ```
 
-- [ ] **Step 3: Wire `SecEdgarClient` into the pipeline**
+- [ ] **Step 3: Keep classification in the per-run runtime path and wire `SecEdgarClient` into the pipeline**
+
+In `crates/scorpio-core/src/workflow/pipeline/runtime.rs`, perform pack classification inside the per-run analysis path after symbol/profile resolution. Do **not** move symbol-specific `get_profile` / `get_fund_info` I/O into `TradingPipeline::new` or `build_graph_from_pack`; graph construction remains static in this slice.
 
 Open `crates/scorpio-core/src/workflow/pipeline/runtime.rs` and locate the construction of `AnalystSyncTask`. Add a `SecEdgarClient` parameter to the constructor chain:
 
@@ -2765,7 +2874,7 @@ pub struct AnalystSyncTask {
 
 Update `AnalystSyncTask::new` and `AnalystSyncTask::with_yfinance` to set `sec_edgar: None` (callers that don't supply one keep working — Task 13 actually consumes this field).
 
-- [ ] **Step 4: Update `build_graph_from_pack` to thread the new `SecEdgarClient`**
+- [ ] **Step 4: Update `build_graph_from_pack` to thread the new `SecEdgarClient` only**
 
 In `crates/scorpio-core/src/workflow/builder.rs`, extend `PipelineDeps`:
 
@@ -2805,7 +2914,7 @@ In `crates/scorpio-core/src/workflow/tasks/common.rs`, add:
 pub const KEY_RUNTIME_PACK_ROUTE: &str = "routing.pack";
 
 /// Set by preflight when classification fell back to baseline. Values: the
-/// `&'static str` reason from `RuntimePackSelection::Baseline { reason }`.
+/// `&'static str` reason from `RuntimePackSelection::BaselineFallback { reason }`.
 /// Absent when the run used the ETF baseline pack.
 pub const KEY_ROUTING_FALLBACK_REASON: &str = "routing.fallback_reason";
 ```
@@ -2965,7 +3074,7 @@ git commit -m "feat(workflow): preflight records ETF routing fallback reason in 
 **Files:**
 - Modify: `crates/scorpio-core/src/workflow/tasks/analyst.rs`
 
-When the active pack is `EtfBaseline`, fetch ETF quote, fund info, fund CIK, N-PORT-P, distribution yield, and benchmark OHLCV (when source-provided benchmark is present). Stuff these into `ValuationInputs` and call the ETF valuator.
+When the active pack is `EtfBaseline`, fetch ETF quote, fund info, fund CIK, N-PORT-P, distribution yield, ETF OHLCV, and benchmark OHLCV (when source-provided benchmark is present). Stuff these into `ValuationInputs` and call the ETF valuator.
 
 - [ ] **Step 1: Extend the local `ValuationInputs` struct**
 
@@ -2984,6 +3093,7 @@ struct ValuationInputs {
     etf_quote: Option<crate::data::yfinance::etf::EtfQuote>,
     etf_fund_info: Option<crate::data::yfinance::etf::FundInfo>,
     etf_holdings: Option<crate::data::sec_edgar_nport::NPortHoldings>,
+    etf_ohlcv: Option<Vec<crate::data::yfinance::Candle>>,
     etf_benchmark_ohlcv: Option<Vec<crate::data::yfinance::Candle>>,
     /// Cached TTM distribution yield (from yfinance), used to fill
     /// `EtfComposition.distribution_yield_ttm_pct` after the valuator returns.
@@ -3014,18 +3124,21 @@ async fn fetch_valuation_inputs(
     let mut etf_quote = None;
     let mut etf_fund_info = None;
     let mut etf_holdings = None;
+    let mut etf_ohlcv = None;
     let mut etf_benchmark_ohlcv = None;
     let mut etf_distribution_yield_ttm_pct = None;
 
     if pack_id == crate::analysis_packs::PackId::EtfBaseline {
-        let (quote_opt, info_opt, yld_opt) = tokio::join!(
+        let (quote_opt, info_opt, yld_opt, etf_ohlcv_opt) = tokio::join!(
             fetch_with_timeout(symbol, "etf_quote", fetch_timeout, yfinance.get_quote(symbol)),
             fetch_with_timeout(symbol, "etf_fund_info", fetch_timeout, yfinance.get_fund_info(symbol)),
             fetch_with_timeout(symbol, "etf_dist_yield", fetch_timeout, yfinance.get_distribution_yield_ttm(symbol)),
+            fetch_with_timeout(symbol, "etf_ohlcv", fetch_timeout, yfinance.get_ohlcv(symbol, "1y")),
         );
         etf_quote = quote_opt;
         etf_fund_info = info_opt;
         etf_distribution_yield_ttm_pct = yld_opt;
+        etf_ohlcv = etf_ohlcv_opt;
 
         if let Some(edgar) = sec_edgar {
             if let Some(cik) = fetch_with_timeout(symbol, "fund_cik", fetch_timeout, edgar.resolve_fund_cik(symbol)).await {
@@ -3046,7 +3159,7 @@ async fn fetch_valuation_inputs(
 
     ValuationInputs {
         profile, cashflow, balance, income, shares, trend,
-        etf_quote, etf_fund_info, etf_holdings, etf_benchmark_ohlcv,
+        etf_quote, etf_fund_info, etf_holdings, etf_ohlcv, etf_benchmark_ohlcv,
         etf_distribution_yield_ttm_pct,
     }
 }
@@ -3099,6 +3212,7 @@ valuator.assess(
         etf_quote: valuation_inputs.etf_quote.as_ref(),
         etf_fund_info: valuation_inputs.etf_fund_info.as_ref(),
         etf_holdings: valuation_inputs.etf_holdings.as_ref(),
+        etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
         etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
     },
     &provisional.asset_shape,
@@ -3172,6 +3286,23 @@ git commit -m "feat(etf): hydrate ETF valuation inputs in AnalystSyncTask when p
 - Modify: `crates/scorpio-reporters/src/terminal/final_report.rs` (insert routing-fallback warning into the header)
 - Modify: `crates/scorpio-reporters/src/terminal/mod.rs` (declare `mod etf;`)
 
+Phase 1 panel scope must surface ETF-specific user value clearly: price/premium,
+cost profile (`expense_ratio_pct`, `distribution_yield_ttm_pct`, `aum_usd`),
+sector summary (top two sector weights), tracking summary, and trust signals
+(holdings age band + filing age, benchmark resolved, leverage warning). Rich
+UTF-8 rendering is the default, but narrow-terminal and ASCII fallback
+behavior are part of the Phase 1 contract.
+
+- [ ] **Rendering policy**
+
+Add a small render-policy helper for Task 14 with this contract:
+
+- Rich UTF-8 terminals: current multi-column ETF panel style is allowed.
+- Narrow terminals: holdings and tracking rows switch to one-item-per-line output.
+- ASCII-only fallback: replace `⚠`, `✓/✗`, arrows, and heavy separators with plain ASCII equivalents.
+
+Add tests for the narrow and ASCII fallback paths alongside the rich default.
+
 - [ ] **Step 1: Create `etf.rs` panel renderer**
 
 ```rust
@@ -3210,12 +3341,14 @@ pub(crate) fn render_etf_panel(out: &mut String, state: &TradingState) {
     } else {
         let _ = writeln!(out, "⚠ Holdings unavailable — N-PORT-P data missing or too stale");
     }
+    render_cost_block(out, etf);
+    render_sector_summary_block(out, etf.composition.as_ref());
     if let Some(tr) = etf.tracking.as_ref() {
         render_tracking_block(out, tr);
     } else {
         let _ = writeln!(out, "⚠ Tracking error skipped — benchmark not resolved");
     }
-    render_availability(out, etf);
+    render_trust_signals(out, etf);
 }
 
 fn render_premium_block(out: &mut String, etf: &EtfValuation, state: &TradingState) {
@@ -3290,14 +3423,23 @@ fn render_tracking_block(out: &mut String, tr: &TrackingError) {
     );
 }
 
-fn render_availability(out: &mut String, etf: &EtfValuation) {
-    let _ = writeln!(out, "─── DATA AVAILABILITY ────────────");
+fn render_cost_block(out: &mut String, etf: &EtfValuation) {
+    // Expense ratio, distribution yield, and AUM live here.
+}
+
+fn render_sector_summary_block(out: &mut String, comp: Option<&EtfComposition>) {
+    // Render the top two sector weights or the largest overweights.
+}
+
+fn render_trust_signals(out: &mut String, etf: &EtfValuation) {
+    let _ = writeln!(out, "─── TRUST SIGNALS ───────────────");
     let _ = writeln!(out, "NAV: {}  Bid/Ask: {}  Holdings: {}  Benchmark: {}",
         flag_check(etf.flags.nav_available),
         flag_check(etf.flags.bid_ask_available),
         flag_check(etf.flags.holdings_present),
         flag_check(etf.flags.benchmark_resolved),
     );
+    let _ = writeln!(out, "Holdings age band: {:?}", etf.flags.holdings_age_band);
 }
 
 fn flag_check(b: bool) -> char {
@@ -3437,11 +3579,23 @@ match state.derived_valuation() {
 
 - [ ] **Step 3: Add routing-fallback warning to the header**
 
-Locate `final_report.rs` and find where the analysis pack label is rendered. Add (or extend) the rendering to print a warning when `state.etf_routing_fallback_reason` is `Some`:
+Locate `final_report.rs` and find where the analysis pack label is rendered. Add a user-facing copy map for routing fallback reasons and print the mapped warning when `state.etf_routing_fallback_reason` is `Some`:
 
 ```rust
+fn routing_fallback_message(reason: &str) -> &'static str {
+    match reason {
+        "unsupported_fund_shape" =>
+            "ETF-specific analysis unavailable because this fund shape is not yet supported; baseline pack used instead.",
+        "profile_lookup_unavailable" =>
+            "ETF-specific analysis unavailable because fund metadata could not be verified; baseline pack used instead.",
+        "unknown_profile_shape" =>
+            "ETF-specific analysis unavailable because the symbol shape could not be classified; baseline pack used instead.",
+        _ => "ETF-specific analysis unavailable; baseline pack used instead.",
+    }
+}
+
 if let Some(reason) = state.etf_routing_fallback_reason.as_deref() {
-    let _ = writeln!(out, "⚠ ETF routing fallback — {} ; baseline pack used for this run", reason.replace('_', " "));
+    let _ = writeln!(out, "⚠ {}", routing_fallback_message(reason));
 }
 ```
 
@@ -3471,7 +3625,7 @@ git commit -m "feat(reporters): add ETF Valuation Snapshot panel + routing-fallb
 **Files:**
 - Modify: `crates/scorpio-core/tests/workflow_pipeline_structure.rs`
 
-The existing test asserts the baseline graph topology. We need three new tests: ETF symbol → EtfBaseline pack drives topology; unsupported fund shape → Baseline with `unsupported_fund_shape` reason; `None` profile → Baseline with `profile_lookup_unavailable` reason.
+The existing test asserts the baseline graph topology. We need three new tests: ETF symbol → EtfBaseline pack drives topology; unsupported fund shape → Baseline fallback with `unsupported_fund_shape` reason; `None` profile → Baseline fallback with `profile_lookup_unavailable` reason.
 
 - [ ] **Step 1: Read the existing test file to understand the helper pattern**
 
@@ -3490,8 +3644,20 @@ fn classify_with_no_profile_falls_back_to_baseline_with_reason() {
     let result = classify_runtime_pack(None, None);
     assert_eq!(
         result,
-        RuntimePackSelection::Baseline {
+        RuntimePackSelection::BaselineFallback {
             reason: "profile_lookup_unavailable"
+        }
+    );
+}
+
+#[test]
+fn unsupported_fund_shape_falls_back_with_reason() {
+    use scorpio_core::workflow::pack_classifier::{classify_runtime_pack, RuntimePackSelection};
+    let result = classify_runtime_pack(Some(&test_profile_fund()), Some(&test_unsupported_fund_info()));
+    assert_eq!(
+        result,
+        RuntimePackSelection::BaselineFallback {
+            reason: "unsupported_fund_shape"
         }
     );
 }
@@ -3812,8 +3978,8 @@ async fn main() {
         );
         match (symbol, &result) {
             ("SPY", RuntimePackSelection::EtfBaseline) => {}
-            ("AAPL", RuntimePackSelection::Baseline { reason }) if *reason == "corporate_equity" => {}
-            ("BOGUS", RuntimePackSelection::Baseline { reason }) if *reason == "profile_lookup_unavailable" => {}
+            ("AAPL", RuntimePackSelection::BaselineMatched) => {}
+            ("BOGUS", RuntimePackSelection::BaselineFallback { reason }) if *reason == "profile_lookup_unavailable" => {}
             (s, r) => eprintln!("⚠ unexpected routing for {s}: {r:?}"),
         }
     }
@@ -3868,4 +4034,4 @@ Expected: report shows `Analysis Pack    Balanced Institutional`, no ETF panel, 
 SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze BOGUS_TICKER_XYZ
 ```
 
-Expected: classification falls back to baseline; if pre-symbol-resolution checks pass (or the test symbol is one that resolves syntactically but yfinance can't profile), the header warns `ETF routing fallback — profile lookup unavailable; baseline pack used for this run`.
+Expected: classification falls back to baseline; if pre-symbol-resolution checks pass (or the test symbol is one that resolves syntactically but yfinance can't profile), the header warns `ETF-specific analysis unavailable because fund metadata could not be verified; baseline pack used for this run`.
