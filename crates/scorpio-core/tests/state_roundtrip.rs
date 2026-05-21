@@ -1141,3 +1141,91 @@ fn trading_state_deserializes_old_snapshot_without_audit_report() {
     );
     assert!(back.audit_report.is_none());
 }
+
+// ── ETF variant + Phase-2 routing field backward-compat ────────────────
+//
+// These three tests cover the ETF baseline pack rollout:
+//   - Task 1 added `ScenarioValuation::Etf(EtfValuation)` alongside the
+//     existing `CorporateEquity` and `NotAssessed` variants. Old snapshots
+//     of the surviving variants must still deserialize after that addition.
+//   - Task 12 added `TradingState::etf_routing_fallback_reason: Option<String>`
+//     with `#[serde(default)]`. Old snapshots without that field must
+//     still deserialize cleanly.
+//   - Round-tripping a `TradingState` containing the new `Etf` variant
+//     exercises the full encode/decode path through `equity.derived_valuation`
+//     so a future serde rename would fail loudly.
+
+#[test]
+fn trading_state_with_etf_variant_roundtrips() {
+    let mut state = TradingState::new("SPY", "2026-05-21");
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(621.18),
+                market_price: 621.40,
+                bid: Some(621.39),
+                ask: Some(621.41),
+                premium_pct: Some(0.04),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+    let json = serde_json::to_string(&state).expect("serialize");
+    let back: TradingState = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(state, back);
+}
+
+#[test]
+fn legacy_snapshot_without_etf_routing_fallback_field_still_loads() {
+    // Generate today's snapshot, then synthesise a "legacy" one by removing
+    // the `etf_routing_fallback_reason` field (added in Task 12 with
+    // `#[serde(default)]`). Using the round-trip-strip trick keeps this
+    // robust against future additive fields on `TradingState`.
+    let state = TradingState::new("AAPL", "2026-05-21");
+    let mut value: serde_json::Value =
+        serde_json::to_value(&state).expect("serialize current state");
+    let removed = value
+        .as_object_mut()
+        .expect("json is object")
+        .remove("etf_routing_fallback_reason");
+    assert!(
+        removed.is_some(),
+        "etf_routing_fallback_reason must be present in current snapshots; \
+         did the field get renamed?"
+    );
+    let legacy_json = serde_json::to_string(&value).expect("re-serialize legacy");
+
+    let back: TradingState =
+        serde_json::from_str(&legacy_json).expect("legacy snapshot must deserialize");
+    assert_eq!(back.asset_symbol, "AAPL");
+    assert!(back.etf_routing_fallback_reason.is_none());
+}
+
+#[test]
+fn legacy_corporate_equity_snapshot_unchanged_after_etf_variant_added() {
+    // A pre-ETF `ScenarioValuation::CorporateEquity` snapshot with all
+    // metric sub-fields absent must still deserialize after the `Etf`
+    // variant was added in Task 1. `CorporateEquityValuation` carries
+    // `#[serde(default)]` on every metric, so an empty inner object is
+    // the minimal legacy shape we expect to see in stored snapshots.
+    let json = r#"{"corporate_equity":{}}"#;
+    let back: ScenarioValuation =
+        serde_json::from_str(json).expect("legacy variant must still parse");
+    let inner = match back {
+        ScenarioValuation::CorporateEquity(v) => v,
+        other => panic!("expected CorporateEquity variant, got: {other:?}"),
+    };
+    assert!(inner.dcf.is_none());
+    assert!(inner.ev_ebitda.is_none());
+    assert!(inner.forward_pe.is_none());
+    assert!(inner.peg.is_none());
+}
