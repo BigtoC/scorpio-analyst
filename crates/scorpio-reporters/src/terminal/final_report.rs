@@ -274,6 +274,10 @@ fn trader_valuation_label(proposal: &scorpio_core::state::TradeProposal) -> Stri
             .valuation_assessment
             .clone()
             .unwrap_or_else(|| "Not assessed".to_owned()),
+        Some(scorpio_core::state::ScenarioValuation::Etf(_)) => proposal
+            .valuation_assessment
+            .clone()
+            .unwrap_or_else(|| "ETF baseline".to_owned()),
     }
 }
 

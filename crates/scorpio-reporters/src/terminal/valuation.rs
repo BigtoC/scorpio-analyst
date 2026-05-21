@@ -31,6 +31,11 @@ fn write_valuation_body(out: &mut String, dv: &DerivedValuation) {
             let _ = writeln!(out, "Valuation model: Corporate Equity");
             write_equity_metrics(out, equity);
         }
+        ScenarioValuation::Etf(_) => {
+            // Task 14 replaces this stub with the full ETF Valuation Snapshot panel.
+            let _ = writeln!(out, "Valuation model: ETF Baseline");
+            let _ = writeln!(out, "(ETF panel rendering lands in Task 14.)");
+        }
     }
 }
 
