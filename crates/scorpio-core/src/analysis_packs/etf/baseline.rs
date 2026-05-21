@@ -16,7 +16,7 @@ const ETF_FAILURE_MODES: &str = include_str!("prompts/etf_failure_modes.md");
 
 // Shared scaffolding reused directly from the equity prompt directory for the
 // first shippable ETF slice. Tasks 3-4 later move these paths to `common/`.
-const COMMON_ANALYST_CONTRACT: &str = include_str!("../equity/prompts/analyst_runtime_contract.md");
+const COMMON_ANALYST_CONTRACT: &str = include_str!("../common/prompts/analyst_runtime_contract.md");
 const ETF_LEVERAGE_WARNING: &str = include_str!("prompts/etf_leverage_warning.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
@@ -97,19 +97,19 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
             &[include_str!("prompts/etf_landmines.md")],
         ),
 
-        // Tier 1 — verbatim reuse from the equity prompt directory in the
-        // first slice (Tasks 3-4 later move these to `common/`).
+        // Tier 1 — verbatim reuse from the shared cross-pack `common/`
+        // prompt directory.
         bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../equity/prompts/bullish_researcher.md"
+            "../common/prompts/bullish_researcher.md"
         ))),
         bearish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../equity/prompts/bearish_researcher.md"
+            "../common/prompts/bearish_researcher.md"
         ))),
         debate_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../equity/prompts/debate_moderator.md"
+            "../common/prompts/debate_moderator.md"
         ))),
         risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "../equity/prompts/risk_moderator.md"
+            "../common/prompts/risk_moderator.md"
         ))),
 
         // Tier 3 — fully new ETF roles (trader, risk, fund manager).

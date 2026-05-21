@@ -16,10 +16,11 @@ use super::super::{
 /// Cross-cutting evidence-discipline rules + analyst inference guards every
 /// equity analyst's system prompt enforces. Loaded once at compile time and
 /// appended to each analyst slot in [`baseline_prompt_bundle`].
-const ANALYST_RUNTIME_CONTRACT: &str = include_str!("prompts/analyst_runtime_contract.md");
+const ANALYST_RUNTIME_CONTRACT: &str =
+    include_str!("../common/prompts/analyst_runtime_contract.md");
 const THEME_C_MANAGEMENT_RED_FLAGS: &str = include_str!("prompts/theme_c_management_red_flags.md");
 const THEME_H_SOURCING_AND_UNTRUSTED: &str =
-    include_str!("prompts/theme_h_sourcing_and_untrusted.md");
+    include_str!("../common/prompts/theme_h_sourcing_and_untrusted.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
     content.strip_suffix('\n').unwrap_or(content)
@@ -74,13 +75,13 @@ fn baseline_prompt_bundle() -> PromptBundle {
             &[theme_h_summary.as_str()],
         ),
         bullish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/bullish_researcher.md"
+            "../common/prompts/bullish_researcher.md"
         ))),
         bearish_researcher: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/bearish_researcher.md"
+            "../common/prompts/bearish_researcher.md"
         ))),
         debate_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/debate_moderator.md"
+            "../common/prompts/debate_moderator.md"
         ))),
         trader: with_sections(
             include_str!("prompts/trader.md"),
@@ -96,7 +97,7 @@ fn baseline_prompt_bundle() -> PromptBundle {
             "prompts/neutral_risk.md"
         ))),
         risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/risk_moderator.md"
+            "../common/prompts/risk_moderator.md"
         ))),
         fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
             "prompts/fund_manager.md"

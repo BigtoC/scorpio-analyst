@@ -16,6 +16,7 @@
 //! - [`selection`] — runtime policy hydration from the manifest
 //!   ([`RuntimePolicy`], [`resolve_runtime_policy`]).
 
+mod common;
 mod completeness;
 mod crypto;
 mod equity;
