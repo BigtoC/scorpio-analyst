@@ -5,7 +5,7 @@
 
 ## Goal
 
-Add a first-class `EtfBaseline` analysis pack so that `scorpio analyze SPY` produces ETF-native analysis (premium/discount, holdings composition, sector tilt, tracking error, dealer GEX) instead of the current `valuation_not_assessed` short-circuit. Pack selection happens automatically in preflight based on `yfinance::get_profile(symbol)`; users keep the same `scorpio analyze <SYMBOL>` CLI surface.
+Add a first-class `EtfBaseline` analysis pack so that `scorpio analyze SPY` stops short-circuiting on fund-shaped assets and produces ETF-native analysis. Phase 1 covers premium/discount, holdings composition and sector tilt when fresh N-PORT data is available, and tracking error when a source-provided benchmark is available; Phase 2 adds dealer GEX. Pack selection stays automatic and uses `yfinance::get_profile(symbol)` plus fund metadata before pack-specific graph wiring; users keep the same `scorpio analyze <SYMBOL>` CLI surface.
 
 ## Problem
 
@@ -20,41 +20,64 @@ This design preserves all existing equity behaviour byte-for-byte and adds a par
 
 - Reuses every existing infrastructure layer (graph-flow topology, `Role` enum, `PromptBundle`, `Valuator` trait, `ScenarioValuation` enum) by extension, not replacement.
 - Uses **only free-tier data sources** (yfinance public endpoints via `yfinance-rs 0.7.2`, SEC EDGAR via the existing `SecEdgarClient`).
-- Emits structured availability flags so missing-data cases are visibly degraded rather than silently mis-analysed.
+- Emits structured availability flags so missing-data cases degrade visibly via warnings and omitted sections rather than being silently mis-analysed.
 
 ## Decisions
 
-| Decision                     | Choice                                                                                                                                                                            | Rationale                                                                                                                                                                                                                                           |
-|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Signal scope                 | Full skill parity including GEX                                                                                                                                                   | Match `himself65/finance-skills/etf-premium` methodology end-to-end so this pack is competitive with the reference skill on free-tier data.                                                                                                         |
-| Analyst slot mapping         | Subject-aligned: Fundamental→Composition, Sentiment→Flow/Premium, News→Macro/Sector, Technical→Tracking/Options                                                                   | Each slot has one sharp purpose; prompts are ETF-native, not "equity prompts with appendix".                                                                                                                                                        |
-| Failure policy               | Tiered degradation with per-signal flags                                                                                                                                          | NAV+OHLCV are critical (abort otherwise); holdings, benchmark, options chain degrade silently with `EtfDataAvailability` flag → false. Matches existing 1-analyst-fail-OK contract.                                                                 |
-| Prompt strategy              | Per-slot prompts compose shared scaffolding (mirrors `with_analyst_runtime_contract_sections` in equity baseline)                                                                 | Eliminates duplication; same pattern the codebase already uses.                                                                                                                                                                                     |
-| Prompt reuse                 | Promote 9 cross-cutting equity prompts to `analysis_packs/common/prompts/` (6 Tier 1 verbatim + 3 Tier 2 with ETF composition deltas); ETF pack composes from common + ETF deltas | ~30% reduction in new prompts; equity pack also benefits from cleaner location; zero cross-pack include paths.                                                                                                                                      |
-| Holdings staleness threshold | 90 days                                                                                                                                                                           | Matches worst-case SEC N-PORT-P delay (60-day filing window). >90 days → `holdings_fresh=false`, prompt sees stale flag; >180 days → skip composition signal.                                                                                       |
-| CLI behaviour                | Auto-route only; no `--pack` override flag                                                                                                                                        | Smaller surface; profile-based routing is deterministic.                                                                                                                                                                                            |
-| Routing fallback             | `get_profile → None` falls back to `PackId::Baseline`                                                                                                                             | `get_profile` already returns `Option<Profile>` (None on any failure). Falling back is safer than aborting; equity valuator returns `NotAssessed` if fundamentals are missing, so an ETF accidentally routed to Baseline still degrades gracefully. |
-| Report layout                | New ETF Valuation Snapshot panel; shared report scaffolding                                                                                                                       | Pattern matches today's report — just a different valuation panel.                                                                                                                                                                                  |
-| Valuation policy variant     | Add `ValuationAssessment::Etf` (third variant alongside `Full`, `NotAssessed`)                                                                                                    | Mirrors `ScenarioValuation::Etf` on output; avoids semantic abuse of `Full` (which implies DCF).                                                                                                                                                    |
-| Output variant               | Add `ScenarioValuation::Etf(EtfValuation)` to existing enum                                                                                                                       | Serde-compatible additive variant; old snapshots round-trip unchanged.                                                                                                                                                                              |
-| Inputs carrier               | Extend `ValuationInputs<'a>` with optional ETF fields                                                                                                                             | Existing valuators ignore the new fields; trait signature unchanged.                                                                                                                                                                                |
+| Decision                     | Choice                                                                                                                                                                            | Rationale                                                                                                                                                                                                                           |
+|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Signal scope                 | Phase 1 ships premium/discount plus composition/tracking when supported; Phase 2 adds GEX parity                                                                                  | Solves the ETF short-circuit first while keeping the full reference-skill path explicit for follow-up work.                                                                                                                         |
+| Analyst slot mapping         | Subject-aligned: Fundamental→Composition, Sentiment→Flow/Premium, News→Macro/Sector, Technical→Tracking/Options                                                                   | Each slot has one sharp purpose; prompts are ETF-native, not "equity prompts with appendix".                                                                                                                                        |
+| Failure policy               | Tiered degradation with per-signal flags                                                                                                                                          | Quote availability is the only hard stop; missing NAV, holdings, benchmark, and options data degrade the affected signals via `EtfDataAvailability` flags plus report/prompt warnings. Matches existing 1-analyst-fail-OK contract. |
+| Prompt strategy              | Per-slot prompts compose shared scaffolding (mirrors `with_analyst_runtime_contract_sections` in equity baseline)                                                                 | Eliminates duplication; same pattern the codebase already uses.                                                                                                                                                                     |
+| Prompt reuse                 | Promote 9 cross-cutting equity prompts to `analysis_packs/common/prompts/` (6 Tier 1 verbatim + 3 Tier 2 with ETF composition deltas); ETF pack composes from common + ETF deltas | ~30% reduction in new prompts; equity pack also benefits from cleaner location; zero cross-pack include paths.                                                                                                                      |
+| Holdings staleness threshold | 90 days                                                                                                                                                                           | Matches worst-case SEC N-PORT-P delay (60-day filing window). >90 days → `holdings_fresh=false`, prompt sees stale flag; >180 days → skip composition signal.                                                                       |
+| CLI behaviour                | Auto-route only; no `--pack` override flag                                                                                                                                        | Smaller surface; profile-based routing is deterministic.                                                                                                                                                                            |
+| Routing fallback             | `get_profile → None` falls back to `PackId::Baseline` with a user-visible warning                                                                                                 | `get_profile` already returns `Option<Profile>` (None on any failure). Falling back is safer than aborting, but the rendered report/header must say the run used baseline routing because ETF detection was unavailable.            |
+| Routing visibility           | Always surface the active pack and any fallback reason in the rendered report/header                                                                                              | Auto-routing has no user control surface, so users need to see what actually ran.                                                                                                                                                   |
+| Report layout                | New ETF Valuation Snapshot panel; shared report scaffolding                                                                                                                       | Pattern matches today's report — just a different valuation panel.                                                                                                                                                                  |
+| Valuation policy variant     | Add `ValuationAssessment::Etf` (third variant alongside `Full`, `NotAssessed`)                                                                                                    | Mirrors `ScenarioValuation::Etf` on output; avoids semantic abuse of `Full` (which implies DCF).                                                                                                                                    |
+| Output variant               | Add `ScenarioValuation::Etf(EtfValuation)` to existing enum                                                                                                                       | Serde-compatible additive variant; old snapshots round-trip unchanged.                                                                                                                                                              |
+| Inputs carrier               | Extend `ValuationInputs<'a>` with optional ETF fields                                                                                                                             | Existing valuators ignore the new fields; trait signature unchanged.                                                                                                                                                                |
+
+### Delivery phases
+
+- Phase 1 (this slice): runtime ETF classification, ETF valuation inputs, premium/discount, composition when fresh N-PORT data exists, source-provided benchmark tracking, and user-visible ETF report/routing warnings.
+- Phase 2 (follow-up once Phase 1 is useful): dealer GEX, options-heavy prompt/report extensions, and any related live-data hardening for that path.
 
 ## Architecture
 
-### Routing dispatch (preflight)
+### Routing dispatch (runtime selection + preflight recording)
 
 ```rust
-// crates/scorpio-core/src/workflow/tasks/preflight.rs — one new helper
-fn pack_id_for_profile(profile: Option<&Profile>) -> PackId {
-    match profile {
-        Some(Profile::Fund(_))    => PackId::EtfBaseline,
-        Some(Profile::Company(_)) => PackId::Baseline,
-        None                      => PackId::Baseline,   // fail-soft
+// runtime pack selection runs before `build_graph_from_pack(...)`
+enum RuntimePackSelection {
+    Baseline { reason: &'static str },
+    EtfBaseline,
+}
+
+fn classify_runtime_pack(
+    profile: Option<&Profile>,
+    fund_info: Option<&FundInfo>,
+) -> RuntimePackSelection {
+    match (profile, fund_info.and_then(|info| info.fund_kind.as_deref())) {
+        (Some(Profile::Fund(_)), Some(kind)) if is_supported_etf_kind(kind) => {
+            RuntimePackSelection::EtfBaseline
+        }
+        (Some(Profile::Fund(_)), _) => RuntimePackSelection::Baseline {
+            reason: "unsupported_fund_shape",
+        },
+        (Some(Profile::Company(_)), _) => RuntimePackSelection::Baseline {
+            reason: "corporate_equity",
+        },
+        (None, _) => RuntimePackSelection::Baseline {
+            reason: "profile_lookup_unavailable",
+        },
     }
 }
 ```
 
-`PreflightTask` adds one call: `let profile = yfinance.get_profile(&symbol).await;` immediately after symbol validation, then `let active_pack = pack_id_for_profile(profile.as_ref());`. A `tracing::info!` emits `routing.pack`, `routing.profile_present`, and `routing.fallback` for log-side observability. Everything downstream (`validate_active_pack_completeness`, `build_run_topology`, `KEY_RUNTIME_POLICY`/`KEY_ROUTING_FLAGS` writes) consumes the resolved pack as today.
+`TradingPipeline::new` adds a lightweight runtime-selection step before `build_graph_from_pack(...)` so the selected pack still drives `required_inputs`, analyst fan-out, and runtime-policy wiring. The selector calls `yfinance.get_profile(&symbol)` first and, for `Profile::Fund` symbols, `get_fund_info(&symbol)` to confirm the instrument is an in-scope ETF before handing `PackId::EtfBaseline` to the graph builder. `PreflightTask` remains the first graph task, but it no longer owns pack selection: it records the already-resolved pack, routing reason, and warning metadata into state/context for downstream topology checks, tracing, and user-visible reporting. When runtime selection falls back to `Baseline`, preflight still emits `routing.pack`, `routing.profile_present`, and `routing.fallback`, and the rendered report/header shows the same fallback warning to the user.
 
 ### Component layout
 
@@ -118,17 +141,23 @@ crates/scorpio-core/src/
 │       └── tracking_error.rs         ETF vs benchmark deviation math
 │
 ├── indicators/
-│   ├── gex.rs                        (NEW) Black-Scholes gamma + GEX aggregation
-│   └── etf_benchmarks.rs             (NEW) static top-50 ETF→benchmark map + category fallback
+│   └── gex.rs                        (NEW, Phase 2) Black-Scholes gamma + GEX aggregation
+│
+├── workflow/
+│   ├── builder.rs                    (UPDATE) runtime pack selection resolves before `build_graph_from_pack()`
+│   └── tasks/
+│       ├── preflight.rs              (UPDATE) records resolved pack + routing warning metadata
+│       └── analyst.rs                (UPDATE) owns ETF input hydration; constructor gains `SecEdgarClient`
 │
 └── state/
     └── derived.rs                    (+) ScenarioValuation::Etf(EtfValuation)
-                                      (+) EtfValuation, PremiumSnapshot, EtfComposition,
-                                          TrackingError, GexSummary, EtfDataAvailability
-                                      (+) ScenarioValuation enum gains one variant
+                                       (+) EtfValuation, PremiumSnapshot, EtfComposition,
+                                           TrackingError, GexSummary, EtfDataAvailability
+                                       (+) ScenarioValuation enum gains one variant
 
-crates/scorpio-cli/src/report/
-└── etf.rs                            (NEW) render_etf_panel() — shares header/risk scaffolding
+crates/scorpio-reporters/src/terminal/
+├── etf.rs                            (NEW) render_etf_panel() — shares header/risk scaffolding
+└── valuation.rs                      (UPDATE) dispatches `ScenarioValuation::Etf(_)` to the ETF panel
 ```
 
 ### State schema additions
@@ -224,14 +253,15 @@ All new state types derive `Serialize`, `Deserialize`, `JsonSchema`, `Debug`, `C
 
 ### Data adapter additions
 
-| Source | New method | Returns | Fail-soft |
-|---|---|---|---|
-| yfinance | `YFinanceClient::get_quote(&str) -> Option<EtfQuote>` | `nav, regular_market_price, previous_close, bid, ask, market_cap, day_volume, currency` | Yes — None on transport error |
-| yfinance | `YFinanceClient::get_fund_info(&str) -> Option<FundInfo>` | `category, fund_family, expense_ratio, total_assets, leverage_factor, fund_kind, stated_benchmark` | Yes |
-| yfinance | `YFinanceClient::get_distribution_yield_ttm(&str) -> Option<f64>` | TTM sum of distributions / current price | Yes |
-| SEC EDGAR | `SecEdgarClient::fetch_latest_nport_p(cik: &str, max_age_days: u32) -> Option<NPortHoldings>` | `{filing_date, holdings: Vec<{cusip, ticker?, name, weight_pct, value_usd}>, sector_breakdown, stated_benchmark}` | Yes |
-| Benchmark resolver | `etf_benchmarks::resolve(ticker, category) -> Option<&'static str>` | Top-50 hardcoded map + category fallback (e.g. "Large Blend" → "^GSPC") | Yes |
-| GEX math | `indicators::gex::compute_gex(chain, spot) -> GexSummary` | Aggregated BSM gamma per strike | N/A (pure function) |
+| Source              | New method                                                                                    | Returns                                                                                                                                       | Fail-soft                     |
+|---------------------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
+| yfinance            | `YFinanceClient::get_quote(&str) -> Option<EtfQuote>`                                         | `nav, regular_market_price, previous_close, bid, ask, market_cap, day_volume, currency`                                                       | Yes — None on transport error |
+| yfinance            | `YFinanceClient::get_fund_info(&str) -> Option<FundInfo>`                                     | `category, fund_family, expense_ratio, total_assets, leverage_factor, fund_kind, stated_benchmark`                                            | Yes                           |
+| yfinance            | `YFinanceClient::get_distribution_yield_ttm(&str) -> Option<f64>`                             | TTM sum of distributions / current price                                                                                                      | Yes                           |
+| SEC EDGAR           | `SecEdgarClient::resolve_fund_cik(&str) -> Option<String>`                                    | ETF CIK resolved through the existing ticker→CIK lookup path already owned by `sec_edgar.rs`; unresolved tickers degrade holdings/composition | Yes                           |
+| SEC EDGAR           | `SecEdgarClient::fetch_latest_nport_p(cik: &str, max_age_days: u32) -> Option<NPortHoldings>` | `{filing_date, holdings: Vec<{cusip, ticker?, name, weight_pct, value_usd}>, sector_breakdown, stated_benchmark}`                             | Yes                           |
+| Benchmark selection | task-local helper on ETF hydration                                                            | `fund_info.stated_benchmark.or(nport_holdings.stated_benchmark)`                                                                              | Yes                           |
+| GEX math            | `indicators::gex::compute_gex(chain, spot) -> GexSummary`                                     | Aggregated BSM gamma per strike (Phase 2)                                                                                                     | N/A (pure function)           |
 
 ### `ValuationInputs` extension
 
@@ -256,6 +286,15 @@ pub struct ValuationInputs<'a> {
     pub etf_benchmark_ohlcv: Option<&'a [Candle]>,
 }
 ```
+
+### ETF input hydration ownership
+
+`AnalystSyncTask` stays the owner of deterministic valuation input hydration. Its constructor grows a `SecEdgarClient`, and `fetch_valuation_inputs()` splits into two branches:
+
+- Existing equity fetches remain unconditional.
+- ETF-only fetches run when the resolved runtime pack is `EtfBaseline`: quote, fund info, distribution yield, fund CIK resolution, N-PORT holdings, options snapshot, and benchmark OHLCV when a source-provided benchmark symbol is present.
+
+`TradingPipeline::new` / `build_graph_from_pack()` wire the `SecEdgarClient` into `AnalystSyncTask`, while preflight exposes the resolved pack and routing reason the sync stage reads. The hydrated ETF bundle is stored alongside the existing valuation inputs before `valuation_derive`, preserving the current fail-soft contract.
 
 ### Valuator implementation
 
@@ -317,14 +356,15 @@ pub fn etf_baseline_pack() -> AnalysisPackManifest {
     AnalysisPackManifest {
         id: PackId::EtfBaseline,
         name: "ETF Baseline".to_owned(),
-        description: "ETF-native analysis: premium/discount band, holdings concentration, \
-                      sector tilt, tracking error vs benchmark, and dealer GEX where available. \
-                      Sources: yfinance (free) + SEC EDGAR N-PORT-P (free).".to_owned(),
+        description: "Phase 1: ETF-native analysis via premium/discount band, composition/sector tilt \
+                      when fresh N-PORT data is available, and tracking error vs a source-provided \
+                      benchmark. Phase 2 adds dealer GEX where available. Sources: yfinance (free) \
+                      + SEC EDGAR N-PORT-P (free).".to_owned(),
         required_inputs: vec![
             "fundamentals".to_owned(),   // → Composition & Costs prompt
             "sentiment".to_owned(),      // → Flow & Premium prompt
             "news".to_owned(),           // → Macro & Sector Catalysts prompt
-            "technical".to_owned(),      // → Tracking + Options/GEX prompt
+            "technical".to_owned(),      // → Tracking prompt in Phase 1 (+ Options/GEX in Phase 2)
         ],
         enrichment_intent: EnrichmentIntent {
             transcripts: false,           // ETFs don't have earnings calls
@@ -423,14 +463,15 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
 
 No cross-pack includes — every external reference is into `analysis_packs/common/prompts/`. The equity pack picks up the same nine common files via its own `include_str!("../common/prompts/X.md")` paths, so neither pack reaches into the other's directory.
 
-The leverage warning is conditionally injected by the renderer at substitution time when `state.etf_data_availability.leverage_factor != 1.0`; the static manifest stays leverage-agnostic.
+The leverage warning is conditionally injected by the renderer at substitution time when the ETF valuation context carries `leverage_factor != 1.0`; the static manifest stays leverage-agnostic.
 
 ### Report rendering
 
-A new `crates/scorpio-cli/src/report/etf.rs` exports `render_etf_panel(state: &TradingState) -> String`. The existing report driver detects `matches!(scenario, ScenarioValuation::Etf(_))` and calls the new renderer in place of the DCF/multiples panel. Header, analyst summaries, debate, risk, fund-manager scaffolding are unchanged. Example output:
+A new `crates/scorpio-reporters/src/terminal/etf.rs` exports `render_etf_panel(state: &TradingState) -> String`, and `crates/scorpio-reporters/src/terminal/valuation.rs` dispatches `ScenarioValuation::Etf(_)` to it while `scorpio-cli` keeps delegating to `scorpio_reporters::terminal::render_final_report`. The rendered header always shows `Analysis Pack`, and when runtime selection falls back to `Baseline` it also prints a warning line describing the fallback reason. Header, analyst summaries, debate, risk, and fund-manager scaffolding are unchanged. Wide-terminal example output after Phase 2 (Phase 1 omits the `DEALER GAMMA` sub-section):
 
 ```
 ═══ ETF VALUATION SNAPSHOT ═══════════════════════════════════════════
+  Analysis Pack    ETF Baseline
   Symbol           SPY           Category      Large Blend
   Market Price     $621.40       NAV           $621.18   (as of 21:00 UTC)
   Premium          +0.04%        Band          ▲ Normal  (US Large-Cap: ±0.01–0.05%)
@@ -455,7 +496,7 @@ A new `crates/scorpio-cli/src/report/etf.rs` exports `render_etf_panel(state: &T
 ═══════════════════════════════════════════════════════════════════════
 ```
 
-When flags are false, the corresponding sub-section is omitted and a `⚠` line surfaces in DATA AVAILABILITY:
+When a flag disables a signal, the affected sub-section is omitted and a `⚠` line surfaces in DATA AVAILABILITY. `holdings_fresh=false` is the explicit exception: composition still renders with a staleness warning.
 
 ```
   ⚠ Holdings unavailable — no N-PORT-P filing within 90 days (CIK 0001234567)
@@ -463,37 +504,68 @@ When flags are false, the corresponding sub-section is omitted and a `⚠` line 
   ⚠ Dealer gamma skipped — no options chain available
 ```
 
+When runtime selection falls back to `Baseline`, the same warning surfaces in the rendered header:
+
+```
+  Analysis Pack    Baseline
+  ⚠ ETF routing fallback — profile lookup unavailable; baseline pack used for this run
+```
+
+The degraded ETF states are explicit rather than implicit:
+
+```
+  Market Price     $621.40       NAV           unavailable
+  Premium          unavailable   Band          Unknown
+  ⚠ Premium band unavailable — NAV missing from ETF quote payload
+```
+
+```
+  Bid/Ask          unavailable   Spread        unavailable
+  ⚠ Noise-floor check skipped — bid/ask unavailable
+```
+
+```
+  Analysis Pack    ETF Baseline
+  ETF valuation    Not assessed
+  Reason           etf_quote_unavailable
+  ⚠ ETF quote unavailable — premium snapshot and downstream ETF signals skipped
+```
+
+When terminal width is constrained, the renderer falls back to a narrow/plain-text layout that stacks fields vertically, avoids multi-column wrapping, and replaces decorative Unicode with ASCII labels where needed. The wide layout above remains the default when the terminal is wide enough.
+
 ## Failure modes & data availability
 
-| Condition                                          | Detection                                      | Behaviour                                                                                                                                      |
-|----------------------------------------------------|------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `get_profile` fails (network, parse)               | `Option::None` returned                        | Fallback to `PackId::Baseline`; `tracing::info!` emits `routing.fallback=true`.                                                                |
-| ETF detected but `Ticker::quote()` returns nothing | `etf_quote.is_none()` in valuator              | Valuator returns `NotAssessed { reason: "etf_quote_unavailable" }`. Pipeline continues; fund manager sees the gap.                             |
-| ETF detected, quote OK, no NAV                     | `quote.nav.is_none()`                          | `flags.nav_available = false`; `premium.premium_pct = None`; flow/premium analyst sees the flag in prompt context.                             |
-| No bid/ask                                         | `quote.bid.is_none()` or `quote.ask.is_none()` | `flags.bid_ask_available = false`; noise-floor gate cannot fire.                                                                               |
-| N-PORT-P missing                                   | EDGAR returns empty                            | `flags.holdings_present = false`, `composition = None`. Composition analyst gets a flag-only prompt context.                                   |
-| N-PORT-P > 90 days old                             | `holdings_age_days > 90`                       | `flags.holdings_fresh = false`; composition still rendered, with staleness shown in report.                                                    |
-| N-PORT-P > 180 days old                            | `holdings_age_days > 180`                      | Skip composition signal entirely (`composition = None`).                                                                                       |
-| Benchmark unresolvable                             | `etf_benchmarks::resolve()` returns None       | `flags.benchmark_resolved = false`; `tracking = None`.                                                                                         |
-| Options chain empty                                | yfinance `options()` returns `[]`              | `flags.options_chain_present = false`; `options_gex = None`.                                                                                   |
-| Leveraged/inverse ETF                              | `fund_info.leverage_factor != 1.0`             | `etf_leverage_warning.md` injected into Conservative + Neutral risk + Auditor prompts.                                                         |
-| Critical-data abort                                | NAV + bid + ask + OHLCV all unavailable        | `ScenarioValuation::NotAssessed { reason: "etf_quote_unavailable" }`. Pipeline runs to completion; report shows availability-flag footer only. |
+| Condition                                          | Detection                                                                              | Behaviour                                                                                                                                                   |
+|----------------------------------------------------|----------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `get_profile` fails (network, parse)               | `Option::None` returned                                                                | Fallback to `PackId::Baseline`; preflight emits `routing.fallback=true`, and the rendered header warns `ETF routing fallback — profile lookup unavailable`. |
+| Fund-shaped symbol is not a supported ETF          | `Profile::Fund` + missing/unsupported `fund_kind`                                      | Fallback to `PackId::Baseline`; rendered header warns `unsupported fund shape for ETF routing`.                                                             |
+| ETF detected but `Ticker::quote()` returns nothing | `etf_quote.is_none()` in valuator                                                      | Valuator returns `NotAssessed { reason: "etf_quote_unavailable" }`. Pipeline continues; ETF panel renders the explicit not-assessed variant.                |
+| ETF detected, quote OK, no NAV                     | `quote.nav.is_none()`                                                                  | `flags.nav_available = false`; `premium.premium_pct = None`; report shows `NAV unavailable` and band `Unknown`.                                             |
+| No bid/ask                                         | `quote.bid.is_none()` or `quote.ask.is_none()`                                         | `flags.bid_ask_available = false`; noise-floor gate cannot fire; report shows `Bid/Ask unavailable`.                                                        |
+| N-PORT-P missing                                   | EDGAR returns empty                                                                    | `flags.holdings_present = false`, `composition = None`. Composition is opportunistic; report warns and continues.                                           |
+| N-PORT-P > 90 days old                             | `holdings_age_days > 90`                                                               | `flags.holdings_fresh = false`; composition still rendered, with staleness shown in report.                                                                 |
+| N-PORT-P > 180 days old                            | `holdings_age_days > 180`                                                              | Skip composition signal entirely (`composition = None`).                                                                                                    |
+| Benchmark unavailable from sources                 | `fund_info.stated_benchmark.is_none()` and `nport_holdings.stated_benchmark.is_none()` | `flags.benchmark_resolved = false`; `tracking = None`.                                                                                                      |
+| Options chain empty                                | yfinance `options()` returns `[]`                                                      | `flags.options_chain_present = false`; `options_gex = None` (Phase 2 only).                                                                                 |
+| Leveraged/inverse ETF                              | `fund_info.leverage_factor != 1.0`                                                     | `etf_leverage_warning.md` injected into Conservative + Neutral risk + Auditor prompts.                                                                      |
 
 The fund manager's deterministic-fallback semantics (per `2026-04-20-fund-manager-dual-risk-escalation-design.md`) are preserved — the ETF `conservative_risk.md` prompt teaches the LLM to flag `tracking_failure`, `extreme_premium`, or `leverage_decay`, and the fund manager prompt's first-line audit contract applies the same way.
 
 ## Test plan
 
-| Layer               | Location                                                                        | Coverage                                                                                                                                                                   |
-|---------------------|---------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Pack manifest       | `crates/scorpio-core/src/analysis_packs/etf/baseline.rs#tests` (mirrors equity) | `etf_baseline_pack().validate().is_ok()`, correct id, required_inputs, prompt slots populated, valuator_selection contains Fund key                                        |
-| Valuator            | `crates/scorpio-core/src/valuation/etf/premium_discount.rs#tests`               | Premium math, band classification, bid-ask floor, each flag-false branch returns sane sub-struct, leverage-factor pass-through                                             |
-| State serde         | `crates/scorpio-core/tests/state_roundtrip.rs` (extend)                         | `ScenarioValuation::Etf(…)` round-trips JSON; old snapshots without the variant still deserialize; `EtfDataAvailability` defaults work                                     |
-| Routing             | `crates/scorpio-core/tests/workflow_pipeline_structure.rs` (extend)             | `Profile::Fund→EtfBaseline`, `Profile::Company→Baseline`, `None→Baseline`; preflight emits expected `tracing` fields                                                       |
-| Prompt completeness | `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` (extend)           | EtfBaseline manifest passes `validate_active_pack_completeness` for all 4 topology shapes (full / no-debate / no-risk / neither)                                           |
-| Live smoke (manual) | `crates/scorpio-core/examples/etf_quote_live_test.rs` (NEW)                     | `get_quote(SPY)`, `get_fund_info(SPY)`, `get_distribution_yield_ttm(SPY)`, `get_profile(SPY)→Fund`, `get_profile(AAPL)→Company`, `get_profile(BOGUS)→None`                 |
-| Live smoke (manual) | `crates/scorpio-core/examples/nport_live_test.rs` (NEW)                         | `fetch_latest_nport_p(spy_cik, 90)`, fail-soft `fetch_latest_nport_p(bogus_cik, 90)→None`, staleness flag fires on aged fixture                                            |
-| Live smoke (manual) | `crates/scorpio-core/examples/etf_pack_live_test.rs` (NEW)                      | End-to-end: build EtfBaseline manifest, run preflight on SPY → pack=EtfBaseline; preflight on AAPL → pack=Baseline; preflight on bogus → pack=Baseline (fallback verified) |
-| Report rendering    | `crates/scorpio-cli/tests/` (extend)                                            | ETF panel renders for `ScenarioValuation::Etf`; missing-data footer reflects flags; equity report unchanged for `Profile::Company`                                         |
+| Layer               | Location                                                                        | Coverage                                                                                                                                                                      |
+|---------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Pack manifest       | `crates/scorpio-core/src/analysis_packs/etf/baseline.rs#tests` (mirrors equity) | `etf_baseline_pack().validate().is_ok()`, correct id, required_inputs, prompt slots populated, valuator_selection contains Fund key                                           |
+| Valuator            | `crates/scorpio-core/src/valuation/etf/premium_discount.rs#tests`               | Premium math, band classification, bid-ask floor, each flag-false branch returns sane sub-struct, leverage-factor pass-through                                                |
+| State serde         | `crates/scorpio-core/tests/state_roundtrip.rs` (extend)                         | `ScenarioValuation::Etf(…)` round-trips JSON; old snapshots without the variant still deserialize; `EtfDataAvailability` defaults work                                        |
+| Routing             | `crates/scorpio-core/tests/workflow_pipeline_structure.rs` (extend)             | ETF-confirmed fund→EtfBaseline, unsupported fund→Baseline + warning, `None→Baseline` + fallback warning; selected pack still drives topology before analyst fan-out           |
+| ETF input hydration | `crates/scorpio-core/src/workflow/tasks/analyst.rs#tests` (extend)              | `AnalystSyncTask` fetches quote, fund info, fund CIK, N-PORT, source-provided benchmark, and options opportunistically; each missing branch degrades without aborting         |
+| Prompt completeness | `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` (extend)           | EtfBaseline manifest passes `validate_active_pack_completeness` for all 4 topology shapes (full / no-debate / no-risk / neither)                                              |
+| Equity regression   | `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` (extend)           | shared-prompt extraction keeps baseline-equity prompt bytes and manifest behaviour unchanged for the moved prompt files                                                       |
+| Live smoke (manual) | `crates/scorpio-core/examples/etf_quote_live_test.rs` (NEW)                     | `get_quote(SPY)`, `get_fund_info(SPY)`, `get_distribution_yield_ttm(SPY)`, `get_profile(SPY)→Fund`, `get_profile(AAPL)→Company`, `get_profile(BOGUS)→None`                    |
+| Live smoke (manual) | `crates/scorpio-core/examples/nport_live_test.rs` (NEW)                         | `resolve_fund_cik(spy_ticker)`, `fetch_latest_nport_p(spy_cik, 90)`, fail-soft `fetch_latest_nport_p(bogus_cik, 90)→None`, staleness flag fires on aged fixture               |
+| Live smoke (manual) | `crates/scorpio-core/examples/etf_pack_live_test.rs` (NEW)                      | End-to-end: runtime selection on SPY → pack=EtfBaseline; unsupported fund fixture → pack=Baseline + warning; bogus → pack=Baseline (fallback warning verified)                |
+| Report rendering    | `crates/scorpio-reporters/tests/terminal.rs` (extend)                           | ETF panel renders for `ScenarioValuation::Etf`; routing banner, degraded-state output, narrow fallback, and missing-data footer all render correctly; equity report unchanged |
 
 Live smoke tests are NOT in CI — they run via `cargo run -p scorpio-core --example <name>` per the existing `<source>_live_test.rs` convention.
 
@@ -501,7 +573,7 @@ Live smoke tests are NOT in CI — they run via `cargo run -p scorpio-core --exa
 
 - Real-time NAV (iNAV) — yfinance only provides end-of-prior-day NAV.
 - Bond ETF duration / convexity analysis — needs `/etf/bond-profile` (paid Finnhub) or coupon scraping.
-- Multi-asset ETF benchmarking — the resolver fallback returns None; report flags it.
+- Benchmark inference beyond source-provided benchmark fields — if fund metadata and N-PORT both omit a benchmark, tracking error is skipped and flagged.
 - Closed-end fund discount analysis — different mechanic; separate `PackId::ClosedEndFund` if ever needed.
 - ETF holdings recursion (ETF-of-ETFs unwrapping) — first-level holdings only.
 - Active ETF stock-picking quality vs benchmark — out of scope; tracking error covers index-tracking variant only.
@@ -511,9 +583,8 @@ Live smoke tests are NOT in CI — they run via `cargo run -p scorpio-core --exa
 
 None for the design itself. Implementation-time questions deferred to the writing-plans phase:
 
-- Exact CIK lookup path for ETFs in `SecEdgarClient` — existing CIK resolver works for stocks; whether ETFs share that resolver or need a `funds-only` filter is an implementation detail.
 - Whether to cache N-PORT-P filings in SQLite (existing snapshot DB) or fetch on every run — likely cache with 30-day TTL but exact strategy TBD in plan.
-- BSM gamma helper: borrow `kand` crate API or implement standalone — `kand` doesn't currently expose BSM Greeks; likely standalone in `indicators/gex.rs`.
+- Phase 2 GEX math helper: borrow `kand` crate API or implement standalone — `kand` doesn't currently expose BSM Greeks; likely standalone in `indicators/gex.rs`.
 
 ## References
 
