@@ -18,8 +18,14 @@ use crate::{
     agents::analyst::{
         AnalystId, FundamentalAnalyst, NewsAnalyst, SentimentAnalyst, TechnicalAnalyst,
     },
+    analysis_packs::PackId,
     config::LlmConfig,
-    data::{FinnhubClient, FredClient, YFinanceClient, adapters::transcripts::TranscriptFetch},
+    data::{
+        FinnhubClient, FredClient, SecEdgarClient, YFinanceClient,
+        adapters::transcripts::TranscriptFetch,
+        sec_edgar_nport::NPortHoldings,
+        yfinance::{Candle, etf::EtfQuote, etf::FundInfo},
+    },
     providers::factory::CompletionModelHandle,
     state::{
         AgentTokenUsage, AssetShape, DataCoverageReport, DerivedValuation, EvidenceKind,
@@ -534,11 +540,11 @@ impl Task for TechnicalAnalystTask {
 pub struct AnalystSyncTask {
     snapshot_store: Arc<SnapshotStore>,
     yfinance: YFinanceClient,
-    /// Consumed by the per-run ETF input hydration path (Task 13). Threaded
-    /// through `PipelineDeps` so the field exists and is populated even
-    /// though the consumer lands in a follow-up commit.
-    #[allow(dead_code)]
-    sec_edgar: Option<Arc<crate::data::SecEdgarClient>>,
+    /// Optional SEC EDGAR client. Consumed by the ETF input hydration path
+    /// (Task 13) to fetch N-PORT-P holdings when the active pack is
+    /// `EtfBaseline`. Left `None` for the equity baseline and for tests that
+    /// don't need EDGAR.
+    sec_edgar: Option<Arc<SecEdgarClient>>,
     valuation_fetch_timeout: Duration,
 }
 
@@ -586,7 +592,7 @@ impl AnalystSyncTask {
     pub fn with_yfinance_and_edgar(
         snapshot_store: Arc<SnapshotStore>,
         yfinance: YFinanceClient,
-        sec_edgar: Arc<crate::data::SecEdgarClient>,
+        sec_edgar: Arc<SecEdgarClient>,
         valuation_fetch_timeout: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -606,10 +612,42 @@ struct ValuationInputs {
     income: Option<Vec<IncomeStatementRow>>,
     shares: Option<Vec<ShareCount>>,
     trend: Option<Vec<EarningsTrendRow>>,
+    // ETF inputs — populated only when pack == EtfBaseline.
+    etf_quote: Option<EtfQuote>,
+    etf_fund_info: Option<FundInfo>,
+    etf_holdings: Option<NPortHoldings>,
+    etf_ohlcv: Option<Vec<Candle>>,
+    etf_benchmark_ohlcv: Option<Vec<Candle>>,
+    /// Cached TTM distribution yield (from yfinance), used to fill
+    /// `EtfComposition.distribution_yield_ttm_pct` after the valuator returns.
+    etf_distribution_yield_ttm_pct: Option<f64>,
+}
+
+/// Trailing window for ETF / benchmark OHLCV fetches in [`fetch_valuation_inputs`].
+///
+/// One year is sufficient for the 90d and 1y tracking-error windows computed
+/// by [`crate::valuation::EtfPremiumDiscountValuator`].
+const ETF_OHLCV_WINDOW_DAYS: i64 = 365;
+
+/// Fetch an OHLCV series for the last [`ETF_OHLCV_WINDOW_DAYS`] days.
+///
+/// Wraps the `Result`-returning [`YFinanceClient::get_ohlcv`] into an
+/// `Option`-returning future so it can flow through [`fetch_with_timeout`]
+/// alongside the other fail-soft ETF fetches. Date-range failures or
+/// transport errors degrade to `None` rather than propagating.
+async fn fetch_ohlcv_1y(yfinance: &YFinanceClient, symbol: &str) -> Option<Vec<Candle>> {
+    let today = chrono::Utc::now().date_naive();
+    let start = today - chrono::Duration::days(ETF_OHLCV_WINDOW_DAYS);
+    yfinance
+        .get_ohlcv(symbol, &start.to_string(), &today.to_string())
+        .await
+        .ok()
 }
 
 async fn fetch_valuation_inputs(
     yfinance: &YFinanceClient,
+    sec_edgar: Option<&Arc<SecEdgarClient>>,
+    pack_id: PackId,
     symbol: &str,
     fetch_timeout: Duration,
 ) -> ValuationInputs {
@@ -652,6 +690,82 @@ async fn fetch_valuation_inputs(
         ),
     );
 
+    let mut etf_quote = None;
+    let mut etf_fund_info = None;
+    let mut etf_holdings = None;
+    let mut etf_ohlcv = None;
+    let mut etf_benchmark_ohlcv = None;
+    let mut etf_distribution_yield_ttm_pct = None;
+
+    if pack_id == PackId::EtfBaseline {
+        // Parallel ETF fetches that don't depend on each other.
+        let (quote_opt, info_opt, yld_opt, etf_ohlcv_opt) = tokio::join!(
+            fetch_with_timeout(
+                symbol,
+                "etf_quote",
+                fetch_timeout,
+                yfinance.get_quote(symbol)
+            ),
+            fetch_with_timeout(
+                symbol,
+                "etf_fund_info",
+                fetch_timeout,
+                yfinance.get_fund_info(symbol),
+            ),
+            fetch_with_timeout(
+                symbol,
+                "etf_dist_yield",
+                fetch_timeout,
+                yfinance.get_distribution_yield_ttm(symbol),
+            ),
+            fetch_with_timeout(
+                symbol,
+                "etf_ohlcv",
+                fetch_timeout,
+                fetch_ohlcv_1y(yfinance, symbol),
+            ),
+        );
+        etf_quote = quote_opt;
+        etf_fund_info = info_opt;
+        etf_distribution_yield_ttm_pct = yld_opt;
+        etf_ohlcv = etf_ohlcv_opt;
+
+        // Sequential N-PORT-P fetch (depends on CIK resolution).
+        if let Some(edgar) = sec_edgar
+            && let Some(cik) = fetch_with_timeout(
+                symbol,
+                "fund_cik",
+                fetch_timeout,
+                edgar.resolve_fund_cik(symbol),
+            )
+            .await
+        {
+            etf_holdings = fetch_with_timeout(
+                symbol,
+                "nport_holdings",
+                fetch_timeout,
+                edgar.fetch_latest_nport_p(&cik, 180),
+            )
+            .await;
+        }
+
+        // Benchmark OHLCV depends on the stated benchmark symbol pulled from
+        // fund_info — kept sequential to avoid issuing a phantom fetch when
+        // the benchmark is unknown.
+        if let Some(bench) = etf_fund_info
+            .as_ref()
+            .and_then(|i| i.stated_benchmark.clone())
+        {
+            etf_benchmark_ohlcv = fetch_with_timeout(
+                symbol,
+                "etf_benchmark_ohlcv",
+                fetch_timeout,
+                fetch_ohlcv_1y(yfinance, &bench),
+            )
+            .await;
+        }
+    }
+
     ValuationInputs {
         profile,
         cashflow,
@@ -659,6 +773,12 @@ async fn fetch_valuation_inputs(
         income,
         shares,
         trend,
+        etf_quote,
+        etf_fund_info,
+        etf_holdings,
+        etf_ohlcv,
+        etf_benchmark_ohlcv,
+        etf_distribution_yield_ttm_pct,
     }
 }
 
@@ -758,7 +878,10 @@ fn derive_runtime_valuation(
         };
     };
 
-    let registry = ValuatorRegistry::equity_baseline();
+    let registry = match policy.pack_id {
+        PackId::EtfBaseline => ValuatorRegistry::etf_baseline(),
+        _ => ValuatorRegistry::equity_baseline(),
+    };
     let Some(valuator) = registry.get(valuator_id) else {
         return no_valuator_selected(provisional.asset_shape);
     };
@@ -772,11 +895,11 @@ fn derive_runtime_valuation(
             shares: valuation_inputs.shares.as_deref(),
             earnings_trend: valuation_inputs.trend.as_deref(),
             current_price,
-            etf_quote: None,
-            etf_fund_info: None,
-            etf_holdings: None,
-            etf_ohlcv: None,
-            etf_benchmark_ohlcv: None,
+            etf_quote: valuation_inputs.etf_quote.as_ref(),
+            etf_fund_info: valuation_inputs.etf_fund_info.as_ref(),
+            etf_holdings: valuation_inputs.etf_holdings.as_ref(),
+            etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
+            etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
         },
         &provisional.asset_shape,
     )
@@ -993,8 +1116,18 @@ impl Task for AnalystSyncTask {
         // All fetchers degrade gracefully to `None` on network failure — the cycle
         // must always continue regardless of availability.
         let symbol = state.asset_symbol.clone();
-        let valuation_inputs =
-            fetch_valuation_inputs(&self.yfinance, &symbol, self.valuation_fetch_timeout).await;
+        let pack_id = state
+            .analysis_runtime_policy
+            .as_ref()
+            .map_or(PackId::Baseline, |p| p.pack_id);
+        let valuation_inputs = fetch_valuation_inputs(
+            &self.yfinance,
+            self.sec_edgar.as_ref(),
+            pack_id,
+            &symbol,
+            self.valuation_fetch_timeout,
+        )
+        .await;
         let current_price = state.current_price;
 
         state.set_derived_valuation(derive_runtime_valuation(
@@ -1002,6 +1135,18 @@ impl Task for AnalystSyncTask {
             &valuation_inputs,
             current_price,
         ));
+
+        // Post-process the ETF valuation: the valuator can't fetch the
+        // distribution yield itself (the dividend-history path lives behind
+        // `YFinanceClient` and is not exposed to valuators), so we attach it
+        // here once the composition snapshot has been written.
+        if let Some(yld) = valuation_inputs.etf_distribution_yield_ttm_pct
+            && let Some(dv) = state.derived_valuation_mut()
+            && let ScenarioValuation::Etf(etf) = &mut dv.scenario
+            && let Some(comp) = etf.composition.as_mut()
+        {
+            comp.distribution_yield_ttm_pct = Some(yld);
+        }
 
         info!(
             task = "analyst_sync",
@@ -1075,6 +1220,8 @@ mod tests {
     use tokio::time::sleep;
 
     use super::fetch_with_timeout;
+    use crate::analysis_packs::PackId;
+    use crate::valuation::{ValuatorId, ValuatorRegistry};
 
     #[tokio::test]
     async fn fetch_with_timeout_preserves_fast_result_when_parallel_peer_times_out() {
@@ -1090,5 +1237,30 @@ mod tests {
 
         assert_eq!(slow, None);
         assert_eq!(fast, Some("fast"));
+    }
+
+    /// Mirrors the registry switch inside `derive_runtime_valuation` to lock
+    /// in that `PackId::EtfBaseline` resolves to a registry that knows about
+    /// the ETF premium/discount valuator. The classifier wiring that actually
+    /// flips this at runtime lands in a later task — this test guards the
+    /// dispatch logic in isolation.
+    #[test]
+    fn etf_routing_selects_etf_baseline_registry() {
+        let pack_id = PackId::EtfBaseline;
+        let registry = match pack_id {
+            PackId::EtfBaseline => ValuatorRegistry::etf_baseline(),
+            _ => ValuatorRegistry::equity_baseline(),
+        };
+        assert!(registry.get(ValuatorId::EtfPremiumDiscount).is_some());
+    }
+
+    #[test]
+    fn baseline_routing_falls_back_to_equity_registry_without_etf_valuator() {
+        let pack_id = PackId::Baseline;
+        let registry = match pack_id {
+            PackId::EtfBaseline => ValuatorRegistry::etf_baseline(),
+            _ => ValuatorRegistry::equity_baseline(),
+        };
+        assert!(registry.get(ValuatorId::EtfPremiumDiscount).is_none());
     }
 }

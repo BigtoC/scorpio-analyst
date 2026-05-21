@@ -529,6 +529,15 @@ impl TradingState {
     pub fn derived_valuation(&self) -> Option<&DerivedValuation> {
         self.equity.as_ref()?.derived_valuation.as_ref()
     }
+    /// Mutable accessor for the derived valuation.
+    ///
+    /// Used by `AnalystSyncTask` to post-process valuator output (e.g. attach
+    /// the distribution-yield-TTM to the ETF composition snapshot, which the
+    /// valuator itself can't fetch). Returns `None` when no valuation has
+    /// been written yet for this cycle.
+    pub fn derived_valuation_mut(&mut self) -> Option<&mut DerivedValuation> {
+        self.equity.as_mut()?.derived_valuation.as_mut()
+    }
     pub fn set_derived_valuation(&mut self, v: DerivedValuation) {
         self.equity_mut().derived_valuation = Some(v);
     }
