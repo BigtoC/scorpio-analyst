@@ -139,6 +139,21 @@ pub(super) fn section_header(out: &mut String, title: &str) {
     let _ = writeln!(out, "\n{}", title.bold().underline());
 }
 
+fn routing_fallback_message(reason: &str) -> &'static str {
+    match reason {
+        "unsupported_fund_shape" => {
+            "ETF-specific analysis unavailable because this fund shape is not yet supported; baseline pack used instead."
+        }
+        "profile_lookup_unavailable" => {
+            "ETF-specific analysis unavailable because fund metadata could not be verified; baseline pack used instead."
+        }
+        "unknown_profile_shape" => {
+            "ETF-specific analysis unavailable because the symbol shape could not be classified; baseline pack used instead."
+        }
+        _ => "ETF-specific analysis unavailable; baseline pack used instead.",
+    }
+}
+
 // ── section writers ──────────────────────────────────────────────────────
 
 fn write_header(out: &mut String, state: &TradingState) {
@@ -175,6 +190,10 @@ fn write_header(out: &mut String, state: &TradingState) {
         "As of: {}  |  Execution ID: {}  |  Strategy: {}",
         state.target_date, state.execution_id, strategy_label
     );
+
+    if let Some(reason) = state.etf_routing_fallback_reason.as_deref() {
+        let _ = writeln!(out, "⚠ {}", routing_fallback_message(reason));
+    }
 
     if let Some(proposal) = &state.trader_proposal {
         if let Some(exec) = &state.final_execution_status {
@@ -1162,6 +1181,14 @@ mod tests {
     fn format_duration_ms_formats_seconds() {
         assert_eq!(format_duration_ms(2500), "2.5s");
         assert_eq!(format_duration_ms(500), "500ms");
+    }
+
+    #[test]
+    fn routing_fallback_message_maps_known_reasons() {
+        assert!(routing_fallback_message("unsupported_fund_shape").contains("fund shape"));
+        assert!(routing_fallback_message("profile_lookup_unavailable").contains("metadata"));
+        assert!(routing_fallback_message("unknown_profile_shape").contains("classified"));
+        assert!(routing_fallback_message("anything_else").contains("baseline"));
     }
 
     #[test]

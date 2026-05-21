@@ -14,12 +14,12 @@ pub(crate) fn write_scenario_valuation(out: &mut String, state: &TradingState) {
             let _ = writeln!(out, "Not computed for this run.");
         }
         Some(dv) => {
-            write_valuation_body(out, dv);
+            write_valuation_body(out, dv, state);
         }
     }
 }
 
-fn write_valuation_body(out: &mut String, dv: &DerivedValuation) {
+fn write_valuation_body(out: &mut String, dv: &DerivedValuation, state: &TradingState) {
     let _ = writeln!(out, "Asset shape: {}", asset_shape_label(&dv.asset_shape));
 
     match &dv.scenario {
@@ -32,9 +32,7 @@ fn write_valuation_body(out: &mut String, dv: &DerivedValuation) {
             write_equity_metrics(out, equity);
         }
         ScenarioValuation::Etf(_) => {
-            // Task 14 replaces this stub with the full ETF Valuation Snapshot panel.
-            let _ = writeln!(out, "Valuation model: ETF Baseline");
-            let _ = writeln!(out, "(ETF panel rendering lands in Task 14.)");
+            super::etf::render_etf_panel(out, state);
         }
     }
 }
