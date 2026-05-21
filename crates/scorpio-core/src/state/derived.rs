@@ -162,12 +162,26 @@ pub struct CorporateEquityValuation {
 /// [`super::TradeProposal`] (LLM-visible schema).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+// `ScenarioValuation` lives on `TradingState`, which is heap-allocated and
+// constructed once per analysis run. The size delta between
+// `CorporateEquityValuation` (~96 B) and `EtfValuation` (~376 B) is irrelevant
+// at this allocation cadence, and boxing would force every callsite (including
+// LLM-visible `TradeProposal` serde) to deal with an extra indirection that
+// the task spec explicitly forbids.
+#[allow(clippy::large_enum_variant)]
 pub enum ScenarioValuation {
     /// Deterministic corporate equity valuation computed from financial statements.
     #[schemars(
         description = "Deterministic corporate equity valuation computed from financial statements"
     )]
     CorporateEquity(CorporateEquityValuation),
+
+    /// ETF-native valuation: premium/discount band + composition + tracking.
+    /// Phase 1 always omits `options_gex` (`None`).
+    #[schemars(
+        description = "ETF-native valuation: premium/discount band + composition + tracking"
+    )]
+    Etf(EtfValuation),
 
     /// Valuation was not assessed; includes the reason why.
     ///
@@ -195,6 +209,143 @@ pub struct DerivedValuation {
 
     /// The scenario valuation outcome.
     pub scenario: ScenarioValuation,
+}
+
+// ─── ETF valuation types (Phase 1) ────────────────────────────────────────────
+
+/// Premium-band classification anchored to category norms.
+///
+/// Populated by [`EtfValuation`]. `Unknown` means the band could not be
+/// computed (NAV missing, category unknown, or both).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PremiumBand {
+    Normal,
+    Elevated,
+    Extreme,
+    Unknown,
+}
+
+/// Single holding row inside [`EtfComposition`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HoldingWeight {
+    pub cusip: Option<String>,
+    pub ticker: Option<String>,
+    pub name: String,
+    pub weight_pct: f64,
+    #[serde(default)]
+    pub value_usd: Option<f64>,
+}
+
+/// Single sector row inside [`EtfComposition`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SectorWeight {
+    pub sector: String,
+    pub weight_pct: f64,
+}
+
+/// Quote + premium snapshot. `premium_pct` is `None` when NAV is unavailable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PremiumSnapshot {
+    pub nav: Option<f64>,
+    pub market_price: f64,
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub premium_pct: Option<f64>,
+    pub category_band: PremiumBand,
+    pub bid_ask_spread_pct: Option<f64>,
+    pub as_of: chrono::DateTime<chrono::Utc>,
+}
+
+/// Composition + cost snapshot derived from N-PORT-P + fund metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EtfComposition {
+    pub top_holdings: Vec<HoldingWeight>,
+    pub top10_concentration_pct: f64,
+    pub sector_weights: Vec<SectorWeight>,
+    #[serde(default)]
+    pub expense_ratio_pct: Option<f64>,
+    #[serde(default)]
+    pub aum_usd: Option<f64>,
+    #[serde(default)]
+    pub fund_family: Option<String>,
+    #[serde(default)]
+    pub distribution_yield_ttm_pct: Option<f64>,
+    pub holdings_filing_date: chrono::NaiveDate,
+    pub holdings_age_days: u32,
+}
+
+/// Tracking error vs a source-provided benchmark.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TrackingError {
+    pub benchmark_symbol: String,
+    pub te_pct_90d: f64,
+    pub te_pct_1y: f64,
+    pub sample_days: u32,
+}
+
+/// Phase 2 placeholder (declared now so the variant signature is stable; the
+/// `EtfValuation.options_gex` field stays `None` in Phase 1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct GexSummary {
+    pub net_gex_usd_per_1pct_move: f64,
+    pub gross_gex_usd_per_1pct_move: f64,
+    pub call_put_oi_ratio: f64,
+    pub max_pain_strike: f64,
+    pub near_term_expiration: chrono::NaiveDate,
+}
+
+/// Filing-age qualification for N-PORT-backed holdings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldingsAgeBand {
+    Fresh,
+    Aging,
+    Stale,
+    #[default]
+    Unknown,
+}
+
+/// Per-signal availability flags plus holdings age-band qualification.
+/// Availability flags default to `false`; `holdings_age_band` defaults to
+/// `Unknown` until holdings land.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EtfDataAvailability {
+    #[serde(default)]
+    pub nav_available: bool,
+    #[serde(default)]
+    pub bid_ask_available: bool,
+    #[serde(default)]
+    pub holdings_present: bool,
+    #[serde(default)]
+    pub holdings_age_band: HoldingsAgeBand,
+    #[serde(default)]
+    pub benchmark_resolved: bool,
+    #[serde(default)]
+    pub options_chain_present: bool,
+    #[serde(default)]
+    pub expense_ratio_available: bool,
+}
+
+/// Aggregate ETF valuation output. Carried by [`ScenarioValuation::Etf`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EtfValuation {
+    pub premium: PremiumSnapshot,
+    #[serde(default)]
+    pub composition: Option<EtfComposition>,
+    #[serde(default)]
+    pub tracking: Option<TrackingError>,
+    /// Phase 2 — always `None` in Phase 1.
+    #[serde(default)]
+    pub options_gex: Option<GexSummary>,
+    #[serde(default)]
+    pub category: Option<String>,
+    /// `1.0` for plain ETFs; `2.0`, `3.0`, `-1.0`, `-2.0`, `-3.0` for
+    /// leveraged/inverse products. `None` when not declared by the source.
+    #[serde(default)]
+    pub leverage_factor: Option<f64>,
+    #[serde(default)]
+    pub flags: EtfDataAvailability,
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -431,5 +582,75 @@ mod tests {
         let json = serde_json::to_string(&val).expect("serialize");
         let back: ScenarioValuation = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(val, back);
+    }
+
+    // ── ScenarioValuation::Etf variant (Phase 1) ─────────────────────────
+
+    #[test]
+    fn scenario_valuation_etf_variant_roundtrips_json() {
+        let val = ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(621.18),
+                market_price: 621.40,
+                bid: Some(621.39),
+                ask: Some(621.41),
+                premium_pct: Some(0.04),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        });
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: ScenarioValuation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn scenario_valuation_etf_serializes_with_snake_case_key() {
+        let val = ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: None,
+                market_price: 100.0,
+                bid: None,
+                ask: None,
+                premium_pct: None,
+                category_band: PremiumBand::Unknown,
+                bid_ask_spread_pct: None,
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: None,
+            leverage_factor: None,
+            flags: EtfDataAvailability::default(),
+        });
+        let json = serde_json::to_string(&val).expect("serialize");
+        assert!(json.contains("\"etf\""), "expected 'etf' tag, got: {json}");
+    }
+
+    #[test]
+    fn legacy_not_assessed_snapshot_still_deserializes_after_etf_variant_added() {
+        let json = r#"{"not_assessed":{"reason":"fund_style_asset"}}"#;
+        let back: ScenarioValuation = serde_json::from_str(json).expect("deserialize");
+        assert!(matches!(back, ScenarioValuation::NotAssessed { .. }));
+    }
+
+    #[test]
+    fn etf_data_availability_defaults_to_unavailable_and_unknown_age_band() {
+        let flags = EtfDataAvailability::default();
+        assert!(!flags.nav_available);
+        assert!(!flags.bid_ask_available);
+        assert!(!flags.holdings_present);
+        assert_eq!(flags.holdings_age_band, HoldingsAgeBand::Unknown);
+        assert!(!flags.benchmark_resolved);
+        assert!(!flags.options_chain_present);
+        assert!(!flags.expense_ratio_available);
     }
 }

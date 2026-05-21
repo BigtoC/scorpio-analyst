@@ -20,6 +20,15 @@ pub(crate) fn build_valuation_context(state: &TradingState) -> String {
                  Do not fabricate DCF, EV/EBITDA, Forward P/E, or PEG values."
             )
         }
+        ScenarioValuation::Etf(_) => {
+            // Phase 1: ETF valuator not yet wired. The variant exists so the
+            // type system can carry future ETF outputs, but in this phase no
+            // ETF context is rendered into the prompt — emit the same
+            // not-computed guard so downstream agents do not fabricate metrics.
+            "Deterministic scenario valuation: not computed for this run. \
+             Do not fabricate valuation metrics."
+                .to_owned()
+        }
         ScenarioValuation::CorporateEquity(equity) => {
             let mut lines: Vec<String> = Vec::new();
 
