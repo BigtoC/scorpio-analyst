@@ -183,11 +183,13 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.token_usage = Default::default();
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_graph(
     config: Arc<Config>,
     finnhub: &FinnhubClient,
     fred: &FredClient,
     yfinance: &YFinanceClient,
+    sec_edgar: Arc<SecEdgarClient>,
     snapshot_store: Arc<SnapshotStore>,
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
@@ -207,6 +209,7 @@ pub(super) fn build_graph(
         finnhub,
         fred,
         yfinance,
+        sec_edgar,
         snapshot_store,
         quick_handle,
         deep_handle,

@@ -129,6 +129,13 @@ pub async fn make_pipeline_from_pack(
             finnhub,
             fred,
             yfinance,
+            sec_edgar: Arc::new(
+                scorpio_core::data::SecEdgarClient::new(SharedRateLimiter::new(
+                    "test-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store: pipeline_store,
             quick_handle: handle.clone(),
             deep_handle: handle,

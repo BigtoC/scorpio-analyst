@@ -53,9 +53,11 @@ use crate::{
     analysis_packs::RuntimePolicy,
     config::Config,
     data::{
-        FinnhubClient, FredClient, YFinanceClient, adapters::catalysts::CatalystCalendarProvider,
+        FinnhubClient, FredClient, SecEdgarClient, YFinanceClient,
+        adapters::catalysts::CatalystCalendarProvider,
     },
     providers::factory::CompletionModelHandle,
+    rate_limit::SharedRateLimiter,
     workflow::SnapshotStore,
 };
 
@@ -89,6 +91,22 @@ const _: () = {
 pub enum WorkflowTestSeamError {
     #[error("unknown workflow task id '{task_id}' cannot be replaced via test seam")]
     UnknownTaskId { task_id: String },
+}
+
+/// Construct the default `Arc<SecEdgarClient>` used by [`AnalystSyncTask`].
+///
+/// Mirrors the rate-limit policy already used by `build_catalyst_provider`
+/// (10 rps under the `"sec-edgar"` label). `SecEdgarClient::new` only fails
+/// when `reqwest::Client::builder()` fails — virtually impossible in practice,
+/// so we `.expect(...)` rather than thread an additional `Result` through
+/// every pipeline-construction call site. The downstream consumer is
+/// `Option<Arc<SecEdgarClient>>` on `AnalystSyncTask` so the field can still
+/// be elided in narrow test paths via `AnalystSyncTask::with_yfinance`.
+fn build_default_sec_edgar_client() -> Arc<SecEdgarClient> {
+    Arc::new(
+        SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10))
+            .expect("SecEdgarClient construction must succeed (reqwest builder)"),
+    )
 }
 
 /// Orchestrates the full five-phase trading analysis pipeline.
@@ -173,11 +191,13 @@ impl TradingPipeline {
             &yfinance,
             std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
         );
+        let sec_edgar = build_default_sec_edgar_client();
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
             &fred,
             &yfinance,
+            sec_edgar,
             Arc::clone(&snapshot_store),
             &quick_handle,
             &deep_handle,
@@ -241,11 +261,13 @@ impl TradingPipeline {
             &yfinance,
             std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
         );
+        let sec_edgar = build_default_sec_edgar_client();
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
             &fred,
             &yfinance,
+            sec_edgar,
             Arc::clone(&snapshot_store),
             &quick_handle,
             &deep_handle,
@@ -308,6 +330,7 @@ impl TradingPipeline {
             &self.finnhub,
             &self.fred,
             &self.yfinance,
+            build_default_sec_edgar_client(),
             Arc::clone(&self.snapshot_store),
             &self.quick_handle,
             &self.deep_handle,

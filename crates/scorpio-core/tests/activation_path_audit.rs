@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use scorpio_core::analysis_packs::{PackId, resolve_pack};
 use scorpio_core::config::{Config, LlmConfig, TradingConfig};
-use scorpio_core::data::{FinnhubClient, FredClient, YFinanceClient};
+use scorpio_core::data::{FinnhubClient, FredClient, SecEdgarClient, YFinanceClient};
 use scorpio_core::providers::factory::CompletionModelHandle;
 use scorpio_core::rate_limit::SharedRateLimiter;
 use scorpio_core::workflow::{PipelineDeps, SnapshotStore, TradingPipeline, build_graph_from_pack};
@@ -64,6 +64,13 @@ async fn make_test_snapshot_store(name: &str) -> (SnapshotStore, tempfile::TempD
 
 fn dummy_yfinance() -> YFinanceClient {
     YFinanceClient::new(SharedRateLimiter::new("activation-audit", 10))
+}
+
+fn dummy_sec_edgar() -> Arc<SecEdgarClient> {
+    Arc::new(
+        SecEdgarClient::new(SharedRateLimiter::new("activation-audit-sec-edgar", 10))
+            .expect("SecEdgarClient construction must succeed"),
+    )
 }
 
 #[tokio::test]
@@ -120,6 +127,7 @@ async fn pipeline_from_pack_entry_task_is_preflight() {
         finnhub: FinnhubClient::for_test(),
         fred: FredClient::for_test(),
         yfinance: dummy_yfinance(),
+        sec_edgar: dummy_sec_edgar(),
         snapshot_store,
         quick_handle: CompletionModelHandle::for_test(),
         deep_handle: CompletionModelHandle::for_test(),
@@ -150,6 +158,7 @@ async fn build_graph_from_pack_entry_task_is_preflight() {
         &FinnhubClient::for_test(),
         &FredClient::for_test(),
         &dummy_yfinance(),
+        dummy_sec_edgar(),
         Arc::clone(&snapshot_store),
         &CompletionModelHandle::for_test(),
         &CompletionModelHandle::for_test(),

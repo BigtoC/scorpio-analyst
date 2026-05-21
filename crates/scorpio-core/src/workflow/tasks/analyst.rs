@@ -534,6 +534,11 @@ impl Task for TechnicalAnalystTask {
 pub struct AnalystSyncTask {
     snapshot_store: Arc<SnapshotStore>,
     yfinance: YFinanceClient,
+    /// Consumed by the per-run ETF input hydration path (Task 13). Threaded
+    /// through `PipelineDeps` so the field exists and is populated even
+    /// though the consumer lands in a follow-up commit.
+    #[allow(dead_code)]
+    sec_edgar: Option<Arc<crate::data::SecEdgarClient>>,
     valuation_fetch_timeout: Duration,
 }
 
@@ -564,6 +569,30 @@ impl AnalystSyncTask {
         Arc::new(Self {
             snapshot_store,
             yfinance,
+            sec_edgar: None,
+            valuation_fetch_timeout,
+        })
+    }
+
+    /// Create a new `AnalystSyncTask` with both Yahoo Finance and SEC EDGAR
+    /// clients.
+    ///
+    /// The SEC EDGAR client is used by the ETF pack to fetch N-PORT-P
+    /// holdings for premium/discount valuation. It is wrapped in `Option` on
+    /// the struct so non-ETF runs (and tests that don't need it) can leave
+    /// it unset via [`AnalystSyncTask::with_yfinance`] without breaking
+    /// graceful degradation.
+    #[must_use]
+    pub fn with_yfinance_and_edgar(
+        snapshot_store: Arc<SnapshotStore>,
+        yfinance: YFinanceClient,
+        sec_edgar: Arc<crate::data::SecEdgarClient>,
+        valuation_fetch_timeout: Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            snapshot_store,
+            yfinance,
+            sec_edgar: Some(sec_edgar),
             valuation_fetch_timeout,
         })
     }

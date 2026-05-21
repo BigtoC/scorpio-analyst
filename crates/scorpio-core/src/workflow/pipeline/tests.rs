@@ -682,6 +682,13 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
             finnhub: crate::data::FinnhubClient::for_test(),
             fred: crate::data::FredClient::for_test(),
             yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store,
             quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
             deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
@@ -797,6 +804,13 @@ async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_sto
             finnhub: crate::data::FinnhubClient::for_test(),
             fred: crate::data::FredClient::for_test(),
             yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store,
             quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
             deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
@@ -894,6 +908,13 @@ async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbol
             finnhub: crate::data::FinnhubClient::for_test(),
             fred: crate::data::FredClient::for_test(),
             yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store,
             quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
             deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),

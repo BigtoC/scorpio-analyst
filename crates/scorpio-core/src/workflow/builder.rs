@@ -33,7 +33,7 @@ use super::tasks::{
 use crate::agents::analyst::AnalystRegistry;
 use crate::analysis_packs::{AnalysisPackManifest, resolve_runtime_policy_for_manifest};
 use crate::config::Config;
-use crate::data::{FinnhubClient, FredClient, YFinanceClient};
+use crate::data::{FinnhubClient, FredClient, SecEdgarClient, YFinanceClient};
 use crate::providers::factory::CompletionModelHandle;
 
 /// Build a fully-wired pipeline graph from a resolved pack manifest.
@@ -56,6 +56,7 @@ pub fn build_graph_from_pack(
     finnhub: &FinnhubClient,
     fred: &FredClient,
     yfinance: &YFinanceClient,
+    sec_edgar: Arc<SecEdgarClient>,
     snapshot_store: Arc<SnapshotStore>,
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
@@ -91,9 +92,10 @@ pub fn build_graph_from_pack(
     graph.add_task(fan_out);
     graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
 
-    let analyst_sync = AnalystSyncTask::with_yfinance(
+    let analyst_sync = AnalystSyncTask::with_yfinance_and_edgar(
         Arc::clone(&snapshot_store),
         yfinance.clone(),
+        sec_edgar,
         Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
     );
     graph.add_task(analyst_sync);
@@ -216,6 +218,7 @@ pub struct PipelineDeps {
     pub finnhub: FinnhubClient,
     pub fred: FredClient,
     pub yfinance: YFinanceClient,
+    pub sec_edgar: Arc<SecEdgarClient>,
     pub snapshot_store: SnapshotStore,
     pub quick_handle: CompletionModelHandle,
     pub deep_handle: CompletionModelHandle,
@@ -235,6 +238,7 @@ impl TradingPipeline {
             finnhub,
             fred,
             yfinance,
+            sec_edgar,
             snapshot_store,
             quick_handle,
             deep_handle,
@@ -251,6 +255,7 @@ impl TradingPipeline {
             &finnhub,
             &fred,
             &yfinance,
+            Arc::clone(&sec_edgar),
             Arc::clone(&snapshot_store),
             &quick_handle,
             &deep_handle,
