@@ -171,6 +171,12 @@ pub struct TradingState {
     #[serde(default)]
     pub analysis_runtime_policy: Option<RuntimePolicy>,
 
+    /// Reason for runtime pack-routing fallback, set when the active pack is
+    /// not the symbol's expected pack. `None` when routing matched. Surfaced in
+    /// the final report header.
+    #[serde(default)]
+    pub etf_routing_fallback_reason: Option<String>,
+
     /// Token accounting.
     pub token_usage: TokenUsageTracker,
 }
@@ -235,6 +241,8 @@ struct TradingStateWire {
     analysis_pack_name: Option<String>,
     #[serde(default)]
     analysis_runtime_policy: Option<RuntimePolicy>,
+    #[serde(default)]
+    etf_routing_fallback_reason: Option<String>,
     token_usage: TokenUsageTracker,
 }
 
@@ -280,6 +288,7 @@ impl From<TradingStateWire> for TradingState {
             current_thesis: wire.current_thesis,
             analysis_pack_name: wire.analysis_pack_name,
             analysis_runtime_policy: wire.analysis_runtime_policy,
+            etf_routing_fallback_reason: wire.etf_routing_fallback_reason,
             token_usage: wire.token_usage,
         }
     }
@@ -383,6 +392,7 @@ impl TradingState {
             current_thesis: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            etf_routing_fallback_reason: None,
             token_usage: TokenUsageTracker::default(),
         }
     }

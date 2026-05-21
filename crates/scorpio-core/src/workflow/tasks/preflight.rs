@@ -35,7 +35,8 @@ use crate::{
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
     KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
-    KEY_ROUTING_FLAGS, KEY_RUNTIME_POLICY, KEY_TRANSCRIPT_FETCH_STATUS,
+    KEY_ROUTING_FALLBACK_REASON, KEY_ROUTING_FLAGS, KEY_RUNTIME_PACK_ROUTE, KEY_RUNTIME_POLICY,
+    KEY_TRANSCRIPT_FETCH_STATUS,
 };
 
 const TASK_ID: &str = "preflight";
@@ -59,6 +60,13 @@ pub struct PreflightTask {
     /// The resolved runtime policy or the deferred resolution error for the
     /// config-selected pack.
     runtime_policy: Result<RuntimePolicy, String>,
+    /// Routing-fallback reason captured upstream by the runtime classifier
+    /// when the active pack diverged from the symbol's expected pack.
+    /// `None` when routing matched. Propagated to both
+    /// [`TradingState::etf_routing_fallback_reason`] and the context keys
+    /// [`KEY_RUNTIME_PACK_ROUTE`] / [`KEY_ROUTING_FALLBACK_REASON`] for
+    /// downstream report rendering.
+    routing_fallback_reason: Option<String>,
 }
 
 impl PreflightTask {
@@ -94,6 +102,7 @@ impl PreflightTask {
             transcripts_enabled,
             snapshot_store,
             runtime_policy: crate::analysis_packs::resolve_runtime_policy(&pack_id),
+            routing_fallback_reason: None,
         }
     }
 
@@ -109,6 +118,32 @@ impl PreflightTask {
             transcripts_enabled,
             snapshot_store,
             runtime_policy: Ok(runtime_policy),
+            routing_fallback_reason: None,
+        }
+    }
+
+    /// Like [`Self::with_runtime_policy`] but also propagates a
+    /// routing-fallback reason captured upstream by the runtime classifier.
+    ///
+    /// `routing_fallback_reason` should be `Some(_)` only when the active pack
+    /// diverged from the symbol's expected pack (see
+    /// [`crate::workflow::RuntimePackSelection::BaselineFallback`]). When
+    /// `None`, preflight emits only [`KEY_RUNTIME_PACK_ROUTE`] without a
+    /// fallback reason, matching the no-fallback path.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn with_runtime_policy_and_routing(
+        enrichment: crate::config::DataEnrichmentConfig,
+        transcripts_enabled: bool,
+        snapshot_store: Arc<SnapshotStore>,
+        runtime_policy: RuntimePolicy,
+        routing_fallback_reason: Option<&'static str>,
+    ) -> Self {
+        Self {
+            enrichment,
+            transcripts_enabled,
+            snapshot_store,
+            runtime_policy: Ok(runtime_policy),
+            routing_fallback_reason: routing_fallback_reason.map(str::to_owned),
         }
     }
 }
@@ -199,6 +234,7 @@ impl Task for PreflightTask {
 
         state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
         state.analysis_runtime_policy = Some(runtime_policy.clone());
+        state.etf_routing_fallback_reason = self.routing_fallback_reason.clone();
 
         serialize_state_to_context(&state, &context)
             .await
@@ -207,6 +243,24 @@ impl Task for PreflightTask {
                     "PreflightTask: orchestration corruption: state serialization failed after runtime policy hydration: {e}"
                 ))
             })?;
+
+        // ── Write the runtime pack route + (optional) fallback reason ─────
+        // `KEY_RUNTIME_PACK_ROUTE` is always present once preflight has
+        // emitted runtime policy. `KEY_ROUTING_FALLBACK_REASON` is only set
+        // when the upstream classifier captured a fallback reason — absent
+        // otherwise, matching the on-disk semantics of
+        // `TradingState::etf_routing_fallback_reason`.
+        context
+            .set(
+                KEY_RUNTIME_PACK_ROUTE,
+                runtime_policy.pack_id.as_str().to_owned(),
+            )
+            .await;
+        if let Some(reason) = self.routing_fallback_reason.as_deref() {
+            context
+                .set(KEY_ROUTING_FALLBACK_REASON, reason.to_owned())
+                .await;
+        }
 
         // ── Write required coverage inputs from runtime policy ────────────
         let inputs_json = serde_json::to_string(&runtime_policy.required_inputs).map_err(|e| {
@@ -890,5 +944,79 @@ mod tests {
                 "context key '{key}' must be present after preflight"
             );
         }
+    }
+
+    // ── Routing fallback reason tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn preflight_records_routing_fallback_reason_in_state_and_context() {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new("AAPL", "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let task = PreflightTask::with_runtime_policy_and_routing(
+            DataEnrichmentConfig::default(),
+            false,
+            store,
+            crate::analysis_packs::resolve_runtime_policy("baseline")
+                .expect("baseline pack must resolve"),
+            Some("profile_lookup_unavailable"),
+        );
+        task.run(ctx.clone())
+            .await
+            .expect("preflight should succeed");
+
+        let route: Option<String> = ctx
+            .get(crate::workflow::tasks::common::KEY_RUNTIME_PACK_ROUTE)
+            .await;
+        assert_eq!(route.as_deref(), Some("baseline"));
+
+        let reason: Option<String> = ctx
+            .get(crate::workflow::tasks::common::KEY_ROUTING_FALLBACK_REASON)
+            .await;
+        assert_eq!(reason.as_deref(), Some("profile_lookup_unavailable"));
+
+        let after = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+        assert_eq!(
+            after.etf_routing_fallback_reason.as_deref(),
+            Some("profile_lookup_unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_does_not_set_fallback_reason_for_matched_routing() {
+        let ctx = run_preflight("AAPL", DataEnrichmentConfig::default())
+            .await
+            .expect("preflight should succeed");
+
+        let route: Option<String> = ctx
+            .get(crate::workflow::tasks::common::KEY_RUNTIME_PACK_ROUTE)
+            .await;
+        assert_eq!(
+            route.as_deref(),
+            Some("baseline"),
+            "matched-routing path must still emit the pack route"
+        );
+
+        let reason: Option<String> = ctx
+            .get(crate::workflow::tasks::common::KEY_ROUTING_FALLBACK_REASON)
+            .await;
+        assert!(
+            reason.is_none(),
+            "matched routing must not emit a fallback reason"
+        );
+
+        let state = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+        assert!(
+            state.etf_routing_fallback_reason.is_none(),
+            "matched routing must leave state.etf_routing_fallback_reason as None"
+        );
     }
 }

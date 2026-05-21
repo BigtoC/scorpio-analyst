@@ -770,6 +770,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     token_usage,
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
+                    etf_routing_fallback_reason: None,
                     audit_status: scorpio_core::state::auditor::AuditStatus::Disabled,
                     audit_report: None,
                 }
