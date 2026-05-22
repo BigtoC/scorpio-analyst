@@ -224,7 +224,7 @@ fn render_cost_block(out: &mut String, etf: &EtfValuation) {
         let _ = writeln!(out, "Expense ratio    {:.2}%", er * 100.0);
     }
     if let Some(yld) = comp.distribution_yield_ttm_pct {
-        let _ = writeln!(out, "Distribution TTM {yld:.2}%");
+        let _ = writeln!(out, "Distribution TTM {:.2}%", yld * 100.0);
     }
     if let Some(aum) = comp.aum_usd {
         let _ = writeln!(out, "AUM              ${:.2}B", aum / 1e9);
