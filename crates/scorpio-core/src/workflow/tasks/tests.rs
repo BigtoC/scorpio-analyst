@@ -1776,6 +1776,12 @@ mod derive_valuation_tests {
                      — forward_pe should have been computable from EPS + price"
                 );
             }
+            ScenarioValuation::Etf(_) => {
+                panic!(
+                    "expected CorporateEquity (partial), got Etf \
+                     — derive_valuation should never emit ETF in this codepath"
+                );
+            }
         }
     }
 

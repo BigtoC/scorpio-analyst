@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     agents::analyst::{AnalystId, AnalystRegistry},
-    analysis_packs::{PackId, resolve_pack, resolve_runtime_policy},
+    analysis_packs::{PackId, resolve_pack, resolve_runtime_policy_for_manifest},
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
@@ -28,13 +28,13 @@ use crate::{
     rate_limit::SharedRateLimiter,
     state::{EnrichmentState, TradingState},
     workflow::{
-        SnapshotStore,
+        SnapshotStore, classify_runtime_pack,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         tasks::{
             FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
             KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
             KEY_TRANSCRIPT_FETCH_STATUS, NewsAnalystTask, SentimentAnalystTask,
-            TechnicalAnalystTask,
+            TechnicalAnalystTask, handoff,
         },
     },
 };
@@ -183,11 +183,13 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.token_usage = Default::default();
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_graph(
     config: Arc<Config>,
     finnhub: &FinnhubClient,
     fred: &FredClient,
     yfinance: &YFinanceClient,
+    sec_edgar: Arc<SecEdgarClient>,
     snapshot_store: Arc<SnapshotStore>,
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
@@ -207,6 +209,7 @@ pub(super) fn build_graph(
         finnhub,
         fred,
         yfinance,
+        sec_edgar,
         snapshot_store,
         quick_handle,
         deep_handle,
@@ -326,16 +329,26 @@ pub async fn run_analysis_cycle(
         .await
         .map_err(TradingError::Config)?;
 
-    let runtime_policy = match pipeline.runtime_policy.clone() {
-        Some(policy) => policy,
-        None => resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {
-            TradingError::Config(anyhow::anyhow!(
-                "analysis pack resolution failed for '{}': {cause}",
-                pipeline.config.analysis_pack
-            ))
-        })?,
+    let (runtime_policy, routing_fallback_reason) = match pipeline.runtime_policy.clone() {
+        Some(policy) => (policy, None),
+        None => {
+            let symbol = &initial_state.asset_symbol;
+            let profile = pipeline.yfinance.get_profile(symbol).await;
+            let fund_info = profile.as_ref().and_then(|profile| {
+                crate::data::yfinance::etf::fund_info_from_profile(symbol, profile)
+            });
+            let selection = classify_runtime_pack(profile.as_ref(), fund_info.as_ref());
+            let pack_id = selection.pack_id();
+            let policy =
+                resolve_runtime_policy_for_manifest(&resolve_pack(pack_id)).map_err(|cause| {
+                    TradingError::Config(anyhow::anyhow!(
+                        "analysis pack resolution failed for '{}': {cause}",
+                        pack_id.as_str()
+                    ))
+                })?;
+            (policy, selection.fallback_reason().map(str::to_owned))
+        }
     };
-
     let symbol = initial_state.asset_symbol.clone();
     let date = initial_state.target_date.clone();
     let execution_id = initial_state.execution_id.to_string();
@@ -501,6 +514,14 @@ pub async fn run_analysis_cycle(
         .await;
     session.context.set(KEY_DEBATE_ROUND, 0u32).await;
     session.context.set(KEY_RISK_ROUND, 0u32).await;
+
+    handoff::put_into_context(&session.context, runtime_policy, routing_fallback_reason)
+        .await
+        .map_err(|error| TradingError::GraphFlow {
+            phase: "init".into(),
+            task: "serialize_runtime_preflight_override".into(),
+            cause: error.to_string(),
+        })?;
 
     if let Some(news_json) = cached_news_json {
         session.context.set(KEY_CACHED_NEWS, news_json).await;

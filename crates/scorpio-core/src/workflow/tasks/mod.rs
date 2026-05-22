@@ -7,6 +7,7 @@ mod accounting;
 mod analyst;
 mod auditor;
 mod common;
+pub(in crate::workflow) mod handoff;
 pub mod preflight;
 mod research;
 mod risk;
@@ -28,8 +29,9 @@ pub use auditor::AuditorTask;
 pub use common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS, KEY_DEBATE_ROUND,
     KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_PROVIDER_CAPABILITIES,
-    KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_RISK_ROUND, KEY_ROUTING_FLAGS,
-    KEY_RUNTIME_POLICY, KEY_TRANSCRIPT_FETCH_STATUS,
+    KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT, KEY_RISK_ROUND,
+    KEY_ROUTING_FALLBACK_REASON, KEY_ROUTING_FLAGS, KEY_RUNTIME_PACK_ROUTE, KEY_RUNTIME_POLICY,
+    KEY_TRANSCRIPT_FETCH_STATUS,
 };
 pub use preflight::PreflightTask;
 pub use research::{BearishResearcherTask, BullishResearcherTask, DebateModeratorTask};

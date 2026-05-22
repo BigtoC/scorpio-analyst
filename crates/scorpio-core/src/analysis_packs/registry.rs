@@ -9,7 +9,9 @@
 use tracing::{info, warn};
 
 use super::completeness::{CompletenessError, validate_active_pack_completeness};
-use super::{AnalysisPackManifest, PackId, crypto, equity, resolve_runtime_policy_for_manifest};
+use super::{
+    AnalysisPackManifest, PackId, crypto, equity, etf, resolve_runtime_policy_for_manifest,
+};
 use crate::workflow::build_run_topology;
 
 /// Resolve a [`PackId`] into its full [`AnalysisPackManifest`].
@@ -20,6 +22,9 @@ use crate::workflow::build_run_topology;
 pub fn resolve_pack(id: PackId) -> AnalysisPackManifest {
     match id {
         PackId::Baseline => equity::baseline_pack(),
+        // ETF pack is selected by runtime classification (Task 11), not by
+        // user config — `PackId::from_str` rejects "etf_baseline" today.
+        PackId::EtfBaseline => etf::etf_baseline_pack(),
         // Registered but not user-selectable — see `PackId::from_str`.
         PackId::CryptoDigitalAsset => crypto::digital_asset_pack(),
     }
@@ -31,7 +36,11 @@ pub fn resolve_pack(id: PackId) -> AnalysisPackManifest {
 /// `strum` or a derive. Adding a new `PackId` variant requires extending
 /// this array — the registry's `resolve_pack` match would otherwise
 /// silently treat the new variant as unhandled.
-const REGISTERED_PACKS: &[PackId] = &[PackId::Baseline, PackId::CryptoDigitalAsset];
+const REGISTERED_PACKS: &[PackId] = &[
+    PackId::Baseline,
+    PackId::EtfBaseline,
+    PackId::CryptoDigitalAsset,
+];
 
 /// Compute completeness diagnostics for every registered active pack.
 ///

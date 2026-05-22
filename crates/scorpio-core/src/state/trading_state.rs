@@ -171,6 +171,12 @@ pub struct TradingState {
     #[serde(default)]
     pub analysis_runtime_policy: Option<RuntimePolicy>,
 
+    /// Reason for runtime pack-routing fallback, set when the active pack is
+    /// not the symbol's expected pack. `None` when routing matched. Surfaced in
+    /// the final report header.
+    #[serde(default)]
+    pub etf_routing_fallback_reason: Option<String>,
+
     /// Token accounting.
     pub token_usage: TokenUsageTracker,
 }
@@ -235,6 +241,8 @@ struct TradingStateWire {
     analysis_pack_name: Option<String>,
     #[serde(default)]
     analysis_runtime_policy: Option<RuntimePolicy>,
+    #[serde(default)]
+    etf_routing_fallback_reason: Option<String>,
     token_usage: TokenUsageTracker,
 }
 
@@ -280,6 +288,7 @@ impl From<TradingStateWire> for TradingState {
             current_thesis: wire.current_thesis,
             analysis_pack_name: wire.analysis_pack_name,
             analysis_runtime_policy: wire.analysis_runtime_policy,
+            etf_routing_fallback_reason: wire.etf_routing_fallback_reason,
             token_usage: wire.token_usage,
         }
     }
@@ -383,6 +392,7 @@ impl TradingState {
             current_thesis: None,
             analysis_pack_name: None,
             analysis_runtime_policy: None,
+            etf_routing_fallback_reason: None,
             token_usage: TokenUsageTracker::default(),
         }
     }
@@ -518,6 +528,15 @@ impl TradingState {
     #[must_use]
     pub fn derived_valuation(&self) -> Option<&DerivedValuation> {
         self.equity.as_ref()?.derived_valuation.as_ref()
+    }
+    /// Mutable accessor for the derived valuation.
+    ///
+    /// Used by `AnalystSyncTask` to post-process valuator output (e.g. attach
+    /// the distribution-yield-TTM to the ETF composition snapshot, which the
+    /// valuator itself can't fetch). Returns `None` when no valuation has
+    /// been written yet for this cycle.
+    pub fn derived_valuation_mut(&mut self) -> Option<&mut DerivedValuation> {
+        self.equity.as_mut()?.derived_valuation.as_mut()
     }
     pub fn set_derived_valuation(&mut self, v: DerivedValuation) {
         self.equity_mut().derived_valuation = Some(v);

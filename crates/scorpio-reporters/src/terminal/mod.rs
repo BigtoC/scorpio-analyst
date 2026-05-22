@@ -1,4 +1,5 @@
 mod coverage;
+pub(crate) mod etf;
 mod final_report;
 mod provenance;
 mod valuation;

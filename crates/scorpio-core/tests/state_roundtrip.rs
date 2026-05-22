@@ -8,6 +8,9 @@ use scorpio_core::data::adapters::{
 };
 use scorpio_core::data::traits::options::{OptionsOutcome, OptionsSnapshot};
 use scorpio_core::state::*;
+use scorpio_core::workflow::{SnapshotPhase, SnapshotStore};
+use serde::Deserialize;
+use tempfile::tempdir;
 
 fn arb_enrichment_status() -> impl Strategy<Value = EnrichmentStatus> {
     prop_oneof![
@@ -770,6 +773,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     token_usage,
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
+                    etf_routing_fallback_reason: None,
                     audit_status: scorpio_core::state::auditor::AuditStatus::Disabled,
                     audit_report: None,
                 }
@@ -1139,4 +1143,188 @@ fn trading_state_deserializes_old_snapshot_without_audit_report() {
         scorpio_core::state::auditor::AuditStatus::Disabled
     );
     assert!(back.audit_report.is_none());
+}
+
+// ── ETF variant + Phase-2 routing field backward-compat ────────────────
+//
+// These three tests cover the ETF baseline pack rollout:
+//   - Task 1 added `ScenarioValuation::Etf(EtfValuation)` alongside the
+//     existing `CorporateEquity` and `NotAssessed` variants. Old snapshots
+//     of the surviving variants must still deserialize after that addition.
+//   - Task 12 added `TradingState::etf_routing_fallback_reason: Option<String>`
+//     with `#[serde(default)]`. Old snapshots without that field must
+//     still deserialize cleanly.
+//   - Round-tripping a `TradingState` containing the new `Etf` variant
+//     exercises the full encode/decode path through `equity.derived_valuation`
+//     so a future serde rename would fail loudly.
+
+#[test]
+fn trading_state_with_etf_variant_roundtrips() {
+    let mut state = TradingState::new("SPY", "2026-05-21");
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(621.18),
+                market_price: 621.40,
+                bid: Some(621.39),
+                ask: Some(621.41),
+                premium_pct: Some(0.04),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+    let json = serde_json::to_string(&state).expect("serialize");
+    let back: TradingState = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(state, back);
+}
+
+#[test]
+fn legacy_snapshot_without_etf_routing_fallback_field_still_loads() {
+    // Generate today's snapshot, then synthesise a "legacy" one by removing
+    // the `etf_routing_fallback_reason` field (added in Task 12 with
+    // `#[serde(default)]`). Using the round-trip-strip trick keeps this
+    // robust against future additive fields on `TradingState`.
+    let state = TradingState::new("AAPL", "2026-05-21");
+    let mut value: serde_json::Value =
+        serde_json::to_value(&state).expect("serialize current state");
+    let removed = value
+        .as_object_mut()
+        .expect("json is object")
+        .remove("etf_routing_fallback_reason");
+    assert!(
+        removed.is_some(),
+        "etf_routing_fallback_reason must be present in current snapshots; \
+         did the field get renamed?"
+    );
+    let legacy_json = serde_json::to_string(&value).expect("re-serialize legacy");
+
+    let back: TradingState =
+        serde_json::from_str(&legacy_json).expect("legacy snapshot must deserialize");
+    assert_eq!(back.asset_symbol, "AAPL");
+    assert!(back.etf_routing_fallback_reason.is_none());
+}
+
+#[test]
+fn legacy_corporate_equity_snapshot_unchanged_after_etf_variant_added() {
+    // A pre-ETF `ScenarioValuation::CorporateEquity` snapshot with all
+    // metric sub-fields absent must still deserialize after the `Etf`
+    // variant was added in Task 1. `CorporateEquityValuation` carries
+    // `#[serde(default)]` on every metric, so an empty inner object is
+    // the minimal legacy shape we expect to see in stored snapshots.
+    let json = r#"{"corporate_equity":{}}"#;
+    let back: ScenarioValuation =
+        serde_json::from_str(json).expect("legacy variant must still parse");
+    let inner = match back {
+        ScenarioValuation::CorporateEquity(v) => v,
+        other => panic!("expected CorporateEquity variant, got: {other:?}"),
+    };
+    assert!(inner.dcf.is_none());
+    assert!(inner.ev_ebitda.is_none());
+    assert!(inner.forward_pe.is_none());
+    assert!(inner.peg.is_none());
+}
+
+#[tokio::test]
+async fn etf_variant_requires_snapshot_schema_version_above_v3() {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct LegacySnapshotState {
+        #[serde(default)]
+        equity: Option<LegacyEquityState>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct LegacyEquityState {
+        #[serde(default)]
+        derived_valuation: Option<LegacyDerivedValuation>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct LegacyDerivedValuation {
+        asset_shape: AssetShape,
+        scenario: LegacyScenarioValuation,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LegacyScenarioValuation {
+        CorporateEquity(CorporateEquityValuation),
+        NotAssessed { reason: String },
+    }
+
+    let mut state = TradingState::new("SPY", "2026-05-21");
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(621.18),
+                market_price: 621.40,
+                bid: Some(621.39),
+                ask: Some(621.41),
+                premium_pct: Some(0.04),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let json = serde_json::to_string(&state).expect("serialize current ETF-bearing snapshot");
+    let err = serde_json::from_str::<LegacySnapshotState>(&json)
+        .expect_err("pre-ETF snapshot schema must reject the ETF variant");
+
+    assert!(
+        err.to_string().contains("unknown variant") && err.to_string().contains("etf"),
+        "legacy decoder should fail on ETF variant tag: {err}"
+    );
+
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("state-roundtrip.db");
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("snapshot store creation");
+    store
+        .save_snapshot(
+            &state.execution_id.to_string(),
+            SnapshotPhase::FundManager,
+            &state,
+            None,
+        )
+        .await
+        .expect("save ETF-bearing snapshot");
+
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rw", db_path.display()))
+        .await
+        .expect("sqlite open");
+    let stored_schema_version: (i64,) = sqlx::query_as(
+        "SELECT schema_version FROM phase_snapshots WHERE execution_id = ? AND phase_number = ?",
+    )
+    .bind(state.execution_id.to_string())
+    .bind(SnapshotPhase::FundManager.number() as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("schema version query");
+
+    assert!(
+        stored_schema_version.0 > 3,
+        "ETF-bearing snapshots are not reverse-compatible with schema v3 readers"
+    );
 }

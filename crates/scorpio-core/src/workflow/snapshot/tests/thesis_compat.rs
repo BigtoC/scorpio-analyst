@@ -69,9 +69,9 @@ async fn load_prior_thesis_supports_legacy_rows_without_symbol_column_data() {
 
 #[tokio::test]
 async fn load_prior_thesis_skips_rows_with_mismatched_schema_version() {
-    // Same-version-only after the Phase 6 bump: any row whose stored
+    // Same-version-only after the schema-version bumps: any row whose stored
     // `schema_version` does not equal `THESIS_MEMORY_SCHEMA_VERSION` is
-    // skipped before deserialization. Simulate a pre-v2 row by writing
+    // skipped before deserialization. Simulate an older row by writing
     // `schema_version = 1`.
     let store = in_memory_store().await;
     let mut state = TradingState::new("AAPL", "2026-04-07");
@@ -109,8 +109,8 @@ async fn load_prior_thesis_skips_rows_with_mismatched_schema_version() {
 #[tokio::test]
 async fn load_prior_thesis_prefers_newest_compatible_schema_row() {
     // Seed two phase-5 rows for the same symbol: a stale v1 (incompatible)
-    // row inserted first, then a newer v2 row. The lookup must return the
-    // v2 thesis even though the v1 row is "newer" in insertion order only
+    // row inserted first, then a newer current-version row. The lookup must return the
+    // current-version thesis even though the v1 row is "newer" in insertion order only
     // if the same-version filter is working.
     let store = in_memory_store().await;
     let mut stale = TradingState::new("AAPL", "2026-04-07");
@@ -131,7 +131,7 @@ async fn load_prior_thesis_prefers_newest_compatible_schema_row() {
     .await
     .expect("stale-version update should succeed");
 
-    // Write a fresh v2 row (the default version on save).
+    // Write a fresh current-version row (the default version on save).
     let mut fresh = TradingState::new("AAPL", "2026-04-08");
     let mut fresh_thesis = sample_thesis();
     fresh_thesis.action = "Sell".to_owned();
@@ -150,11 +150,11 @@ async fn load_prior_thesis_prefers_newest_compatible_schema_row() {
         .load_prior_thesis_for_symbol("AAPL", 30)
         .await
         .expect("query should succeed")
-        .expect("v2 row should be reused");
+        .expect("current-version row should be reused");
 
     assert_eq!(
         loaded.action, "Sell",
-        "lookup must return the v2 thesis, not the stale v1 row"
+        "lookup must return the current-version thesis, not the stale v1 row"
     );
 }
 
@@ -195,10 +195,10 @@ async fn load_prior_thesis_skips_undeserializable_payload_and_returns_none() {
 
 #[tokio::test]
 async fn load_prior_thesis_skips_higher_schema_version_rows_after_downgrade() {
-    // Reverse-direction safety: a v2 binary running against a database that
-    // already contains v3 rows (e.g. an operator who upgraded, ran once, then
-    // rolled back to a prior binary) must skip the v3 rows the same way a v3
-    // binary skips v2 rows. The existing `!=` skip path at thesis.rs:83
+    // Reverse-direction safety: an older binary running against a database that
+    // already contains newer-version rows (e.g. an operator who upgraded, ran once, then
+    // rolled back to a prior binary) must skip the newer rows the same way the current
+    // binary skips older rows. The existing `!=` skip path at thesis.rs handles both directions;
     // handles both directions; this test pins that contract so a future
     // refactor that switches to `<` would fail.
     let store = in_memory_store().await;
@@ -215,7 +215,7 @@ async fn load_prior_thesis_skips_higher_schema_version_rows_after_downgrade() {
         .await
         .expect("save should succeed");
 
-    // Simulate a v3-binary write by stamping the row at the *current* active
+    // Simulate a newer-binary write by stamping the row at the *current* active
     // version + 1; the binary running this test is conceptually older.
     sqlx::query(
         "UPDATE phase_snapshots SET schema_version = ? WHERE execution_id = ? AND phase_number = 5",

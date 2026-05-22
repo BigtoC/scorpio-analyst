@@ -550,6 +550,145 @@ fn baseline_manifest_is_complete_under_fully_enabled_topology() {
     );
 }
 
+#[test]
+fn etf_baseline_passes_completeness_under_all_topology_shapes() {
+    // ETF baseline pack must populate every required prompt slot across the
+    // four runtime topology shapes preflight can build:
+    //  - full          (debate + risk both > 0)
+    //  - no_debate     (max_debate_rounds == 0)
+    //  - no_risk       (max_risk_rounds == 0)
+    //  - no_debate_no_risk (both == 0)
+    //
+    // Uses `runtime_policy_from_manifest` (test-helpers gated) because
+    // `EtfBaseline` is not user-selectable via `resolve_runtime_policy` —
+    // `PackId::from_str` rejects it so the runtime classifier (not the
+    // string config) is the only production hydration path.
+    let manifest = resolve_pack(PackId::EtfBaseline);
+    let policy = runtime_policy_from_manifest(&manifest);
+
+    let shapes = [
+        (1_u32, 1_u32, "full"),
+        (0, 1, "no_debate"),
+        (1, 0, "no_risk"),
+        (0, 0, "no_debate_no_risk"),
+    ];
+    for (max_debate, max_risk, label) in shapes {
+        let topology = build_run_topology(
+            &manifest.required_inputs,
+            max_debate,
+            max_risk,
+            manifest.auditor_enabled,
+        );
+        let result = validate_active_pack_completeness(&policy, &topology);
+        assert!(
+            result.is_ok(),
+            "ETF baseline pack must be complete in shape '{label}' \
+             (debate={max_debate}, risk={max_risk}, auditor={}): {result:?}",
+            manifest.auditor_enabled,
+        );
+    }
+}
+
+#[test]
+fn equity_baseline_prompt_bundle_still_includes_moved_files() {
+    // Tier-1 and Tier-2 prompts were physically relocated to
+    // `analysis_packs/common/prompts/` in Tasks 3 and 4. This is a low-cost
+    // byte-identity sanity check: the equity baseline pack must still
+    // include the moved files (i.e. the `include_str!` paths still resolve
+    // to non-empty content that mentions the role-specific subject matter).
+    //
+    // The golden-byte fixtures in `tests/fixtures/prompt_bundle/` are the
+    // real merge gate — this test is a fast pre-check that catches a
+    // missing file before the full render diff fires.
+    let pack = resolve_pack(PackId::Baseline);
+
+    // Tier-1 files moved to common/ in Task 3 — verbatim reuse.
+    assert!(
+        !pack.prompt_bundle.debate_moderator.is_empty(),
+        "debate_moderator must be non-empty"
+    );
+    assert!(
+        !pack.prompt_bundle.risk_moderator.is_empty(),
+        "risk_moderator must be non-empty"
+    );
+    assert!(
+        !pack.prompt_bundle.bullish_researcher.is_empty(),
+        "bullish_researcher must be non-empty"
+    );
+    assert!(
+        !pack.prompt_bundle.bearish_researcher.is_empty(),
+        "bearish_researcher must be non-empty"
+    );
+
+    // Tier-2 files moved to common/ in Task 4 — composed with equity-pack
+    // deltas. Loose `contains` because the equity pack appends additional
+    // sections; we only verify the right base file is being included.
+    assert!(
+        pack.prompt_bundle
+            .news_analyst
+            .to_lowercase()
+            .contains("news"),
+        "news_analyst should reference news"
+    );
+    assert!(
+        pack.prompt_bundle
+            .technical_analyst
+            .to_lowercase()
+            .contains("technical"),
+        "technical_analyst should reference technical analysis"
+    );
+    assert!(
+        pack.prompt_bundle.auditor.to_lowercase().contains("audit"),
+        "auditor should reference auditing"
+    );
+}
+
+#[test]
+fn etf_baseline_prompt_bundle_still_includes_moved_files() {
+    // Mirror of `equity_baseline_prompt_bundle_still_includes_moved_files`
+    // for the ETF pack — the ETF pack reuses the same `common/prompts/`
+    // files for Tier-1 (verbatim) and Tier-2 (composed with ETF deltas).
+    let pack = resolve_pack(PackId::EtfBaseline);
+
+    // Tier-1 verbatim reuse.
+    assert!(
+        !pack.prompt_bundle.debate_moderator.is_empty(),
+        "debate_moderator must be non-empty"
+    );
+    assert!(
+        !pack.prompt_bundle.risk_moderator.is_empty(),
+        "risk_moderator must be non-empty"
+    );
+    assert!(
+        !pack.prompt_bundle.bullish_researcher.is_empty(),
+        "bullish_researcher must be non-empty"
+    );
+    assert!(
+        !pack.prompt_bundle.bearish_researcher.is_empty(),
+        "bearish_researcher must be non-empty"
+    );
+
+    // Tier-2 composed with ETF deltas.
+    assert!(
+        pack.prompt_bundle
+            .news_analyst
+            .to_lowercase()
+            .contains("news"),
+        "news_analyst should reference news"
+    );
+    assert!(
+        pack.prompt_bundle
+            .technical_analyst
+            .to_lowercase()
+            .contains("technical"),
+        "technical_analyst should reference technical analysis"
+    );
+    assert!(
+        pack.prompt_bundle.auditor.to_lowercase().contains("audit"),
+        "auditor should reference auditing"
+    );
+}
+
 // --- Analytical Themes Port assertions (Tasks 2-9 of 2026-05-10-004) ---
 
 #[test]

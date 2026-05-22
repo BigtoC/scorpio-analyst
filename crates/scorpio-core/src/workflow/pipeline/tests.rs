@@ -6,6 +6,7 @@ use super::{
     constants::TASKS, errors::map_graph_error, runtime, runtime::canonicalize_runtime_symbol,
 };
 use crate::{
+    analysis_packs::{PackId, resolve_pack},
     error::TradingError,
     state::{
         AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
@@ -565,7 +566,8 @@ async fn try_new_rejects_invalid_pack_id_with_typed_error() {
 #[tokio::test]
 async fn try_new_succeeds_for_baseline_pack_id() {
     // The happy path: construction with a valid pack id produces a usable
-    // pipeline whose runtime_policy is hydrated to the resolved manifest.
+    // pipeline, while leaving per-run routing resolution deferred unless the
+    // caller explicitly used `from_pack`.
     let config = crate::config::Config {
         llm: crate::config::LlmConfig {
             quick_thinking_provider: "openai".to_owned(),
@@ -603,10 +605,7 @@ async fn try_new_succeeds_for_baseline_pack_id() {
     )
     .expect("baseline pack id must resolve");
 
-    assert_eq!(
-        pipeline.runtime_policy.as_ref().map(|p| p.pack_id),
-        Some(crate::analysis_packs::PackId::Baseline)
-    );
+    assert!(pipeline.runtime_policy.is_none());
 }
 
 #[tokio::test]
@@ -682,6 +681,13 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
             finnhub: crate::data::FinnhubClient::for_test(),
             fred: crate::data::FredClient::for_test(),
             yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store,
             quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
             deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
@@ -797,6 +803,13 @@ async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_sto
             finnhub: crate::data::FinnhubClient::for_test(),
             fred: crate::data::FredClient::for_test(),
             yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store,
             quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
             deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
@@ -894,6 +907,13 @@ async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbol
             finnhub: crate::data::FinnhubClient::for_test(),
             fred: crate::data::FredClient::for_test(),
             yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
             snapshot_store,
             quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
             deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
@@ -1438,4 +1458,151 @@ async fn run_analysis_cycle_reuses_injected_catalyst_provider_across_cycles() {
         second.enrichment_catalysts.status,
         crate::data::adapters::EnrichmentStatus::Available
     ));
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_routes_baseline_pipeline_to_etf_pack_per_run() {
+    use crate::data::StubbedFinancialResponses;
+    use yfinance_rs::profile::{Fund, Profile};
+
+    let yfinance =
+        crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            profile: Some(Profile::Fund(Fund {
+                name: "SPDR S&P 500 ETF Trust".to_owned(),
+                family: Some("State Street".to_owned()),
+                kind: Default::default(),
+                isin: None,
+            })),
+            ..StubbedFinancialResponses::default()
+        });
+
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-runtime-etf-routing.db").await;
+    let pipeline = crate::workflow::TradingPipeline::new(
+        config,
+        crate::data::FinnhubClient::for_test(),
+        crate::data::FredClient::for_test(),
+        yfinance,
+        snapshot_store,
+        crate::providers::factory::CompletionModelHandle::for_test(),
+        crate::providers::factory::CompletionModelHandle::for_test(),
+    );
+
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    let final_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("SPY", "2026-03-20"))
+            .await
+            .expect("runtime ETF routing run must succeed");
+
+    assert_eq!(
+        final_state.analysis_pack_name.as_deref(),
+        Some("etf_baseline"),
+        "baseline-configured pipeline should reroute ETF symbols per run"
+    );
+    assert_eq!(
+        final_state
+            .analysis_runtime_policy
+            .as_ref()
+            .map(|p| p.pack_id),
+        Some(PackId::EtfBaseline)
+    );
+}
+
+#[tokio::test]
+async fn run_analysis_cycle_preserves_from_pack_fixed_manifest_over_runtime_etf_route() {
+    use crate::data::StubbedFinancialResponses;
+    use crate::workflow::builder::PipelineDeps;
+    use yfinance_rs::profile::{Fund, Profile};
+
+    let yfinance =
+        crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            profile: Some(Profile::Fund(Fund {
+                name: "SPDR S&P 500 ETF Trust".to_owned(),
+                family: Some("State Street".to_owned()),
+                kind: Default::default(),
+                isin: None,
+            })),
+            ..StubbedFinancialResponses::default()
+        });
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: Default::default(),
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+    let (snapshot_store, _dir) = test_snapshot_store("pipeline-fixed-pack-wins.db").await;
+    let pipeline = crate::workflow::TradingPipeline::from_pack(
+        &resolve_pack(PackId::Baseline),
+        PipelineDeps {
+            config,
+            finnhub: crate::data::FinnhubClient::for_test(),
+            fred: crate::data::FredClient::for_test(),
+            yfinance,
+            sec_edgar: std::sync::Arc::new(
+                crate::data::SecEdgarClient::new(crate::rate_limit::SharedRateLimiter::new(
+                    "pipeline-tests-sec-edgar",
+                    10,
+                ))
+                .expect("SecEdgarClient construction must succeed"),
+            ),
+            snapshot_store,
+            quick_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+            deep_handle: crate::providers::factory::CompletionModelHandle::for_test(),
+        },
+    );
+
+    replace_with_stubs(&pipeline, Arc::clone(&pipeline.snapshot_store))
+        .expect("stub install must succeed");
+
+    let final_state =
+        runtime::run_analysis_cycle(&pipeline, TradingState::new("SPY", "2026-03-20"))
+            .await
+            .expect("fixed-pack run must succeed");
+
+    assert_eq!(final_state.analysis_pack_name.as_deref(), Some("baseline"));
+    assert_eq!(
+        final_state
+            .analysis_runtime_policy
+            .as_ref()
+            .map(|p| p.pack_id),
+        Some(PackId::Baseline),
+        "from_pack should remain a fixed-pack entry point"
+    );
 }

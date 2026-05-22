@@ -52,6 +52,11 @@ mod tests {
             shares: None,
             earnings_trend: None,
             current_price: None,
+            etf_quote: None,
+            etf_fund_info: None,
+            etf_holdings: None,
+            etf_ohlcv: None,
+            etf_benchmark_ohlcv: None,
         };
         let via_trait = EquityDefaultValuator.assess(inputs, &AssetShape::Unknown);
         let via_fn = derive_valuation(None, None, None, None, None, None, None);

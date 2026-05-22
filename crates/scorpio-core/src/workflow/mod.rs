@@ -1,5 +1,6 @@
 pub mod builder;
 mod context_bridge;
+pub mod pack_classifier;
 mod pipeline;
 mod snapshot;
 mod tasks;
@@ -9,6 +10,7 @@ mod topology;
 pub mod test_support;
 
 pub use builder::{PipelineDeps, build_graph_from_pack};
+pub use pack_classifier::{RuntimePackSelection, classify_runtime_pack};
 pub use pipeline::TradingPipeline;
 pub use pipeline::runtime::run_analysis_cycle;
 pub use snapshot::{
