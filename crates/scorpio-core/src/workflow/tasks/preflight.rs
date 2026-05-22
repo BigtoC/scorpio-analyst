@@ -35,7 +35,8 @@ use crate::{
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
     KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
-    KEY_ROUTING_FALLBACK_REASON, KEY_ROUTING_FLAGS, KEY_RUNTIME_PACK_ROUTE, KEY_RUNTIME_POLICY,
+    KEY_ROUTING_FALLBACK_REASON, KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_ROUTING_FLAGS,
+    KEY_RUNTIME_PACK_ROUTE, KEY_RUNTIME_POLICY, KEY_RUNTIME_POLICY_OVERRIDE,
     KEY_TRANSCRIPT_FETCH_STATUS,
 };
 
@@ -225,16 +226,25 @@ impl Task for PreflightTask {
         context.set(KEY_RESOLVED_INSTRUMENT, instrument_json).await;
 
         // ── Resolve analysis pack into runtime policy ─────────────────────
-        let runtime_policy = self.runtime_policy.as_ref().map_err(|e| {
-            graph_flow::GraphError::TaskExecutionFailed(format!(
-                "PreflightTask: pack resolution failed: {e}"
-            ))
-        })?;
+        let runtime_policy = runtime_policy_override(&context)
+            .await?
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.runtime_policy.clone().map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "PreflightTask: pack resolution failed: {e}"
+                    ))
+                })
+            })?;
+        let routing_fallback_reason = routing_fallback_reason_override(&context)
+            .await?
+            .or_else(|| self.routing_fallback_reason.clone());
+
         debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
 
         state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
         state.analysis_runtime_policy = Some(runtime_policy.clone());
-        state.etf_routing_fallback_reason = self.routing_fallback_reason.clone();
+        state.etf_routing_fallback_reason = routing_fallback_reason.clone();
 
         serialize_state_to_context(&state, &context)
             .await
@@ -256,7 +266,7 @@ impl Task for PreflightTask {
                 runtime_policy.pack_id.as_str().to_owned(),
             )
             .await;
-        if let Some(reason) = self.routing_fallback_reason.as_deref() {
+        if let Some(reason) = routing_fallback_reason.as_deref() {
             context
                 .set(KEY_ROUTING_FALLBACK_REASON, reason.to_owned())
                 .await;
@@ -270,7 +280,7 @@ impl Task for PreflightTask {
         })?;
         context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
 
-        let policy_json = serde_json::to_string(runtime_policy).map_err(|e| {
+        let policy_json = serde_json::to_string(&runtime_policy).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: orchestration corruption: RuntimePolicy serialization failed: {e}"
             ))
@@ -306,7 +316,7 @@ impl Task for PreflightTask {
         // and the regression-gate sanity), so production runs never trip
         // this gate today; it exists to defend against future packs that
         // ship incomplete prompt bundles.
-        if let Err(err) = validate_active_pack_completeness(runtime_policy, &topology) {
+        if let Err(err) = validate_active_pack_completeness(&runtime_policy, &topology) {
             return Err(graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: active pack {:?} is incomplete under runtime topology: {err}",
                 err.pack_id
@@ -362,6 +372,33 @@ async fn seed_transcript_status_if_absent(context: &Context) {
     }
 }
 
+async fn runtime_policy_override(
+    context: &Context,
+) -> graph_flow::Result<Option<crate::analysis_packs::RuntimePolicy>> {
+    let raw: Option<String> = context.get(KEY_RUNTIME_POLICY_OVERRIDE).await;
+    raw.map(|json| {
+        serde_json::from_str(&json).map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: orchestration corruption: runtime policy override deserialization failed: {error}"
+            ))
+        })
+    })
+    .transpose()
+}
+
+async fn routing_fallback_reason_override(context: &Context) -> graph_flow::Result<Option<String>> {
+    let raw: Option<String> = context.get(KEY_ROUTING_FALLBACK_REASON_OVERRIDE).await;
+    raw.map(|json| {
+        serde_json::from_str::<Option<String>>(&json).map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "PreflightTask: orchestration corruption: routing fallback reason override deserialization failed: {error}"
+            ))
+        })
+    })
+    .transpose()
+    .map(Option::flatten)
+}
+
 /// Write `"null"` to a context key only if it is not already set or its current
 /// value is the JSON literal `"null"`.  This preserves enrichment data that
 /// `run_analysis_cycle` may have hydrated before the graph starts.
@@ -400,7 +437,9 @@ mod tests {
     };
 
     use super::PreflightTask;
-    use crate::workflow::tasks::common::KEY_RUNTIME_POLICY;
+    use crate::workflow::tasks::common::{
+        KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_RUNTIME_POLICY, KEY_RUNTIME_POLICY_OVERRIDE,
+    };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -982,6 +1021,56 @@ mod tests {
         let after = deserialize_state_from_context(&ctx)
             .await
             .expect("state deserialization");
+        assert_eq!(
+            after.etf_routing_fallback_reason.as_deref(),
+            Some("profile_lookup_unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_hydrates_runtime_surfaces_from_context_override_without_state_preseed() {
+        let (store, _dir) = test_store().await;
+        let state = TradingState::new("SPY", "2026-01-15");
+        let ctx = Context::new();
+        serialize_state_to_context(&state, &ctx)
+            .await
+            .expect("state serialization");
+
+        let runtime_policy = crate::analysis_packs::resolve_runtime_policy_for_manifest(
+            &crate::analysis_packs::resolve_pack(crate::analysis_packs::PackId::EtfBaseline),
+        )
+        .expect("etf baseline pack must resolve");
+        let runtime_policy_json =
+            serde_json::to_string(&runtime_policy).expect("runtime policy serialization");
+        let fallback_json = serde_json::to_string(&Some("profile_lookup_unavailable".to_owned()))
+            .expect("fallback serialization");
+        ctx.set(KEY_RUNTIME_POLICY_OVERRIDE, runtime_policy_json)
+            .await;
+        ctx.set(KEY_ROUTING_FALLBACK_REASON_OVERRIDE, fallback_json)
+            .await;
+
+        let task = PreflightTask::with_runtime_policy(
+            DataEnrichmentConfig::default(),
+            false,
+            store,
+            crate::analysis_packs::resolve_runtime_policy("baseline")
+                .expect("baseline pack must resolve"),
+        );
+        task.run(ctx.clone())
+            .await
+            .expect("preflight should succeed");
+
+        let after = deserialize_state_from_context(&ctx)
+            .await
+            .expect("state deserialization");
+        assert_eq!(after.analysis_pack_name.as_deref(), Some("etf_baseline"));
+        assert_eq!(
+            after
+                .analysis_runtime_policy
+                .as_ref()
+                .map(|policy| policy.pack_id),
+            Some(crate::analysis_packs::PackId::EtfBaseline)
+        );
         assert_eq!(
             after.etf_routing_fallback_reason.as_deref(),
             Some("profile_lookup_unavailable")
