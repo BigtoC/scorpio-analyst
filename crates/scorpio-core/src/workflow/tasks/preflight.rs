@@ -122,31 +122,6 @@ impl PreflightTask {
             routing_fallback_reason: None,
         }
     }
-
-    /// Like [`Self::with_runtime_policy`] but also propagates a
-    /// routing-fallback reason captured upstream by the runtime classifier.
-    ///
-    /// `routing_fallback_reason` should be `Some(_)` only when the active pack
-    /// diverged from the symbol's expected pack (see
-    /// [`crate::workflow::RuntimePackSelection::BaselineFallback`]). When
-    /// `None`, preflight emits only [`KEY_RUNTIME_PACK_ROUTE`] without a
-    /// fallback reason, matching the no-fallback path.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn with_runtime_policy_and_routing(
-        enrichment: crate::config::DataEnrichmentConfig,
-        transcripts_enabled: bool,
-        snapshot_store: Arc<SnapshotStore>,
-        runtime_policy: RuntimePolicy,
-        routing_fallback_reason: Option<&'static str>,
-    ) -> Self {
-        Self {
-            enrichment,
-            transcripts_enabled,
-            snapshot_store,
-            runtime_policy: Ok(runtime_policy),
-            routing_fallback_reason: routing_fallback_reason.map(str::to_owned),
-        }
-    }
 }
 
 #[async_trait]
@@ -966,13 +941,21 @@ mod tests {
             .await
             .expect("state serialization");
 
-        let task = PreflightTask::with_runtime_policy_and_routing(
+        handoff::put_into_context(
+            &ctx,
+            crate::analysis_packs::resolve_runtime_policy("baseline")
+                .expect("baseline pack must resolve"),
+            Some("profile_lookup_unavailable".to_owned()),
+        )
+        .await
+        .expect("override write");
+
+        let task = PreflightTask::with_runtime_policy(
             DataEnrichmentConfig::default(),
             false,
             store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
-            Some("profile_lookup_unavailable"),
         );
         task.run(ctx.clone())
             .await
