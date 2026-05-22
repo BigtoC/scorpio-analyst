@@ -303,12 +303,24 @@ impl SecEdgarClient {
             }
         }
 
+        {
+            let breaker = self.breaker.lock().await;
+            if breaker.is_open() {
+                tracing::debug!(
+                    ticker,
+                    "SEC EDGAR circuit breaker open; skipping CIK lookup"
+                );
+                return Ok(None);
+            }
+        }
+
         let url = format!("{EDGAR_WWW_BASE_URL}{COMPANY_TICKERS_PATH}");
         self.limiter.acquire().await;
         let result = self.http.get(&url).await;
 
         match result {
             Err(transport_err) => {
+                self.breaker.lock().await.record_failure();
                 tracing::warn!(
                     kind = "catalyst_fetch_failed",
                     source = "sec_edgar_cik_lookup",
@@ -319,6 +331,7 @@ impl SecEdgarClient {
                 Ok(None)
             }
             Ok((status, _)) if status != 200 => {
+                self.breaker.lock().await.record_failure();
                 tracing::warn!(
                     kind = "catalyst_fetch_failed",
                     source = "sec_edgar_cik_lookup",
@@ -330,6 +343,7 @@ impl SecEdgarClient {
             }
             Ok((_, body)) => match parse_company_tickers(&body) {
                 Err(parse_err) => {
+                    self.breaker.lock().await.record_failure();
                     tracing::warn!(
                         kind = "catalyst_fetch_failed",
                         source = "sec_edgar_cik_lookup",
@@ -340,6 +354,7 @@ impl SecEdgarClient {
                     Ok(None)
                 }
                 Ok(map) => {
+                    self.breaker.lock().await.record_success();
                     let cik = map.get(&ticker_upper).copied();
                     *self.cik_cache.write().await = Some(map);
                     Ok(cik)
@@ -913,6 +928,25 @@ mod tests {
             .await
             .expect("must return Ok");
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lookup_cik_skips_request_when_circuit_open() {
+        let mut mock_http = MockEdgarHttp::new();
+        mock_http
+            .expect_get()
+            .times(CIRCUIT_OPEN_THRESHOLD as usize)
+            .returning(|_| Err("error".to_owned()));
+
+        let client =
+            SecEdgarClient::with_http(Arc::new(mock_http), SharedRateLimiter::new("test", 100));
+
+        for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+            let _ = client.lookup_cik("SPY").await.expect("must not error");
+        }
+
+        let result = client.lookup_cik("SPY").await.expect("must not error");
+        assert_eq!(result, None);
     }
 
     // ── new() construction ────────────────────────────────────────────────────
