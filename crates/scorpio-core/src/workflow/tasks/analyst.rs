@@ -652,6 +652,7 @@ async fn fetch_valuation_inputs(
     sec_edgar: Option<&Arc<SecEdgarClient>>,
     pack_id: PackId,
     symbol: &str,
+    target_date: &str,
     fetch_timeout: Duration,
 ) -> ValuationInputs {
     let profile = fetch_with_timeout(
@@ -706,6 +707,29 @@ async fn fetch_valuation_inputs(
     let mut etf_distribution_yield_ttm_pct = None;
 
     if pack_id == PackId::EtfBaseline {
+        let is_historical_target_date = target_date
+            != chrono::Utc::now()
+                .date_naive()
+                .format("%Y-%m-%d")
+                .to_string();
+
+        if is_historical_target_date {
+            return ValuationInputs {
+                profile,
+                cashflow,
+                balance,
+                income,
+                shares,
+                trend,
+                etf_quote,
+                etf_fund_info,
+                etf_holdings,
+                etf_ohlcv,
+                etf_benchmark_ohlcv,
+                etf_distribution_yield_ttm_pct,
+            };
+        }
+
         // Parallel ETF fetches that don't depend on each other.
         let fund_info_from_profile = profile
             .as_ref()
@@ -1158,6 +1182,7 @@ impl Task for AnalystSyncTask {
             self.sec_edgar.as_ref(),
             pack_id,
             &symbol,
+            &state.target_date,
             self.valuation_fetch_timeout,
         )
         .await;
@@ -1312,12 +1337,17 @@ mod tests {
             })),
             ..StubbedFinancialResponses::default()
         });
+        let today = chrono::Utc::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
 
         let inputs = fetch_valuation_inputs(
             &yfinance,
             None,
             PackId::EtfBaseline,
             "SPY",
+            &today,
             Duration::from_secs(1),
         )
         .await;
@@ -1346,6 +1376,40 @@ mod tests {
             inputs.trend.is_none(),
             "ETF pack should not fetch equity earnings trend"
         );
+    }
+
+    #[tokio::test]
+    async fn etf_baseline_historical_target_date_skips_live_etf_fetches() {
+        let yfinance = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            profile: Some(Profile::Fund(Fund {
+                name: "SPDR S&P 500 ETF Trust".to_owned(),
+                family: Some("State Street".to_owned()),
+                kind: Default::default(),
+                isin: None,
+            })),
+            ..StubbedFinancialResponses::default()
+        });
+
+        let inputs = fetch_valuation_inputs(
+            &yfinance,
+            None,
+            PackId::EtfBaseline,
+            "SPY",
+            "2024-01-15",
+            Duration::from_secs(1),
+        )
+        .await;
+
+        assert!(
+            inputs.profile.is_some(),
+            "asset-shape detection should still fetch profile"
+        );
+        assert!(inputs.etf_quote.is_none());
+        assert!(inputs.etf_fund_info.is_none());
+        assert!(inputs.etf_holdings.is_none());
+        assert!(inputs.etf_ohlcv.is_none());
+        assert!(inputs.etf_benchmark_ohlcv.is_none());
+        assert!(inputs.etf_distribution_yield_ttm_pct.is_none());
     }
 
     #[test]
