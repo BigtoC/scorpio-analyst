@@ -28,7 +28,7 @@ use crate::{
     rate_limit::SharedRateLimiter,
     state::{EnrichmentState, TradingState},
     workflow::{
-        RuntimePackSelection, SnapshotStore, classify_runtime_pack,
+        SnapshotStore, classify_runtime_pack,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         tasks::{
             FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
@@ -48,17 +48,6 @@ pub(super) const CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES: u32 = 3;
 const CONSENSUS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
-
-async fn classify_runtime_pack_selection(
-    yfinance: &YFinanceClient,
-    symbol: &str,
-) -> RuntimePackSelection {
-    let profile = yfinance.get_profile(symbol).await;
-    let fund_info = profile
-        .as_ref()
-        .and_then(|profile| crate::data::yfinance::etf::fund_info_from_profile(symbol, profile));
-    classify_runtime_pack(profile.as_ref(), fund_info.as_ref())
-}
 
 pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
     Ok(crate::data::resolve_symbol(symbol)?.symbol)
@@ -343,9 +332,12 @@ pub async fn run_analysis_cycle(
     let (runtime_policy, routing_fallback_reason) = match pipeline.runtime_policy.clone() {
         Some(policy) => (policy, None),
         None => {
-            let selection =
-                classify_runtime_pack_selection(&pipeline.yfinance, &initial_state.asset_symbol)
-                    .await;
+            let symbol = &initial_state.asset_symbol;
+            let profile = pipeline.yfinance.get_profile(symbol).await;
+            let fund_info = profile.as_ref().and_then(|profile| {
+                crate::data::yfinance::etf::fund_info_from_profile(symbol, profile)
+            });
+            let selection = classify_runtime_pack(profile.as_ref(), fund_info.as_ref());
             let pack_id = selection.pack_id();
             let policy =
                 resolve_runtime_policy_for_manifest(&resolve_pack(pack_id)).map_err(|cause| {

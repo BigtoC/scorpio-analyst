@@ -226,21 +226,17 @@ impl Task for PreflightTask {
         context.set(KEY_RESOLVED_INSTRUMENT, instrument_json).await;
 
         // ── Resolve analysis pack into runtime policy ─────────────────────
-        let override_payload = handoff::try_load_from_context(&context).await?;
-        let runtime_policy = override_payload
-            .as_ref()
-            .map(|(policy, _)| policy.clone())
-            .map(Ok)
-            .unwrap_or_else(|| {
-                self.runtime_policy.clone().map_err(|e| {
+        let (runtime_policy, routing_fallback_reason) =
+            if let Some((policy, reason)) = handoff::try_load_from_context(&context).await? {
+                (policy, reason)
+            } else {
+                let policy = self.runtime_policy.clone().map_err(|e| {
                     graph_flow::GraphError::TaskExecutionFailed(format!(
                         "PreflightTask: pack resolution failed: {e}"
                     ))
-                })
-            })?;
-        let routing_fallback_reason = override_payload
-            .and_then(|(_, reason)| reason)
-            .or_else(|| self.routing_fallback_reason.clone());
+                })?;
+                (policy, self.routing_fallback_reason.clone())
+            };
 
         debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
 
