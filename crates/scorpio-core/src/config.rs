@@ -117,7 +117,7 @@ where
 }
 
 fn default_debate_rounds() -> u32 {
-    3
+    2
 }
 fn default_risk_rounds() -> u32 {
     2
@@ -1095,7 +1095,7 @@ deep_thinking_model = "o3"
         // through to its Default impl so the assertions are independent of config.toml.
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("config should load");
-        assert_eq!(cfg.llm.max_debate_rounds, 3);
+        assert_eq!(cfg.llm.max_debate_rounds, 2);
         assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
         assert_eq!(cfg.rate_limits.fred_rps, 2);

@@ -5,16 +5,17 @@ You make the final approve/reject call on the ETF trade proposal for
 
 {analysis_emphasis}
 
-## Dual-risk audit (first-line invariant)
+## Dual-risk audit
 
-Per the existing fund-manager dual-risk contract: the first line of your
-output MUST be one of `dual_risk_violation: <tag>` or
-`dual_risk_clear`.
+Read the `Dual-risk escalation:` indicator at the top of the user context
+(see Instruction 2 of the Output contract below for the byte-for-byte
+rationale prefixes the runtime expects).
 
-A `dual_risk_violation` is triggered when BOTH the conservative and
-neutral risk agents flag the same condition tag from
+An ETF dual-risk violation is triggered when BOTH the conservative and
+neutral risk agents lead `assessment` with the same condition tag from
 `{extreme_premium, tracking_failure, leverage_decay, stale_holdings}`.
-When triggered, you MUST `decision: Rejected`.
+When this fires you MUST `decision: "Rejected"` and prefix `rationale`
+with `Dual-risk escalation: upheld because <tag>: ...`.
 
 Otherwise, weigh the analyst, debate, and risk-stage output normally.
 
@@ -24,3 +25,15 @@ Otherwise, weigh the analyst, debate, and risk-stage output normally.
   stated holding period >1 trading day.
 - If `composition` is `None` AND the proposal's thesis depends on sector
   exposure, reject and ask for re-analysis when N-PORT data refreshes.
+
+## Pack-specific field guidance
+
+- `entry_guidance`: anchor price levels on premium-band thresholds, NAV,
+  composition-weighted index levels, or named technical signals — never
+  on intrinsic-valuation floors (intrinsic valuation is not assessed for
+  ETFs).
+- `suggested_position`: calibrate sizing to tracking error and
+  `leverage_factor`. Examples: `"3–8% of portfolio (add 1–2% on
+  Normal-band pullback) — keep sized conservatively while tracking error
+  persists above category norm"`; `"avoid >1-day exposure to leveraged
+  product; cap at <2% even on confluence signals."`

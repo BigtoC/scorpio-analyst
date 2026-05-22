@@ -21,6 +21,12 @@ const ANALYST_RUNTIME_CONTRACT: &str =
 const THEME_C_MANAGEMENT_RED_FLAGS: &str = include_str!("prompts/theme_c_management_red_flags.md");
 const THEME_H_SOURCING_AND_UNTRUSTED: &str =
     include_str!("../common/prompts/theme_h_sourcing_and_untrusted.md");
+const RISK_REPORT_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/risk_report_output_contract.md");
+const TRADE_PROPOSAL_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/trade_proposal_output_contract.md");
+const EXECUTION_STATUS_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/execution_status_output_contract.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
     content.strip_suffix('\n').unwrap_or(content)
@@ -51,6 +57,13 @@ fn with_analyst_runtime_contract_sections(
     composed.push_str("\n\n");
     composed.push_str(trim_trailing_newline(ANALYST_RUNTIME_CONTRACT));
     Cow::Owned(composed)
+}
+
+/// Compose an equity risk-agent slot: stance-specific raw prompt + the
+/// shared `RiskReport` output contract with `{stance}` substituted in.
+fn compose_equity_risk(raw: &'static str, stance: &str) -> Cow<'static, str> {
+    let output_contract = RISK_REPORT_OUTPUT_CONTRACT.replace("{stance}", stance);
+    Cow::Owned(compose_prompt_sections(raw, &[&output_contract]))
 }
 
 fn baseline_prompt_bundle() -> PromptBundle {
@@ -85,23 +98,24 @@ fn baseline_prompt_bundle() -> PromptBundle {
         ))),
         trader: with_sections(
             include_str!("prompts/trader.md"),
-            &[theme_h_rationale.as_str()],
+            &[theme_h_rationale.as_str(), TRADE_PROPOSAL_OUTPUT_CONTRACT],
         ),
-        aggressive_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/aggressive_risk.md"
-        ))),
-        conservative_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/conservative_risk.md"
-        ))),
-        neutral_risk: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/neutral_risk.md"
-        ))),
+        aggressive_risk: compose_equity_risk(
+            include_str!("prompts/aggressive_risk.md"),
+            "Aggressive",
+        ),
+        conservative_risk: compose_equity_risk(
+            include_str!("prompts/conservative_risk.md"),
+            "Conservative",
+        ),
+        neutral_risk: compose_equity_risk(include_str!("prompts/neutral_risk.md"), "Neutral"),
         risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
             "../common/prompts/risk_moderator.md"
         ))),
-        fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/fund_manager.md"
-        ))),
+        fund_manager: with_sections(
+            include_str!("prompts/fund_manager.md"),
+            &[EXECUTION_STATUS_OUTPUT_CONTRACT],
+        ),
         auditor: Cow::Borrowed(trim_trailing_newline(include_str!(
             "../common/prompts/auditor.md"
         ))),

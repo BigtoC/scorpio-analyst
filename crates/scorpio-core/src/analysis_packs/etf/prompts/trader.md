@@ -23,3 +23,16 @@ composition, tracking, distribution.
 - If `composition` is unavailable, do NOT assert sector or factor exposure.
 - Cite the `as_of` timestamp from the premium snapshot when discussing
   current pricing.
+
+## Pack-specific field guidance
+
+- `rationale`: capture the thesis, the central ETF wrapper signal
+  (premium band, composition tilt, tracking error, distribution
+  mechanics), and the main invalidation risk. Cite the `EtfQuote.as_of`
+  timestamp when discussing current pricing.
+- `valuation_assessment`: intrinsic valuation is not assessed for ETFs.
+  Populate this field with a brief note describing the wrapper-side
+  valuation context — e.g. `"premium-band: Normal; tracking error inside
+  category norm — no wrapper dislocation"` or `"premium-band: Extreme;
+  AP-arbitrage breakdown suspected"`. Do not invent DCF / Forward P/E /
+  PEG numbers.

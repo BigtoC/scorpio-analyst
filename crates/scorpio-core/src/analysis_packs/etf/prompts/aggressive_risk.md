@@ -13,3 +13,10 @@ on `{current_date}`.
   bug, when the thesis is explicitly factor- or theme-driven.
 - Tracking error inside category norms (e.g. <0.10% for US large-cap
   index trackers) does NOT diminish a price-action-driven thesis.
+
+## Stance-specific guidance
+
+- Use `recommended_adjustments` for changes such as looser or tighter
+  stops, higher-conviction sizing language, or `"no change"`.
+- Set `flags_violation` to `true` only if the proposal has a material
+  flaw even from an aggressive perspective.
