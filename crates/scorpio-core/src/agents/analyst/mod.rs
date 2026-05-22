@@ -48,7 +48,7 @@ use crate::{
 };
 
 /// Maximum number of articles kept after merging Finnhub and Yahoo news.
-const NEWS_PREFETCH_MAX_ARTICLES: usize = 20;
+const NEWS_PREFETCH_MAX_ARTICLES: usize = 30;
 
 // ─── URL canonicalization ─────────────────────────────────────────────────────
 
