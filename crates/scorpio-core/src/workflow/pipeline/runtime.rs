@@ -33,9 +33,8 @@ use crate::{
         tasks::{
             FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
             KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
-            KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_RUNTIME_POLICY_OVERRIDE,
             KEY_TRANSCRIPT_FETCH_STATUS, NewsAnalystTask, SentimentAnalystTask,
-            TechnicalAnalystTask,
+            TechnicalAnalystTask, handoff,
         },
     },
 };
@@ -524,31 +523,13 @@ pub async fn run_analysis_cycle(
     session.context.set(KEY_DEBATE_ROUND, 0u32).await;
     session.context.set(KEY_RISK_ROUND, 0u32).await;
 
-    let runtime_policy_json =
-        serde_json::to_string(&runtime_policy).map_err(|error| TradingError::GraphFlow {
+    handoff::put_into_context(&session.context, runtime_policy, routing_fallback_reason)
+        .await
+        .map_err(|error| TradingError::GraphFlow {
             phase: "init".into(),
-            task: "serialize_runtime_policy_override".into(),
+            task: "serialize_runtime_preflight_override".into(),
             cause: error.to_string(),
         })?;
-    session
-        .context
-        .set(KEY_RUNTIME_POLICY_OVERRIDE, runtime_policy_json)
-        .await;
-    let routing_fallback_reason_json =
-        serde_json::to_string(&routing_fallback_reason).map_err(|error| {
-            TradingError::GraphFlow {
-                phase: "init".into(),
-                task: "serialize_routing_fallback_reason_override".into(),
-                cause: error.to_string(),
-            }
-        })?;
-    session
-        .context
-        .set(
-            KEY_ROUTING_FALLBACK_REASON_OVERRIDE,
-            routing_fallback_reason_json,
-        )
-        .await;
 
     if let Some(news_json) = cached_news_json {
         session.context.set(KEY_CACHED_NEWS, news_json).await;

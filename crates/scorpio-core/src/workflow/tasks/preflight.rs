@@ -35,10 +35,10 @@ use crate::{
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
     KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
-    KEY_ROUTING_FALLBACK_REASON, KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_ROUTING_FLAGS,
-    KEY_RUNTIME_PACK_ROUTE, KEY_RUNTIME_POLICY, KEY_RUNTIME_POLICY_OVERRIDE,
+    KEY_ROUTING_FALLBACK_REASON, KEY_ROUTING_FLAGS, KEY_RUNTIME_PACK_ROUTE, KEY_RUNTIME_POLICY,
     KEY_TRANSCRIPT_FETCH_STATUS,
 };
+use super::handoff;
 
 const TASK_ID: &str = "preflight";
 
@@ -226,8 +226,10 @@ impl Task for PreflightTask {
         context.set(KEY_RESOLVED_INSTRUMENT, instrument_json).await;
 
         // ── Resolve analysis pack into runtime policy ─────────────────────
-        let runtime_policy = runtime_policy_override(&context)
-            .await?
+        let override_payload = handoff::try_load_from_context(&context).await?;
+        let runtime_policy = override_payload
+            .as_ref()
+            .map(|(policy, _)| policy.clone())
             .map(Ok)
             .unwrap_or_else(|| {
                 self.runtime_policy.clone().map_err(|e| {
@@ -236,8 +238,8 @@ impl Task for PreflightTask {
                     ))
                 })
             })?;
-        let routing_fallback_reason = routing_fallback_reason_override(&context)
-            .await?
+        let routing_fallback_reason = override_payload
+            .and_then(|(_, reason)| reason)
             .or_else(|| self.routing_fallback_reason.clone());
 
         debug!(pack = %runtime_policy.pack_id, "resolved analysis pack");
@@ -372,33 +374,6 @@ async fn seed_transcript_status_if_absent(context: &Context) {
     }
 }
 
-async fn runtime_policy_override(
-    context: &Context,
-) -> graph_flow::Result<Option<crate::analysis_packs::RuntimePolicy>> {
-    let raw: Option<String> = context.get(KEY_RUNTIME_POLICY_OVERRIDE).await;
-    raw.map(|json| {
-        serde_json::from_str(&json).map_err(|error| {
-            graph_flow::GraphError::TaskExecutionFailed(format!(
-                "PreflightTask: orchestration corruption: runtime policy override deserialization failed: {error}"
-            ))
-        })
-    })
-    .transpose()
-}
-
-async fn routing_fallback_reason_override(context: &Context) -> graph_flow::Result<Option<String>> {
-    let raw: Option<String> = context.get(KEY_ROUTING_FALLBACK_REASON_OVERRIDE).await;
-    raw.map(|json| {
-        serde_json::from_str::<Option<String>>(&json).map_err(|error| {
-            graph_flow::GraphError::TaskExecutionFailed(format!(
-                "PreflightTask: orchestration corruption: routing fallback reason override deserialization failed: {error}"
-            ))
-        })
-    })
-    .transpose()
-    .map(Option::flatten)
-}
-
 /// Write `"null"` to a context key only if it is not already set or its current
 /// value is the JSON literal `"null"`.  This preserves enrichment data that
 /// `run_analysis_cycle` may have hydrated before the graph starts.
@@ -437,9 +412,8 @@ mod tests {
     };
 
     use super::PreflightTask;
-    use crate::workflow::tasks::common::{
-        KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_RUNTIME_POLICY, KEY_RUNTIME_POLICY_OVERRIDE,
-    };
+    use crate::workflow::tasks::common::KEY_RUNTIME_POLICY;
+    use crate::workflow::tasks::handoff;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1040,14 +1014,13 @@ mod tests {
             &crate::analysis_packs::resolve_pack(crate::analysis_packs::PackId::EtfBaseline),
         )
         .expect("etf baseline pack must resolve");
-        let runtime_policy_json =
-            serde_json::to_string(&runtime_policy).expect("runtime policy serialization");
-        let fallback_json = serde_json::to_string(&Some("profile_lookup_unavailable".to_owned()))
-            .expect("fallback serialization");
-        ctx.set(KEY_RUNTIME_POLICY_OVERRIDE, runtime_policy_json)
-            .await;
-        ctx.set(KEY_ROUTING_FALLBACK_REASON_OVERRIDE, fallback_json)
-            .await;
+        handoff::put_into_context(
+            &ctx,
+            runtime_policy,
+            Some("profile_lookup_unavailable".to_owned()),
+        )
+        .await
+        .expect("override write");
 
         let task = PreflightTask::with_runtime_policy(
             DataEnrichmentConfig::default(),

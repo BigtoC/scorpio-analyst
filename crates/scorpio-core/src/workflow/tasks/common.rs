@@ -65,16 +65,6 @@ pub const KEY_CACHED_EVENT_FEED: &str = "cached_event_feed";
 /// Value: JSON-serialized [`crate::analysis_packs::RuntimePolicy`].
 pub const KEY_RUNTIME_POLICY: &str = "runtime_policy";
 
-/// Internal context key used by `run_analysis_cycle` to pass a per-run
-/// runtime-policy override into preflight without pre-hydrating
-/// `TradingState.analysis_runtime_policy` before the graph starts.
-pub(crate) const KEY_RUNTIME_POLICY_OVERRIDE: &str = "runtime_policy_override";
-
-/// Internal context key used by `run_analysis_cycle` to pass the per-run
-/// routing fallback reason into preflight without pre-hydrating
-/// `TradingState.etf_routing_fallback_reason` before the graph starts.
-pub(crate) const KEY_ROUTING_FALLBACK_REASON_OVERRIDE: &str = "routing.fallback_reason_override";
-
 /// Context key for the per-run routing decisions written by [`PreflightTask`].
 ///
 /// Value: JSON-serialized [`crate::workflow::topology::RoutingFlags`].
