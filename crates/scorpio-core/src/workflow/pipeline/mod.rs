@@ -183,8 +183,6 @@ impl TradingPipeline {
     ) -> Self {
         let config = Arc::new(config);
         let snapshot_store = Arc::new(snapshot_store);
-        let runtime_policy =
-            crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack).ok();
         let catalyst_provider = runtime::build_catalyst_provider(
             &finnhub,
             &fred,
@@ -212,7 +210,7 @@ impl TradingPipeline {
             snapshot_store,
             quick_handle,
             deep_handle,
-            runtime_policy,
+            runtime_policy: None,
             graph,
         }
     }
@@ -248,8 +246,7 @@ impl TradingPipeline {
     ) -> Result<Self, crate::error::TradingError> {
         let config = Arc::new(config);
         let snapshot_store = Arc::new(snapshot_store);
-        let runtime_policy = crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack)
-            .map_err(|e| {
+        crate::analysis_packs::resolve_runtime_policy(&config.analysis_pack).map_err(|e| {
             crate::error::TradingError::Config(anyhow::anyhow!(
                 "TradingPipeline::try_new: invalid analysis_pack {:?}: {e}",
                 config.analysis_pack
@@ -282,7 +279,7 @@ impl TradingPipeline {
             snapshot_store,
             quick_handle,
             deep_handle,
-            runtime_policy: Some(runtime_policy),
+            runtime_policy: None,
             graph,
         })
     }

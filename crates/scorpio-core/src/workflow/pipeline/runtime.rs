@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     agents::analyst::{AnalystId, AnalystRegistry},
-    analysis_packs::{PackId, resolve_pack, resolve_runtime_policy},
+    analysis_packs::{PackId, resolve_pack, resolve_runtime_policy_for_manifest},
     config::Config,
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
@@ -28,11 +28,12 @@ use crate::{
     rate_limit::SharedRateLimiter,
     state::{EnrichmentState, TradingState},
     workflow::{
-        SnapshotStore,
+        RuntimePackSelection, SnapshotStore, classify_runtime_pack,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         tasks::{
             FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
             KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
+            KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_RUNTIME_POLICY_OVERRIDE,
             KEY_TRANSCRIPT_FETCH_STATUS, NewsAnalystTask, SentimentAnalystTask,
             TechnicalAnalystTask,
         },
@@ -48,6 +49,17 @@ pub(super) const CONSENSUS_PROVIDER_DEGRADED_HALF_LIFE_CYCLES: u32 = 3;
 const CONSENSUS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
+
+async fn classify_runtime_pack_selection(
+    yfinance: &YFinanceClient,
+    symbol: &str,
+) -> RuntimePackSelection {
+    let profile = yfinance.get_profile(symbol).await;
+    let fund_info = profile
+        .as_ref()
+        .and_then(|profile| crate::data::yfinance::etf::fund_info_from_profile(symbol, profile));
+    classify_runtime_pack(profile.as_ref(), fund_info.as_ref())
+}
 
 pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
     Ok(crate::data::resolve_symbol(symbol)?.symbol)
@@ -329,16 +341,23 @@ pub async fn run_analysis_cycle(
         .await
         .map_err(TradingError::Config)?;
 
-    let runtime_policy = match pipeline.runtime_policy.clone() {
-        Some(policy) => policy,
-        None => resolve_runtime_policy(&pipeline.config.analysis_pack).map_err(|cause| {
-            TradingError::Config(anyhow::anyhow!(
-                "analysis pack resolution failed for '{}': {cause}",
-                pipeline.config.analysis_pack
-            ))
-        })?,
+    let (runtime_policy, routing_fallback_reason) = match pipeline.runtime_policy.clone() {
+        Some(policy) => (policy, None),
+        None => {
+            let selection =
+                classify_runtime_pack_selection(&pipeline.yfinance, &initial_state.asset_symbol)
+                    .await;
+            let pack_id = selection.pack_id();
+            let policy =
+                resolve_runtime_policy_for_manifest(&resolve_pack(pack_id)).map_err(|cause| {
+                    TradingError::Config(anyhow::anyhow!(
+                        "analysis pack resolution failed for '{}': {cause}",
+                        pack_id.as_str()
+                    ))
+                })?;
+            (policy, selection.fallback_reason().map(str::to_owned))
+        }
     };
-
     let symbol = initial_state.asset_symbol.clone();
     let date = initial_state.target_date.clone();
     let execution_id = initial_state.execution_id.to_string();
@@ -504,6 +523,32 @@ pub async fn run_analysis_cycle(
         .await;
     session.context.set(KEY_DEBATE_ROUND, 0u32).await;
     session.context.set(KEY_RISK_ROUND, 0u32).await;
+
+    let runtime_policy_json =
+        serde_json::to_string(&runtime_policy).map_err(|error| TradingError::GraphFlow {
+            phase: "init".into(),
+            task: "serialize_runtime_policy_override".into(),
+            cause: error.to_string(),
+        })?;
+    session
+        .context
+        .set(KEY_RUNTIME_POLICY_OVERRIDE, runtime_policy_json)
+        .await;
+    let routing_fallback_reason_json =
+        serde_json::to_string(&routing_fallback_reason).map_err(|error| {
+            TradingError::GraphFlow {
+                phase: "init".into(),
+                task: "serialize_routing_fallback_reason_override".into(),
+                cause: error.to_string(),
+            }
+        })?;
+    session
+        .context
+        .set(
+            KEY_ROUTING_FALLBACK_REASON_OVERRIDE,
+            routing_fallback_reason_json,
+        )
+        .await;
 
     if let Some(news_json) = cached_news_json {
         session.context.set(KEY_CACHED_NEWS, news_json).await;
