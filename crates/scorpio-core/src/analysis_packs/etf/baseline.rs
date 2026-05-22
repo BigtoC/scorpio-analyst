@@ -16,6 +16,8 @@ const ETF_FAILURE_MODES: &str = include_str!("prompts/etf_failure_modes.md");
 
 // Shared scaffolding reused from the cross-pack `common/` prompt directory.
 const COMMON_ANALYST_CONTRACT: &str = include_str!("../common/prompts/analyst_runtime_contract.md");
+const RISK_REPORT_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/risk_report_output_contract.md");
 const ETF_LEVERAGE_WARNING: &str = include_str!("prompts/etf_leverage_warning.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
@@ -51,11 +53,13 @@ fn compose_etf_section(raw: &'static str, deltas: &[&str]) -> Cow<'static, str> 
     Cow::Owned(compose_prompt_sections(raw, &sections))
 }
 
-/// Compose a risk-agent slot: ETF-specific raw prompt + scaffolding.
-fn compose_etf_risk(raw: &'static str) -> Cow<'static, str> {
+/// Compose a risk-agent slot: ETF-specific raw prompt + ETF scaffolding +
+/// the shared `RiskReport` output contract with `{stance}` substituted in.
+fn compose_etf_risk(raw: &'static str, stance: &str) -> Cow<'static, str> {
+    let output_contract = RISK_REPORT_OUTPUT_CONTRACT.replace("{stance}", stance);
     Cow::Owned(compose_prompt_sections(
         raw,
-        &[ETF_RUNTIME_CONTRACT, ETF_FAILURE_MODES],
+        &[ETF_RUNTIME_CONTRACT, ETF_FAILURE_MODES, &output_contract],
     ))
 }
 
@@ -113,9 +117,15 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
 
         // Tier 3 — fully new ETF roles (trader, risk, fund manager).
         trader: compose_etf_section(include_str!("prompts/trader.md"), &[]),
-        aggressive_risk: compose_etf_risk(include_str!("prompts/aggressive_risk.md")),
-        conservative_risk: compose_etf_risk(include_str!("prompts/conservative_risk.md")),
-        neutral_risk: compose_etf_risk(include_str!("prompts/neutral_risk.md")),
+        aggressive_risk: compose_etf_risk(
+            include_str!("prompts/aggressive_risk.md"),
+            "Aggressive",
+        ),
+        conservative_risk: compose_etf_risk(
+            include_str!("prompts/conservative_risk.md"),
+            "Conservative",
+        ),
+        neutral_risk: compose_etf_risk(include_str!("prompts/neutral_risk.md"), "Neutral"),
         fund_manager: compose_etf_section(include_str!("prompts/fund_manager.md"), &[]),
     }
 }

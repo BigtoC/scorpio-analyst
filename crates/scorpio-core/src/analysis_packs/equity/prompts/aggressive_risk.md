@@ -12,12 +12,6 @@ Available inputs:
 - Neutral's latest view: {neutral_response}
 - Past learnings: {past_memory_str}
 
-Return ONLY a JSON object matching `RiskReport`:
-- `risk_level`: `Aggressive`
-- `assessment`: concise string explaining your view
-- `recommended_adjustments`: array of concrete refinements
-- `flags_violation`: boolean
-
 Options context guidance:
 - The technical report may include a structured `options_context` field and a plain-text `options_summary` field.
 - Always inspect `technical_report.options_context` first. Branch on `technical_report.options_context.outcome.kind`:

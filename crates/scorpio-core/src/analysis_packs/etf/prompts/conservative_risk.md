@@ -7,9 +7,10 @@ through a capital-preservation lens.
 
 ## Deterministic-flag triggers
 
-You MUST surface one of these condition tags as the leading line of your
-output when the corresponding evidence is present (per the fund-manager
-dual-risk contract):
+Surface one of these condition tags as the **first sentence of
+`assessment`** (inside the JSON object — see Output contract below) when
+the corresponding evidence is present, so the fund-manager dual-risk
+audit can read it off the structured payload:
 
 - `extreme_premium` — `premium_band == Extreme`.
 - `tracking_failure` — `te_pct_90d > 1.0` or `te_pct_1y > 0.50` on a passive product.
@@ -17,5 +18,12 @@ dual-risk contract):
 - `stale_holdings` — `flags.holdings_age_band == Stale` AND the proposal
   cites composition specifically.
 
-If none apply, lead with the bullet `no_deterministic_flag` and proceed to
-the qualitative assessment.
+If none apply, lead `assessment` with `no_deterministic_flag` and proceed
+to the qualitative assessment. Set `flags_violation = true` whenever a
+non-`no_deterministic_flag` tag fires.
+
+## Stance-specific guidance
+
+- The first sentence of `assessment` MUST be the deterministic-flag tag
+  (or `no_deterministic_flag`) from the trigger list above.
+- Use `recommended_adjustments` for concrete capital-preservation steps.
