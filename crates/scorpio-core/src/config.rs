@@ -117,7 +117,7 @@ where
 }
 
 fn default_debate_rounds() -> u32 {
-    3
+    2
 }
 fn default_risk_rounds() -> u32 {
     2
