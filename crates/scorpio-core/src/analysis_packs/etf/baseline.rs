@@ -18,6 +18,10 @@ const ETF_FAILURE_MODES: &str = include_str!("prompts/etf_failure_modes.md");
 const COMMON_ANALYST_CONTRACT: &str = include_str!("../common/prompts/analyst_runtime_contract.md");
 const RISK_REPORT_OUTPUT_CONTRACT: &str =
     include_str!("../common/prompts/risk_report_output_contract.md");
+const TRADE_PROPOSAL_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/trade_proposal_output_contract.md");
+const EXECUTION_STATUS_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/execution_status_output_contract.md");
 const ETF_LEVERAGE_WARNING: &str = include_str!("prompts/etf_leverage_warning.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
@@ -116,7 +120,10 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
         ))),
 
         // Tier 3 — fully new ETF roles (trader, risk, fund manager).
-        trader: compose_etf_section(include_str!("prompts/trader.md"), &[]),
+        trader: compose_etf_section(
+            include_str!("prompts/trader.md"),
+            &[TRADE_PROPOSAL_OUTPUT_CONTRACT],
+        ),
         aggressive_risk: compose_etf_risk(
             include_str!("prompts/aggressive_risk.md"),
             "Aggressive",
@@ -126,7 +133,10 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
             "Conservative",
         ),
         neutral_risk: compose_etf_risk(include_str!("prompts/neutral_risk.md"), "Neutral"),
-        fund_manager: compose_etf_section(include_str!("prompts/fund_manager.md"), &[]),
+        fund_manager: compose_etf_section(
+            include_str!("prompts/fund_manager.md"),
+            &[EXECUTION_STATUS_OUTPUT_CONTRACT],
+        ),
     }
 }
 

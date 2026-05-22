@@ -23,6 +23,10 @@ const THEME_H_SOURCING_AND_UNTRUSTED: &str =
     include_str!("../common/prompts/theme_h_sourcing_and_untrusted.md");
 const RISK_REPORT_OUTPUT_CONTRACT: &str =
     include_str!("../common/prompts/risk_report_output_contract.md");
+const TRADE_PROPOSAL_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/trade_proposal_output_contract.md");
+const EXECUTION_STATUS_OUTPUT_CONTRACT: &str =
+    include_str!("../common/prompts/execution_status_output_contract.md");
 
 fn trim_trailing_newline(content: &str) -> &str {
     content.strip_suffix('\n').unwrap_or(content)
@@ -94,7 +98,7 @@ fn baseline_prompt_bundle() -> PromptBundle {
         ))),
         trader: with_sections(
             include_str!("prompts/trader.md"),
-            &[theme_h_rationale.as_str()],
+            &[theme_h_rationale.as_str(), TRADE_PROPOSAL_OUTPUT_CONTRACT],
         ),
         aggressive_risk: compose_equity_risk(
             include_str!("prompts/aggressive_risk.md"),
@@ -108,9 +112,10 @@ fn baseline_prompt_bundle() -> PromptBundle {
         risk_moderator: Cow::Borrowed(trim_trailing_newline(include_str!(
             "../common/prompts/risk_moderator.md"
         ))),
-        fund_manager: Cow::Borrowed(trim_trailing_newline(include_str!(
-            "prompts/fund_manager.md"
-        ))),
+        fund_manager: with_sections(
+            include_str!("prompts/fund_manager.md"),
+            &[EXECUTION_STATUS_OUTPUT_CONTRACT],
+        ),
         auditor: Cow::Borrowed(trim_trailing_newline(include_str!(
             "../common/prompts/auditor.md"
         ))),
