@@ -1,5 +1,7 @@
 //! ETF vs benchmark tracking error.
 
+use std::collections::BTreeMap;
+
 use crate::data::yfinance::Candle;
 use crate::state::TrackingError;
 
@@ -11,12 +13,15 @@ pub(crate) fn compute_tracking_error(
     benchmark_ohlcv: &[Candle],
     benchmark_symbol: &str,
 ) -> Option<TrackingError> {
-    let etf_returns = daily_returns(etf_ohlcv);
-    let bench_returns = daily_returns(benchmark_ohlcv);
+    let etf_returns = daily_returns_by_date(etf_ohlcv);
+    let bench_returns = daily_returns_by_date(benchmark_ohlcv);
     let aligned: Vec<(f64, f64)> = etf_returns
         .iter()
-        .zip(bench_returns.iter())
-        .map(|(&a, &b)| (a, b))
+        .filter_map(|(date, etf_return)| {
+            bench_returns
+                .get(date)
+                .map(|benchmark_return| (*etf_return, *benchmark_return))
+        })
         .collect();
     if aligned.len() < 30 {
         return None;
@@ -31,10 +36,10 @@ pub(crate) fn compute_tracking_error(
     })
 }
 
-fn daily_returns(candles: &[Candle]) -> Vec<f64> {
+fn daily_returns_by_date(candles: &[Candle]) -> BTreeMap<String, f64> {
     candles
         .windows(2)
-        .map(|w| (w[1].close - w[0].close) / w[0].close)
+        .map(|w| (w[1].date.clone(), (w[1].close - w[0].close) / w[0].close))
         .collect()
 }
 
@@ -62,9 +67,9 @@ fn annualise(daily_stdev: f64) -> f64 {
 mod tests {
     use super::*;
 
-    fn synth_candle(close: f64) -> Candle {
+    fn synth_candle(date: &str, close: f64) -> Candle {
         Candle {
-            date: "2024-01-15".to_owned(),
+            date: date.to_owned(),
             open: close,
             high: close,
             low: close,
@@ -75,16 +80,49 @@ mod tests {
 
     #[test]
     fn compute_tracking_error_returns_none_for_short_series() {
-        let etf: Vec<Candle> = (0..10).map(|i| synth_candle(100.0 + i as f64)).collect();
-        let bench: Vec<Candle> = (0..10).map(|i| synth_candle(100.0 + i as f64)).collect();
+        let etf: Vec<Candle> = (0..10)
+            .map(|i| synth_candle(&format!("2024-01-{:02}", i + 1), 100.0 + i as f64))
+            .collect();
+        let bench: Vec<Candle> = (0..10)
+            .map(|i| synth_candle(&format!("2024-01-{:02}", i + 1), 100.0 + i as f64))
+            .collect();
         assert!(compute_tracking_error(&etf, &bench, "^GSPC").is_none());
     }
 
     #[test]
     fn compute_tracking_error_returns_zero_when_series_identical() {
-        let etf: Vec<Candle> = (0..100).map(|i| synth_candle(100.0 + i as f64)).collect();
-        let bench: Vec<Candle> = (0..100).map(|i| synth_candle(100.0 + i as f64)).collect();
+        let etf: Vec<Candle> = (0..100)
+            .map(|i| {
+                synth_candle(
+                    &format!("2024-01-{:02}-{:02}", (i / 31) + 1, (i % 31) + 1),
+                    100.0 + i as f64,
+                )
+            })
+            .collect();
+        let bench: Vec<Candle> = (0..100)
+            .map(|i| {
+                synth_candle(
+                    &format!("2024-01-{:02}-{:02}", (i / 31) + 1, (i % 31) + 1),
+                    100.0 + i as f64,
+                )
+            })
+            .collect();
         let te = compute_tracking_error(&etf, &bench, "^GSPC").expect("expected Some");
         assert!(te.te_pct_90d.abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_tracking_error_aligns_returns_by_date_instead_of_position() {
+        let etf: Vec<Candle> = (0..35)
+            .map(|i| synth_candle(&format!("2024-02-{:02}", i + 1), 100.0 + i as f64))
+            .collect();
+        let bench: Vec<Candle> = (0..36)
+            .map(|i| synth_candle(&format!("2024-02-{:02}", i + 1), 200.0 + i as f64))
+            .collect();
+
+        let te = compute_tracking_error(&etf, &bench[1..], "^GSPC")
+            .expect("date-aligned overlap should still produce tracking error");
+
+        assert_eq!(te.sample_days, 33);
     }
 }
