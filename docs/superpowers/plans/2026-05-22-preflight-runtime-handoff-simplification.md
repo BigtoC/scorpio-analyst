@@ -4,25 +4,25 @@
 
 **Goal:** Collapse the two-key JSON override transport between `run_analysis_cycle` and `PreflightTask` into a single private typed handoff carried through one sealed submodule, then inline one-use ceremony and replace combinator-heavy override resolution with direct branching.
 
-**Architecture:** A new sealed submodule `crates/scorpio-core/src/workflow/tasks/handoff.rs` owns the override type, its single context key, and read/write accessor functions. The struct itself stays `pub(super)`; the accessor functions are `pub(in crate::workflow)` and take/return primitives (`RuntimePolicy`, `Option<String>`) so no caller outside the submodule names the type. `run_analysis_cycle` writes via `put_into_context(...)`; `PreflightTask` reads via `try_load_from_context(...)` which preserves the existing fail-loud `TaskExecutionFailed` contract on malformed payloads (the typed `Context::get::<T>` path is explicitly avoided because it returns `None` on deserialize mismatch, silently downgrading to the constructor-derived fallback).
+**Architecture:** A new sealed submodule `crates/scorpio-core/src/workflow/tasks/handoff.rs` owns the override type, its single context key, and read/write accessor functions. The module itself is declared `pub(in crate::workflow) mod handoff;`, so workflow-internal callers can name `crate::workflow::tasks::handoff` directly without re-exporting it outside the workflow tree. The struct itself stays `pub(super)`; the accessor functions are `pub(in crate::workflow)` and take/return primitives (`RuntimePolicy`, `Option<String>`) so no caller outside the submodule names the type. `run_analysis_cycle` writes via `put_into_context(...)`; `PreflightTask` reads via `try_load_from_context(...)` which preserves the existing fail-loud `TaskExecutionFailed` contract on malformed payloads (the typed `Context::get::<T>` path is explicitly avoided because it returns `None` on deserialize mismatch, silently downgrading to the constructor-derived fallback). This stays out of `context_bridge` because that module owns `TradingState` serialization, while this handoff is a preflight-only orchestration override; a dedicated submodule is the smallest place to keep the key, payload shape, and fail-loud accessors together. Invariant: the handoff always carries a `RuntimePolicy`; `routing_fallback_reason` is optional metadata attached to that policy, not an independently overridable value.
 
 **Tech Stack:** Rust 1.93+ (edition 2024), `graph-flow` 0.5, `serde`/`serde_json`, `tokio` 1, `async-trait`, `cargo nextest`. Existing structs `RuntimePolicy` (from `crate::analysis_packs`) and `graph_flow::Context` are unchanged.
 
-**Shipping order:** Two atomic commits. Commit 1 lands the typed handoff and removes the old keys. Commit 2 lands the readability cleanup (inline helper, direct branching). Each commit must independently pass the merge gates so a regression in either is revertible without dragging the other.
+**Shipping order:** Two atomic commits. Commit 1 lands the typed handoff and removes the old keys while preserving the existing override-resolution shape. Commit 2 lands the readability cleanup (inline helper, direct branching). Each commit must independently pass the merge gates so a regression in either is revertible without dragging the other.
 
 ---
 
 ## File Structure
 
-| File                                                   | Action | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-|--------------------------------------------------------|--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/scorpio-core/src/workflow/tasks/handoff.rs`    | Create | Private `RuntimePreflightOverride` struct, single context key constant, and `pub(in crate::workflow)` accessor functions for write/read.                                                                                                                                                                                                                                                                                                                                                                 |
-| `crates/scorpio-core/src/workflow/tasks/mod.rs`        | Modify | Declare the new `handoff` submodule; remove the `pub(crate) use common::{KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_RUNTIME_POLICY_OVERRIDE};` re-export.                                                                                                                                                                                                                                                                                                                                                 |
-| `crates/scorpio-core/src/workflow/tasks/common.rs`     | Modify | Remove `KEY_RUNTIME_POLICY_OVERRIDE` and `KEY_ROUTING_FALLBACK_REASON_OVERRIDE` constants (lines 71-76).                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `crates/scorpio-core/src/workflow/pipeline/runtime.rs` | Modify | (Commit 1) Replace the two-key write block (lines 527-551) with one `handoff::put_into_context(...)` call. (Commit 2) Inline `classify_runtime_pack_selection` into `run_analysis_cycle`; the standalone function (lines 53-62) is deleted.                                                                                                                                                                                                                                                              |
-| `crates/scorpio-core/src/workflow/tasks/preflight.rs`  | Modify | (Commit 1) Replace `runtime_policy_override(...)` and `routing_fallback_reason_override(...)` helpers (lines 375-400) with one call to `handoff::try_load_from_context(...)`; rewrite the override-resolution block (lines 229-241) accordingly. Update the existing test `preflight_hydrates_runtime_surfaces_from_context_override_without_state_preseed` to write the single new key. (Commit 2) Replace the combinator-heavy resolution with `if let Some((policy, reason)) = ...` direct branching. |
+| File                                                   | Action | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+|--------------------------------------------------------|--------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `crates/scorpio-core/src/workflow/tasks/handoff.rs`    | Create | Private `RuntimePreflightOverride` struct, single context key constant, and `pub(in crate::workflow)` accessor functions for write/read.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `crates/scorpio-core/src/workflow/tasks/mod.rs`        | Modify | Declare `pub(in crate::workflow) mod handoff;`; remove the `pub(crate) use common::{KEY_ROUTING_FALLBACK_REASON_OVERRIDE, KEY_RUNTIME_POLICY_OVERRIDE};` re-export.                                                                                                                                                                                                                                                                                                                                                                       |
+| `crates/scorpio-core/src/workflow/tasks/common.rs`     | Modify | Remove `KEY_RUNTIME_POLICY_OVERRIDE` and `KEY_ROUTING_FALLBACK_REASON_OVERRIDE` constants (lines 71-76).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `crates/scorpio-core/src/workflow/pipeline/runtime.rs` | Modify | (Commit 1) Replace the two-key write block (lines 527-551) with one `handoff::put_into_context(...)` call. (Commit 2) Inline `classify_runtime_pack_selection` into `run_analysis_cycle`; the standalone function (lines 53-62) is deleted.                                                                                                                                                                                                                                                                                               |
+| `crates/scorpio-core/src/workflow/tasks/preflight.rs`  | Modify | (Commit 1) Replace `runtime_policy_override(...)` and `routing_fallback_reason_override(...)` helpers (lines 375-400) with one call to `handoff::try_load_from_context(...)`; keep the fallback resolution in its existing combinator shape so the transport swap stays isolated. Update the existing test `preflight_hydrates_runtime_surfaces_from_context_override_without_state_preseed` to write the single new key. (Commit 2) Replace the combinator-heavy resolution with `if let Some((policy, reason)) = ...` direct branching. |
 
-No changes to `pipeline/tests.rs` or `tests/workflow_pipeline_structure.rs` are expected — those tests do not reference the override keys directly (`grep` confirmed). If `cargo nextest` surfaces a failure there, treat it as a real regression rather than a mechanical update.
+No changes to `pipeline/tests.rs` or `tests/workflow_pipeline_structure.rs` are expected — those tests do not reference the override keys directly (`grep` confirmed), and `run_analysis_cycle_routes_baseline_pipeline_to_etf_pack_per_run` remains the load-bearing end-to-end proof that `run_analysis_cycle` and `PreflightTask` stay wired together through the new handoff. If `cargo nextest` surfaces a failure there, treat it as a real regression rather than a mechanical update.
 
 ---
 
@@ -38,14 +38,14 @@ No changes to `pipeline/tests.rs` or `tests/workflow_pipeline_structure.rs` are 
 In `crates/scorpio-core/src/workflow/tasks/mod.rs`, immediately after line 10 (`pub mod preflight;`), add:
 
 ```rust
-mod handoff;
+pub(in crate::workflow) mod handoff;
 ```
 
-Do NOT yet add a re-export — the submodule is sealed and consumers reach into it via its `pub(in crate::workflow)` accessor functions, not via `tasks::*`.
+Do NOT add a wider re-export — the submodule stays sealed outside `crate::workflow`, and workflow-internal consumers reach into it via its `pub(in crate::workflow)` accessor functions rather than `tasks::*`.
 
 - [ ] **Step 2: Write the failing tests first**
 
-Create `crates/scorpio-core/src/workflow/tasks/handoff.rs` with ONLY the test module populated (no implementation yet). The tests cover three required behaviors: round-trip via accessors, absent-key returns `Ok(None)`, malformed payload returns `TaskExecutionFailed`.
+Create `crates/scorpio-core/src/workflow/tasks/handoff.rs` with ONLY the test module populated (no implementation yet). The tests cover four required behaviors: round-trip via accessors, absent-key returns `Ok(None)`, malformed payload returns `TaskExecutionFailed`, and absent fallback reason round-trips as `None`. Together they codify the invariant that the handoff always carries a `RuntimePolicy`; the fallback reason is optional metadata, not an independent override path.
 
 ```rust
 //! Private typed handoff between `run_analysis_cycle` and `PreflightTask`.
@@ -282,7 +282,7 @@ Add a sibling use for the handoff accessors below the existing `tasks::` import 
 use crate::workflow::tasks::handoff;
 ```
 
-Place it with the other `use` statements at the top of the file. If the `handoff` module path is private to `crate::workflow::tasks` and rejects this import, fall back to fully qualifying the call sites: `crate::workflow::tasks::handoff::put_into_context(...)`.
+Place it with the other `use` statements at the top of the file. This is the only supported access path for workflow-internal callers; do not add a re-export or alternate call-site path.
 
 - [ ] **Step 2: Replace the two-key write block**
 
@@ -339,10 +339,10 @@ Replace the entire block with:
 Run: `cargo build -p scorpio-core`
 Expected: clean build. If the compiler complains about an unused import for `KEY_ROUTING_FALLBACK_REASON_OVERRIDE` or `KEY_RUNTIME_POLICY_OVERRIDE`, you missed Step 1 — go back and remove them from the use clause.
 
-- [ ] **Step 4: Re-run handoff tests + a quick smoke**
+- [ ] **Step 4: Re-run handoff tests only**
 
-Run: `cargo nextest run -p scorpio-core workflow::tasks::handoff workflow::pipeline --no-fail-fast`
-Expected: handoff tests still pass; existing pipeline tests pass. No new failures should appear yet — `PreflightTask` is still reading the old keys, but Task 3 fixes that.
+Run: `cargo nextest run -p scorpio-core workflow::tasks::handoff --no-fail-fast`
+Expected: handoff tests still pass. Do not treat pipeline-routing coverage as meaningful yet — `PreflightTask` still reads the old keys until Task 3 lands.
 
 ---
 
@@ -393,20 +393,23 @@ Replace the block with a single call to the accessor. (Direct-branching rewrite 
 
 ```rust
         let override_payload = handoff::try_load_from_context(&context).await?;
-        let (runtime_policy, routing_fallback_reason) = match override_payload {
-            Some((policy, reason)) => (policy, reason),
-            None => {
-                let policy = self.runtime_policy.clone().map_err(|e| {
+        let runtime_policy = override_payload
+            .as_ref()
+            .map(|(policy, _)| policy.clone())
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.runtime_policy.clone().map_err(|e| {
                     graph_flow::GraphError::TaskExecutionFailed(format!(
                         "PreflightTask: pack resolution failed: {e}"
                     ))
-                })?;
-                (policy, self.routing_fallback_reason.clone())
-            }
-        };
+                })
+            })?;
+        let routing_fallback_reason = override_payload
+            .and_then(|(_, reason)| reason)
+            .or_else(|| self.routing_fallback_reason.clone());
 ```
 
-This already uses direct branching, which incidentally satisfies the Commit 2 readability goal for this block — Commit 2 will only need to handle any other combinator-heavy paths the override resolution touched (none today, but verify).
+This keeps Commit 1 as a pure transport substitution. Commit 2 will spend the readability budget on rewriting the same logic into direct branching once the handoff migration is already green.
 
 - [ ] **Step 3: Delete the now-unused helper functions**
 
@@ -457,10 +460,10 @@ The current test body (`preflight.rs:1031-1078`) writes two JSON strings under t
 
 Drop the now-unused `runtime_policy_json` and `fallback_json` locals. The rest of the test (TradingState setup, PreflightTask construction, post-run assertions) stays identical.
 
-- [ ] **Step 3: Run the regression test**
+- [ ] **Step 3: Run the regression tests**
 
-Run: `cargo nextest run -p scorpio-core preflight_hydrates_runtime_surfaces_from_context_override_without_state_preseed`
-Expected: 1 test passed. The assertions on `analysis_pack_name`, `analysis_runtime_policy`, and `etf_routing_fallback_reason` must still hold — the test is the load-bearing check that the typed handoff preserves preflight's hydration contract.
+Run: `cargo nextest run -p scorpio-core preflight_hydrates_runtime_surfaces_from_context_override_without_state_preseed run_analysis_cycle_routes_baseline_pipeline_to_etf_pack_per_run --no-fail-fast`
+Expected: 2 tests passed. The first preserves the preflight hydration contract; the second is the load-bearing producer-to-consumer regression proving `run_analysis_cycle` writes what `PreflightTask` reads through the new handoff after legacy-key removal.
 
 ---
 
@@ -643,39 +646,41 @@ Expected: all tests pass. The inlining is behavior-preserving; failures here ind
 
 ---
 
-### Task 8: Confirm the override-resolution block is already direct-branching, then verify
+### Task 8: Rewrite the override-resolution block to direct branching, then verify
 
-**Files:** none modified — this task is verification of the residual readability claim.
+**Files:**
+- Modify: `crates/scorpio-core/src/workflow/tasks/preflight.rs:229-241` (rewrite override resolution)
 
-In Commit 1 Task 3, the override-resolution block at `preflight.rs:229-241` was already rewritten to direct `match` branching:
+Commit 1 intentionally kept the fallback resolution in its original combinator shape so the transport swap stayed isolated. Commit 2 now spends the readability budget on rewriting that same block to direct branching:
 
 ```rust
-        let override_payload = handoff::try_load_from_context(&context).await?;
-        let (runtime_policy, routing_fallback_reason) = match override_payload {
-            Some((policy, reason)) => (policy, reason),
-            None => {
+        let (runtime_policy, routing_fallback_reason) =
+            if let Some((policy, reason)) = handoff::try_load_from_context(&context).await? {
+                (policy, reason)
+            } else {
                 let policy = self.runtime_policy.clone().map_err(|e| {
                     graph_flow::GraphError::TaskExecutionFailed(format!(
                         "PreflightTask: pack resolution failed: {e}"
                     ))
                 })?;
                 (policy, self.routing_fallback_reason.clone())
-            }
-        };
+            };
 ```
 
-That already satisfies the design's "direct branching (`if let Some(override) = ...`)" goal. No further edit is required for this slice.
+- [ ] **Step 1: Replace the combinator chain with direct branching**
 
-- [ ] **Step 1: Re-read the resolved block to confirm no combinator-heavy code remains**
+Apply the rewrite above in `preflight.rs:229-241`. Keep the error message and fallback semantics identical; only the control-flow shape changes in Commit 2.
+
+- [ ] **Step 2: Re-read the resolved block to confirm no combinator-heavy code remains**
 
 Open `preflight.rs:229-260` and read top-to-bottom. Verify:
 - No `.map(Ok).unwrap_or_else(...)` chains
 - No nested `.and_then(...)` or `.or_else(...)` on the override resolution
-- The intent — "use override if present; otherwise use constructor fallback" — reads as a single `match` arm
+- The intent — "use override if present; otherwise use constructor fallback" — reads as a single `if let` / `else` branch
 
-If anything combinator-heavy remains (e.g., the `routing_fallback_reason` still uses `.or_else(|| self.routing_fallback_reason.clone())` from the pre-Commit-1 shape), rewrite it inline now to match the `match` form already in place.
+If anything combinator-heavy remains (e.g., the `routing_fallback_reason` still uses `.or_else(|| self.routing_fallback_reason.clone())` from the pre-Commit-1 shape), rewrite it inline now to match the `if let` form above.
 
-- [ ] **Step 2: Format and lint**
+- [ ] **Step 3: Format and lint**
 
 Run: `cargo fmt -- --check && cargo clippy --workspace --all-targets -- -D warnings`
 Expected: clean.
@@ -712,12 +717,11 @@ Expected: clean.
 git add crates/scorpio-core/src/workflow/pipeline/runtime.rs \
         crates/scorpio-core/src/workflow/tasks/preflight.rs
 git commit -m "$(cat <<'EOF'
-refactor(workflow): inline one-use classify_runtime_pack_selection wrapper
+refactor(workflow): inline runtime pack helper and preflight branching
 
 Inline the single-call-site classify_runtime_pack_selection helper into
-run_analysis_cycle. The override-resolution block in PreflightTask::run
-already lands as direct match branching from the prior commit, so no
-additional change is needed there. No user-visible behavior changes.
+run_analysis_cycle and rewrite the PreflightTask override-resolution block
+from combinators to direct branching. No user-visible behavior changes.
 EOF
 )"
 ```
