@@ -124,10 +124,7 @@ fn etf_baseline_prompt_bundle() -> PromptBundle {
             include_str!("prompts/trader.md"),
             &[TRADE_PROPOSAL_OUTPUT_CONTRACT],
         ),
-        aggressive_risk: compose_etf_risk(
-            include_str!("prompts/aggressive_risk.md"),
-            "Aggressive",
-        ),
+        aggressive_risk: compose_etf_risk(include_str!("prompts/aggressive_risk.md"), "Aggressive"),
         conservative_risk: compose_etf_risk(
             include_str!("prompts/conservative_risk.md"),
             "Conservative",

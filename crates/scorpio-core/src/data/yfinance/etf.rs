@@ -331,5 +331,4 @@ mod tests {
     fn benchmark_name_normalization_rejects_blank_values() {
         assert_eq!(normalize_benchmark_symbol("   "), None);
     }
-
 }
