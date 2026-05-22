@@ -31,13 +31,17 @@ This preserves the sole-writer contract, but it spreads one concept across:
 - one re-export in `tasks/mod.rs`, and
 - one null-path special case for the optional fallback reason.
 
-There are also two smaller clarity issues adjacent to that path:
+There is also one smaller clarity issue adjacent to that path:
 
 - `classify_runtime_pack_selection(...)` in
   `crates/scorpio-core/src/workflow/pipeline/runtime.rs` is a one-use wrapper.
-- ETF benchmark fallback is normalized once for benchmark fetch assembly and then
-  effectively patched again inside `derive_runtime_valuation(...)` by cloning
-  and mutating `FundInfo`.
+
+ETF benchmark fallback also has a known cleanup opportunity (it is currently
+normalized once for benchmark fetch assembly and then effectively patched
+again inside `derive_runtime_valuation(...)` by cloning and mutating
+`FundInfo`), but that work is deferred to a follow-up plan to keep this
+slice's revert blast radius narrow — see
+"Follow-up: Deferred ETF benchmark normalization cleanup" below.
 
 ## Non-Goals
 
@@ -48,38 +52,71 @@ There are also two smaller clarity issues adjacent to that path:
 - Do not change `TradingPipeline::from_pack(...)` fixed-pack semantics.
 - Do not change user-visible routing behavior, final report behavior, or test
   expectations beyond mechanical adjustments required by the simplification.
+- ETF benchmark normalization cleanup is explicitly out of scope for this
+  slice; see "Follow-up" below.
 
 ## Recommended Approach
 
 Use one private, typed runtime handoff object for the preflight override, then
-apply the smaller readability cleanups around it.
+apply the smaller readability cleanup around it.
 
 ### Runtime handoff
 
 Replace the two-key JSON override transport with one internal typed context
-value, for example:
+value, defined in a new sealed submodule
+`crates/scorpio-core/src/workflow/tasks/handoff.rs` with `pub(super)`
+visibility and no public field access — readers and writers go through
+accessor functions exported from the submodule. The struct shape:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct RuntimePreflightOverride {
+pub(super) struct RuntimePreflightOverride {
     runtime_policy: RuntimePolicy,
     routing_fallback_reason: Option<String>,
 }
 ```
 
-This object remains internal to workflow runtime/preflight plumbing.
+Sealing the submodule and refusing field access enforces Risk #2 (the typed
+handoff staying narrow) at compile time rather than relying on convention.
+
+Transport uses one private context key constant
+`KEY_RUNTIME_PREFLIGHT_OVERRIDE`, defined alongside the struct in the same
+sealed submodule.
+
+The constants `KEY_RUNTIME_POLICY_OVERRIDE` and
+`KEY_ROUTING_FALLBACK_REASON_OVERRIDE` — and every site that writes them —
+are fully removed by this refactor. There is no compat shim, since the
+override lives in in-memory context (not a persisted format with external
+consumers) and the cleanup is atomic with the rest of the change.
 
 `run_analysis_cycle` will:
 
 - resolve runtime classification exactly as it does today,
 - construct one `RuntimePreflightOverride`,
-- store it in context before session save,
+- store it in context under `KEY_RUNTIME_PREFLIGHT_OVERRIDE` before session
+  save,
 - never write runtime surfaces to `TradingState` directly.
 
 `PreflightTask` will:
 
-- read the single override object if present,
-- otherwise fall back to its constructor-provided `runtime_policy`,
+- read the single override object if present, via the submodule's accessor
+  that deserializes through `serde_json::from_str` (or
+  `serde_json::from_value` on a `serde_json::Value` intermediate) with
+  explicit error mapping to `TaskExecutionFailed`. A present-but-malformed
+  override must surface as `TaskExecutionFailed`, not silently fall back —
+  this preserves the fail-loud contract that the existing two-key code
+  provides at `preflight.rs:378-399` and that Risk #1 depends on. A typed
+  `context.get::<RuntimePreflightOverride>` read is not acceptable on its
+  own, because graph-flow's `Context::get` returns `None` on any deserialize
+  mismatch and would silently downgrade to the constructor-derived fallback.
+- otherwise fall back to deriving runtime policy from the pipeline manifest
+  exactly as it does today. No new constructor parameter is introduced —
+  `PreflightTask::new(pipeline)` continues to take only `TradingPipeline`,
+  and the "constructor-provided runtime policy" phrasing of earlier drafts
+  is replaced by this derive-from-pipeline path.
+- when an override is present, completely replace the derived runtime policy
+  and fallback reason with the override's values — no field-level merging
+  occurs,
 - hydrate:
   - `state.analysis_pack_name`
   - `state.analysis_runtime_policy`
@@ -95,18 +132,37 @@ This keeps the authority boundary explicit while reducing transport ceremony.
   branching (`if let Some(override) = ...`) so the handoff precedence is easier
   to read during audits.
 
-### ETF benchmark normalization cleanup
+## Follow-up: Deferred ETF benchmark normalization cleanup
 
-Normalize ETF benchmark fallback once during valuation input assembly in
-`crates/scorpio-core/src/workflow/tasks/analyst.rs`, near the existing
-`resolve_benchmark_symbol(...)` usage that already drives benchmark OHLCV fetch.
+The current code normalizes ETF benchmark fallback once for benchmark fetch
+assembly and then patches `FundInfo` again inside
+`derive_runtime_valuation(...)` by cloning and mutating it. Collapsing those
+two sites into one assembly-time normalization is a real cleanup, but it
+lives in a different execution path (valuation, not preflight transport) and
+has its own divergence risk (originally surfaced as
+"benchmark fetch and valuation could diverge again"). To keep this slice's
+revert blast radius narrow, the cleanup is deferred to a separate plan.
 
-After that normalization:
+When that follow-up plan is written, it MUST include a `FundInfo` consumer
+inventory before any relocation lands. At minimum the inventory must
+enumerate:
 
-- `ValuationInputs.etf_fund_info` should already carry the effective
-  `stated_benchmark` when one can be resolved,
-- `derive_runtime_valuation(...)` should no longer need to clone and patch
-  `FundInfo`.
+- `crates/scorpio-core/src/valuation/etf/premium_discount.rs:55-56`, which
+  reads `info.stated_benchmark` directly from a `FundInfo` argument,
+- both `resolve_benchmark_symbol(...)` call sites in
+  `crates/scorpio-core/src/workflow/tasks/analyst.rs` (`:766` driving
+  benchmark OHLCV fetch and `:880` inside `derive_runtime_valuation`),
+- any other `stated_benchmark` reader the audit surfaces.
+
+The follow-up plan must assert that valuation-input assembly is upstream of
+every listed consumer. If any consumer constructs its own `FundInfo`
+independently, normalization must happen at the `FundInfo` construction
+boundary instead of at `ValuationInputs` assembly. The proposed assembly-time
+site is `build_valuation_inputs()` in `analyst.rs`, immediately after the
+existing `resolve_benchmark_symbol(...)` call at `analyst.rs:766` and before
+`ValuationInputs` is constructed at `analyst.rs:778` — but this must be
+re-validated against the consumer inventory in the follow-up plan, not
+assumed here.
 
 ## Alternatives Considered
 
@@ -154,7 +210,7 @@ These are the design gates for the simplification:
 - `crates/scorpio-core/src/workflow/tasks/preflight.rs`
 - `crates/scorpio-core/src/workflow/tasks/common.rs`
 - `crates/scorpio-core/src/workflow/tasks/mod.rs`
-- `crates/scorpio-core/src/workflow/tasks/analyst.rs`
+- `crates/scorpio-core/src/workflow/tasks/handoff.rs` (new file)
 
 Tests may need mechanical updates in:
 
@@ -177,8 +233,24 @@ These are acceptable internal changes:
 
 - one typed internal handoff object instead of two JSON override values,
 - fewer serialization/deserialization seams,
-- simpler preflight override precedence logic,
-- benchmark normalization performed once earlier in the valuation-input path.
+- simpler preflight override precedence logic.
+
+### Snapshot compatibility
+
+The override lives in `graph_flow::Context`, not on `TradingState`. The new
+key `KEY_RUNTIME_PREFLIGHT_OVERRIDE` does not enter
+`phase_snapshots.trading_state_json`, so `THESIS_MEMORY_SCHEMA_VERSION` does
+not need to be bumped.
+
+In-flight session contexts saved with the old two-key layout
+(`KEY_RUNTIME_POLICY_OVERRIDE` + `KEY_ROUTING_FALLBACK_REASON_OVERRIDE`) and
+then resumed on a new binary that only reads `KEY_RUNTIME_PREFLIGHT_OVERRIDE`
+fall through cleanly to the constructor-derived runtime policy — the old
+keys are simply ignored, and preflight's derive-from-pipeline path computes
+the same policy `run_analysis_cycle` would have written. Operators should
+be aware that runs straddling the upgrade lose any persisted ETF-routing
+fallback reason from the prior cycle, but ETF rerouting itself remains
+correct because `run_analysis_cycle` reruns classification on each run.
 
 ## Testing Strategy
 
@@ -207,18 +279,23 @@ Also keep full repo verification as the merge gate:
 
 - If the simplification leaks runtime surfaces back into pre-graph state, it
   reintroduces the exact regression we just fixed.
-- If the typed handoff is made public or reused too broadly, it weakens the
-  clarity of the workflow boundary instead of improving it.
-- If benchmark normalization is moved to the wrong stage, benchmark fetch and
-  valuation could diverge again.
+- If the typed handoff escapes the sealed `handoff` submodule — visibility
+  widened beyond `pub(super)`, or accessor functions extended to bypass the
+  intended boundary — it weakens the clarity of the workflow boundary
+  instead of improving it.
 
 ## Recommendation
 
 Implement the simplification as a narrow internal refactor:
 
-- one private typed preflight override object,
+- one private typed preflight override object in a sealed submodule,
 - preflight remains the sole production writer,
-- inline/remove single-use ceremony,
-- normalize ETF benchmark fallback once in valuation input assembly.
+- inline/remove single-use ceremony.
 
-This is the best balance between clarity, maintainability, and contract safety.
+Ship the two changes (typed handoff + readability cleanup) as separate
+commits so a regression in either can be reverted independently. The
+deferred ETF benchmark normalization cleanup remains in its own follow-up
+plan and is not part of this slice's revert blast radius.
+
+This is the best balance between clarity, maintainability, and contract
+safety.
