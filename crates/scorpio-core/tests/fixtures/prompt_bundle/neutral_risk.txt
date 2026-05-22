@@ -12,12 +12,6 @@ Available inputs:
 - Conservative's latest view: {conservative_response}
 - Past learnings: see untrusted user context
 
-Return ONLY a JSON object matching `RiskReport`:
-- `risk_level`: `Neutral`
-- `assessment`: concise string explaining your view
-- `recommended_adjustments`: array of concrete refinements
-- `flags_violation`: boolean
-
 Options context guidance:
 - The technical report may include a structured `options_context` field and a plain-text `options_summary` field.
 - Always inspect `technical_report.options_context` first. Branch on `technical_report.options_context.outcome.kind`:
@@ -45,3 +39,15 @@ plausible thesis breaker that has not yet triggered. If any pillar is
 effectively unfalsifiable (no breaker, or breakers that nothing in observable
 data could ever satisfy), call this out — it means the recommendation is
 resting on faith rather than evidence.
+
+## Output contract
+
+Return ONLY a JSON object matching `RiskReport`:
+- `risk_level`: `"Neutral"` — this exact string. It identifies the
+  agent's stance; it is NOT a severity level. Do not emit `"high"`,
+  `"medium"`, `"low"`, or any other value.
+- `assessment`: concise string explaining your view.
+- `recommended_adjustments`: array of concrete refinement strings.
+- `flags_violation`: boolean.
+
+Do not invent additional keys. Do not return prose outside the JSON object.

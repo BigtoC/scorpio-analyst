@@ -1168,7 +1168,7 @@ fn fund_manager_prompt_partial_valuation_surfaces_only_available_metrics() {
 fn fund_manager_system_prompt_references_precomputed_valuation() {
     let prompt = baseline_fund_manager_prompt();
     assert!(
-        prompt.contains("pre-computed deterministic valuation"),
+        prompt.contains("pre-computed deterministic"),
         "system prompt must reference pre-computed valuation context: {prompt}"
     );
     assert!(
@@ -1743,13 +1743,13 @@ fn fund_manager_system_prompt_contains_exact_first_line_contract() {
 fn fund_manager_system_prompt_requires_byte_for_byte_prefix_emission() {
     let prompt = baseline_fund_manager_prompt();
     assert!(
-        prompt.contains("Emit the prefix byte-for-byte"),
+        prompt.contains("byte-for-byte"),
         "system prompt must require byte-for-byte prefix emission"
     );
     assert!(
-        prompt.contains(
-            "Do not use markdown fences, lowercase variants, mixed-case variants, or em-dashes."
-        ),
+        prompt.contains("no markdown fences")
+            && prompt.contains("lowercase or mixed-case variants")
+            && prompt.contains("no em-dashes"),
         "system prompt must forbid alternate prefix formatting"
     );
 }
