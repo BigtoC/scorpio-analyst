@@ -11,6 +11,14 @@ use super::SnapshotStore;
 
 /// Active thesis-memory schema version.
 ///
+/// # v4 (ETF valuation variant)
+///
+/// `ScenarioValuation` gained the closed serde enum variant
+/// `Etf(EtfValuation)`. That variant is serialized into persisted
+/// `TradingState` snapshots and is not readable by older binaries that only
+/// know `corporate_equity` / `not_assessed`, so same-version-only gating must
+/// advance to avoid attempting incompatible deserialization across versions.
+///
 /// # v2 (Phase 6 reshape)
 ///
 /// `TradingState` moved equity-only fields (`fundamental_metrics`,
@@ -24,13 +32,13 @@ use super::SnapshotStore;
 ///
 /// Bumping this version is a one-time breaking change: existing
 /// thesis-memory continuity is reset; prior-run theses will not be carried
-/// forward. No SQL migration runs — pre-v3 rows remain on disk as
-/// unsupported but are silently skipped on read in either direction (a v3
-/// binary skips v2 rows; a v2 binary running against a database that already
-/// contains v3 rows skips them via the same `!=` check). Developers may
+/// forward. No SQL migration runs — pre-v4 rows remain on disk as
+/// unsupported but are silently skipped on read in either direction (a v4
+/// binary skips v3 rows; a v3 binary running against a database that already
+/// contains v4 rows skips them via the same `!=` check). Developers may
 /// optionally delete `~/.scorpio-analyst/phase_snapshots.db` for a clean
-/// slate or run `DELETE FROM phase_snapshots WHERE schema_version < 3`.
-pub const THESIS_MEMORY_SCHEMA_VERSION: i64 = 3;
+/// slate or run `DELETE FROM phase_snapshots WHERE schema_version < 4`.
+pub const THESIS_MEMORY_SCHEMA_VERSION: i64 = 4;
 
 impl SnapshotStore {
     /// Load the most recent prior thesis for a canonical symbol.
