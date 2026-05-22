@@ -6,8 +6,8 @@
 
 ## Goals
 
-1. Expand the analyst news feed with crowd-sourced commentary from Reddit, surfaced as ordinary `NewsArticle` rows the LLM can read alongside Finnhub and Yahoo articles.
-2. Reuse the existing `prefetch_analyst_news` → `Arc<NewsData>` → `GetCachedNews` path. No new state fields, no new analyst, no new LLM tool.
+1. Expand the analyst news feed with crowdsourced commentary from Reddit, surfaced as ordinary `NewsArticle` rows the LLM can read alongside Finnhub and Yahoo articles.
+2. Reuse the existing `prefetch_analyst_news` → `Arc<NewsData>` → `GetCachedNews` path. No new `TradingState`, `NewsArticle`, or `SentimentData` fields, no new analyst, no new LLM tool.
 3. Keep the LLM honest about provenance: Reddit rows are crowd commentary, not vetted news. The pack prompts guide the model to weight Reddit lower for factual claims and accept it as sentiment input.
 4. Honor Reddit's anonymous-API rate limits (10 req/min) without new credentials or wizard steps.
 
@@ -128,7 +128,7 @@ No new top-level Cargo dependencies — `reqwest`, `serde`, `serde_json`, `chron
 
 ## Data model
 
-No struct changes.
+No persisted data-model changes to `TradingState`, `NewsArticle`, or `SentimentData`.
 
 - `NewsArticle` carries Reddit rows as-is (`source = "Reddit r/<sub>"`, `url = permalink`, `snippet = truncated selftext`).
 - `SentimentData.source_breakdown` accepts an LLM-emitted `SentimentSource { source_name: "Reddit r/<sub>", score, sample_size }` entry without modification.
