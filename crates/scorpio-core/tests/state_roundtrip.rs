@@ -8,6 +8,9 @@ use scorpio_core::data::adapters::{
 };
 use scorpio_core::data::traits::options::{OptionsOutcome, OptionsSnapshot};
 use scorpio_core::state::*;
+use scorpio_core::workflow::{SnapshotPhase, SnapshotStore};
+use serde::Deserialize;
+use tempfile::tempdir;
 
 fn arb_enrichment_status() -> impl Strategy<Value = EnrichmentStatus> {
     prop_oneof![
@@ -1228,4 +1231,100 @@ fn legacy_corporate_equity_snapshot_unchanged_after_etf_variant_added() {
     assert!(inner.ev_ebitda.is_none());
     assert!(inner.forward_pe.is_none());
     assert!(inner.peg.is_none());
+}
+
+#[tokio::test]
+async fn etf_variant_requires_snapshot_schema_version_above_v3() {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct LegacySnapshotState {
+        #[serde(default)]
+        equity: Option<LegacyEquityState>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct LegacyEquityState {
+        #[serde(default)]
+        derived_valuation: Option<LegacyDerivedValuation>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct LegacyDerivedValuation {
+        asset_shape: AssetShape,
+        scenario: LegacyScenarioValuation,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LegacyScenarioValuation {
+        CorporateEquity(CorporateEquityValuation),
+        NotAssessed { reason: String },
+    }
+
+    let mut state = TradingState::new("SPY", "2026-05-21");
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(621.18),
+                market_price: 621.40,
+                bid: Some(621.39),
+                ask: Some(621.41),
+                premium_pct: Some(0.04),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let json = serde_json::to_string(&state).expect("serialize current ETF-bearing snapshot");
+    let err = serde_json::from_str::<LegacySnapshotState>(&json)
+        .expect_err("pre-ETF snapshot schema must reject the ETF variant");
+
+    assert!(
+        err.to_string().contains("unknown variant") && err.to_string().contains("etf"),
+        "legacy decoder should fail on ETF variant tag: {err}"
+    );
+
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("state-roundtrip.db");
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("snapshot store creation");
+    store
+        .save_snapshot(
+            &state.execution_id.to_string(),
+            SnapshotPhase::FundManager,
+            &state,
+            None,
+        )
+        .await
+        .expect("save ETF-bearing snapshot");
+
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rw", db_path.display()))
+        .await
+        .expect("sqlite open");
+    let stored_schema_version: (i64,) = sqlx::query_as(
+        "SELECT schema_version FROM phase_snapshots WHERE execution_id = ? AND phase_number = ?",
+    )
+    .bind(state.execution_id.to_string())
+    .bind(SnapshotPhase::FundManager.number() as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("schema version query");
+
+    assert!(
+        stored_schema_version.0 > 3,
+        "ETF-bearing snapshots are not reverse-compatible with schema v3 readers"
+    );
 }
