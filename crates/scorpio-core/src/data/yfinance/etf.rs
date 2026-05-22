@@ -22,7 +22,7 @@ use yfinance_rs::core::conversions::{money_to_currency_str, money_to_f64};
 use yfinance_rs::profile::Profile;
 use yfinance_rs::ticker::Ticker;
 
-use super::ohlcv::YFinanceClient;
+use super::{client::YfSession, ohlcv::YFinanceClient};
 
 /// ETF quote snapshot — extends the regular quote with NAV and bid/ask.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +90,107 @@ fn derive_leverage_factor(fund_name: Option<&str>, category: &Option<String>) ->
     }
 }
 
+#[must_use]
+pub(crate) fn fund_info_from_profile(symbol: &str, profile: &Profile) -> Option<FundInfo> {
+    match profile {
+        Profile::Fund(fund) => {
+            let category: Option<String> = None;
+            let leverage_factor = derive_leverage_factor(Some(&fund.name), &category);
+            Some(FundInfo {
+                symbol: symbol.to_owned(),
+                category,
+                fund_family: fund.family.clone(),
+                expense_ratio: None,
+                total_assets: None,
+                leverage_factor,
+                fund_kind: Some(fund.kind.to_string().to_ascii_lowercase()),
+                stated_benchmark: None,
+            })
+        }
+        Profile::Company(_) => None,
+    }
+}
+
+#[must_use]
+pub(crate) fn normalize_benchmark_symbol(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    match trimmed.to_ascii_lowercase().as_str() {
+        "s&p 500 index" | "s&p500 index" | "sp 500 index" => Some("^GSPC".to_owned()),
+        _ => Some(trimmed.to_owned()),
+    }
+}
+
+fn backfill_quote_fields(
+    quote: &mut EtfQuote,
+    nav: Option<f64>,
+    bid: Option<f64>,
+    ask: Option<f64>,
+) {
+    if quote.nav.is_none() {
+        quote.nav = nav;
+    }
+    if quote.bid.is_none() {
+        quote.bid = bid;
+    }
+    if quote.ask.is_none() {
+        quote.ask = ask;
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct QuoteBackfillEnvelope {
+    #[serde(rename = "quoteResponse")]
+    quote_response: Option<QuoteBackfillResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuoteBackfillResponse {
+    result: Option<Vec<QuoteBackfillNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuoteBackfillNode {
+    #[serde(rename = "navPrice")]
+    nav_price: Option<f64>,
+    bid: Option<f64>,
+    ask: Option<f64>,
+}
+
+async fn fetch_quote_backfill(session: &YfSession, symbol: &str) -> Option<QuoteBackfillNode> {
+    let client = reqwest::Client::new();
+    let response = session
+        .with_rate_limit(async {
+            client
+                .get("https://query1.finance.yahoo.com/v7/finance/quote")
+                .query(&[("symbols", symbol)])
+                .send()
+                .await
+        })
+        .await;
+
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(error = %error, symbol, "failed to fetch ETF quote backfill");
+            return None;
+        }
+    };
+
+    let payload = match response.json::<QuoteBackfillEnvelope>().await {
+        Ok(payload) => payload,
+        Err(error) => {
+            warn!(error = %error, symbol, "failed to parse ETF quote backfill");
+            return None;
+        }
+    };
+
+    payload.quote_response?.result?.into_iter().next()
+}
+
 impl YFinanceClient {
     // ── ETF quote ────────────────────────────────────────────────────────
 
@@ -138,7 +239,7 @@ impl YFinanceClient {
                     .and_then(money_to_currency_str)
             });
 
-        Some(EtfQuote {
+        let mut etf_quote = EtfQuote {
             symbol: quote.symbol.to_string(),
             regular_market_price,
             previous_close: quote.previous_close.as_ref().map(money_to_f64),
@@ -151,7 +252,18 @@ impl YFinanceClient {
             day_volume: quote.day_volume,
             currency,
             as_of: Utc::now(),
-        })
+        };
+
+        if let Some(backfill) = fetch_quote_backfill(&self.session, symbol).await {
+            backfill_quote_fields(
+                &mut etf_quote,
+                backfill.nav_price,
+                backfill.bid,
+                backfill.ask,
+            );
+        }
+
+        Some(etf_quote)
     }
 
     // ── ETF fund info ────────────────────────────────────────────────────
@@ -171,22 +283,9 @@ impl YFinanceClient {
     /// [`derive_leverage_factor`].
     pub async fn get_fund_info(&self, symbol: &str) -> Option<FundInfo> {
         let profile = self.get_profile(symbol).await?;
-        match profile {
-            Profile::Fund(fund) => {
-                let category: Option<String> = None;
-                let leverage_factor = derive_leverage_factor(Some(&fund.name), &category);
-                Some(FundInfo {
-                    symbol: symbol.to_owned(),
-                    category,
-                    fund_family: fund.family,
-                    expense_ratio: None,
-                    total_assets: None,
-                    leverage_factor,
-                    fund_kind: Some(fund.kind.to_string().to_ascii_lowercase()),
-                    stated_benchmark: None,
-                })
-            }
-            Profile::Company(_) => {
+        match fund_info_from_profile(symbol, &profile) {
+            Some(info) => Some(info),
+            None => {
                 warn!(symbol, "get_fund_info called on a Company profile");
                 None
             }
@@ -244,6 +343,7 @@ impl YFinanceClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     #[test]
     fn is_supported_etf_kind_matches_known_variants() {
@@ -288,5 +388,70 @@ mod tests {
             derive_leverage_factor(None, &Some("Large Blend".to_owned())),
             Some(1.0)
         );
+    }
+
+    #[test]
+    fn benchmark_name_normalization_maps_sp500_to_gspc() {
+        assert_eq!(
+            normalize_benchmark_symbol("S&P 500 Index"),
+            Some("^GSPC".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_name_normalization_keeps_symbols() {
+        assert_eq!(
+            normalize_benchmark_symbol("^IXIC"),
+            Some("^IXIC".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_name_normalization_rejects_blank_values() {
+        assert_eq!(normalize_benchmark_symbol("   "), None);
+    }
+
+    #[test]
+    fn backfill_quote_fields_prefers_live_values() {
+        let mut quote = EtfQuote {
+            symbol: "SPY".into(),
+            regular_market_price: 600.0,
+            previous_close: None,
+            nav: Some(599.8),
+            bid: Some(599.9),
+            ask: Some(600.1),
+            market_cap: None,
+            day_volume: None,
+            currency: Some("USD".into()),
+            as_of: Utc::now(),
+        };
+
+        backfill_quote_fields(&mut quote, Some(599.5), Some(599.7), Some(600.2));
+
+        assert_eq!(quote.nav, Some(599.8));
+        assert_eq!(quote.bid, Some(599.9));
+        assert_eq!(quote.ask, Some(600.1));
+    }
+
+    #[test]
+    fn backfill_quote_fields_fills_missing_nav_and_bid_ask() {
+        let mut quote = EtfQuote {
+            symbol: "SPY".into(),
+            regular_market_price: 600.0,
+            previous_close: None,
+            nav: None,
+            bid: None,
+            ask: None,
+            market_cap: None,
+            day_volume: None,
+            currency: Some("USD".into()),
+            as_of: Utc::now(),
+        };
+
+        backfill_quote_fields(&mut quote, Some(599.5), Some(599.7), Some(600.2));
+
+        assert_eq!(quote.nav, Some(599.5));
+        assert_eq!(quote.bid, Some(599.7));
+        assert_eq!(quote.ask, Some(600.2));
     }
 }
