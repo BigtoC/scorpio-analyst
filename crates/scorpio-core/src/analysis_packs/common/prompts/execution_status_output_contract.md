@@ -64,25 +64,10 @@ gated on a single price that may never print:
   described above. At least one tier must be reachable in a near-term
   horizon. End with a thesis-invalidation level that cancels any unfilled
   tiers.
-  * **Uptrend** (price above key moving averages, positive momentum,
-    bullish sentiment): use **Inverted Pyramid** — small starter near
-    current price (e.g. 20% of intended allocation), then increase on
-    pullbacks to support (e.g. 30% on dip to 20-day SMA, 50% on deeper
-    retrace to 50-day SMA). Trend-following with controlled risk; light
-    initial entry avoids missing the move while reserving bulk capital
-    for better levels.
-  * **Downtrend** (price below key moving averages, negative momentum,
-    bearish sentiment): use **Standard Pyramid** — largest portion at
-    lower levels (e.g. 50% near valuation floor / 200-day SMA, 30% at
-    intermediate support, 20% at current or near-term level). Accumulate
-    more at discounted prices to lower cost basis; requires strong
-    conviction in the fundamental floor.
-  * **Sideways / range-bound** (price oscillating between well-defined
-    support and resistance, neutral momentum): use **Equal-Weight
-    Allocation** — split the intended position into 2-4 equal portions at
-    discrete support levels or on confirmed bounces (e.g. 25% × 4 at
-    $100, $97, $94, $91). Smooth entry in choppy markets without timing
-    risk.
+  - `Overweight` or `Hold`: **dynamic laddered entry plan required.** Choose based on current regime:
+  * **Uptrend**: Add more as price rises (higher-risk). Start small (e.g. 20%), increase on breakout/retest, largest on confirmed momentum.
+  * **Downtrend**: Add more as price falls (lower-risk). Largest near valuation floor, medium at intermediate support, small starter near current.
+  * **Sideways**: Equal-weight allocation at discrete support levels (risk-neutral).
 
 - **`Buy`**: a laddered plan is preferred (same tier structure as above,
   with at least one starter tier within ~2% of `{current_price}` so
