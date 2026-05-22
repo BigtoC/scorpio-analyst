@@ -14,8 +14,6 @@
 //! When upstream begins exposing these fields, populate them here without
 //! changing the public shape of [`EtfQuote`] / [`FundInfo`].
 
-use std::time::Duration;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -24,32 +22,7 @@ use yfinance_rs::core::conversions::{money_to_currency_str, money_to_f64};
 use yfinance_rs::profile::Profile;
 use yfinance_rs::ticker::Ticker;
 
-use super::{client::YfSession, ohlcv::YFinanceClient};
-
-const QUOTE_BACKFILL_TIMEOUT: Duration = Duration::from_secs(15);
-
-async fn fetch_quote_backfill_payload(
-    client: &reqwest::Client,
-    url: &str,
-    symbol: &str,
-) -> Option<QuoteBackfillEnvelope> {
-    let response = client.get(url).query(&[("symbols", symbol)]).send().await;
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            warn!(error = %error, symbol, "failed to fetch ETF quote backfill");
-            return None;
-        }
-    };
-
-    match response.json::<QuoteBackfillEnvelope>().await {
-        Ok(payload) => Some(payload),
-        Err(error) => {
-            warn!(error = %error, symbol, "failed to parse ETF quote backfill");
-            None
-        }
-    }
-}
+use super::ohlcv::YFinanceClient;
 
 /// ETF quote snapshot — extends the regular quote with NAV and bid/ask.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,67 +124,6 @@ pub(crate) fn normalize_benchmark_symbol(raw: &str) -> Option<String> {
     }
 }
 
-fn backfill_quote_fields(
-    quote: &mut EtfQuote,
-    nav: Option<f64>,
-    bid: Option<f64>,
-    ask: Option<f64>,
-) {
-    if quote.nav.is_none() {
-        quote.nav = nav;
-    }
-    if quote.bid.is_none() {
-        quote.bid = bid;
-    }
-    if quote.ask.is_none() {
-        quote.ask = ask;
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct QuoteBackfillEnvelope {
-    #[serde(rename = "quoteResponse")]
-    quote_response: Option<QuoteBackfillResponse>,
-}
-
-#[derive(Debug, Deserialize)]
-struct QuoteBackfillResponse {
-    result: Option<Vec<QuoteBackfillNode>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct QuoteBackfillNode {
-    #[serde(rename = "navPrice")]
-    nav_price: Option<f64>,
-    bid: Option<f64>,
-    ask: Option<f64>,
-}
-
-async fn fetch_quote_backfill(session: &YfSession, symbol: &str) -> Option<QuoteBackfillNode> {
-    let client = match reqwest::Client::builder()
-        .timeout(QUOTE_BACKFILL_TIMEOUT)
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            warn!(error = %error, symbol, "failed to build ETF quote backfill client");
-            return None;
-        }
-    };
-    let payload = session
-        .with_rate_limit(async {
-            fetch_quote_backfill_payload(
-                &client,
-                "https://query1.finance.yahoo.com/v7/finance/quote",
-                symbol,
-            )
-            .await
-        })
-        .await;
-
-    payload?.quote_response?.result?.into_iter().next()
-}
-
 impl YFinanceClient {
     // ── ETF quote ────────────────────────────────────────────────────────
 
@@ -260,7 +172,7 @@ impl YFinanceClient {
                     .and_then(money_to_currency_str)
             });
 
-        let mut etf_quote = EtfQuote {
+        Some(EtfQuote {
             symbol: quote.symbol.to_string(),
             regular_market_price,
             previous_close: quote.previous_close.as_ref().map(money_to_f64),
@@ -273,18 +185,7 @@ impl YFinanceClient {
             day_volume: quote.day_volume,
             currency,
             as_of: Utc::now(),
-        };
-
-        if let Some(backfill) = fetch_quote_backfill(&self.session, symbol).await {
-            backfill_quote_fields(
-                &mut etf_quote,
-                backfill.nav_price,
-                backfill.bid,
-                backfill.ask,
-            );
-        }
-
-        Some(etf_quote)
+        })
     }
 
     // ── ETF fund info ────────────────────────────────────────────────────
@@ -364,8 +265,6 @@ impl YFinanceClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use tokio::{io::AsyncWriteExt, net::TcpListener, time::Instant};
 
     #[test]
     fn is_supported_etf_kind_matches_known_variants() {
@@ -433,123 +332,4 @@ mod tests {
         assert_eq!(normalize_benchmark_symbol("   "), None);
     }
 
-    #[test]
-    fn backfill_quote_fields_prefers_live_values() {
-        let mut quote = EtfQuote {
-            symbol: "SPY".into(),
-            regular_market_price: 600.0,
-            previous_close: None,
-            nav: Some(599.8),
-            bid: Some(599.9),
-            ask: Some(600.1),
-            market_cap: None,
-            day_volume: None,
-            currency: Some("USD".into()),
-            as_of: Utc::now(),
-        };
-
-        backfill_quote_fields(&mut quote, Some(599.5), Some(599.7), Some(600.2));
-
-        assert_eq!(quote.nav, Some(599.8));
-        assert_eq!(quote.bid, Some(599.9));
-        assert_eq!(quote.ask, Some(600.1));
-    }
-
-    #[test]
-    fn backfill_quote_fields_fills_missing_nav_and_bid_ask() {
-        let mut quote = EtfQuote {
-            symbol: "SPY".into(),
-            regular_market_price: 600.0,
-            previous_close: None,
-            nav: None,
-            bid: None,
-            ask: None,
-            market_cap: None,
-            day_volume: None,
-            currency: Some("USD".into()),
-            as_of: Utc::now(),
-        };
-
-        backfill_quote_fields(&mut quote, Some(599.5), Some(599.7), Some(600.2));
-
-        assert_eq!(quote.nav, Some(599.5));
-        assert_eq!(quote.bid, Some(599.7));
-        assert_eq!(quote.ask, Some(600.2));
-    }
-
-    #[tokio::test]
-    async fn quote_backfill_payload_times_out_on_hanging_server() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("local addr");
-        let accept_task = tokio::spawn(async move {
-            let (_stream, _) = listener.accept().await.expect("accept");
-            tokio::time::sleep(QUOTE_BACKFILL_TIMEOUT + Duration::from_secs(5)).await;
-        });
-
-        let client = reqwest::Client::builder()
-            .timeout(QUOTE_BACKFILL_TIMEOUT)
-            .build()
-            .expect("client");
-        let start = Instant::now();
-        let payload = fetch_quote_backfill_payload(
-            &client,
-            &format!("http://{addr}/v7/finance/quote"),
-            "SPY",
-        )
-        .await;
-
-        assert!(payload.is_none(), "hung backfill should degrade to None");
-        assert!(
-            start.elapsed() < QUOTE_BACKFILL_TIMEOUT + Duration::from_secs(2),
-            "request should respect the configured timeout"
-        );
-
-        accept_task.abort();
-    }
-
-    #[tokio::test]
-    async fn quote_backfill_payload_parses_successful_response() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("local addr");
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            let body =
-                r#"{"quoteResponse":{"result":[{"navPrice":599.5,"bid":599.7,"ask":600.2}]}}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("write response");
-        });
-
-        let client = reqwest::Client::builder()
-            .timeout(QUOTE_BACKFILL_TIMEOUT)
-            .build()
-            .expect("client");
-        let payload = fetch_quote_backfill_payload(
-            &client,
-            &format!("http://{addr}/v7/finance/quote"),
-            "SPY",
-        )
-        .await
-        .expect("payload");
-
-        let node = payload
-            .quote_response
-            .expect("quote_response")
-            .result
-            .expect("result")
-            .into_iter()
-            .next()
-            .expect("node");
-        assert_eq!(node.nav_price, Some(599.5));
-        assert_eq!(node.bid, Some(599.7));
-        assert_eq!(node.ask, Some(600.2));
-
-        server.await.expect("server finished");
-    }
 }
