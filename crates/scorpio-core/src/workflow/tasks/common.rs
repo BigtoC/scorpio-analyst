@@ -18,8 +18,13 @@ pub const KEY_MAX_RISK_ROUNDS: &str = "max_risk_rounds";
 pub const KEY_DEBATE_ROUND: &str = "debate_round";
 /// Context key for the current risk discussion round counter.
 pub const KEY_RISK_ROUND: &str = "risk_round";
-/// Context key for pre-fetched news data shared between Sentiment and News analysts.
-pub const KEY_CACHED_NEWS: &str = "analyst.cached_news";
+/// Context key for the vetted news feed (Finnhub + Yahoo). Consumed by
+/// [`crate::workflow::tasks::NewsAnalystTask`].
+pub const KEY_CACHED_VETTED_NEWS: &str = "analyst.cached_news.vetted";
+
+/// Context key for the sentiment news feed (vetted + Reddit sidecar).
+/// Consumed by [`crate::workflow::tasks::SentimentAnalystTask`].
+pub const KEY_CACHED_SENTIMENT_NEWS: &str = "analyst.cached_news.sentiment";
 
 // ── Stage 1 preflight context keys ──────────────────────────────────────────
 

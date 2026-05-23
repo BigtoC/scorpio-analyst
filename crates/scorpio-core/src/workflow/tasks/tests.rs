@@ -45,8 +45,15 @@ async fn seed_state(ctx: &Context, state: &TradingState) {
 async fn context_with_invalid_cached_news() -> Context {
     let ctx = Context::new();
     seed_state(&ctx, &sample_state()).await;
+    // Lane split: seed both vetted and sentiment keys with malformed JSON so
+    // either analyst task's corruption guard fires.
     ctx.set(
-        common::KEY_CACHED_NEWS.to_owned(),
+        common::KEY_CACHED_VETTED_NEWS.to_owned(),
+        "not valid json".to_owned(),
+    )
+    .await;
+    ctx.set(
+        common::KEY_CACHED_SENTIMENT_NEWS.to_owned(),
         "not valid json".to_owned(),
     )
     .await;

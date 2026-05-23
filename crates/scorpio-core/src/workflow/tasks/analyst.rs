@@ -81,11 +81,12 @@ fn stage1_source(provider: &str, datasets: Vec<String>) -> EvidenceSource {
     }
 }
 
-async fn read_cached_news(
+async fn read_cached_news_at(
     task_name: &str,
     context: &Context,
+    key: &str,
 ) -> graph_flow::Result<Option<Arc<NewsData>>> {
-    let json: Option<String> = context.get(super::KEY_CACHED_NEWS).await;
+    let json: Option<String> = context.get(key).await;
     json.map(|value| {
         serde_json::from_str::<NewsData>(&value).map(Arc::new).map_err(|error| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -268,7 +269,12 @@ impl Task for SentimentAnalystTask {
             }
         };
 
-        let cached_news_opt = read_cached_news("SentimentAnalystTask", &context).await?;
+        let cached_news_opt = read_cached_news_at(
+            "SentimentAnalystTask",
+            &context,
+            super::KEY_CACHED_SENTIMENT_NEWS,
+        )
+        .await?;
 
         let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
             graph_flow::GraphError::TaskExecutionFailed(
@@ -375,7 +381,8 @@ impl Task for NewsAnalystTask {
             }
         };
 
-        let cached_news_opt = read_cached_news("NewsAnalystTask", &context).await?;
+        let cached_news_opt =
+            read_cached_news_at("NewsAnalystTask", &context, super::KEY_CACHED_VETTED_NEWS).await?;
 
         let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
             graph_flow::GraphError::TaskExecutionFailed(
