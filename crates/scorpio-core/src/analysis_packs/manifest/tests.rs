@@ -26,6 +26,7 @@ fn valid_manifest() -> AnalysisPackManifest {
             m
         },
         auditor_enabled: false,
+        reddit_subreddits: vec![],
     }
 }
 

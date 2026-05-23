@@ -58,6 +58,9 @@ pub struct AnalysisPackManifest {
     /// non-empty `prompt_bundle.auditor` slot and `PreflightTask` will gate
     /// the auditor task via `RoutingFlags::skip_auditor`.
     pub auditor_enabled: bool,
+    /// Subreddit names (no `r/` prefix) consulted by the Reddit sentiment
+    /// sidecar. Empty for packs that opt out of Reddit ingestion.
+    pub reddit_subreddits: Vec<String>,
 }
 
 impl AnalysisPackManifest {
