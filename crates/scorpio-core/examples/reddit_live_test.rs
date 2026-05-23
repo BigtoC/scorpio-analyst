@@ -16,12 +16,11 @@ use std::time::{Duration, Instant};
 
 use scorpio_core::{
     config::RateLimitConfig,
+    constants::EQUITY_BASELINE_REDDIT_SUBREDDITS,
     data::{RedditClient, RedditNewsProvider, traits::NewsProvider},
     domain::{Symbol, Ticker},
     rate_limit::SharedRateLimiter,
 };
-
-const BASELINE_EQUITY_SUBS: &[&str] = &["stocks", "investing", "wallstreetbets", "StockMarket"];
 
 struct Results {
     pass: usize,
@@ -67,7 +66,7 @@ fn build_client() -> RedditClient {
 }
 
 fn equity_subs() -> Vec<String> {
-    BASELINE_EQUITY_SUBS
+    EQUITY_BASELINE_REDDIT_SUBREDDITS
         .iter()
         .map(|s| (*s).to_owned())
         .collect()
