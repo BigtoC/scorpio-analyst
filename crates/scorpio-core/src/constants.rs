@@ -33,3 +33,38 @@ pub const NEWS_ANALYSIS_DAYS: TimeDelta = chrono::Duration::days(30);
 /// Health check timeout in seconds. Kept short so a failure surfaces quickly
 /// at the end of the wizard rather than blocking for the full pipeline timeout.
 pub const HEALTH_CHECK_TIMEOUT_SECS: u64 = 30;
+
+// ─── Reddit ────────────────────────────────────────────────────────────
+
+/// Minimum upvote score for a Reddit submission to be retained.
+///
+/// Tunes signal/noise; chosen empirically to filter low-engagement posts.
+pub const REDDIT_MIN_SCORE: u32 = 50;
+
+/// Per-search `limit` parameter for Reddit `search.json`.
+///
+/// Reddit caps per-page results at 100; we ask for the cap and apply
+/// our own score/age filters client-side.
+pub const REDDIT_PER_SUB_FETCH_LIMIT: u32 = 100;
+
+/// Maximum Reddit articles included in the sentiment sidecar feed after
+/// score+age filtering and ranking.
+pub const REDDIT_SENTIMENT_MAX_ARTICLES: usize = 20;
+
+/// Per-request timeout for Reddit HTTP calls.
+pub const REDDIT_REQUEST_TIMEOUT_SECS: u64 = 15;
+
+/// User-Agent prefix; the full header is built at construction time as
+/// `"<prefix>/<CARGO_PKG_VERSION> (https://github.com/BigtoC/scorpio-analyst)"`.
+pub const REDDIT_USER_AGENT_PREFIX: &str = "scorpio-analyst";
+
+/// Static v1 denylist of equity tickers that collide with high-traffic
+/// non-financial words on Reddit. Lookups are case-insensitive.
+///
+/// Reddit search results for these tickers return mostly unrelated posts;
+/// `RedditNewsProvider::fetch` returns an empty `NewsData` when a request's
+/// canonical ticker matches an entry here so vetted sources carry the run.
+pub const REDDIT_AMBIGUOUS_SYMBOLS_DENYLIST: &[&str] = &[
+    "A", "ALL", "ARE", "BIG", "CAN", "FOR", "GO", "HAS", "IT", "ON", "OR", "REAL", "SO", "TRUE",
+    "WELL", "WHO",
+];
