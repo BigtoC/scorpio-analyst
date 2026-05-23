@@ -291,14 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_forbids_social_platforms() {
-        // Drift-detection guard against the canonical runtime source — the
-        // baseline pack's `PromptBundle.sentiment_analyst` slot.
+    fn equity_sentiment_prompt_keeps_xtwitter_and_stocktwits_unavailable() {
         let prompt = baseline_sentiment_prompt();
-        assert!(
-            prompt.contains("Reddit"),
-            "prompt should mention Reddit constraint"
-        );
         assert!(
             prompt.contains("X/Twitter"),
             "prompt should mention X/Twitter constraint"
@@ -310,6 +304,23 @@ mod tests {
         assert!(
             prompt.contains("Do not assume"),
             "prompt should say 'Do not assume'"
+        );
+    }
+
+    #[test]
+    fn equity_sentiment_prompt_treats_reddit_as_crowd_commentary() {
+        let prompt = baseline_sentiment_prompt();
+        assert!(
+            prompt.contains("Reddit"),
+            "prompt should reference Reddit explicitly"
+        );
+        assert!(
+            prompt.contains("crowd commentary"),
+            "prompt should describe Reddit rows as 'crowd commentary'"
+        );
+        assert!(
+            prompt.contains("Reddit r/"),
+            "prompt should describe the `Reddit r/<subreddit>` source tag"
         );
     }
 
