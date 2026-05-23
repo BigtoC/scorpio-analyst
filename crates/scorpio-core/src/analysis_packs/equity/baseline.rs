@@ -7,7 +7,10 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
+use crate::{
+    constants::EQUITY_BASELINE_REDDIT_SUBREDDITS, prompts::PromptBundle, state::AssetShape,
+    valuation::ValuatorId,
+};
 
 use super::super::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
@@ -156,6 +159,10 @@ pub fn baseline_pack() -> AnalysisPackManifest {
             m
         },
         auditor_enabled: true,
+        reddit_subreddits: EQUITY_BASELINE_REDDIT_SUBREDDITS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
     }
 }
 

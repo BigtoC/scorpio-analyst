@@ -68,3 +68,20 @@ pub const REDDIT_AMBIGUOUS_SYMBOLS_DENYLIST: &[&str] = &[
     "A", "ALL", "ARE", "BIG", "CAN", "FOR", "GO", "HAS", "IT", "ON", "OR", "REAL", "SO", "TRUE",
     "WELL", "WHO",
 ];
+
+/// Subreddits the equity baseline pack consults for crowd-commentary
+/// sentiment context. Names are case-sensitive and shipped without the `r/`
+/// prefix (the URL builder adds it).
+///
+/// Owned by `constants.rs` so the pack manifest, manual smoke-test example,
+/// and any future pack derivatives reference the same canonical list.
+pub const EQUITY_BASELINE_REDDIT_SUBREDDITS: &[&str] =
+    &["stocks", "investing", "wallstreetbets", "StockMarket", "Daytrading"];
+
+/// Reddit subreddits for the crypto digital-asset pack.
+///
+/// Empty in v1 — the crypto pack opts out of the Reddit sentiment sidecar.
+/// `RedditNewsProvider::fetch` short-circuits with an empty `NewsData` when
+/// the resolved subreddit list is empty, so binding this constant onto the
+/// pack manifest is the explicit opt-out signal.
+pub const CRYPTO_DIGITAL_ASSET_REDDIT_SUBREDDITS: &[&str] = &[];
