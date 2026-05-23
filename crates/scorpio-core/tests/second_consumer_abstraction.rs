@@ -83,6 +83,7 @@ fn synthetic_one_role_manifest() -> AnalysisPackManifest {
         prompt_bundle: bundle,
         valuator_selection: HashMap::new(),
         auditor_enabled: false,
+        reddit_subreddits: vec![],
     }
 }
 
