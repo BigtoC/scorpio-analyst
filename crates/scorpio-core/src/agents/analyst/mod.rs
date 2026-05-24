@@ -50,6 +50,11 @@ use crate::{
 /// Maximum number of articles kept after merging Finnhub and Yahoo news.
 const NEWS_PREFETCH_MAX_ARTICLES: usize = 30;
 
+/// When a Reddit sidecar is present, reserve part of the fixed cached-news
+/// budget so the sidecar cannot be fully trimmed away by newer vetted rows.
+const SENTIMENT_VETTED_MAX_ARTICLES_WITH_REDDIT: usize =
+    NEWS_PREFETCH_MAX_ARTICLES - crate::constants::REDDIT_SENTIMENT_MAX_ARTICLES;
+
 // ─── URL canonicalization ─────────────────────────────────────────────────────
 
 /// Known URL shortener hosts — treated as "no URL" for dedup purposes so they
@@ -178,6 +183,43 @@ fn sort_and_cap_news(mut news: NewsData) -> NewsData {
         .sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
     news.articles.truncate(NEWS_PREFETCH_MAX_ARTICLES);
     news
+}
+
+fn build_sentiment_news(vetted: &NewsData, reddit: NewsData) -> Option<NewsData> {
+    if reddit.articles.is_empty() {
+        return if vetted.articles.is_empty() {
+            None
+        } else {
+            Some(vetted.clone())
+        };
+    }
+
+    let mut vetted_articles = vetted.articles.clone();
+    vetted_articles.sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+    vetted_articles.truncate(SENTIMENT_VETTED_MAX_ARTICLES_WITH_REDDIT);
+
+    let reddit_count = reddit.articles.len();
+    let mut articles = vetted_articles;
+    articles.extend(reddit.articles);
+    articles.sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+
+    if articles.is_empty() {
+        return None;
+    }
+
+    let kept_reddit = articles
+        .iter()
+        .filter(|a| a.source.starts_with("Reddit r/"))
+        .count();
+    let kept_vetted = articles.len().saturating_sub(kept_reddit);
+
+    Some(NewsData {
+        articles,
+        macro_events: vetted.macro_events.clone(),
+        summary: format!(
+            "{kept_vetted} vetted articles + {kept_reddit} Reddit articles (of {reddit_count} fetched)"
+        ),
+    })
 }
 
 /// Normalize a title for exact-match deduplication.
@@ -352,27 +394,7 @@ pub async fn prefetch_analyst_news(
                 Some(reddit_only)
             }
         }
-        (Some(v), Some(r)) => {
-            let mut combined = v.clone();
-            let reddit_count = r.articles.len();
-            combined.articles.extend(r.articles);
-            let combined = sort_and_cap_news(combined);
-            let kept_reddit = combined
-                .articles
-                .iter()
-                .filter(|a| a.source.starts_with("Reddit r/"))
-                .count();
-            let kept_vetted = combined.articles.len().saturating_sub(kept_reddit);
-            let mut combined = combined;
-            combined.summary = format!(
-                "{kept_vetted} vetted articles + {kept_reddit} Reddit articles (of {reddit_count} fetched)"
-            );
-            if combined.articles.is_empty() {
-                None
-            } else {
-                Some(combined)
-            }
-        }
+        (Some(v), Some(r)) => build_sentiment_news(v, r),
     };
 
     PrefetchedNewsBundle {
