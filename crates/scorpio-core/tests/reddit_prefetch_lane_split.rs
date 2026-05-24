@@ -177,6 +177,72 @@ async fn sentiment_lane_preserves_reddit_row_when_url_matches_vetted_story() {
     );
 }
 
+#[tokio::test]
+async fn sentiment_lane_keeps_reddit_sidecar_under_vetted_saturation() {
+    let vetted_articles: Vec<NewsArticle> = (0..30)
+        .map(|i| {
+            article(
+                &format!("Vetted {i}"),
+                "Reuters",
+                &format!("2026-03-14T12:{i:02}:00Z"),
+            )
+        })
+        .collect();
+    let reddit_article = article("Reddit Sidecar", "Reddit r/stocks", "2026-03-14T10:00:00Z");
+
+    let bundle = prefetch_analyst_news(
+        &StubNewsProvider::ok("finnhub", news(vetted_articles.clone())),
+        &StubNewsProvider::ok("yfinance", news(vec![])),
+        &StubNewsProvider::ok("reddit", news(vec![reddit_article])),
+        "AAPL",
+    )
+    .await;
+
+    let sentiment = bundle.sentiment.expect("sentiment lane should exist");
+    assert!(
+        sentiment
+            .articles
+            .iter()
+            .any(|a| a.source.starts_with("Reddit r/")),
+        "sentiment lane must retain at least one Reddit sidecar row even when vetted news fills the global cap"
+    );
+}
+
+#[tokio::test]
+async fn sentiment_lane_keeps_full_vetted_budget_when_reddit_sidecar_is_empty() {
+    let vetted_articles: Vec<NewsArticle> = (0..30)
+        .map(|i| {
+            article(
+                &format!("Vetted {i}"),
+                "Reuters",
+                &format!("2026-03-14T12:{i:02}:00Z"),
+            )
+        })
+        .collect();
+
+    let bundle = prefetch_analyst_news(
+        &StubNewsProvider::ok("finnhub", news(vetted_articles.clone())),
+        &StubNewsProvider::ok("yfinance", news(vec![])),
+        &StubNewsProvider::ok("reddit", news(vec![])),
+        "AAPL",
+    )
+    .await;
+
+    let sentiment = bundle.sentiment.expect("sentiment lane should exist");
+    assert_eq!(
+        sentiment.articles.len(),
+        30,
+        "an empty Reddit sidecar must not shrink vetted sentiment coverage"
+    );
+    assert!(
+        sentiment
+            .articles
+            .iter()
+            .all(|a| !a.source.starts_with("Reddit r/")),
+        "empty Reddit fetches must not inject synthetic Reddit rows"
+    );
+}
+
 #[test]
 fn baseline_equity_pack_carries_reddit_subreddits() {
     let p = resolve_runtime_policy("baseline").expect("baseline");
