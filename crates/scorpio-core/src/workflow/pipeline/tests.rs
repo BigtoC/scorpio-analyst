@@ -1167,6 +1167,43 @@ fn make_pipeline(db_name: &'static str) -> (crate::workflow::TradingPipeline, te
     (pipeline, dir)
 }
 
+#[test]
+fn runtime_reddit_subreddits_are_disabled_when_reddit_rpm_is_zero() {
+    let runtime_policy =
+        crate::analysis_packs::resolve_runtime_policy("baseline").expect("baseline");
+    let config = crate::config::Config {
+        llm: crate::config::LlmConfig {
+            quick_thinking_provider: "openai".to_owned(),
+            deep_thinking_provider: "openai".to_owned(),
+            quick_thinking_model: "gpt-4o-mini".to_owned(),
+            deep_thinking_model: "o3".to_owned(),
+            max_debate_rounds: 1,
+            max_risk_rounds: 1,
+            analyst_timeout_secs: 30,
+            valuation_fetch_timeout_secs: 30,
+            retry_max_retries: 1,
+            retry_base_delay_ms: 1,
+        },
+        trading: crate::config::TradingConfig::default(),
+        api: Default::default(),
+        providers: Default::default(),
+        storage: Default::default(),
+        rate_limits: crate::config::RateLimitConfig {
+            reddit_rpm: 0,
+            ..Default::default()
+        },
+        enrichment: Default::default(),
+        analysis_pack: "baseline".to_owned(),
+    };
+
+    let effective = runtime::reddit_subreddits_for_cycle(&config, &runtime_policy);
+
+    assert!(
+        effective.is_empty(),
+        "reddit_rpm=0 must disable runtime Reddit ingestion rather than leave subreddit routing active"
+    );
+}
+
 #[tokio::test]
 async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
     use crate::agents::trader::build_prompt_context_for_test as build_prompt_context;

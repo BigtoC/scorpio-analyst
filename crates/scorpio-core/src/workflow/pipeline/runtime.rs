@@ -110,6 +110,17 @@ pub(crate) fn build_analyst_tasks(
         .collect()
 }
 
+pub(crate) fn reddit_subreddits_for_cycle(
+    config: &Config,
+    runtime_policy: &crate::analysis_packs::RuntimePolicy,
+) -> Vec<String> {
+    if config.rate_limits.reddit_rpm == 0 {
+        vec![]
+    } else {
+        runtime_policy.reddit_subreddits.clone()
+    }
+}
+
 fn build_analyst_task(
     id: AnalystId,
     finnhub: &FinnhubClient,
@@ -411,8 +422,10 @@ pub async fn run_analysis_cycle(
             version = env!("CARGO_PKG_VERSION"),
         );
         let reddit_client = RedditClient::new(reddit_http, reddit_limiter, reddit_user_agent);
-        let reddit_news_provider =
-            RedditNewsProvider::new(reddit_client, runtime_policy.reddit_subreddits.clone());
+        let reddit_news_provider = RedditNewsProvider::new(
+            reddit_client,
+            reddit_subreddits_for_cycle(&pipeline.config, &runtime_policy),
+        );
 
         let fetch_timeout =
             std::time::Duration::from_secs(pipeline.config.enrichment.fetch_timeout_secs);
