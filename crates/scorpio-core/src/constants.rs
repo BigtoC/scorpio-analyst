@@ -75,8 +75,13 @@ pub const REDDIT_AMBIGUOUS_SYMBOLS_DENYLIST: &[&str] = &[
 ///
 /// Owned by `constants.rs` so the pack manifest, manual smoke-test example,
 /// and any future pack derivatives reference the same canonical list.
-pub const EQUITY_BASELINE_REDDIT_SUBREDDITS: &[&str] =
-    &["stocks", "investing", "wallstreetbets", "StockMarket", "Daytrading"];
+pub const EQUITY_BASELINE_REDDIT_SUBREDDITS: &[&str] = &[
+    "stocks",
+    "investing",
+    "wallstreetbets",
+    "StockMarket",
+    "Daytrading",
+];
 
 /// Reddit subreddits for the crypto digital-asset pack.
 ///
