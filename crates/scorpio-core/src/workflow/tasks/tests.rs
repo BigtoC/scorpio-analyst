@@ -5,11 +5,11 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    analysis_packs::resolve_runtime_policy,
+    analysis_packs::{RuntimePolicy, resolve_runtime_policy},
     config::LlmConfig,
     data::traits::{OptionsOutcome, OptionsSnapshot},
     state::{
-        AgentTokenUsage, FundamentalData, NewsData, ScenarioValuation, SentimentData,
+        AgentTokenUsage, FundamentalData, NewsArticle, NewsData, ScenarioValuation, SentimentData,
         TechnicalData, TechnicalOptionsContext, TradingState,
     },
     workflow::context_bridge::{
@@ -259,6 +259,270 @@ async fn analyst_sync_all_succeed_returns_continue() {
         provenance.providers_used,
         vec!["finnhub", "fred", "yfinance"],
         "providers_used must be sorted and deduplicated"
+    );
+}
+
+#[tokio::test]
+async fn analyst_sync_records_reddit_sentiment_provenance_when_cached_sentiment_feed_contains_reddit()
+ {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let state = sample_state();
+    seed_state(&ctx, &state).await;
+
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_FUNDAMENTAL,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_SENTIMENT,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_NEWS,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_TECHNICAL,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+
+    ctx.set(
+        common::KEY_CACHED_SENTIMENT_NEWS.to_owned(),
+        serde_json::to_string(&NewsData {
+            articles: vec![NewsArticle {
+                title: "Retail chatter".to_owned(),
+                source: "Reddit r/stocks".to_owned(),
+                published_at: "2026-03-19T12:00:00Z".to_owned(),
+                relevance_score: None,
+                snippet: String::new(),
+                url: None,
+            }],
+            macro_events: vec![],
+            summary: "1 vetted article + 1 Reddit article".to_owned(),
+        })
+        .expect("serialize sentiment cache"),
+    )
+    .await;
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_FUNDAMENTAL,
+        &FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: Some(20.0),
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_NEWS,
+        &NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_TECHNICAL,
+        &TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "ok".to_owned(),
+            options_summary: None,
+            options_context: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let task = AnalystSyncTask::new(store);
+    task.run(ctx.clone()).await.expect("task should succeed");
+
+    let recovered = deserialize_state_from_context(&ctx)
+        .await
+        .expect("state deserialization should succeed");
+    let sources = &recovered
+        .evidence_sentiment()
+        .expect("sentiment evidence must be set")
+        .sources;
+
+    assert!(
+        sources.iter().any(|s| s.provider == "reddit"),
+        "sentiment evidence should record reddit when cached sentiment news contains Reddit rows"
+    );
+    assert!(
+        recovered
+            .provenance_summary
+            .as_ref()
+            .expect("provenance summary must be set")
+            .providers_used
+            .iter()
+            .any(|provider| provider == "reddit"),
+        "provenance summary should include reddit when sentiment evidence used it"
+    );
+}
+
+#[tokio::test]
+async fn analyst_sync_reddit_only_sentiment_provenance_does_not_claim_finnhub() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let store = Arc::new(
+        crate::workflow::SnapshotStore::new(Some(&db_path))
+            .await
+            .expect("snapshot store creation should succeed"),
+    );
+
+    let ctx = Context::new();
+    let mut state = sample_state();
+    let mut sentiment_only_policy: RuntimePolicy =
+        resolve_runtime_policy("baseline").expect("baseline policy");
+    sentiment_only_policy.required_inputs = vec!["sentiment".to_owned()];
+    state.analysis_runtime_policy = Some(sentiment_only_policy);
+    seed_state(&ctx, &state).await;
+
+    ctx.set(
+        format!(
+            "{}.{}.{}",
+            common::ANALYST_PREFIX,
+            common::ANALYST_SENTIMENT,
+            common::OK_SUFFIX
+        ),
+        true,
+    )
+    .await;
+    ctx.set(
+        common::KEY_CACHED_SENTIMENT_NEWS.to_owned(),
+        serde_json::to_string(&NewsData {
+            articles: vec![NewsArticle {
+                title: "Retail chatter".to_owned(),
+                source: "Reddit r/stocks".to_owned(),
+                published_at: "2026-03-19T12:00:00Z".to_owned(),
+                relevance_score: None,
+                snippet: String::new(),
+                url: None,
+            }],
+            macro_events: vec![],
+            summary: "Reddit: 1 posts from 1 subreddits".to_owned(),
+        })
+        .expect("serialize sentiment cache"),
+    )
+    .await;
+
+    write_prefixed_result(
+        &ctx,
+        common::ANALYST_PREFIX,
+        common::ANALYST_SENTIMENT,
+        &SentimentData {
+            overall_score: 0.5,
+            source_breakdown: vec![],
+            engagement_peaks: vec![],
+            summary: "ok".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let task = AnalystSyncTask::new(store);
+    let result = task
+        .run(ctx.clone())
+        .await
+        .expect("reddit-only sentiment should continue when sentiment is the only active analyst");
+
+    assert_eq!(result.next_action, NextAction::Continue);
+
+    let recovered = deserialize_state_from_context(&ctx)
+        .await
+        .expect("state deserialization should succeed");
+    let sources = &recovered
+        .evidence_sentiment()
+        .expect("sentiment evidence must be set")
+        .sources;
+
+    assert!(
+        sources.iter().any(|s| s.provider == "reddit"),
+        "reddit-only sentiment evidence should include reddit"
+    );
+    assert!(
+        !sources.iter().any(|s| s.provider == "finnhub"),
+        "reddit-only sentiment evidence must not claim finnhub when no vetted sentiment input was present"
+    );
+    assert_eq!(
+        recovered
+            .provenance_summary
+            .as_ref()
+            .expect("provenance summary must be set")
+            .providers_used,
+        vec!["reddit"],
+        "providers_used should reflect the actual sentiment-sidecar source in a Reddit-only degraded run"
     );
 }
 
