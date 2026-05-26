@@ -50,11 +50,6 @@ use crate::{
 /// Maximum number of articles kept after merging Finnhub and Yahoo news.
 const NEWS_PREFETCH_MAX_ARTICLES: usize = 30;
 
-/// When a Reddit sidecar is present, reserve part of the fixed cached-news
-/// budget so the sidecar cannot be fully trimmed away by newer vetted rows.
-const SENTIMENT_VETTED_MAX_ARTICLES_WITH_REDDIT: usize =
-    NEWS_PREFETCH_MAX_ARTICLES - crate::constants::REDDIT_SENTIMENT_MAX_ARTICLES;
-
 // ─── URL canonicalization ─────────────────────────────────────────────────────
 
 /// Known URL shortener hosts — treated as "no URL" for dedup purposes so they
@@ -196,7 +191,6 @@ fn build_sentiment_news(vetted: &NewsData, reddit: NewsData) -> Option<NewsData>
 
     let mut vetted_articles = vetted.articles.clone();
     vetted_articles.sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
-    vetted_articles.truncate(SENTIMENT_VETTED_MAX_ARTICLES_WITH_REDDIT);
 
     let reddit_count = reddit.articles.len();
     let mut articles = vetted_articles;
