@@ -1,20 +1,86 @@
 # AGENTS.md
 
-Rust-native multi-agent LLM trading system. Cargo workspace with four active crates under `crates/`:
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-- `scorpio-core` — shared runtime/domain logic (agents, workflow, providers, data clients, state, indicators, analysis packs, errors, observability, rate limiting, config, settings file boundary, async application facade).
-- `scorpio-cli` — binary crate hosting the clap/inquire command surface, setup wizard, update notices, terminal banner, and dispatch for `analyze`, `report`, and `upgrade`. Depends on `scorpio-core` and `scorpio-reporters`.
-- `scorpio-reporters` — shared output/reporting crate (reporter trait, reporter chain, terminal rendering, JSON artifacts). Depends on `scorpio-core`; consumed by `scorpio-cli`.
-- `scorpio-server` — Loco-based HTTP/OpenAPI surface with environment-specific YAML config under `crates/scorpio-server/config/`.
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## Project
+
+Rust-native multi-agent LLM trading system. Cargo workspace with **four active crates** under `crates/`:
+
+- `scorpio-core` — shared runtime/domain logic (agents, workflow, providers, data clients, state, indicators, packs).
+- `scorpio-cli` — clap/inquire command surface; depends on `scorpio-core` and `scorpio-reporters`.
+- `scorpio-reporters` — reporter trait + terminal/JSON rendering; depends on `scorpio-core`.
+- `scorpio-server` — Loco-based HTTP/OpenAPI surface.
 
 Edition 2024 (Rust 1.93+).
 
 ## Commands
 
 ```bash
-cargo fmt -- --check                                         # CI step 1
-cargo clippy --workspace --all-targets -- -D warnings        # CI step 2 (warnings = errors)
-cargo nextest run --workspace --all-features --locked --no-fail-fast   # CI step 3 (NOT cargo test)
+cargo fmt -- --check                                                  # CI step 1
+cargo clippy --workspace --all-targets -- -D warnings                 # CI step 2 (warnings = errors)
+cargo nextest run --workspace --all-features --locked --no-fail-fast  # CI step 3 (NOT cargo test)
 ```
 
 CI uses **nextest**, not `cargo test`. Run all three in order before claiming work is done.
@@ -26,6 +92,18 @@ Other useful focused loops: `cargo run -p scorpio-cli -- report list`, `cargo ru
 ## Build prerequisite
 
 Protobuf compiler (`protoc`) is required by transitive dependencies. CI installs it via `apt-get install protobuf-compiler`. On macOS: `brew install protobuf`.
+
+## Architecture details
+
+This file is intentionally short. Architecture, gotchas, dependency table, config order, dev-task map, testing, and CI all live in dedicated docs:
+
+- [`docs/architecture/source-layout.md`](docs/architecture/source-layout.md) — 4-crate tree, test layout, phased UI roadmap
+- [`docs/architecture/design-decisions.md`](docs/architecture/design-decisions.md) — crate boundary, Phase 0 preflight, dual-write, schema evolution, pack-owned prompts, transcript cache, reporter split, HTTP server pattern
+- [`docs/architecture/dependencies.md`](docs/architecture/dependencies.md) — crate dependency table, protoc prerequisite, workspace pinning
+- [`docs/architecture/config-and-errors.md`](docs/architecture/config-and-errors.md) — config loading order, storage paths, error-handling pattern
+- [`docs/architecture/dev-tasks.md`](docs/architecture/dev-tasks.md) — running/debugging, CI verification, testing, common dev-task map, coding conventions
+
+> **Before editing `TradingState`, analysis packs, workflow routing, or migration directories**, read `design-decisions.md` — it documents invariants (`#[serde(default)]`, schema version bumps, preflight ownership of policy/routing, transcript-cache migration boundary) that are easy to violate silently.
 
 ## Work Mode
 > Based on the complexity of the tasks, choose the appropriate work mode
@@ -52,70 +130,6 @@ Trigger: User explicitly says "write code" or uses `/opsx:apply` or `/spec-code-
 2. `/ce-code-review` — multi-agent code review, code quality checks should also reference `.github/instructions/rust.instructions.md`.
 3. `/ce-compound` — knowledge consolidation
 
-## Testing
-
-- Core integration tests live in `crates/scorpio-core/tests/` (pipeline, state, workflow, foundation, app facade); CLI integration tests live in `crates/scorpio-cli/tests/` (release-archive contract only).
-- Reporter integration tests live in `crates/scorpio-reporters/tests/` (reporter chain, JSON artifact, terminal rendering); server integration tests live in `crates/scorpio-server/tests/` (`health` end-to-end).
-- Integration tests require the `test-helpers` feature flag: `cargo nextest run --workspace --features test-helpers`. The feature's canonical home is `scorpio-core`; `scorpio-cli` declares `test-helpers = ["scorpio-core/test-helpers"]` as a forwarder so `cargo test -p scorpio-cli --all-features` still enables the gated helpers.
-- CI runs `--workspace --all-features`, which includes `test-helpers`.
-- Integration tests use `tempfile` for SQLite snapshot databases -- no external services needed.
-- Test support modules live in `crates/scorpio-core/tests/support/` and are included via `#[path = "support/..."]`.
-- `scorpio-server` skips `OpenapiInitializerWithSetup` in `Environment::Test` (`crates/scorpio-server/src/app.rs`) to avoid process-global route bleed across tests.
-
-## Configuration
-
-Loading order (later overrides earlier):
-1. `~/.scorpio-analyst/config.toml` -- user-level config written by `scorpio setup`
-2. `.env` via `dotenvy` -- local secrets (git-ignored)
-3. Env vars with prefix `SCORPIO__` (double underscore for nesting: `SCORPIO__LLM__MAX_DEBATE_ROUNDS=5`)
-4. Flat API-key env vars (`SCORPIO_OPENAI_API_KEY`, `SCORPIO_FINNHUB_API_KEY`, etc.) -- override matching secrets from the user config file
-
-Repo-root `config.toml` is deprecated/inert and is not read at runtime.
-
-API keys use a flat `SCORPIO_` prefix (single underscore) -- see `.env.example`. The asset symbol is a CLI argument to `scorpio analyze <SYMBOL>`, not a config key.
-
-## Architecture gotchas
-
-- **Crate boundary**: `scorpio-core` owns the runtime/domain surface; `scorpio-reporters` owns reporter traits/rendering; `scorpio-cli` and `scorpio-server` are consumers. New contributors should prefer `scorpio_core::app::AnalysisRuntime` and `scorpio_core::settings` as runtime entry points, `scorpio_reporters::{Reporter, ReporterChain}` for output extensions, and `crates/scorpio-server/src/controllers/health.rs` + `crates/scorpio-server/src/app.rs` as the canonical HTTP endpoint pattern. Broader direct module imports remain available only where the extraction slice still needs them. No module inside `scorpio-core` may depend on anything under `scorpio_cli`, `scorpio_reporters`, or `scorpio_server`.
-- **State passing**: Agents read/write typed fields on `TradingState` via `graph_flow::Context`, not chat buffers. Adding a new data field means updating `TradingState` and the relevant state module in `crates/scorpio-core/src/state/`.
-- **Phase 0 preflight**: The graph starts at `PreflightTask` (`crates/scorpio-core/src/workflow/tasks/preflight.rs`), not analyst fan-out. It canonicalizes the symbol, loads prior thesis memory, resolves `analysis_pack` into `TradingState.analysis_runtime_policy`, and seeds context keys such as `KEY_RESOLVED_INSTRUMENT`, `KEY_PROVIDER_CAPABILITIES`, `KEY_REQUIRED_COVERAGE_INPUTS`, and `KEY_RUNTIME_POLICY`.
-- **Concurrency**: Per-field `Arc<RwLock<Option<T>>>` locking on `TradingState`. Never hold `std::sync::Mutex` across `.await` -- use `tokio::sync::RwLock`.
-- **Phase 1 dual-write**: `AnalystSyncTask` (`crates/scorpio-core/src/workflow/tasks/analyst.rs`) still fills legacy analyst fields (`fundamental_metrics`, `market_sentiment`, etc.) but also populates `evidence_*`, `data_coverage`, `provenance_summary`, and `derived_valuation`. Keep both paths in sync when changing analyst outputs; prefer typed evidence for new consumers.
-- **SQLite snapshots**: `SnapshotStore::new` / `from_config` runs `sqlx::migrate!()` over `crates/scorpio-core/migrations/` (currently including `0001_create_phase_snapshots.sql` and `0002_add_symbol_and_schema_version.sql`). The directory resolves via `CARGO_MANIFEST_DIR` of `scorpio-core`, so the migrations move with the core crate.
-- **Transcript cache**: `TranscriptCacheStore` persists Alpha Vantage transcript results in a dedicated SQLite database at `~/.scorpio-analyst/transcript_cache.db` (overridable via `SCORPIO__STORAGE__TRANSCRIPT_CACHE_DB_PATH`). Migrations live in `crates/scorpio-core/migrations/transcript_cache/` — a subdirectory that `SnapshotStore`'s `sqlx::migrate!()` does not recurse into. Only `TranscriptFetch::Found` results are cached; negative outcomes are re-fetchable. `AlphaVantageClient::cache_failure_count` (exposed in `Debug` impl) tracks **write** failures only — read-side failures emit sanitized `warn!` logs but do not bump the counter.
-- **TradingState schema evolution**: `TradingState` is serialized into `phase_snapshots.trading_state_json`. Every new
-  field **must** have `#[serde(default)]` or existing snapshots will fail to deserialize. When a field is renamed,
-  removed, or its type changes incompatibly, bump `THESIS_MEMORY_SCHEMA_VERSION` in
-  `crates/scorpio-core/src/workflow/snapshot/thesis.rs` — this explicitly retires old rows rather than silently skipping them at runtime.
-- **Custom Copilot provider**: `crates/scorpio-core/src/providers/copilot.rs` + `crates/scorpio-core/src/providers/acp.rs` implement a custom `rig` provider over JSON-RPC 2.0/NDJSON via `copilot --acp --stdio`.
-- **Dual-tier models**: `ModelTier::QuickThinking` (analysts) vs `ModelTier::DeepThinking` (researchers, trader, risk, fund manager). Configured in the runtime `[llm]` settings from the user config / env merge.
-- **Reporter split**: `scorpio analyze` builds a `ReporterChain` in `crates/scorpio-cli/src/cli/analyze.rs`; terminal/JSON implementations live in `crates/scorpio-reporters/` and run concurrently via `ReporterChain::run_all`. Add new output legs by implementing `scorpio_reporters::Reporter` first, then wiring CLI selection. `scorpio report` lives in `crates/scorpio-cli/src/cli/report.rs`, reads persisted snapshots through `SnapshotStore::from_runtime_storage()`, and does not require API keys.
-- **HTTP server surface**: `scorpio-server` is a separate Loco app. Route registration lives in `crates/scorpio-server/src/app.rs`; documented handlers should follow `crates/scorpio-server/src/controllers/health.rs` (`#[utoipa::path]` + `#[debug_handler]` + `openapi(get(handler), routes!(handler))`).
-
-## Adding things
-
-| Task                  | Files to touch                                                                                                                                                                                                                  |
-|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| New agent             | `crates/scorpio-core/src/agents/<role>/`, `crates/scorpio-core/src/workflow/tasks/`                                                                                                                                             |
-| New data source       | `crates/scorpio-core/src/data/`, expose via `#[tool]` macro                                                                                                                                                                     |
-| New indicator         | `crates/scorpio-core/src/indicators/core_math.rs` + `crates/scorpio-core/src/indicators/tools.rs`                                                                                                                               |
-| New LLM provider      | Extend `ProviderId` in `crates/scorpio-core/src/providers/mod.rs`, add case in `crates/scorpio-core/src/providers/factory/`                                                                                                     |
-| New analysis pack     | Add `PackId` variant in `crates/scorpio-core/src/analysis_packs/manifest/pack_id.rs`, add match arm in `crates/scorpio-core/src/analysis_packs/builtin.rs`                                                                      |
-| New CLI subcommand    | Add variant to `Commands` in `crates/scorpio-cli/src/cli/mod.rs`, create `crates/scorpio-cli/src/cli/<name>.rs`, dispatch in `crates/scorpio-cli/src/main.rs`                                                                   |
-| New reporter          | Implement `scorpio_reporters::Reporter` in `crates/scorpio-reporters/src/`, wire selection in `crates/scorpio-cli/src/cli/analyze.rs`, add tests in `crates/scorpio-reporters/tests/`                                           |
-| New HTTP endpoint     | Create `crates/scorpio-server/src/controllers/<name>.rs`, re-export in `crates/scorpio-server/src/controllers/mod.rs`, wire its `routes()` into `crates/scorpio-server/src/app.rs`, add `crates/scorpio-server/tests/<name>.rs` |
-| New wizard config key | Add field to `PartialConfig` in `crates/scorpio-core/src/settings.rs`, add step in `crates/scorpio-cli/src/cli/setup/steps.rs`, inject in `Config::load_from_user_path` in `crates/scorpio-core/src/config.rs`                  |
-
-## Coding conventions
-
-Detailed Rust conventions are in `.github/instructions/rust.instructions.md`. Non-obvious points:
-- `crates/scorpio-core/src/lib.rs` allows `clippy::absurd_extreme_comparisons` globally
-- Error handling: `thiserror` for `TradingError` variants, `anyhow` for context propagation within tasks
-- Module refactoring: use Facade pattern in `mod.rs`, re-export only the public API. Split files mixing multiple concerns or exceeding ~500 lines.
-- All public types must derive `Debug`
-- Performance optimization: prioritize `O`-complexity before micro-optimizing. Use pre-allocation (`with_capacity`) and avoid unnecessary cloning.
-- Eliminate unnecessary wrapper functions that simply call another function without adding logic.
-
 ## Knowledge Consolidation
 
 After resolving a non-trivial problem, run `/ce:compound` to persist the solution for future reference.
@@ -131,7 +145,7 @@ When to invoke `/ce:compound`:
 
 ## Other instruction files
 
-- `CLAUDE.md` -- comprehensive project context (architecture, dependencies, design decisions)
-- `.github/instructions/rust.instructions.md` -- Rust coding conventions (auto-applied to `**/*.rs`)
-- `README.md` -- current execution graph, CLI usage, known limitations, and OpenSpec workflow shortcuts
-- `crates/scorpio-server/README.md` -- server-specific build/run/config/OpenAPI conventions and the canonical endpoint wiring pattern
+- `CLAUDE.md` — sibling instruction file (same behavioral guidelines, references the same `docs/architecture/`).
+- `.github/instructions/rust.instructions.md` — Rust coding conventions (auto-applied to `**/*.rs`).
+- `README.md` — current execution graph, CLI usage, known limitations, and OpenSpec workflow shortcuts.
+- `crates/scorpio-server/README.md` — server-specific build/run/config/OpenAPI conventions and the canonical endpoint wiring pattern.
