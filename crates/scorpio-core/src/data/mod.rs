@@ -32,6 +32,7 @@ pub mod entity;
 pub mod finnhub;
 pub mod fred;
 mod provider_impls;
+pub mod reddit;
 pub mod routing;
 pub mod sec_edgar;
 pub mod sec_edgar_nport;
@@ -51,6 +52,7 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
+pub use reddit::{RedditClient, RedditNewsProvider};
 pub use sec_edgar::{FilingHeader, SecEdgarClient};
 pub use sec_edgar_nport::{NPortHoldingRow, NPortHoldings, NPortSectorRow};
 #[cfg(any(test, feature = "test-helpers"))]

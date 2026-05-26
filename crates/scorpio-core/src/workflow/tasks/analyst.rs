@@ -63,6 +63,8 @@ const PROVIDER_YFINANCE: &str = "yfinance";
 const PROVIDER_ALPHA_VANTAGE: &str = "alpha_vantage";
 /// Provider tag for SEC EDGAR catalyst feeds (8-K, etc.).
 const PROVIDER_SEC_EDGAR: &str = "sec_edgar";
+/// Provider tag for Reddit sentiment-sidecar rows.
+const PROVIDER_REDDIT: &str = "reddit";
 
 /// Source-tag used on `CatalystEvent.source` by [`crate::data::adapters::catalysts`]
 /// when an 8-K filing comes from SEC EDGAR. Kept in sync there manually — this is
@@ -81,11 +83,108 @@ fn stage1_source(provider: &str, datasets: Vec<String>) -> EvidenceSource {
     }
 }
 
-async fn read_cached_news(
+#[cfg(test)]
+mod reddit_lane_tests {
+    use super::*;
+    use crate::state::NewsArticle;
+    use crate::workflow::tasks::{KEY_CACHED_SENTIMENT_NEWS, KEY_CACHED_VETTED_NEWS};
+
+    #[tokio::test]
+    async fn sentiment_cache_contains_reddit_detects_sidecar_rows() {
+        let context = Context::new();
+        context
+            .set(
+                KEY_CACHED_SENTIMENT_NEWS,
+                serde_json::to_string(&NewsData {
+                    articles: vec![NewsArticle {
+                        title: "Retail chatter".to_owned(),
+                        source: "Reddit r/stocks".to_owned(),
+                        published_at: "2026-03-19T12:00:00Z".to_owned(),
+                        relevance_score: None,
+                        snippet: String::new(),
+                        url: None,
+                    }],
+                    macro_events: vec![],
+                    summary: "reddit sidecar".to_owned(),
+                })
+                .expect("serialize sentiment cache"),
+            )
+            .await;
+
+        let sources = sentiment_evidence_sources(&context)
+            .await
+            .expect("cache read should succeed");
+
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.provider == PROVIDER_REDDIT),
+            "Reddit sidecar rows should be detected from the sentiment cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_cached_news_at_reads_lane_specific_keys() {
+        let context = Context::new();
+        context
+            .set(
+                KEY_CACHED_VETTED_NEWS,
+                serde_json::to_string(&NewsData {
+                    articles: vec![NewsArticle {
+                        title: "Wire".to_owned(),
+                        source: "Reuters".to_owned(),
+                        published_at: "2026-03-19T12:00:00Z".to_owned(),
+                        relevance_score: None,
+                        snippet: String::new(),
+                        url: None,
+                    }],
+                    macro_events: vec![],
+                    summary: "vetted".to_owned(),
+                })
+                .expect("serialize vetted cache"),
+            )
+            .await;
+        context
+            .set(
+                KEY_CACHED_SENTIMENT_NEWS,
+                serde_json::to_string(&NewsData {
+                    articles: vec![NewsArticle {
+                        title: "Crowd".to_owned(),
+                        source: "Reddit r/stocks".to_owned(),
+                        published_at: "2026-03-19T11:00:00Z".to_owned(),
+                        relevance_score: None,
+                        snippet: String::new(),
+                        url: None,
+                    }],
+                    macro_events: vec![],
+                    summary: "sentiment".to_owned(),
+                })
+                .expect("serialize sentiment cache"),
+            )
+            .await;
+
+        let vetted = read_cached_news_at("test", &context, KEY_CACHED_VETTED_NEWS)
+            .await
+            .expect("vetted cache read")
+            .expect("vetted cache present");
+        let sentiment = read_cached_news_at("test", &context, KEY_CACHED_SENTIMENT_NEWS)
+            .await
+            .expect("sentiment cache read")
+            .expect("sentiment cache present");
+
+        assert_eq!(vetted.articles.len(), 1);
+        assert_eq!(vetted.articles[0].source, "Reuters");
+        assert_eq!(sentiment.articles.len(), 1);
+        assert!(sentiment.articles[0].source.starts_with("Reddit r/"));
+    }
+}
+
+async fn read_cached_news_at(
     task_name: &str,
     context: &Context,
+    key: &str,
 ) -> graph_flow::Result<Option<Arc<NewsData>>> {
-    let json: Option<String> = context.get(super::KEY_CACHED_NEWS).await;
+    let json: Option<String> = context.get(key).await;
     json.map(|value| {
         serde_json::from_str::<NewsData>(&value).map(Arc::new).map_err(|error| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -94,6 +193,47 @@ async fn read_cached_news(
         })
     })
     .transpose()
+}
+
+async fn sentiment_evidence_sources(context: &Context) -> graph_flow::Result<Vec<EvidenceSource>> {
+    let Some(news) =
+        read_cached_news_at("AnalystSyncTask", context, super::KEY_CACHED_SENTIMENT_NEWS).await?
+    else {
+        return Ok(vec![stage1_source(
+            PROVIDER_FINNHUB,
+            vec!["company_news_sentiment_inputs".to_owned()],
+        )]);
+    };
+
+    let has_reddit = news
+        .articles
+        .iter()
+        .any(|article| article.source.starts_with("Reddit r/"));
+    let has_non_reddit = news
+        .articles
+        .iter()
+        .any(|article| !article.source.starts_with("Reddit r/"));
+
+    let mut sources = Vec::new();
+    if has_non_reddit || news.articles.is_empty() {
+        sources.push(stage1_source(
+            PROVIDER_FINNHUB,
+            vec!["company_news_sentiment_inputs".to_owned()],
+        ));
+    }
+    if has_reddit {
+        sources.push(stage1_source(
+            PROVIDER_REDDIT,
+            vec!["crowd_commentary_sentiment_inputs".to_owned()],
+        ));
+    }
+    if sources.is_empty() {
+        sources.push(stage1_source(
+            PROVIDER_FINNHUB,
+            vec!["company_news_sentiment_inputs".to_owned()],
+        ));
+    }
+    Ok(sources)
 }
 
 fn required_inputs_for_state(state: &TradingState) -> Vec<String> {
@@ -268,7 +408,12 @@ impl Task for SentimentAnalystTask {
             }
         };
 
-        let cached_news_opt = read_cached_news("SentimentAnalystTask", &context).await?;
+        let cached_news_opt = read_cached_news_at(
+            "SentimentAnalystTask",
+            &context,
+            super::KEY_CACHED_SENTIMENT_NEWS,
+        )
+        .await?;
 
         let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
             graph_flow::GraphError::TaskExecutionFailed(
@@ -375,7 +520,8 @@ impl Task for NewsAnalystTask {
             }
         };
 
-        let cached_news_opt = read_cached_news("NewsAnalystTask", &context).await?;
+        let cached_news_opt =
+            read_cached_news_at("NewsAnalystTask", &context, super::KEY_CACHED_VETTED_NEWS).await?;
 
         let policy = state.analysis_runtime_policy.as_ref().ok_or_else(|| {
             graph_flow::GraphError::TaskExecutionFailed(
@@ -990,6 +1136,7 @@ impl Task for AnalystSyncTask {
             load_transcript_fetch(&context).await.ok(),
             Some(TranscriptFetch::Found(_))
         );
+        let sentiment_sources = sentiment_evidence_sources(&context).await?;
         let sec_edgar_contributed_catalysts = state
             .enrichment_catalysts
             .payload
@@ -1035,10 +1182,7 @@ impl Task for AnalystSyncTask {
                 ANALYST_SENTIMENT,
                 |state, data| state.set_market_sentiment(data),
                 |state, data| {
-                    let mut sources = vec![stage1_source(
-                        PROVIDER_FINNHUB,
-                        vec!["company_news_sentiment_inputs".to_owned()],
-                    )];
+                    let mut sources = sentiment_sources.clone();
                     if transcript_from_alpha_vantage {
                         sources.push(stage1_source(
                             PROVIDER_ALPHA_VANTAGE,

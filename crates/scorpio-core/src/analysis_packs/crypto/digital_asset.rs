@@ -3,7 +3,10 @@
 
 use std::collections::HashMap;
 
-use crate::{prompts::PromptBundle, state::AssetShape, valuation::ValuatorId};
+use crate::{
+    constants::CRYPTO_DIGITAL_ASSET_REDDIT_SUBREDDITS, prompts::PromptBundle, state::AssetShape,
+    valuation::ValuatorId,
+};
 
 use super::super::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
@@ -58,6 +61,10 @@ pub fn digital_asset_pack() -> AnalysisPackManifest {
             m
         },
         auditor_enabled: true,
+        reddit_subreddits: CRYPTO_DIGITAL_ASSET_REDDIT_SUBREDDITS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
     }
 }
 

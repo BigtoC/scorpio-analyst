@@ -106,6 +106,22 @@ impl SharedRateLimiter {
         Some(Self::new("alpha_vantage", cfg.alpha_vantage_rps))
     }
 
+    /// Create a Reddit rate limiter from `RateLimitConfig`.
+    ///
+    /// Uses exact period-based spacing (`Quota::with_period(60s / rpm)`) so
+    /// the anonymous Reddit quota (10 rpm → 6 s spacing) is honored
+    /// deterministically. Returns `None` when `rpm == 0`, which is the v1
+    /// disable path.
+    pub fn reddit_from_config(cfg: &RateLimitConfig) -> Option<Self> {
+        if cfg.reddit_rpm == 0 {
+            return None;
+        }
+        let period = Duration::from_secs(60) / cfg.reddit_rpm;
+        let quota = Quota::with_period(period)
+            .expect("non-zero period should always produce a valid quota");
+        Some(Self::from_quota("reddit", quota))
+    }
+
     /// Wait until a single permit becomes available. This is cancel-safe.
     pub async fn acquire(&self) {
         if let Some(inner) = &self.inner {
@@ -323,6 +339,7 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
+            reddit_rpm: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_some());
@@ -336,6 +353,7 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
+            reddit_rpm: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_none());
@@ -368,6 +386,7 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 5,
             alpha_vantage_rps: 0,
+            reddit_rpm: 0,
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
         assert!(limiter.is_some(), "non-zero rps should produce a limiter");
@@ -385,6 +404,7 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
+            reddit_rpm: 0,
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
         assert!(limiter.is_none(), "rps=0 should disable the limiter");
@@ -397,6 +417,7 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 1,
+            reddit_rpm: 0,
         };
         let limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg);
         assert!(limiter.is_some(), "non-zero rps should produce a limiter");
@@ -410,9 +431,32 @@ mod tests {
             fred_rps: 0,
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
+            reddit_rpm: 0,
         };
         let limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg);
         assert!(limiter.is_none(), "rps=0 should disable the limiter");
+    }
+
+    // ── Reddit rate limiter tests ────────────────────────────────────────────
+
+    #[test]
+    fn reddit_from_config_returns_some_with_exact_6s_spacing_under_default() {
+        let cfg = RateLimitConfig {
+            reddit_rpm: 10,
+            ..Default::default()
+        };
+        let limiter =
+            SharedRateLimiter::reddit_from_config(&cfg).expect("rpm=10 should produce a limiter");
+        assert_eq!(limiter.label(), "reddit");
+    }
+
+    #[test]
+    fn reddit_from_config_returns_none_when_zero_disables_reddit() {
+        let cfg = RateLimitConfig {
+            reddit_rpm: 0,
+            ..Default::default()
+        };
+        assert!(SharedRateLimiter::reddit_from_config(&cfg).is_none());
     }
 
     // ── DeepSeek rate limiter tests ──────────────────────────────────────────

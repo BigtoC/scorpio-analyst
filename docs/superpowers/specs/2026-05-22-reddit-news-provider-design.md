@@ -52,7 +52,7 @@ run_analyst_team
 
 - Pack-owned prompts. In v1 the baseline equity and ETF packs own `RuntimePolicy.reddit_subreddits`; crypto-specific subreddit routing stays out of scope until the broader news-provider contract supports `Symbol::Crypto` end to end.
 - Prompt contract is lane-specific. Every in-scope sentiment prompt treats `source` values beginning with `Reddit r/` as crowd commentary, while in-scope news prompts keep the explicit `Do not assume Reddit` wording because `NewsAnalyst` stays on the vetted lane. Both prompt contracts get drift tests.
-- Rate limiting is centralized. A new `SharedRateLimiter` labelled `"reddit"` is built from validated `RateLimitConfig.reddit_rpm` (default 10, must be `>= 1`) using `Quota::with_period(Duration::from_secs(60) / rpm)` — exact 6-second spacing under 10 rpm.
+- Rate limiting is centralized. A new `SharedRateLimiter` labelled `"reddit"` is built from `RateLimitConfig.reddit_rpm` (default 10). Positive values use `Quota::with_period(Duration::from_secs(60) / rpm)` — exact 6-second spacing under 10 rpm — while `0` disables Reddit ingestion for the cycle.
 - Reddit never displaces vetted articles from `NewsAnalyst`. `NewsAnalyst` stays on Finnhub+Yahoo only; `SentimentAnalyst` gets a separate Reddit sidecar budget.
 - Partial success is evaluated per lane. `NewsAnalyst` cached news exists iff Finnhub or Yahoo succeeds. `SentimentAnalyst` cached news exists iff Finnhub, Yahoo, or Reddit succeeds. If only Reddit succeeds, `SentimentAnalyst` still gets cached Reddit context while `NewsAnalyst` falls back to live `GetNews`.
 - Ambiguous ticker symbols do not guess. A v1 denylist returns empty Reddit data for known ambiguous tickers rather than risking unrelated posts.
@@ -174,7 +174,7 @@ The existing `warn!` log lines in `prefetch_analyst_news` are extended to includ
 - User file override: `[rate_limits] reddit_rpm = 6` in `~/.scorpio-analyst/config.toml`
 - Env override: `SCORPIO__RATE_LIMITS__REDDIT_RPM=6`
 
-`reddit_rpm` must be `>= 1`; `0` is rejected during config loading rather than treated as an implicit disable flag in v1.
+`reddit_rpm` defaults to `10`. Positive values rate-limit Reddit requests, and `0` disables Reddit ingestion without changing the rest of the news pipeline.
 
 No `PartialConfig` change (no secret to persist), no `cli/setup/steps.rs` change (no wizard step).
 

@@ -37,7 +37,7 @@ use tracing::warn;
 
 use crate::{
     config::LlmConfig,
-    data::{FinnhubClient, FredClient, YFinanceClient, YFinanceNewsProvider, traits::NewsProvider},
+    data::{FinnhubClient, FredClient, YFinanceClient, traits::NewsProvider},
     domain::{Symbol, Ticker},
     error::{RetryPolicy, TradingError, check_analyst_degradation},
     providers::factory::CompletionModelHandle,
@@ -180,6 +180,42 @@ fn sort_and_cap_news(mut news: NewsData) -> NewsData {
     news
 }
 
+fn build_sentiment_news(vetted: &NewsData, reddit: NewsData) -> Option<NewsData> {
+    if reddit.articles.is_empty() {
+        return if vetted.articles.is_empty() {
+            None
+        } else {
+            Some(vetted.clone())
+        };
+    }
+
+    let mut vetted_articles = vetted.articles.clone();
+    vetted_articles.sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+
+    let reddit_count = reddit.articles.len();
+    let mut articles = vetted_articles;
+    articles.extend(reddit.articles);
+    articles.sort_unstable_by(|a, b| b.published_at.cmp(&a.published_at));
+
+    if articles.is_empty() {
+        return None;
+    }
+
+    let kept_reddit = articles
+        .iter()
+        .filter(|a| a.source.starts_with("Reddit r/"))
+        .count();
+    let kept_vetted = articles.len().saturating_sub(kept_reddit);
+
+    Some(NewsData {
+        articles,
+        macro_events: vetted.macro_events.clone(),
+        summary: format!(
+            "{kept_vetted} vetted articles + {kept_reddit} Reddit articles (of {reddit_count} fetched)"
+        ),
+    })
+}
+
 /// Normalize a title for exact-match deduplication.
 ///
 /// Uses `to_lowercase()` as a practical substitute for Unicode NFKC
@@ -259,50 +295,105 @@ fn merge_news(primary: NewsData, secondary: NewsData) -> NewsData {
     }
 }
 
-/// Pre-fetch news from both Finnhub and Yahoo Finance, merge, and deduplicate.
+/// Dual-feed result of [`prefetch_analyst_news`].
 ///
-/// Returns `Some(Arc<NewsData>)` on success (at least one provider succeeded).
-/// Returns `None` only when **both** providers failed — callers fall back to
-/// live `GetNews` tool calls in that case.
+/// - `vetted` is `Some` when at least one of Finnhub or Yahoo succeeded.
+///   Bound into `NewsAnalyst` via `KEY_CACHED_VETTED_NEWS`.
+/// - `sentiment` is `Some` when at least one of the three providers
+///   succeeded (vetted + Reddit sidecar). Bound into `SentimentAnalyst`
+///   via `KEY_CACHED_SENTIMENT_NEWS`.
+#[derive(Debug, Clone, Default)]
+pub struct PrefetchedNewsBundle {
+    pub vetted: Option<Arc<NewsData>>,
+    pub sentiment: Option<Arc<NewsData>>,
+}
+
+/// Pre-fetch news from Finnhub, Yahoo, and Reddit and build two analyst feeds.
+///
+/// - Vetted feed (Finnhub + Yahoo, deduplicated and sorted) → `NewsAnalyst`.
+/// - Sentiment feed (vetted + Reddit sidecar, preserving Reddit rows as
+///   distinct sentiment inputs) → `SentimentAnalyst`.
+///
+/// Reddit never displaces vetted rows from `NewsAnalyst`. The sentiment lane
+/// reports `None` when every contributing provider either failed or produced
+/// no usable articles after filtering, so callers still fall back to live
+/// `GetNews` when cached sentiment content is empty.
 pub async fn prefetch_analyst_news(
     finnhub_news: &impl NewsProvider,
     yfinance_news: &impl NewsProvider,
+    reddit_news: &impl NewsProvider,
     symbol: &str,
-) -> Option<Arc<NewsData>> {
-    // Resolve the string symbol once to the typed Symbol so both providers use
-    // the same canonical form.
+) -> PrefetchedNewsBundle {
     let typed_symbol = match Ticker::parse(symbol) {
         Ok(ticker) => Symbol::Equity(ticker),
         Err(err) => {
             warn!(error = %err, symbol, "news pre-fetch: symbol parse failed");
-            return None;
+            return PrefetchedNewsBundle::default();
         }
     };
 
-    let (finnhub_result, yahoo_result) = tokio::join!(
+    let (finnhub_result, yahoo_result, reddit_result) = tokio::join!(
         finnhub_news.fetch(&typed_symbol),
         yfinance_news.fetch(&typed_symbol),
+        reddit_news.fetch(&typed_symbol),
     );
 
-    match (finnhub_result, yahoo_result) {
-        (Ok(fh), Ok(yf)) => Some(Arc::new(merge_news(fh, yf))),
+    let vetted: Option<NewsData> = match (finnhub_result, yahoo_result) {
+        (Ok(fh), Ok(yf)) => Some(merge_news(fh, yf)),
         (Ok(fh), Err(yf_err)) => {
             warn!(error = %yf_err, symbol, "yahoo news pre-fetch failed; using finnhub only");
-            Some(Arc::new(sort_and_cap_news(fh)))
+            Some(sort_and_cap_news(fh))
         }
         (Err(fh_err), Ok(yf)) => {
             warn!(error = %fh_err, symbol, "finnhub news pre-fetch failed; using yahoo only");
-            Some(Arc::new(sort_and_cap_news(yf)))
+            Some(sort_and_cap_news(yf))
         }
         (Err(fh_err), Err(yf_err)) => {
             warn!(
                 finnhub_error = %fh_err,
                 yahoo_error = %yf_err,
                 symbol,
-                "both news pre-fetches failed; analysts will use live tool calls"
+                "both vetted news pre-fetches failed; NewsAnalyst will fall back to live GetNews"
             );
             None
         }
+    };
+
+    let reddit_news_data: Option<NewsData> = match reddit_result {
+        Ok(data) => Some(data),
+        Err(err) => {
+            warn!(
+                reddit_error = %err,
+                symbol,
+                "reddit news pre-fetch failed; sentiment lane continues without sidecar"
+            );
+            None
+        }
+    };
+
+    let sentiment: Option<NewsData> = match (vetted.as_ref(), reddit_news_data) {
+        (None, None) => None,
+        (Some(v), None) => {
+            if v.articles.is_empty() {
+                None
+            } else {
+                Some(v.clone())
+            }
+        }
+        (None, Some(r)) => {
+            let reddit_only = sort_and_cap_news(r);
+            if reddit_only.articles.is_empty() {
+                None
+            } else {
+                Some(reddit_only)
+            }
+        }
+        (Some(v), Some(r)) => build_sentiment_news(v, r),
+    };
+
+    PrefetchedNewsBundle {
+        vetted: vetted.map(Arc::new),
+        sentiment: sentiment.map(Arc::new),
     }
 }
 
@@ -326,9 +417,12 @@ pub async fn run_analyst_team(
     finnhub: &FinnhubClient,
     fred: &FredClient,
     yfinance: &YFinanceClient,
+    prefetched_news: PrefetchedNewsBundle,
     state: &mut TradingState,
     llm_config: &LlmConfig,
 ) -> Result<Vec<AgentTokenUsage>, TradingError> {
+    let vetted_news = prefetched_news.vetted;
+    let sentiment_news = prefetched_news.sentiment;
     // The inner retry policy sets the per-attempt timeout; the outer task timeout
     // must cover all attempts plus backoff so it never fires before the inner budget
     // is exhausted.
@@ -336,7 +430,6 @@ pub async fn run_analyst_team(
     let retry_policy = RetryPolicy::from_config(llm_config);
     let outer_timeout = retry_policy.total_budget(inner_timeout);
 
-    let symbol = state.asset_symbol.clone();
     let analyst_handles = state.analyst_handles();
     let model_id = handle.model_id().to_owned();
 
@@ -353,14 +446,11 @@ pub async fn run_analyst_team(
         ))
     })?;
 
-    // ── Pre-fetch news once; both Sentiment and News analysts share the result ─
-    //
-    // This eliminates the duplicate Finnhub `get_news` call (P1).  If the
-    // pre-fetch fails the analysts fall back to their live `GetNews` tool.
-    let yfinance_news_provider = YFinanceNewsProvider::new(yfinance);
-    let cached_news = prefetch_analyst_news(finnhub, &yfinance_news_provider, &symbol).await;
-
     // ── Spawn all four analysts concurrently ─────────────────────────────
+    //
+    // News pre-fetch is owned by the runtime caller (`runtime.rs` constructs
+    // the Reddit provider and builds a `PrefetchedNewsBundle`). This helper
+    // only consumes the bundle: vetted → NewsAnalyst, sentiment → SentimentAnalyst.
 
     let fundamental_task = {
         let analyst =
@@ -375,7 +465,7 @@ pub async fn run_analyst_team(
             state,
             policy,
             llm_config,
-            cached_news.clone(),
+            sentiment_news.clone(),
             None,
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
@@ -389,7 +479,7 @@ pub async fn run_analyst_team(
             state,
             policy,
             llm_config,
-            cached_news,
+            vetted_news,
             None,
         );
         tokio::spawn(async move { tokio::time::timeout(outer_timeout, analyst.run()).await })
@@ -1002,6 +1092,17 @@ mod merge_tests {
         }
     }
 
+    /// Helper that builds an empty-news Reddit stub. The Reddit sidecar
+    /// is the third positional argument to `prefetch_analyst_news` after the
+    /// lane-split refactor; tests that don't care about the sidecar use this.
+    fn empty_reddit_stub() -> StubNewsProvider {
+        StubNewsProvider::ok(NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: String::new(),
+        })
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -1019,10 +1120,16 @@ mod merge_tests {
             "2026-03-14T10:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed when both providers succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle
+            .vetted
+            .expect("should succeed when both providers succeed");
 
         assert_eq!(
             result.articles.len(),
@@ -1045,10 +1152,14 @@ mod merge_tests {
             "2026-03-14T10:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         assert_eq!(
             result.articles.len(),
@@ -1076,10 +1187,14 @@ mod merge_tests {
             "2026-03-14T10:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         // The yhoo.it shortener must be treated as missing URL, so dedup falls
         // back to title-hash. Same title => single article.
@@ -1106,10 +1221,14 @@ mod merge_tests {
             "2026-03-14T10:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         assert_eq!(
             result.articles.len(),
@@ -1131,10 +1250,14 @@ mod merge_tests {
             "2026-03-14T10:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         assert_eq!(
             result.articles.len(),
@@ -1178,10 +1301,14 @@ mod merge_tests {
             ),
         ]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         // All 5 articles have distinct URLs and near-but-not-identical titles.
         // Title-hash dedup uses exact match after lowercasing, so none of these
@@ -1202,10 +1329,16 @@ mod merge_tests {
         )]);
 
         // Yahoo fails.
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::err(), "AAPL")
-                .await
-                .expect("should succeed with Finnhub-only fallback when Yahoo fails");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::err(),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle
+            .vetted
+            .expect("should succeed with Finnhub-only fallback when Yahoo fails");
 
         assert_eq!(
             result.articles.len(),
@@ -1227,10 +1360,16 @@ mod merge_tests {
             .collect();
         let fh = news_data(articles);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::err(), "AAPL")
-                .await
-                .expect("single-provider fallback should still succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::err(),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle
+            .vetted
+            .expect("single-provider fallback should still succeed");
 
         assert_eq!(
             result.articles.len(),
@@ -1247,10 +1386,16 @@ mod merge_tests {
             "2026-03-14T10:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::err(), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed with Yahoo-only fallback when Finnhub fails");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::err(),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle
+            .vetted
+            .expect("should succeed with Yahoo-only fallback when Finnhub fails");
 
         assert_eq!(
             result.articles.len(),
@@ -1260,13 +1405,114 @@ mod merge_tests {
     }
 
     #[tokio::test]
-    async fn prefetch_analyst_news_returns_none_when_both_prefetch_providers_fail() {
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::err(), &StubNewsProvider::err(), "AAPL").await;
+    async fn prefetch_all_three_fail_returns_none_for_both_lanes() {
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::err(),
+            &StubNewsProvider::err(),
+            &StubNewsProvider::err(),
+            "AAPL",
+        )
+        .await;
 
         assert!(
-            result.is_none(),
-            "must return None when both providers fail so live tool fallback activates"
+            bundle.vetted.is_none(),
+            "must return None for the vetted lane when both vetted providers fail"
+        );
+        assert!(
+            bundle.sentiment.is_none(),
+            "must return None for the sentiment lane when every contributor fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn prefetch_returns_sentiment_only_when_finnhub_and_yahoo_fail_but_reddit_succeeds() {
+        let mut reddit_article = article(
+            "AAPL Q4 thread",
+            Some("https://www.reddit.com/r/stocks/comments/abc/aapl_q4/"),
+            "2026-03-14T10:00:00Z",
+        );
+        reddit_article.source = "Reddit r/stocks".to_owned();
+        let reddit = news_data(vec![reddit_article]);
+
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::err(),
+            &StubNewsProvider::err(),
+            &StubNewsProvider::ok(reddit),
+            "AAPL",
+        )
+        .await;
+
+        assert!(bundle.vetted.is_none(), "no vetted source succeeded");
+        let sentiment = bundle
+            .sentiment
+            .expect("sentiment feed should exist when only Reddit succeeded");
+        assert_eq!(sentiment.articles.len(), 1);
+        assert!(sentiment.articles[0].source.starts_with("Reddit r/"));
+    }
+
+    #[tokio::test]
+    async fn prefetch_vetted_never_contains_reddit_sources() {
+        let fh = news_data(vec![article(
+            "Vetted Article",
+            Some("https://reuters.com/aapl"),
+            "2026-03-14T10:00:00Z",
+        )]);
+        let yf = news_data(vec![article(
+            "Yahoo Article",
+            Some("https://finance.yahoo.com/aapl"),
+            "2026-03-14T09:00:00Z",
+        )]);
+        let mut reddit_article = article(
+            "Reddit Article",
+            Some("https://www.reddit.com/r/stocks/comments/abc/x/"),
+            "2026-03-14T08:00:00Z",
+        );
+        reddit_article.source = "Reddit r/stocks".to_owned();
+        let reddit = news_data(vec![reddit_article]);
+
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &StubNewsProvider::ok(reddit),
+            "AAPL",
+        )
+        .await;
+
+        let vetted = bundle.vetted.expect("vetted feed should exist");
+        assert!(
+            vetted
+                .articles
+                .iter()
+                .all(|a| !a.source.starts_with("Reddit r/")),
+            "vetted feed must never contain Reddit sources"
+        );
+
+        let sentiment = bundle.sentiment.expect("sentiment feed should exist");
+        let reddit_count = sentiment
+            .articles
+            .iter()
+            .filter(|a| a.source.starts_with("Reddit r/"))
+            .count();
+        assert!(reddit_count >= 1, "sentiment feed must carry Reddit rows");
+    }
+
+    #[tokio::test]
+    async fn prefetch_empty_reddit_ok_does_not_create_sentiment_when_vetted_fails() {
+        // Reddit returns Ok with empty articles. With both vetted providers
+        // failing, the sentiment lane should remain None so callers fall back
+        // to live GetNews instead of pinning a useless empty feed.
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::err(),
+            &StubNewsProvider::err(),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+
+        assert!(bundle.vetted.is_none());
+        assert!(
+            bundle.sentiment.is_none(),
+            "empty Reddit Ok must not suppress fallback path"
         );
     }
 
@@ -1282,10 +1528,14 @@ mod merge_tests {
             "2026-03-14T12:00:00Z",
         )]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         assert_eq!(result.articles.len(), 3);
         // Verify newest-first ordering.
@@ -1375,10 +1625,14 @@ mod merge_tests {
         );
         let yf = news_data(vec![article("Article B", None, "2026-03-14T09:00:00Z")]);
 
-        let result =
-            prefetch_analyst_news(&StubNewsProvider::ok(fh), &StubNewsProvider::ok(yf), "AAPL")
-                .await
-                .expect("should succeed");
+        let bundle = prefetch_analyst_news(
+            &StubNewsProvider::ok(fh),
+            &StubNewsProvider::ok(yf),
+            &empty_reddit_stub(),
+            "AAPL",
+        )
+        .await;
+        let result = bundle.vetted.expect("vetted lane should exist");
 
         assert_eq!(
             result.macro_events.len(),

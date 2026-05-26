@@ -45,6 +45,10 @@ pub struct RuntimePolicy {
     /// Whether the post-decision advisory auditor stage runs for this pack.
     #[serde(default)]
     pub auditor_enabled: bool,
+    /// Subreddit list resolved from the pack manifest for the Reddit
+    /// sentiment sidecar. Empty for packs that opt out.
+    #[serde(default)]
+    pub reddit_subreddits: Vec<String>,
 }
 
 /// Serializable enrichment intent (mirrors [`EnrichmentIntent`] but with serde).
@@ -95,6 +99,7 @@ pub(crate) fn resolve_runtime_policy_for_manifest(
         default_valuation: manifest.default_valuation,
         valuator_selection: manifest.valuator_selection.clone(),
         auditor_enabled: manifest.auditor_enabled,
+        reddit_subreddits: manifest.reddit_subreddits.clone(),
     })
 }
 
@@ -190,6 +195,32 @@ mod tests {
         let json = serde_json::to_string(&policy).expect("serialize");
         let back: RuntimePolicy = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(policy, back);
+    }
+
+    #[test]
+    fn runtime_policy_serde_compat_missing_reddit_subreddits() {
+        // Older snapshots predate the reddit_subreddits field. They must
+        // still deserialize because of #[serde(default)].
+        let baseline = resolve_runtime_policy("baseline").expect("baseline");
+        let mut json: serde_json::Value = serde_json::to_value(&baseline).expect("serialize");
+        // Strip the field as if from an older binary.
+        json.as_object_mut().unwrap().remove("reddit_subreddits");
+
+        let back: RuntimePolicy =
+            serde_json::from_value(json).expect("older snapshot must deserialize");
+        assert!(
+            back.reddit_subreddits.is_empty(),
+            "missing field must default to an empty Vec"
+        );
+    }
+
+    #[test]
+    fn baseline_runtime_policy_carries_equity_subreddits() {
+        let policy = resolve_runtime_policy("baseline").expect("baseline");
+        assert!(
+            !policy.reddit_subreddits.is_empty(),
+            "equity baseline must populate reddit_subreddits"
+        );
     }
 
     #[test]

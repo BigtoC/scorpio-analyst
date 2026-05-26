@@ -172,6 +172,11 @@ pub fn etf_baseline_pack() -> AnalysisPackManifest {
             m
         },
         auditor_enabled: true,
+        // ETFs are not in scope for the Reddit sentiment sidecar: r/stocks
+        // and r/investing chatter rarely names a specific fund ticker, so
+        // queries return mostly noise. Empty vec opts the pack out — the
+        // sentiment lane carries on with vetted sources only.
+        reddit_subreddits: vec![],
     }
 }
 

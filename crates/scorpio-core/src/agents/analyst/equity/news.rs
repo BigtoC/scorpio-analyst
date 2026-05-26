@@ -560,6 +560,19 @@ mod tests {
     }
 
     #[test]
+    fn news_prompt_asserts_reddit_remains_unavailable_in_vetted_lane() {
+        let prompt = baseline_news_prompt();
+        assert!(
+            prompt.contains("Do not assume direct Reddit"),
+            "news prompt must assert Reddit is unavailable to the NewsAnalyst"
+        );
+        assert!(
+            prompt.contains("vetted"),
+            "news prompt must describe its lane as vetted"
+        );
+    }
+
+    #[test]
     fn news_prompt_states_exact_tool_argument_shapes() {
         let prompt = baseline_news_prompt();
         assert!(

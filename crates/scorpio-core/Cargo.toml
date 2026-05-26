@@ -75,6 +75,7 @@ pretty_assertions.workspace = true
 paft-money.workspace = true
 paft-domain.workspace = true
 rust_decimal.workspace = true
+wiremock.workspace = true
 
 [features]
 default = []

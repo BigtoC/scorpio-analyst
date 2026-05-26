@@ -326,6 +326,12 @@ pub struct RateLimitConfig {
     /// burst behavior polite without burning through the daily quota.
     #[serde(default = "default_alpha_vantage_rps")]
     pub alpha_vantage_rps: u32,
+    /// Reddit requests per minute (anonymous quota is 10 rpm).
+    ///
+    /// `0` disables Reddit ingestion in v1 and acts as the operator kill
+    /// switch.
+    #[serde(default = "default_reddit_rpm")]
+    pub reddit_rpm: u32,
 }
 
 fn default_finnhub_rps() -> u32 {
@@ -340,6 +346,9 @@ fn default_yahoo_finance_rps() -> u32 {
 fn default_alpha_vantage_rps() -> u32 {
     1
 }
+fn default_reddit_rpm() -> u32 {
+    10
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -348,6 +357,7 @@ impl Default for RateLimitConfig {
             fred_rps: default_fred_rps(),
             yahoo_finance_rps: default_yahoo_finance_rps(),
             alpha_vantage_rps: default_alpha_vantage_rps(),
+            reddit_rpm: default_reddit_rpm(),
         }
     }
 }
@@ -1570,6 +1580,32 @@ fetch_timeout_secs = 0
         assert!(!cfg.enrichment.enable_consensus_estimates);
         assert!(!cfg.enrichment.enable_event_news);
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
+    }
+
+    #[test]
+    fn rate_limit_config_reddit_rpm_default_is_10() {
+        let cfg = RateLimitConfig::default();
+        assert_eq!(cfg.reddit_rpm, 10);
+    }
+
+    #[test]
+    fn config_allows_reddit_rpm_zero_to_disable_reddit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(
+            r#"
+[llm]
+quick_thinking_provider = "openai"
+deep_thinking_provider = "openai"
+quick_thinking_model = "gpt-4o-mini"
+deep_thinking_model = "o3"
+
+[rate_limits]
+reddit_rpm = 0
+"#,
+        );
+        let cfg =
+            Config::load_from(&path).expect("zero reddit_rpm should disable Reddit, not fail");
+        assert_eq!(cfg.rate_limits.reddit_rpm, 0);
     }
 
     #[test]

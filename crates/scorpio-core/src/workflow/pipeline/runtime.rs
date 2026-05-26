@@ -31,8 +31,9 @@ use crate::{
         SnapshotStore, classify_runtime_pack,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         tasks::{
-            FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_CACHED_NEWS,
-            KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
+            FundamentalAnalystTask, KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED,
+            KEY_CACHED_SENTIMENT_NEWS, KEY_CACHED_VETTED_NEWS, KEY_DEBATE_ROUND,
+            KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS, KEY_RISK_ROUND,
             KEY_TRANSCRIPT_FETCH_STATUS, NewsAnalystTask, SentimentAnalystTask,
             TechnicalAnalystTask, handoff,
         },
@@ -107,6 +108,17 @@ pub(crate) fn build_analyst_tasks(
         .into_iter()
         .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, llm_config))
         .collect()
+}
+
+pub(crate) fn reddit_subreddits_for_cycle(
+    config: &Config,
+    runtime_policy: &crate::analysis_packs::RuntimePolicy,
+) -> Vec<String> {
+    if config.rate_limits.reddit_rpm == 0 {
+        vec![]
+    } else {
+        runtime_policy.reddit_subreddits.clone()
+    }
 }
 
 fn build_analyst_task(
@@ -385,8 +397,36 @@ pub async fn run_analysis_cycle(
     let need_vix = initial_state.market_volatility().is_none();
     let (price_result, vix_result, news_result, catalysts_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
+        use crate::constants::{REDDIT_REQUEST_TIMEOUT_SECS, REDDIT_USER_AGENT_PREFIX};
         use crate::data::YFinanceNewsProvider;
+        use crate::data::reddit::RedditClient;
+        use crate::data::reddit::RedditNewsProvider;
         let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
+
+        // Construct a per-cycle Reddit provider. Pipeline-level sharing would
+        // require storing the client on `TradingPipeline` and threading it
+        // through `try_new`; the per-cycle client is simpler given cycle
+        // frequency.
+        let reddit_http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(REDDIT_REQUEST_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "failed to build reddit http client; using default");
+                reqwest::Client::new()
+            });
+        let reddit_limiter = SharedRateLimiter::reddit_from_config(&pipeline.config.rate_limits)
+            .unwrap_or_else(|| SharedRateLimiter::disabled("reddit"));
+        let reddit_user_agent = format!(
+            "{prefix}/{version} (https://github.com/BigtoC/scorpio-analyst)",
+            prefix = REDDIT_USER_AGENT_PREFIX,
+            version = env!("CARGO_PKG_VERSION"),
+        );
+        let reddit_client = RedditClient::new(reddit_http, reddit_limiter, reddit_user_agent);
+        let reddit_news_provider = RedditNewsProvider::new(
+            reddit_client,
+            reddit_subreddits_for_cycle(&pipeline.config, &runtime_policy),
+        );
+
         let fetch_timeout =
             std::time::Duration::from_secs(pipeline.config.enrichment.fetch_timeout_secs);
         tokio::join!(
@@ -404,7 +444,12 @@ pub async fn run_analysis_cycle(
                     None
                 }
             },
-            prefetch_analyst_news(&pipeline.finnhub, &yfinance_news_provider, &symbol),
+            prefetch_analyst_news(
+                &pipeline.finnhub,
+                &yfinance_news_provider,
+                &reddit_news_provider,
+                &symbol,
+            ),
             hydrate_catalysts(
                 pipeline.catalyst_provider.as_ref(),
                 &symbol,
@@ -490,7 +535,14 @@ pub async fn run_analysis_cycle(
     initial_state.enrichment_consensus = consensus_enrichment_state;
     initial_state.enrichment_catalysts = catalysts_result;
 
-    let cached_news_json = news_result.and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
+    let vetted_news_json = news_result
+        .vetted
+        .as_ref()
+        .and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
+    let sentiment_news_json = news_result
+        .sentiment
+        .as_ref()
+        .and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
     let graph = Arc::clone(&pipeline.graph);
     let storage = Arc::new(InMemorySessionStorage::new());
     let session_id = Uuid::new_v4().to_string();
@@ -523,8 +575,11 @@ pub async fn run_analysis_cycle(
             cause: error.to_string(),
         })?;
 
-    if let Some(news_json) = cached_news_json {
-        session.context.set(KEY_CACHED_NEWS, news_json).await;
+    if let Some(json) = vetted_news_json {
+        session.context.set(KEY_CACHED_VETTED_NEWS, json).await;
+    }
+    if let Some(json) = sentiment_news_json {
+        session.context.set(KEY_CACHED_SENTIMENT_NEWS, json).await;
     }
 
     // ── Write enrichment payloads to context cache keys ──────────────
