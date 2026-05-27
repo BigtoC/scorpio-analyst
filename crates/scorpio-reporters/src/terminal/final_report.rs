@@ -14,6 +14,7 @@ pub(crate) fn format_final_report(state: &TradingState) -> String {
     let mut out = String::new();
 
     write_header(&mut out, state);
+    write_risk_free_rate_banner(&mut out, state);
     write_executive_summary(&mut out, state);
     write_trader_proposal(&mut out, state);
     write_analyst_snapshot(&mut out, state);
@@ -217,6 +218,40 @@ fn write_header(out: &mut String, state: &TradingState) {
 
     if let Some(exec) = &state.final_execution_status {
         let _ = writeln!(out, "Timestamp: {}", exec.decided_at);
+    }
+}
+
+fn write_risk_free_rate_banner(out: &mut String, state: &TradingState) {
+    // Both None is the default state for every non-ETF run, so the degraded
+    // warning must additionally observe an ETF-scenario marker to avoid
+    // false-positive banners on equity reports.
+    let is_etf_run = state
+        .derived_valuation()
+        .map(|d| matches!(d.scenario, scorpio_core::state::ScenarioValuation::Etf(_)))
+        .unwrap_or(false);
+
+    match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
+        (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::FredDgs3Mo)) => {
+            let _ = writeln!(
+                out,
+                "  Risk-free rate    FRED DGS3MO ({:.2}%)",
+                rate * 100.0
+            );
+        }
+        (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::YFinanceIrx)) => {
+            let _ = writeln!(
+                out,
+                "  Risk-free rate    yfinance ^IRX ({:.2}%)",
+                rate * 100.0
+            );
+        }
+        (None, None) if is_etf_run => {
+            let _ = writeln!(
+                out,
+                "  ⚠ Risk-free rate unavailable — dealer positioning unavailable"
+            );
+        }
+        _ => {}
     }
 }
 
