@@ -228,6 +228,7 @@ fn arb_technical_options_context() -> impl Strategy<Value = Option<TechnicalOpti
                 max_pain_strike: 180.0,
                 near_term_expiration: "2026-01-17".to_owned(),
                 near_term_strikes: vec![],
+                all_expirations: vec![],
             }),
         })),
     ]

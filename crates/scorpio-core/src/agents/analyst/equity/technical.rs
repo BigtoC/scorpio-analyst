@@ -482,6 +482,7 @@ mod tests {
             max_pain_strike: 150.0,
             near_term_expiration: "2026-05-16".to_owned(),
             near_term_strikes: vec![],
+            all_expirations: vec![],
         }
     }
 
@@ -1503,6 +1504,7 @@ mod tests {
             max_pain_strike: 100.0,
             near_term_expiration: "2026-05-16".to_owned(),
             near_term_strikes: vec![],
+            all_expirations: vec![],
         });
 
         let prepared = prepare_options_runtime(Ok(outcome.clone()), "AAPL", "2026-01-01");

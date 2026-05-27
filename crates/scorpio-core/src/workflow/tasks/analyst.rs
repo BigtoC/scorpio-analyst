@@ -1773,6 +1773,7 @@ mod tests {
                 call_oi: Some(1_000),
                 put_oi: Some(1_000),
             }],
+            all_expirations: vec![],
         };
 
         let mut state = crate::state::TradingState::new("SPY", "2026-06-01");

@@ -193,6 +193,7 @@ impl YFinanceOptionsProvider {
             max_pain_strike,
             near_term_expiration,
             near_term_strikes,
+            all_expirations: vec![],
         }))
     }
 }
@@ -659,6 +660,7 @@ async fn fetch_from_stub(
         max_pain_strike,
         near_term_expiration,
         near_term_strikes,
+        all_expirations: vec![],
     }))
 }
 
@@ -1053,6 +1055,7 @@ mod tests {
                 call_oi: Some(500),
                 put_oi: Some(400),
             }],
+            all_expirations: vec![],
         })
     }
 

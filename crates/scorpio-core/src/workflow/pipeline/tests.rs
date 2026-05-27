@@ -1236,6 +1236,7 @@ async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
                 max_pain_strike: 100.0,
                 near_term_expiration: "2026-05-16".to_owned(),
                 near_term_strikes: vec![],
+                all_expirations: vec![],
             }),
         }),
     };

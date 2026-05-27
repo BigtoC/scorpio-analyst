@@ -321,6 +321,7 @@ mod tests {
                     put_oi: Some(1_200),
                 },
             ],
+            all_expirations: vec![],
         }
     }
 

@@ -461,6 +461,7 @@ mod tests {
             max_pain_strike: 100.0,
             near_term_expiration: "2026-06-26".to_owned(),
             near_term_strikes,
+            all_expirations: vec![],
         }
     }
 

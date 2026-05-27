@@ -67,6 +67,18 @@ pub struct OptionsSnapshot {
     pub near_term_expiration: String,
     /// Near-the-money strikes selected from the front-month chain.
     pub near_term_strikes: Vec<NearTermStrike>,
+
+    /// Stage 3 only — per-expiration per-strike rows for listed expirations
+    /// beyond the authoritative front-month slice already carried in
+    /// `near_term_expiration` / `near_term_strikes`.
+    ///
+    /// **Derive-don't-persist:** this field is populated by the yfinance
+    /// provider during a live run so the ETF valuator can compute broad GEX,
+    /// then stripped by `AnalystSyncTask` before `serialize_state_to_context`.
+    /// Persisted snapshots therefore never contain these rows; the only
+    /// durable artifact is `EtfValuation.options_gex.broad`.
+    #[serde(skip, default)]
+    pub all_expirations: Vec<ExpirationStrikes>,
 }
 
 /// A single point in the implied-volatility term structure.
@@ -105,4 +117,60 @@ pub struct ExpirationStrikes {
     /// NTM per-strike rows for this expiration, normalized with the same helper
     /// used for `OptionsSnapshot.near_term_strikes`.
     pub strikes: Vec<NearTermStrike>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_snapshot() -> OptionsSnapshot {
+        OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-06-26".to_owned(),
+            near_term_strikes: vec![],
+            all_expirations: vec![ExpirationStrikes {
+                expiration: "2026-07-31".to_owned(),
+                strikes: vec![NearTermStrike {
+                    strike: 105.0,
+                    call_iv: Some(0.21),
+                    put_iv: Some(0.22),
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(100),
+                    put_oi: Some(100),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn all_expirations_is_stripped_on_serialization() {
+        let snap = sample_snapshot();
+        let json = serde_json::to_string(&snap).expect("serialize");
+        assert!(
+            !json.contains("all_expirations"),
+            "all_expirations must not appear in serialized form: {json}"
+        );
+    }
+
+    #[test]
+    fn all_expirations_defaults_to_empty_on_deserialization() {
+        let json = r#"{
+            "spot_price": 100.0,
+            "atm_iv": 0.2,
+            "iv_term_structure": [],
+            "put_call_volume_ratio": 1.0,
+            "put_call_oi_ratio": 1.0,
+            "max_pain_strike": 100.0,
+            "near_term_expiration": "2026-06-26",
+            "near_term_strikes": []
+        }"#;
+        let snap: OptionsSnapshot = serde_json::from_str(json).expect("deserialize");
+        assert!(snap.all_expirations.is_empty());
+    }
 }

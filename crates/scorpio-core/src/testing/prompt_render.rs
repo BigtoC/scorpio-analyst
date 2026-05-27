@@ -503,6 +503,7 @@ fn sample_technical_data() -> TechnicalData {
                 max_pain_strike: 180.0,
                 near_term_expiration: FIXTURE_DATE.to_owned(),
                 near_term_strikes: vec![],
+                all_expirations: vec![],
             }),
         }),
     }

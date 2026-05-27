@@ -670,6 +670,7 @@ mod tests {
                     put_oi: Some(4_500),
                 },
             ],
+            all_expirations: vec![],
         };
 
         crate::state::TechnicalData {
