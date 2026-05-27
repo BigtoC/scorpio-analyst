@@ -1328,3 +1328,75 @@ async fn etf_variant_requires_snapshot_schema_version_above_v3() {
         "ETF-bearing snapshots are not reverse-compatible with schema v3 readers"
     );
 }
+
+#[test]
+fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
+    let mut state = TradingState::new("SPY", "2026-05-27");
+    state.equity = None;
+
+    let derived = DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(620.0),
+                market_price: 620.4,
+                bid: Some(620.39),
+                ask: Some(620.41),
+                premium_pct: Some(0.06),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: Some(GexSummary {
+                net_gex_usd_per_1pct_move: 1.2e9,
+                gross_gex_usd_per_1pct_move: 3.4e9,
+                call_put_oi_ratio: 1.25,
+                max_pain_strike: 620.0,
+                near_term_expiration: chrono::NaiveDate::from_ymd_opt(2026, 6, 26).unwrap(),
+                strikes: vec![
+                    StrikeGex {
+                        strike: 620.0,
+                        net_gex_usd_per_1pct_move: 0.6e9,
+                    },
+                    StrikeGex {
+                        strike: 615.0,
+                        net_gex_usd_per_1pct_move: -0.4e9,
+                    },
+                    StrikeGex {
+                        strike: 625.0,
+                        net_gex_usd_per_1pct_move: 0.2e9,
+                    },
+                ],
+            }),
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    };
+    state.set_derived_valuation(derived);
+
+    let json = serde_json::to_string(&state).expect("serialize");
+    let back: TradingState = serde_json::from_str(&json).expect("deserialize");
+    match back.derived_valuation().map(|d| &d.scenario) {
+        Some(ScenarioValuation::Etf(etf)) => {
+            let g = etf.options_gex.as_ref().expect("gex");
+            assert_eq!(g.strikes.len(), 3);
+        }
+        other => panic!("expected ETF scenario with gex, got {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_etf_snapshot_without_phase2_gex_strikes_still_deserializes() {
+    let json = r#"{
+        "net_gex_usd_per_1pct_move": 100.0,
+        "gross_gex_usd_per_1pct_move": 200.0,
+        "call_put_oi_ratio": 1.0,
+        "max_pain_strike": 100.0,
+        "near_term_expiration": "2026-06-26"
+    }"#;
+    let summary: GexSummary = serde_json::from_str(json).expect("legacy summary must deserialize");
+    assert!(summary.strikes.is_empty());
+}
