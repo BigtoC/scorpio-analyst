@@ -13,7 +13,7 @@
 //!
 //! Covers every public FRED client method currently exposed from
 //! `crates/scorpio-core/src/data/fred.rs`:
-//! - `FredClient::get_series_latest` (FEDFUNDS + CPI series)
+//! - `FredClient::get_series_latest` (FEDFUNDS, CPI, DGS3MO series)
 //! - `FredClient::get_economic_indicators`
 //! - `FredClient::release_dates` for every `release_id::*` constant
 
@@ -146,7 +146,27 @@ async fn main() {
     }
     println!();
 
-    section(3, "FredClient::get_economic_indicators");
+    section(3, "FredClient::get_series_latest (3-Month Treasury — DGS3MO)");
+    match client.get_series_latest("DGS3MO").await {
+        Err(e) => {
+            eprintln!("  FAIL  get_series_latest(DGS3MO) returned error: {e}");
+            r.fail += 1;
+        }
+        Ok(value) => {
+            info(&format!("value: {value:?}"));
+            r.check_result(
+                "get_series_latest(DGS3MO) returns Some(f64) in plausible percent range",
+                match value {
+                    Some(v) if (0.0..=20.0).contains(&v) => Ok(()),
+                    Some(v) => Err(format!("DGS3MO outside plausible range (0-20%): {v}")),
+                    None => Err("got None — series missing or all-dot".to_owned()),
+                },
+            );
+        }
+    }
+    println!();
+
+    section(4, "FredClient::get_economic_indicators");
     match client.get_economic_indicators().await {
         Err(e) => {
             eprintln!("  FAIL  get_economic_indicators returned error: {e}");
@@ -168,7 +188,7 @@ async fn main() {
     }
     println!();
 
-    section(4, "FredClient::release_dates — all release_id::* constants");
+    section(5, "FredClient::release_dates — all release_id::* constants");
     for (label, id) in [
         ("CPI", release_id::CPI),
         ("Nonfarm Payrolls", release_id::NONFARM_PAYROLLS),
