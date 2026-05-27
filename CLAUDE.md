@@ -102,6 +102,7 @@ The repository is a Cargo workspace with **four active crates**: `scorpio-core` 
 - [`docs/architecture/dependencies.md`](docs/architecture/dependencies.md) — crate dependency table, workspace pinning
 - [`docs/architecture/config-and-errors.md`](docs/architecture/config-and-errors.md) — config loading order, error handling pattern
 - [`docs/architecture/dev-tasks.md`](docs/architecture/dev-tasks.md) — running, debugging, common dev task map, CI/CD
+- [`docs/architecture/equity-analysis-pack.md`](docs/architecture/equity-analysis-pack.md) — equity baseline pack definition, prompt/data flow, valuation, pipeline execution, state, reporting
 
 > **Before editing `TradingState`, analysis packs, or workflow routing**, read `design-decisions.md` — it documents invariants (`#[serde(default)]`, schema version bumps, preflight ownership of policy/routing) that are easy to violate silently.
 

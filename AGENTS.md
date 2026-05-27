@@ -102,6 +102,7 @@ This file is intentionally short. Architecture, gotchas, dependency table, confi
 - [`docs/architecture/dependencies.md`](docs/architecture/dependencies.md) — crate dependency table, protoc prerequisite, workspace pinning
 - [`docs/architecture/config-and-errors.md`](docs/architecture/config-and-errors.md) — config loading order, storage paths, error-handling pattern
 - [`docs/architecture/dev-tasks.md`](docs/architecture/dev-tasks.md) — running/debugging, CI verification, testing, common dev-task map, coding conventions
+- [`docs/architecture/equity-analysis-pack.md`](docs/architecture/equity-analysis-pack.md) — equity baseline pack definition, prompt/data flow, valuation, pipeline execution, state, reporting
 
 > **Before editing `TradingState`, analysis packs, workflow routing, or migration directories**, read `design-decisions.md` — it documents invariants (`#[serde(default)]`, schema version bumps, preflight ownership of policy/routing, transcript-cache migration boundary) that are easy to violate silently.
 
