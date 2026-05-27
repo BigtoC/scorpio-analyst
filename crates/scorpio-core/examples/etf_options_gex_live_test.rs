@@ -65,10 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snap = match provider.fetch_snapshot_impl(&symbol, &today_iso).await? {
         OptionsOutcome::Snapshot(s) => s,
         other => {
-            return Err(format!(
-                "expected Snapshot(_) for {SYMBOL} options, got: {other:?}"
-            )
-            .into());
+            return Err(
+                format!("expected Snapshot(_) for {SYMBOL} options, got: {other:?}").into(),
+            );
         }
     };
     println!(
@@ -105,15 +104,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  Near-term GEX (gross) : {:.3e} USD per 1% move",
         summary.gross_gex_usd_per_1pct_move
     );
+    println!("  Call/Put OI ratio     : {:.2}", summary.call_put_oi_ratio);
+    println!("  Max-pain strike       : ${:.0}", summary.max_pain_strike);
     println!(
-        "  Call/Put OI ratio     : {:.2}",
-        summary.call_put_oi_ratio
+        "  Gamma walls           : {} entries",
+        summary.strikes.len()
     );
-    println!(
-        "  Max-pain strike       : ${:.0}",
-        summary.max_pain_strike
-    );
-    println!("  Gamma walls           : {} entries", summary.strikes.len());
 
     assert!(
         summary.net_gex_usd_per_1pct_move.is_finite(),

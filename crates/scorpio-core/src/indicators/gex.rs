@@ -2,9 +2,6 @@
 //! dealer-positioning analysis. Pure functions only — no I/O, no `unsafe`,
 //! no panics. Degenerate inputs (σ ≤ 0, t ≤ 0, S ≤ 0) return `0.0`.
 
-// Callers land in Task 2 (per-strike aggregation) and Task 4 (ETF valuator).
-#![allow(dead_code)]
-
 use statrs::distribution::{Continuous, ContinuousCDF, Normal};
 
 /// Common BSM input bundle. All values are positive decimals; `t_years` is

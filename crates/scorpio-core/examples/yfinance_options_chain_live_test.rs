@@ -37,10 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snap = match outcome {
         OptionsOutcome::Snapshot(s) => s,
         other => {
-            return Err(format!(
-                "expected Snapshot(_) for {SYMBOL} options, got: {other:?}"
-            )
-            .into());
+            return Err(
+                format!("expected Snapshot(_) for {SYMBOL} options, got: {other:?}").into(),
+            );
         }
     };
 
@@ -55,11 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     for extra in &snap.all_expirations {
-        println!(
-            "    {} → {} strikes",
-            extra.expiration,
-            extra.strikes.len()
-        );
+        println!("    {} → {} strikes", extra.expiration, extra.strikes.len());
         assert_ne!(
             extra.expiration, snap.near_term_expiration,
             "all_expirations must not include the front-month slice"

@@ -146,7 +146,10 @@ async fn main() {
     }
     println!();
 
-    section(3, "FredClient::get_series_latest (3-Month Treasury — DGS3MO)");
+    section(
+        3,
+        "FredClient::get_series_latest (3-Month Treasury — DGS3MO)",
+    );
     match client.get_series_latest("DGS3MO").await {
         Err(e) => {
             eprintln!("  FAIL  get_series_latest(DGS3MO) returned error: {e}");
