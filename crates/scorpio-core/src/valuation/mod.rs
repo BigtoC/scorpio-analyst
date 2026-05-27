@@ -97,4 +97,14 @@ pub struct ValuationInputs<'a> {
     pub etf_holdings: Option<&'a crate::data::sec_edgar_nport::NPortHoldings>,
     pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
     pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
+
+    /// Phase 2 — Live ETF options snapshot threaded through from the persisted
+    /// `TechnicalOptionsContext` before valuation runs. `None` when no snapshot
+    /// is available or active pack is not `EtfBaseline`.
+    pub etf_options: Option<&'a crate::data::traits::options::OptionsSnapshot>,
+
+    /// Phase 2 — Reference date for time-to-expiration math, sourced from
+    /// `state.target_date`. Defaulted to `chrono::Utc::now().date_naive()` by
+    /// the equity path which does not read it.
+    pub as_of: chrono::NaiveDate,
 }

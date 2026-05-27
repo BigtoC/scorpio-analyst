@@ -1103,6 +1103,8 @@ fn derive_runtime_valuation(
             etf_holdings: valuation_inputs.etf_holdings.as_ref(),
             etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
             etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
+            etf_options: None,
+            as_of: chrono::Utc::now().date_naive(),
         },
         &provisional.asset_shape,
     )
