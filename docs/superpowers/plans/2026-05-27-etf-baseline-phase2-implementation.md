@@ -14,7 +14,7 @@
 - **State-derived valuation inputs are assembled at the state-aware seam.** Keep `fetch_valuation_inputs` provider-only unless the plan explicitly changes its signature and all call sites. Populate `etf_options`, `etf_risk_free_rate`, and `as_of` where `crate::valuation::ValuationInputs` is constructed with access to `TradingState`.
 - **Stage 2 uses one generic dealer-positioning absence branch.** Stage 2 does not distinguish no options snapshot from an unusable snapshot unless an explicit derivation status is added first. Prompt/reporter copy should say no usable dealer-positioning overlay was available. A split reason can be added in Stage 3 only with a real status field.
 - **Prompt contracts must match available context.** The ETF technical prompt may discuss raw `options_context` / `options_summary` snapshot evidence. Do not ask it to cite `EtfValuation.options_gex` unless that derived payload is explicitly threaded into the prompt context. Valuation-aware downstream prompts may cite `options_gex` only after the context payload exists.
-- **The Stage 2 gate must evaluate the full reader experience.** Validate terminal output and generated technical/risk/auditor prose over positive and negative-control ETFs. Stage 3 additions (broad GEX, VEX/CEX, FRED risk-free rate) require separate evidence or separate sub-gate approval; Stage 2 success does not automatically justify all of them.
+- **The Stage 2 gate must evaluate the full reader experience that Stage 2 actually changes.** Validate terminal output plus generated prose surfaces that receive Stage 2 data (raw options/leverage context). If derived `options_gex` is not threaded into prompts, evaluate derived-GEX value in the terminal block only. Stage 3 additions (broad GEX, VEX/CEX, FRED risk-free rate) require separate evidence or separate sub-gate approval; Stage 2 success does not automatically justify all of them.
 - **FRED `DGS3MO` is date-sensitive.** Stage 3 may fetch latest `DGS3MO` only for live/today ETF runs. Historical runs must either skip the fetch and use the documented fallback path or fetch an observation as of `state.target_date` and persist the observation date.
 
 ---
@@ -73,12 +73,12 @@
 
 - [ ] **Step 1.1: Declare the module**
 
-Open `crates/scorpio-core/src/indicators/mod.rs` and add the `mod gex;` declaration alongside the existing private modules. Do **not** re-export anything yet — the public surface lands in Step 1.4. After editing, the module list at the top of the file should read:
+Open `crates/scorpio-core/src/indicators/mod.rs` and add the `pub(crate) mod gex;` declaration alongside the existing private modules so the ETF valuator can import `crate::indicators::gex`. After editing, the module list at the top of the file should read:
 
 ```rust
 mod batch;
 mod core_math;
-mod gex;
+pub(crate) mod gex;
 mod support_resistance;
 mod tools;
 mod types;
@@ -1166,7 +1166,7 @@ For each constructor, set the new fields to:
 - `etf_risk_free_rate: None`
 - `as_of: chrono::Utc::now().date_naive()` (or a fixed test date for tests)
 
-In production code, `as_of` should come from `state.target_date` parsed via `chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")` with a fallback to `chrono::Utc::now().date_naive()` on parse failure. Apply that pattern only in `workflow/tasks/analyst.rs::fetch_valuation_inputs` (Task 5 covers the touch).
+In production code, `as_of` should come from `state.target_date` parsed via `chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")` with a fallback to `chrono::Utc::now().date_naive()` on parse failure. Apply that pattern only at the state-aware `crate::valuation::ValuationInputs` construction site in `workflow/tasks/analyst.rs` (Task 5 covers the touch).
 
 - [ ] **Step 4.4: Implement `compute_gex_summary`**
 
@@ -1459,7 +1459,7 @@ and use the matching helper name. If only `with_baseline_runtime_policy(&mut sta
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: COMPILE FAILURE (`etf_options_from_state` not defined).
 
-- [ ] **Step 5.3: Add the helper and wire it into `fetch_valuation_inputs`**
+- [ ] **Step 5.3: Add the helper and wire it into the state-aware valuator input assembly**
 
 In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, add the helper as a free function at module scope:
 
@@ -1694,7 +1694,7 @@ pub(crate) fn append_leverage_warning_if_needed(
 }
 ```
 
-Two changes per the spec:
+Three changes per the spec:
 1. Use a `1e-6` tolerance constant (more robust than `f64::EPSILON` against floating-point noise from upstream sources).
 2. Insert an explicit `---` divider so the LLM sees a clear delimiter for the warning.
 3. Drop `#[allow(dead_code)]` — the helper is now used.
@@ -1984,7 +1984,7 @@ pub(crate) fn render_risk_system_prompt(
         .replace("{past_memory_str}", "see untrusted user context")
         .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state));
 
-    crate::analysis_packs::etf::baseline::append_leverage_warning_if_needed(
+    crate::analysis_packs::etf::append_leverage_warning_if_needed(
         rendered,
         etf_leverage_factor_from_state(state),
     )
@@ -2002,13 +2002,13 @@ fn etf_leverage_factor_from_state(state: &TradingState) -> Option<f64> {
 }
 ```
 
-If `crate::analysis_packs::etf::baseline::append_leverage_warning_if_needed` is not reachable due to module privacy, expose it from the `analysis_packs::etf` module:
+Expose the helper from the `analysis_packs::etf` module because `baseline` is private:
 
 ```bash
 grep -n 'pub mod baseline' crates/scorpio-core/src/analysis_packs/etf/mod.rs
 ```
 
-If `baseline` is private, change the helper's visibility to `pub(crate)` on the module re-export, e.g. by adding `pub(crate) use baseline::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/etf/mod.rs`, and call it via `crate::analysis_packs::etf::append_leverage_warning_if_needed(...)`. Either path is acceptable.
+Add `pub(crate) use baseline::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/etf/mod.rs`, and call it via `crate::analysis_packs::etf::append_leverage_warning_if_needed(...)`.
 
 - [ ] **Step 8.4: Run the tests to verify they pass**
 
@@ -2119,7 +2119,7 @@ pub(crate) fn build_system_prompt(state: &TradingState) -> Result<String, Tradin
         .replace("{ticker}", &symbol)
         .replace("{current_date}", &target_date);
     Ok(
-        crate::analysis_packs::etf::baseline::append_leverage_warning_if_needed(
+        crate::analysis_packs::etf::append_leverage_warning_if_needed(
             rendered,
             etf_leverage_factor_from_state(state),
         ),
@@ -2239,10 +2239,10 @@ cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --feature
 git add crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md
 git commit -m "docs(etf): rewrite tracking/options focus prompt for Phase 2 dealer positioning
 
-Phase 1 placeholder language is replaced with the dealer-positioning
-contract: secondary overlay framing, mandatory plain-English takeaway,
-distinct partial-data branches for missing broad/strikes/snapshot, and
-explicit no-snapshot vs unusable-snapshot wording."
+Phase 1 placeholder language is replaced with secondary-overlay guidance
+that matches the data actually available to the technical prompt, avoids
+mandatory missing-subsignal bookkeeping, and uses one generic Stage 2
+absence branch until an explicit derivation status exists."
 ```
 
 ---
@@ -2302,7 +2302,7 @@ fn etf_terminal_renders_dealer_positioning_block_when_gex_present() {
         }),
     });
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(rendered.contains("DEALER POSITIONING"), "header missing: {rendered}");
     assert!(rendered.contains("Near-term"), "near-term subheader missing: {rendered}");
     assert!(rendered.contains("Summary"), "summary line missing: {rendered}");
@@ -2349,7 +2349,7 @@ fn etf_terminal_hides_dealer_positioning_block_when_gex_absent() {
         }),
     });
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
         !rendered.contains("DEALER POSITIONING"),
         "block must be hidden when options_gex is None: {rendered}"
@@ -2396,7 +2396,7 @@ fn etf_terminal_emits_partial_data_note_for_missing_walls() {
         }),
     });
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
         rendered.contains("gamma walls unavailable")
             || rendered.contains("gamma walls and broad GEX unavailable"),
@@ -2555,7 +2555,7 @@ if let Some(gex) = etf.options_gex.as_ref() {
 } else {
     // Surface the absence in DATA AVAILABILITY when an options chain was
     // expected but no usable dealer-positioning overlay was produced.
-    if !etf.flags.options_chain_present {
+    if etf.options_gex.is_none() {
         let _ = std::fmt::Write::write_fmt(
             out,
             format_args!(
@@ -2669,22 +2669,22 @@ fn leverage_warning_appears_only_for_conservative_neutral_auditor_when_levered()
 
     let bundle = &state.analysis_runtime_policy.as_ref().unwrap().prompt_bundle;
     // Slots that MUST carry the warning when the helper runs:
-    let conservative = scorpio_core::agents::risk::render_risk_system_prompt_for_test(
+    let conservative = scorpio_core::agents::risk::render_risk_system_prompt(
         &state,
         |b: &scorpio_core::prompts::PromptBundle| b.conservative_risk.as_ref(),
     );
-    let neutral = scorpio_core::agents::risk::render_risk_system_prompt_for_test(
+    let neutral = scorpio_core::agents::risk::render_risk_system_prompt(
         &state,
         |b: &scorpio_core::prompts::PromptBundle| b.neutral_risk.as_ref(),
     );
-    let auditor = scorpio_core::agents::auditor::build_system_prompt_for_test(&state)
+    let auditor = scorpio_core::agents::auditor::build_system_prompt(&state)
         .expect("auditor prompt");
     assert!(conservative.contains(MARKER), "conservative must carry warning");
     assert!(neutral.contains(MARKER), "neutral must carry warning");
     assert!(auditor.contains(MARKER), "auditor must carry warning");
 
     // Slots that MUST NOT carry the warning:
-    let aggressive = scorpio_core::agents::risk::render_risk_system_prompt_for_test(
+    let aggressive = scorpio_core::agents::risk::render_risk_system_prompt(
         &state,
         |b: &scorpio_core::prompts::PromptBundle| b.aggressive_risk.as_ref(),
     );
@@ -2697,7 +2697,7 @@ fn leverage_warning_appears_only_for_conservative_neutral_auditor_when_levered()
 }
 ```
 
-If `render_risk_system_prompt_for_test` and `build_system_prompt_for_test` do not exist as `pub(crate)` test helpers, expose them with `#[cfg(any(test, feature = "test-helpers"))] pub fn ...` shims that delegate to the private functions. Place the shims at the bottom of the source files modified in Tasks 8 and 9.
+If `scorpio_core::agents::auditor::build_system_prompt` is not exported under `test-helpers`, expose the existing private function with `#[cfg(any(test, feature = "test-helpers"))] pub use prompt::build_system_prompt;` in `crates/scorpio-core/src/agents/auditor/mod.rs`.
 
 - [ ] **Step 12.4: Run the regression gate**
 
@@ -2726,12 +2726,12 @@ Neutral, Aggressive-negative, Trader/FundManager-negative, and Auditor slots."
 
 **Do not proceed past this point without an explicit proceed/stop decision from the user.**
 
-After Stage 2 ships, run the surfaced overlay against a validation sample that includes liquid positive cases and negative-control ETFs where dealer-positioning is expected to add little value (e.g. SPY, QQQ, TQQQ, IWM, EFA plus at least two lower-options-value mainstream ETFs). For each sample, capture terminal output and full generated technical/risk/auditor prose:
+After Stage 2 ships, run the surfaced overlay against a validation sample that includes liquid positive cases and negative-control ETFs where dealer-positioning is expected to add little value (e.g. SPY, QQQ, TQQQ, IWM, EFA plus at least two lower-options-value mainstream ETFs). For each sample, capture terminal output and the generated prose surfaces that Stage 2 actually changes:
 
 1. **Distinctness** — does the DEALER POSITIONING block deliver a non-redundant risk/liquidity takeaway, or does it merely echo what premium/discount + composition + tracking already say?
 2. **Secondary-ness** — does the block stay clearly secondary to the existing ETF anchors, or does it dominate the read?
 3. **Mainstream-reader fit** — does the plain-English summary line work without prior options literacy?
-4. **Prompt-integrated fit** — do technical, risk, and auditor outputs keep dealer-positioning secondary in the final prose?
+4. **Prompt-integrated fit** — do generated outputs that receive Stage 2 data keep dealer-positioning/raw-options/leverage context secondary in the final prose? If derived `options_gex` is not threaded into prompts, evaluate derived-GEX value from the terminal block only.
 5. **No-harm on negative controls** — when the overlay is absent or low-value, does the report stay concise instead of surfacing options bookkeeping?
 
 **Decision criteria (recorded by the writing-plans handoff, per the design):**
@@ -3397,13 +3397,19 @@ pub(crate) fn strip_transient_all_expirations(state: &mut crate::state::TradingS
 }
 ```
 
-If `technical_indicators_mut` does not exist on `TradingState`, add it as a `pub(crate)` accessor in `crates/scorpio-core/src/state/trading_state.rs`. Search:
+Add a `pub(crate)` mutable accessor on `TradingState` before using the helper:
+
+```rust
+pub(crate) fn technical_indicators_mut(&mut self) -> Option<&mut TechnicalData> {
+    self.equity.as_mut()?.technical_indicators.as_mut()
+}
+```
+
+Search for the existing immutable getter to place it nearby:
 
 ```bash
 grep -n 'fn technical_indicators\|fn set_technical_indicators' crates/scorpio-core/src/state/trading_state.rs
 ```
-
-If only an immutable getter exists, add the mutable variant.
 
 Then call `strip_transient_all_expirations(&mut state)` from the ETF branch of the analyst task, **immediately before** the call to `serialize_state_to_context(...)`. Locate the serialization site:
 
@@ -3734,7 +3740,7 @@ For historical ETF runs, skip the latest-rate fetch so rerunning the same symbol
 - [ ] **Step 19.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core --test workflow_pipeline_structure`
-Expected: all three new tests pass.
+Expected: all four new tests pass.
 
 - [ ] **Step 19.5: Run the full workspace test suite**
 
@@ -3805,7 +3811,7 @@ pub(crate) fn etf_risk_free_rate_from_state(
 }
 ```
 
-Then update the ETF branch of `fetch_valuation_inputs` (the same place modified in Task 5 Step 5.3) to replace the `etf_risk_free_rate: None` placeholder with `etf_risk_free_rate: etf_risk_free_rate_from_state(state)`.
+Then update the state-aware `crate::valuation::ValuationInputs` construction site modified in Task 5 Step 5.3 to replace the `etf_risk_free_rate: None` placeholder with `etf_risk_free_rate: etf_risk_free_rate_from_state(state)`.
 
 - [ ] **Step 20.4: Run the tests to verify they pass**
 
@@ -3897,7 +3903,7 @@ fn etf_terminal_renders_full_dealer_positioning_with_broad_and_secondary() {
         }),
     });
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(rendered.contains("Secondary sensitivities"));
     assert!(rendered.contains("Net VEX/volpt"));
     assert!(rendered.contains("Net CEX/day"));
@@ -3949,7 +3955,7 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
         }),
     });
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(rendered.contains("Partial expirations"));
     assert!(rendered.contains("3 used of 5"));
 }
@@ -3962,7 +3968,7 @@ fn etf_terminal_renders_risk_free_rate_fallback_banner() {
     state.etf_risk_free_rate = None;
     state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FallbackConst);
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
         rendered.contains("⚠ Risk-free rate fallback")
             && rendered.contains("DGS3MO unavailable"),
@@ -3978,7 +3984,7 @@ fn etf_terminal_hides_risk_free_rate_banner_on_successful_fetch() {
     state.etf_risk_free_rate = Some(0.0427);
     state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
 
-    let rendered = scorpio_reporters::terminal::render(&state);
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
         !rendered.contains("Risk-free rate fallback"),
         "successful fetch must not show the banner: {rendered}"
