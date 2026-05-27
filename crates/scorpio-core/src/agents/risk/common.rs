@@ -62,6 +62,7 @@ impl RiskAgentCore {
         bundle_slot: fn(&PromptBundle) -> &str,
         state: &TradingState,
         llm_config: &LlmConfig,
+        apply_leverage_warning: bool,
     ) -> Result<Self, TradingError> {
         if handle.model_id() != llm_config.deep_thinking_model {
             return Err(TradingError::Config(anyhow::anyhow!(
@@ -73,7 +74,8 @@ impl RiskAgentCore {
 
         let runtime = risk_runtime_config(llm_config);
 
-        let system_prompt = render_risk_system_prompt(policy, state, bundle_slot);
+        let system_prompt =
+            render_risk_system_prompt(policy, state, bundle_slot, apply_leverage_warning);
 
         Ok(Self {
             agent: build_agent(handle, &system_prompt),
@@ -293,10 +295,21 @@ pub(super) fn runtime_policy_for_agent<'a>(
     })
 }
 
+/// Extract the ETF leverage factor from state, if the current scenario is an
+/// `ScenarioValuation::Etf` with a populated `leverage_factor`.
+fn etf_leverage_factor_from_state(state: &TradingState) -> Option<f64> {
+    use crate::state::ScenarioValuation;
+    match state.derived_valuation()?.scenario {
+        ScenarioValuation::Etf(ref etf) => etf.leverage_factor,
+        _ => None,
+    }
+}
+
 pub(crate) fn render_risk_system_prompt(
     policy: &crate::analysis_packs::RuntimePolicy,
     state: &TradingState,
     bundle_slot: fn(&PromptBundle) -> &str,
+    apply_leverage_warning: bool,
 ) -> String {
     // `&RuntimePolicy` is required: preflight is the sole writer of
     // `state.analysis_runtime_policy`, and `validate_active_pack_completeness`
@@ -307,11 +320,20 @@ pub(crate) fn render_risk_system_prompt(
     let target_date = sanitize_date_for_prompt(&state.target_date);
     let template = bundle_slot(&policy.prompt_bundle);
 
-    template
+    let rendered = template
         .replace("{ticker}", &symbol)
         .replace("{current_date}", &target_date)
         .replace("{past_memory_str}", "see untrusted user context")
-        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state))
+        .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state));
+
+    if apply_leverage_warning {
+        crate::analysis_packs::append_leverage_warning_if_needed(
+            rendered,
+            etf_leverage_factor_from_state(state),
+        )
+    } else {
+        rendered
+    }
 }
 
 /// Build the initial user message that seeds each persona chat with untrusted analyst context.
@@ -955,8 +977,12 @@ mod tests {
             .analysis_runtime_policy
             .as_ref()
             .expect("policy hydrated above");
-        let prompt =
-            render_risk_system_prompt(policy, &state, |bundle| bundle.aggressive_risk.as_ref());
+        let prompt = render_risk_system_prompt(
+            policy,
+            &state,
+            |bundle| bundle.aggressive_risk.as_ref(),
+            false,
+        );
 
         assert!(
             prompt.contains(
@@ -981,8 +1007,12 @@ mod tests {
             .analysis_runtime_policy
             .as_ref()
             .expect("policy hydrated above");
-        let prompt =
-            render_risk_system_prompt(policy, &state, |bundle| bundle.risk_moderator.as_ref());
+        let prompt = render_risk_system_prompt(
+            policy,
+            &state,
+            |bundle| bundle.risk_moderator.as_ref(),
+            false,
+        );
 
         assert!(
             prompt.contains("Risk moderator pack prompt for AAPL at 2026-03-15. Emphasis: surface the true blockers."),
@@ -1194,6 +1224,81 @@ mod tests {
         assert!(
             context.contains("options_context"),
             "options_context must appear for FetchFailed: {context}"
+        );
+    }
+
+    // ── Leverage-warning injection ────────────────────────────────────────
+
+    fn make_etf_state_with_leverage(leverage_factor: Option<f64>) -> TradingState {
+        use crate::state::{
+            AssetShape, DerivedValuation, EtfDataAvailability, EtfValuation, PremiumBand,
+            PremiumSnapshot, ScenarioValuation,
+        };
+        let mut state = make_state();
+        state.asset_symbol = "TQQQ".to_owned();
+        state.set_derived_valuation(DerivedValuation {
+            asset_shape: AssetShape::Fund,
+            scenario: ScenarioValuation::Etf(EtfValuation {
+                premium: PremiumSnapshot {
+                    nav: Some(50.0),
+                    market_price: 50.0,
+                    bid: None,
+                    ask: None,
+                    premium_pct: None,
+                    category_band: PremiumBand::Unknown,
+                    bid_ask_spread_pct: None,
+                    as_of: chrono::Utc::now(),
+                },
+                composition: None,
+                tracking: None,
+                options_gex: None,
+                category: None,
+                leverage_factor,
+                flags: EtfDataAvailability::default(),
+            }),
+        });
+        let manifest =
+            crate::analysis_packs::resolve_pack(crate::analysis_packs::PackId::EtfBaseline);
+        let policy = crate::analysis_packs::resolve_runtime_policy_for_manifest(&manifest)
+            .expect("etf_baseline manifest must resolve to a valid runtime policy");
+        state.analysis_runtime_policy = Some(policy);
+        state
+    }
+
+    #[test]
+    fn render_risk_system_prompt_appends_leverage_warning_for_levered_etf() {
+        let state = make_etf_state_with_leverage(Some(3.0));
+        let policy = state.analysis_runtime_policy.as_ref().unwrap();
+        let prompt =
+            render_risk_system_prompt(policy, &state, |b| b.conservative_risk.as_ref(), true);
+        assert!(
+            prompt.contains("Daily-reset products"),
+            "leveraged ETF prompt must carry the warning body: {prompt}"
+        );
+        assert!(
+            prompt.contains("3x"),
+            "leveraged ETF prompt must substitute the factor: {prompt}"
+        );
+    }
+
+    #[test]
+    fn render_risk_system_prompt_omits_leverage_warning_for_unit_factor() {
+        let mut state = make_etf_state_with_leverage(Some(1.0));
+        state.asset_symbol = "SPY".to_owned();
+        let policy = state.analysis_runtime_policy.as_ref().unwrap();
+
+        const WARNING_MARKER: &str = "Daily-reset products";
+
+        let conservative =
+            render_risk_system_prompt(policy, &state, |b| b.conservative_risk.as_ref(), true);
+        let neutral = render_risk_system_prompt(policy, &state, |b| b.neutral_risk.as_ref(), true);
+        assert!(
+            !conservative.contains(WARNING_MARKER),
+            "unit factor must skip warning: {conservative}"
+        );
+        assert!(
+            !neutral.contains(WARNING_MARKER),
+            "unit factor must skip warning: {neutral}"
         );
     }
 }

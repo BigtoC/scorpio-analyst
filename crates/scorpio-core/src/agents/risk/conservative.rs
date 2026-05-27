@@ -67,6 +67,7 @@ impl ConservativeRiskAgent {
             |bundle| bundle.conservative_risk.as_ref(),
             state,
             llm_config,
+            true,
         )?;
         let chat_history = initial_untrusted_history(state, transcript_fetch);
         Ok(Self { core, chat_history })

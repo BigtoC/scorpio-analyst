@@ -73,7 +73,6 @@ const LEVERAGE_TOLERANCE: f64 = 1e-6;
 /// auditor prompts append the leverage warning when `leverage_factor`
 /// diverges from 1.0 beyond the tolerance. Substitutes `{leverage_factor}`
 /// in the warning body with a human-friendly representation of the factor.
-#[allow(dead_code)] // wired in Tasks 8 and 9 (Stage 2)
 pub(crate) fn append_leverage_warning_if_needed(
     rendered: String,
     leverage_factor: Option<f64>,

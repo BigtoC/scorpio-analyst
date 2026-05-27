@@ -68,6 +68,7 @@ impl RiskModerator {
                 |bundle| bundle.risk_moderator.as_ref(),
                 state,
                 llm_config,
+                false,
             )?,
             transcript_fetch: transcript_fetch.cloned(),
         })

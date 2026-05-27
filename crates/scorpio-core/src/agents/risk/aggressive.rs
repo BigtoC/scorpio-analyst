@@ -68,6 +68,7 @@ impl AggressiveRiskAgent {
             |bundle| bundle.aggressive_risk.as_ref(),
             state,
             llm_config,
+            false,
         )?;
         let chat_history = initial_untrusted_history(state, transcript_fetch);
         Ok(Self { core, chat_history })
