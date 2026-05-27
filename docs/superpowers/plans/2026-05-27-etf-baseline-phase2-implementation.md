@@ -38,9 +38,19 @@
 - **Modify:** `crates/scorpio-core/src/agents/risk/common.rs::render_risk_system_prompt` — inject leverage warning into Conservative + Neutral slots
 - **Modify:** `crates/scorpio-core/src/agents/auditor/prompt.rs::build_system_prompt` — inject leverage warning into the auditor slot
 - **Modify:** `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md` — replace Phase 1 placeholder with raw-options guidance that does not cite `EtfValuation.options_gex` unless a derived payload is threaded into context
-- **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add `render_dealer_positioning_block` (near-term GEX core + summary line + gamma walls + partial-data note)
-- **Modify:** `crates/scorpio-reporters/tests/terminal.rs` — assertions for the new block
+- **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add `render_dealer_positioning_block` (near-term GEX core + summary line + gamma walls + partial-data note) and the risk-free-rate source banner (FRED `DGS3MO`, yfinance `^IRX`, or degraded notice)
+- **Modify:** `crates/scorpio-reporters/tests/terminal.rs` — assertions for the new block and the rate-source banner
 - **Modify:** `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` — golden-byte coverage for the rewritten focus prompt + leverage-warning suffix
+- **Modify:** `crates/scorpio-core/src/state/trading_state.rs` — add `etf_risk_free_rate: Option<f64>`, `etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>`, `EtfRiskFreeRateSource` enum; thread through `TradingStateWire` (Task 18, promoted from Stage 3 to Stage 2)
+- **Modify:** `crates/scorpio-core/src/state/mod.rs` — re-export `EtfRiskFreeRateSource` (Task 18)
+- **Modify:** `crates/scorpio-core/src/workflow/builder.rs` — thread `FredClient` + `YFinanceClient` into `PreflightTask` constructor (Task 19)
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/preflight.rs` — live/today `DGS3MO` fetch, yfinance `^IRX` close fallback, and no-rate degradation when both fail (Task 19)
+- **Modify:** `crates/scorpio-core/src/valuation/mod.rs` — add `etf_risk_free_rate: Option<f64>` to `ValuationInputs` (Task 20)
+- **Modify:** `crates/scorpio-core/src/valuation/etf/premium_discount.rs` — degrade `options_gex` to `None` when the carrier is unavailable; no hardcoded rate fallback (Task 20)
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — populate `valuation_inputs.etf_risk_free_rate` from state (Task 20)
+- **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — roundtrip the new `TradingState` rate-source fields (Task 18)
+- **Modify:** `crates/scorpio-core/tests/workflow_pipeline_structure.rs` — verify FRED/yfinance rate-provider threading + live/today gating (Task 19)
+- **Modify:** `crates/scorpio-core/examples/yfinance_live_test.rs` — `^IRX` latest-close assertion for the risk-free-rate fallback path (Task 23, optional smoke ahead of the gate)
 
 ### ⚠️ Validation Gate (manual user decision) ⚠️
 
@@ -49,19 +59,14 @@
 - **Modify:** `crates/scorpio-core/src/data/traits/options.rs` — add `OptionsSnapshot.all_expirations: Vec<ExpirationStrikes>` with `#[serde(skip, default)]` and the `ExpirationStrikes` type
 - **Modify:** `crates/scorpio-core/src/data/yfinance/options.rs` — populate `all_expirations` from the existing per-expiration iteration
 - **Modify:** `crates/scorpio-core/src/indicators/gex.rs` — extend aggregator with broad GEX aggregation and VEX/CEX surfacing
+- **Modify:** `crates/scorpio-core/src/state/derived.rs` — add `BroadGex`, `VexSummary`, `CexSummary` types and the `broad`/`vex_summary`/`cex_summary` fields on `GexSummary`
 - **Modify:** `crates/scorpio-core/src/valuation/etf/premium_discount.rs::compute_gex_summary` — emit `broad`, `vex_summary`, `cex_summary`
 - **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — strip `all_expirations` before `serialize_state_to_context`
-- **Modify:** `crates/scorpio-core/src/state/trading_state.rs` — add `etf_risk_free_rate: Option<f64>`, `etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>`, `EtfRiskFreeRateSource` enum; thread through `TradingStateWire`
-- **Modify:** `crates/scorpio-core/src/state/mod.rs` — re-export new types
-- **Modify:** `crates/scorpio-core/src/workflow/builder.rs` — thread `FredClient` + `YFinanceClient` into `PreflightTask` constructor
-- **Modify:** `crates/scorpio-core/src/workflow/tasks/preflight.rs` — live/today `DGS3MO` fetch, yfinance `^IRX` close fallback, and no-rate degradation when both fail
-- **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add secondary sensitivities block, `All expirations` sub-block, and risk-free-rate unavailable/degraded banner
+- **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — extend `render_dealer_positioning_block` with the Secondary sensitivities block and `All expirations` / `Partial expirations` sub-block
 - **Create:** `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`
 - **Create:** `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
 - **Modify:** `crates/scorpio-core/examples/fred_live_test.rs` — DGS3MO assertion
-- **Modify:** `crates/scorpio-core/examples/yfinance_live_test.rs` — `^IRX` latest-close assertion for the risk-free-rate fallback path
-- **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — new `TradingState` field roundtrip + populated `GexSummary` fields
-- **Modify:** `crates/scorpio-core/tests/workflow_pipeline_structure.rs` — verify FRED/yfinance rate-provider threading + live/today gating
+- **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — populated Stage 3 `GexSummary` fields roundtrip
 
 ---
 
@@ -2218,20 +2223,70 @@ fn etf_terminal_emits_partial_data_note_for_missing_walls() {
         "missing partial-data note: {rendered}"
     );
 }
+
+#[test]
+fn etf_terminal_renders_degraded_rate_banner_when_rate_unavailable() {
+    use scorpio_core::state::TradingState;
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.etf_risk_free_rate = None;
+    state.etf_risk_free_rate_source = None;
+
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(
+        rendered.contains("⚠ Risk-free rate unavailable")
+            && rendered.contains("dealer positioning unavailable"),
+        "degraded-rate banner missing: {rendered}"
+    );
+}
+
+#[test]
+fn etf_terminal_labels_yfinance_irx_rate_source_without_warning() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.etf_risk_free_rate = Some(0.0433);
+    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::YFinanceIrx);
+
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(rendered.contains("Risk-free rate    yfinance ^IRX"));
+    assert!(
+        !rendered.contains("Risk-free rate unavailable"),
+        "^IRX fallback is a live source, not a hardcoded fallback warning: {rendered}"
+    );
+}
+
+#[test]
+fn etf_terminal_labels_fred_dgs3mo_rate_source_without_warning() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.etf_risk_free_rate = Some(0.0427);
+    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
+
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(rendered.contains("Risk-free rate    FRED DGS3MO"));
+    assert!(
+        !rendered.contains("Risk-free rate unavailable"),
+        "FRED success must not show the degraded banner: {rendered}"
+    );
+}
 ```
 
-If the public render entry-point is not `scorpio_reporters::terminal::render`, use the correct path from `crates/scorpio-reporters/src/lib.rs`. Search:
+If the public render entry-point is not `scorpio_reporters::terminal::render_final_report`, use the correct path from `crates/scorpio-reporters/src/lib.rs`. Search:
 
 ```bash
-grep -n 'pub fn render\|pub fn render_terminal' crates/scorpio-reporters/src/lib.rs crates/scorpio-reporters/src/terminal/mod.rs
+grep -n 'pub fn render\|pub fn render_terminal\|pub fn render_final_report' crates/scorpio-reporters/src/lib.rs crates/scorpio-reporters/src/terminal/mod.rs
 ```
 
 and use whichever function returns the rendered string for a `TradingState`.
 
+The banner tests rely on the Stage 2 rate-sourcing work landed in Tasks 18-20. Stage 2 task ordering is therefore Task 18 → Task 19 → Task 20 → Task 11 (this task) → Task 12. Do not attempt this task before `state.etf_risk_free_rate` and `state.etf_risk_free_rate_source` exist on `TradingState`.
+
 - [ ] **Step 11.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
-Expected: all three new tests fail.
+Expected: all five new tests fail (three for the dealer-positioning block, two for the rate-source banner; the unavailable case also fails for the same reason).
 
 - [ ] **Step 11.3: Implement `render_dealer_positioning_block`**
 
@@ -2381,32 +2436,59 @@ if let Some(gex) = etf.options_gex.as_ref() {
 }
 ```
 
-- [ ] **Step 11.4: Run the reporter tests**
+- [ ] **Step 11.4: Render the risk-free-rate source banner**
+
+The rate-source data is populated in Stage 2 (Tasks 18-20). The validation gate evaluates terminal output, so the banner that names the source must render in Stage 2 as well. Locate the ETF report header (search `grep -n 'Analysis Pack' crates/scorpio-reporters/src/terminal/`), and insert the banner immediately after the `Analysis Pack    ETF Baseline` line:
+
+```rust
+use std::fmt::Write as _;
+
+match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
+    (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::FredDgs3Mo)) => {
+        let _ = writeln!(out, "  Risk-free rate    FRED DGS3MO ({:.2}%)", rate * 100.0);
+    }
+    (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::YFinanceIrx)) => {
+        let _ = writeln!(out, "  Risk-free rate    yfinance ^IRX ({:.2}%)", rate * 100.0);
+    }
+    (None, None) => {
+        let _ = writeln!(
+            out,
+            "  ⚠ Risk-free rate unavailable — dealer positioning unavailable"
+        );
+    }
+    _ => {}
+}
+```
+
+Match arms intentionally collapse mismatched `(Some, None)` / `(None, Some)` pairings to no-op; preflight always writes both fields or neither, so any other combination indicates state corruption and is not surfaced.
+
+- [ ] **Step 11.5: Run the reporter tests**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
-Expected: 3 new tests pass.
+Expected: 5 new tests pass (3 dealer-positioning + 2 banner labels; the unavailable banner test also flips green once Step 11.4 lands).
 
-- [ ] **Step 11.5: Run the full workspace test suite**
+- [ ] **Step 11.6: Run the full workspace test suite**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 Expected: no regressions outside `prompt_bundle_regression_gate` (covered in Task 12).
 
-- [ ] **Step 11.6: Lint and format**
+- [ ] **Step 11.7: Lint and format**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 11.7: Commit**
+- [ ] **Step 11.8: Commit**
 
 ```bash
 git add crates/scorpio-reporters/src/terminal/etf.rs crates/scorpio-reporters/tests/terminal.rs
-git commit -m "feat(reporter): render DEALER POSITIONING block for Phase 2 Stage 2
+git commit -m "feat(reporter): Stage 2 dealer-positioning block and risk-free-rate banner
 
-Compact near-term GEX block: plain-English summary line, signed net/gross
-GEX per 1% move, call/put OI, max-pain strike, top-3 gamma walls. Emits
-a partial-data note when walls are unavailable. Stage 3 will extend with
-secondary sensitivities, all-expirations broad GEX, and the risk-free-rate
-source/degradation banner."
+Compact near-term GEX block (plain-English summary, signed net/gross GEX
+per 1% move, call/put OI, max-pain strike, top-3 gamma walls) plus the
+risk-free-rate source/degraded banner under Analysis Pack. The banner
+shows FRED DGS3MO or yfinance ^IRX with the live rate, or a degraded
+notice when both sources fail. Stage 3 extends with secondary
+sensitivities and all-expirations broad GEX."
 ```
 
 ---
@@ -2579,9 +2661,11 @@ Stage 3 has independent subtracks. After the validation gate, schedule only the 
 
 - **Subtrack A — Broad GEX:** Tasks 13-15 plus the broad portion of Task 16 and Task 21. Adds transient `all_expirations`, NTM-per-expiration broad aggregation, and all/partial-expiration reporter output.
 - **Subtrack B — Secondary VEX/CEX:** VEX/CEX portions of Task 13, Task 16, and Task 21. Adds near-term secondary sensitivity summaries and reporter output.
-- **Subtrack C — Live smokes:** Tasks 22-25. Optional manual evidence after whichever Stage 3 subtracks are approved.
+- **Subtrack C — Live smokes:** Tasks 22, 24, 25 (and Task 23 if it was deferred from Stage 2). Optional manual evidence after whichever Stage 3 subtracks are approved.
 
 Do not implement Subtrack A just because Subtrack B is approved, or vice versa.
+
+> **Tasks 18-20 are not Stage 3 subtracks.** They are required Stage 2 risk-free-rate work that the validation gate depends on. Their bodies live under the Stage 3 heading for numbering continuity only — they must be complete before the gate runs, regardless of the gate outcome.
 
 ### Task 13: Aggregator extensions — broad path + VEX/CEX surfacing
 
@@ -3600,7 +3684,10 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
         panic!("^IRX fallback must not be called when FRED succeeds, got symbol={symbol}")
     });
 
-    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    let mut state = TradingState::new(
+        "SPY".to_owned(),
+        chrono::Utc::now().date_naive().to_string(),
+    );
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
@@ -3680,7 +3767,10 @@ async fn preflight_falls_back_to_yfinance_irx_when_fred_returns_empty() {
         _ => Ok(None),
     });
 
-    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    let mut state = TradingState::new(
+        "SPY".to_owned(),
+        chrono::Utc::now().date_naive().to_string(),
+    );
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
@@ -3705,7 +3795,10 @@ async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
     let fred = with_fake_fred_client(|_| Ok(None));
     let yfinance = with_fake_yfinance_client(|_| Ok(None));
 
-    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    let mut state = TradingState::new(
+        "SPY".to_owned(),
+        chrono::Utc::now().date_naive().to_string(),
+    );
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
@@ -3764,12 +3857,21 @@ impl FredSeriesClient for crate::data::FredClient {
 
 #[async_trait::async_trait]
 pub(crate) trait RiskFreeRateYFinanceClient: Send + Sync {
-    async fn latest_close_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError>;
+    /// Return the latest close as an annualized treasury yield in percent
+    /// units. Implemented for `^IRX` today; the trait is rate-specific to
+    /// avoid implying that all yfinance OHLCV close values are percent.
+    async fn latest_risk_free_rate_pct(
+        &self,
+        symbol: &str,
+    ) -> Result<Option<f64>, TradingError>;
 }
 
 #[async_trait::async_trait]
 impl RiskFreeRateYFinanceClient for crate::data::YFinanceClient {
-    async fn latest_close_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError> {
+    async fn latest_risk_free_rate_pct(
+        &self,
+        symbol: &str,
+    ) -> Result<Option<f64>, TradingError> {
         let today = chrono::Utc::now().date_naive();
         let start = today - chrono::Duration::days(14);
         let candles = self
@@ -3783,12 +3885,19 @@ impl RiskFreeRateYFinanceClient for crate::data::YFinanceClient {
 2. In the `Task::run` body, after the resolved-pack classification but before `serialize_state_to_context`, add the live/today ETF risk-free-rate fetch. FRED is authoritative; yfinance `^IRX` is the only fallback. If both fail, leave both fields `None` so downstream GEX degrades cleanly:
 
 ```rust
+// `is_today` is anchored to UTC: `chrono::Utc::now().date_naive()` flips at
+// 00:00 UTC, so late-evening Pacific/Asia runs may see "tomorrow" before the
+// local calendar does. This is acceptable for live-rate gating because both
+// FRED and yfinance publish on US trading-session timestamps; it does mean
+// off-hours operators outside US/Eastern may observe one extra historical-run
+// degradation per day. If we later care about local-time anchoring, source
+// the gate from a single `state.run_started_at` instead of `now()`.
 let is_today = state.target_date == chrono::Utc::now().date_naive().to_string();
 if matches!(resolved_pack, PackId::EtfBaseline) && is_today {
     if let Ok(Some(pct)) = self.fred.get_series_latest("DGS3MO").await {
         state.etf_risk_free_rate = Some(pct / 100.0);
         state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
-    } else if let Ok(Some(pct)) = self.yfinance.latest_close_pct("^IRX").await {
+    } else if let Ok(Some(pct)) = self.yfinance.latest_risk_free_rate_pct("^IRX").await {
         state.etf_risk_free_rate = Some(pct / 100.0);
         state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::YFinanceIrx);
     } else {
@@ -3940,7 +4049,7 @@ dealer-positioning to unavailable when both live sources fail."
 
 ---
 
-### Task 21: Reporter Stage 3 expansion (secondary sensitivities, broad GEX line, rate-source banner)
+### Task 21: Reporter Stage 3 expansion (secondary sensitivities, broad GEX line)
 
 **Files:**
 - Modify: `crates/scorpio-reporters/src/terminal/etf.rs`
@@ -4063,58 +4172,14 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
     assert!(rendered.contains("3 used of 5"));
 }
 
-#[test]
-fn etf_terminal_renders_degraded_rate_banner_when_rate_unavailable() {
-    use scorpio_core::state::TradingState;
-
-    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
-    state.etf_risk_free_rate = None;
-    state.etf_risk_free_rate_source = None;
-
-    let rendered = scorpio_reporters::terminal::render_final_report(&state);
-    assert!(
-        rendered.contains("⚠ Risk-free rate unavailable")
-            && rendered.contains("dealer positioning unavailable"),
-        "degraded-rate banner missing: {rendered}"
-    );
-}
-
-#[test]
-fn etf_terminal_labels_yfinance_irx_rate_source_without_warning() {
-    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
-
-    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
-    state.etf_risk_free_rate = Some(0.0433);
-    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::YFinanceIrx);
-
-    let rendered = scorpio_reporters::terminal::render_final_report(&state);
-    assert!(rendered.contains("Risk-free rate    yfinance ^IRX"));
-    assert!(
-        !rendered.contains("Risk-free rate unavailable"),
-        "^IRX fallback is a live source, not a hardcoded fallback warning: {rendered}"
-    );
-}
-
-#[test]
-fn etf_terminal_hides_risk_free_rate_banner_on_successful_fetch() {
-    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
-
-    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
-    state.etf_risk_free_rate = Some(0.0427);
-    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
-
-    let rendered = scorpio_reporters::terminal::render_final_report(&state);
-    assert!(
-        !rendered.contains("Risk-free rate unavailable"),
-        "successful fetch must not show the banner: {rendered}"
-    );
-}
 ```
+
+The risk-free-rate banner tests live in Task 11 (Stage 2), not here. Stage 3 only extends the dealer-positioning block with secondary sensitivities and the broad-GEX/partial-expirations sub-block.
 
 - [ ] **Step 21.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
-Expected: five new tests fail.
+Expected: two new tests fail (the two added in this step).
 
 - [ ] **Step 21.3: Extend the dealer-positioning block**
 
@@ -4174,47 +4239,25 @@ Also update the partial-data branch from Task 11 to cover the combined case per 
     }
 ```
 
-- [ ] **Step 21.4: Add risk-free-rate source and degraded-rate banner**
-
-In `crates/scorpio-reporters/src/terminal/etf.rs` (or wherever the ETF report header is composed — search `grep -n 'Analysis Pack' crates/scorpio-reporters/src/terminal/`), insert the banner immediately after the `Analysis Pack    ETF Baseline` line:
-
-```rust
-match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
-    (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::FredDgs3Mo)) => {
-        let _ = writeln!(out, "  Risk-free rate    FRED DGS3MO ({:.2}%)", rate * 100.0);
-    }
-    (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::YFinanceIrx)) => {
-        let _ = writeln!(out, "  Risk-free rate    yfinance ^IRX ({:.2}%)", rate * 100.0);
-    }
-    (None, None) => {
-        let _ = writeln!(
-            out,
-            "  ⚠ Risk-free rate unavailable — dealer positioning unavailable"
-        );
-    }
-    _ => {}
-}
-```
-
-- [ ] **Step 21.5: Run the reporter tests**
+- [ ] **Step 21.4: Run the reporter tests**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
 Expected: all new tests pass plus previously-passing tests still green.
 
-- [ ] **Step 21.6: Lint and format**
+- [ ] **Step 21.5: Lint and format**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 21.7: Commit**
+- [ ] **Step 21.6: Commit**
 
 ```bash
 git add crates/scorpio-reporters/src/terminal/etf.rs crates/scorpio-reporters/tests/terminal.rs
 git commit -m "feat(reporter): Stage 3 dealer-positioning expansion
 
 Adds Secondary sensitivities (VEX/CEX) and All expirations / Partial
-expirations sub-blocks, plus risk-free-rate source/degraded banners under
-Analysis Pack. No hardcoded rate fallback is rendered or implied."
+expirations sub-blocks. The risk-free-rate source banner shipped with
+Stage 2 (Task 11)."
 ```
 
 ---
@@ -4476,32 +4519,32 @@ git commit -m "test(smoke): live ETF run populates options_gex with broad/vex/ce
 
 Run through this list before declaring Stage 1, Stage 2, or Stage 3 done:
 
-1. **Spec coverage** — every decision in the spec's decision table maps to at least one task:
-   - BSM math (gamma/vanna/charm) → Task 1
-   - Per-strike aggregation with SqueezeMetrics sign → Task 2
-   - State schema additions → Task 3
-   - ValuationInputs carrier + `compute_gex_summary` near-term → Task 4
-   - Live options hydration on AnalystSyncTask → Task 5
-   - GEX state roundtrip → Task 6
-   - Leverage helper format + visibility → Task 7
-   - Conservative/Neutral injection → Task 8
-   - Auditor injection → Task 9
-   - Rewritten focus prompt → Task 10
-   - Terminal DEALER POSITIONING block → Task 11
-   - Prompt-bundle regression-gate refresh → Task 12
-   - Broad aggregation in aggregator → Task 13
-   - `all_expirations` transient field → Task 14
-   - yfinance plumbing → Task 15
-   - `compute_gex_summary` broad/VEX/CEX → Task 16
-   - Strip-before-serialize → Task 17
-   - TradingState risk-free-rate fields → Task 18
-   - Preflight FRED DGS3MO fetch → Task 19
-   - ValuationInputs.etf_risk_free_rate hookup → Task 20
-   - Reporter Stage 3 expansion + banner → Task 21
-   - fred_live_test DGS3MO → Task 22
-   - yfinance_live_test ^IRX → Task 23
-   - yfinance_options_chain smoke → Task 24
-   - e2e etf_options_gex smoke → Task 25
+1. **Spec coverage** — every decision in the spec's decision table maps to at least one task. Stage labels show where each task ships, including the three promoted tasks (18-20) whose bodies still live under the Stage 3 heading for numbering continuity:
+   - BSM math (gamma/vanna/charm) → Task 1 (Stage 1)
+   - Per-strike aggregation with SqueezeMetrics sign → Task 2 (Stage 1)
+   - State schema additions → Task 3 (Stage 1)
+   - ValuationInputs carrier + `compute_gex_summary` near-term → Task 4 (Stage 1)
+   - Live options hydration on AnalystSyncTask → Task 5 (Stage 1)
+   - GEX state roundtrip → Task 6 (Stage 1)
+   - Leverage helper format + visibility → Task 7 (Stage 2)
+   - Conservative/Neutral injection → Task 8 (Stage 2)
+   - Auditor injection → Task 9 (Stage 2)
+   - Rewritten focus prompt → Task 10 (Stage 2)
+   - Terminal DEALER POSITIONING block + risk-free-rate banner → Task 11 (Stage 2)
+   - Prompt-bundle regression-gate refresh → Task 12 (Stage 2)
+   - Broad aggregation in aggregator → Task 13 (Stage 3)
+   - `all_expirations` transient field → Task 14 (Stage 3)
+   - yfinance plumbing → Task 15 (Stage 3)
+   - `compute_gex_summary` broad/VEX/CEX → Task 16 (Stage 3)
+   - Strip-before-serialize → Task 17 (Stage 3)
+   - TradingState risk-free-rate fields → Task 18 (**Stage 2 — promoted**)
+   - Preflight FRED DGS3MO + yfinance ^IRX fetch → Task 19 (**Stage 2 — promoted**)
+   - ValuationInputs.etf_risk_free_rate hookup → Task 20 (**Stage 2 — promoted**)
+   - Reporter Stage 3 expansion (secondary sensitivities + broad-GEX sub-block) → Task 21 (Stage 3)
+   - fred_live_test DGS3MO → Task 22 (Stage 3, optional smoke)
+   - yfinance_live_test ^IRX → Task 23 (Stage 2 smoke, optional)
+   - yfinance_options_chain smoke → Task 24 (Stage 3, optional)
+   - e2e etf_options_gex smoke → Task 25 (Stage 3, optional)
 
 2. **Placeholder scan** — no "TBD", no "fill in later", no "add appropriate handling". Each step shows the actual code or actual command.
 
