@@ -59,6 +59,7 @@
 - **Create:** `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`
 - **Create:** `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
 - **Modify:** `crates/scorpio-core/examples/fred_live_test.rs` — DGS3MO assertion
+- **Modify:** `crates/scorpio-core/examples/yfinance_live_test.rs` — `^IRX` latest-close assertion for the risk-free-rate fallback path
 - **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — new `TradingState` field roundtrip + populated `GexSummary` fields
 - **Modify:** `crates/scorpio-core/tests/workflow_pipeline_structure.rs` — verify FRED/yfinance rate-provider threading + live/today gating
 
@@ -2578,7 +2579,7 @@ Stage 3 has independent subtracks. After the validation gate, schedule only the 
 
 - **Subtrack A — Broad GEX:** Tasks 13-15 plus the broad portion of Task 16 and Task 21. Adds transient `all_expirations`, NTM-per-expiration broad aggregation, and all/partial-expiration reporter output.
 - **Subtrack B — Secondary VEX/CEX:** VEX/CEX portions of Task 13, Task 16, and Task 21. Adds near-term secondary sensitivity summaries and reporter output.
-- **Subtrack C — Live smokes:** Tasks 22-24. Optional manual evidence after whichever Stage 3 subtracks are approved.
+- **Subtrack C — Live smokes:** Tasks 22-25. Optional manual evidence after whichever Stage 3 subtracks are approved.
 
 Do not implement Subtrack A just because Subtrack B is approved, or vice versa.
 
@@ -4265,12 +4266,64 @@ git commit -m "test(smoke): assert DGS3MO is fetchable in the live FRED smoke"
 
 ---
 
-### Task 23: New live smoke — `yfinance_options_chain_live_test.rs`
+### Task 23: Live yfinance smoke — extend `yfinance_live_test.rs` with `^IRX`
+
+**Files:**
+- Modify: `crates/scorpio-core/examples/yfinance_live_test.rs`
+
+- [ ] **Step 23.1: Locate the existing OHLCV assertions**
+
+```bash
+grep -n 'get_ohlcv\|YFinanceClient\|AAPL\|SPY' crates/scorpio-core/examples/yfinance_live_test.rs
+```
+
+- [ ] **Step 23.2: Add the `^IRX` latest-close assertion**
+
+Append a new block near the existing OHLCV smoke assertions:
+
+```rust
+    let today = chrono::Utc::now().date_naive();
+    let start = today - chrono::Duration::days(14);
+    let irx = yf
+        .get_ohlcv("^IRX", &start.to_string(), &today.to_string())
+        .await
+        .expect("^IRX OHLCV fetch");
+    let latest_irx_close = irx
+        .last()
+        .map(|c| c.close)
+        .expect("^IRX must return at least one recent daily candle");
+    println!("^IRX latest close: {latest_irx_close}");
+    assert!(
+        (0.0..=20.0).contains(&latest_irx_close),
+        "^IRX close must be a plausible annualized percent rate: {latest_irx_close}"
+    );
+```
+
+Use the existing client variable name in `yfinance_live_test.rs`; if it is not `yf`, replace `yf` in the snippet with the local name already used by the smoke.
+
+- [ ] **Step 23.3: Run locally**
+
+```bash
+cargo run -p scorpio-core --example yfinance_live_test
+```
+
+Expected: the example prints the existing yfinance smoke output plus `^IRX latest close: ...` and exits 0.
+
+- [ ] **Step 23.4: Commit**
+
+```bash
+git add crates/scorpio-core/examples/yfinance_live_test.rs
+git commit -m "test(smoke): assert yfinance can fetch ^IRX latest close"
+```
+
+---
+
+### Task 24: New live smoke — `yfinance_options_chain_live_test.rs`
 
 **Files:**
 - Create: `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`
 
-- [ ] **Step 23.1: Author the smoke**
+- [ ] **Step 24.1: Author the smoke**
 
 Use the existing `yfinance_live_test.rs` and `etf_quote_live_test.rs` as templates. Create `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`:
 
@@ -4328,7 +4381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If `YFinanceClient::new_unrate_limited` does not exist, use whatever constructor the other smokes use (search `grep -n 'YFinanceClient::' crates/scorpio-core/examples/`).
 
-- [ ] **Step 23.2: Run locally**
+- [ ] **Step 24.2: Run locally**
 
 ```bash
 cargo run -p scorpio-core --example yfinance_options_chain_live_test
@@ -4336,7 +4389,7 @@ cargo run -p scorpio-core --example yfinance_options_chain_live_test
 
 Expected: prints expirations and "OK".
 
-- [ ] **Step 23.3: Commit**
+- [ ] **Step 24.3: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/yfinance_options_chain_live_test.rs
@@ -4345,12 +4398,12 @@ git commit -m "test(smoke): live yfinance options chain populates all_expiration
 
 ---
 
-### Task 24: New live smoke — `etf_options_gex_live_test.rs`
+### Task 25: New live smoke — `etf_options_gex_live_test.rs`
 
 **Files:**
 - Create: `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
 
-- [ ] **Step 24.1: Author the e2e smoke**
+- [ ] **Step 25.1: Author the e2e smoke**
 
 Use `etf_pack_live_test.rs` as the template. Create `crates/scorpio-core/examples/etf_options_gex_live_test.rs`:
 
@@ -4402,7 +4455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If `AnalysisRuntime::from_env_with_pack` is not the canonical constructor, replace with whatever entry point `etf_pack_live_test.rs` uses.
 
-- [ ] **Step 24.2: Run locally**
+- [ ] **Step 25.2: Run locally**
 
 ```bash
 SCORPIO_FRED_API_KEY=... cargo run -p scorpio-core --example etf_options_gex_live_test
@@ -4410,7 +4463,7 @@ SCORPIO_FRED_API_KEY=... cargo run -p scorpio-core --example etf_options_gex_liv
 
 Expected: prints the populated GEX summary and "OK".
 
-- [ ] **Step 24.3: Commit**
+- [ ] **Step 25.3: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/etf_options_gex_live_test.rs
@@ -4446,8 +4499,9 @@ Run through this list before declaring Stage 1, Stage 2, or Stage 3 done:
    - ValuationInputs.etf_risk_free_rate hookup → Task 20
    - Reporter Stage 3 expansion + banner → Task 21
    - fred_live_test DGS3MO → Task 22
-   - yfinance_options_chain smoke → Task 23
-   - e2e etf_options_gex smoke → Task 24
+   - yfinance_live_test ^IRX → Task 23
+   - yfinance_options_chain smoke → Task 24
+   - e2e etf_options_gex smoke → Task 25
 
 2. **Placeholder scan** — no "TBD", no "fill in later", no "add appropriate handling". Each step shows the actual code or actual command.
 
