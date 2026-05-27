@@ -325,10 +325,59 @@ fn render_dealer_positioning_block(out: &mut String, gex: &GexSummary) {
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "    Gamma walls    {walls}");
-    } else {
+    }
+
+    let walls_missing = gex.strikes.is_empty();
+    let broad_missing = gex.broad.is_none();
+    if walls_missing && broad_missing {
+        let _ = writeln!(
+            out,
+            "    Dealer positioning partial — gamma walls and broad GEX unavailable"
+        );
+    } else if walls_missing {
         let _ = writeln!(
             out,
             "    Dealer positioning partial — gamma walls unavailable"
+        );
+    } else if broad_missing {
+        let _ = writeln!(
+            out,
+            "    Dealer positioning partial — broad GEX unavailable"
+        );
+    }
+
+    if let (Some(v), Some(c)) = (gex.vex_summary.as_ref(), gex.cex_summary.as_ref()) {
+        let _ = writeln!(out, "    Secondary sensitivities");
+        let _ = writeln!(
+            out,
+            "      Net VEX/volpt {nv}    Gross VEX       {gv}",
+            nv = format_usd_signed(v.net_vex_usd_per_volpt),
+            gv = format_usd_magnitude(v.gross_vex_usd_per_volpt),
+        );
+        let _ = writeln!(
+            out,
+            "      Net CEX/day   {nc}    Gross CEX       {gc}",
+            nc = format_usd_signed(c.net_cex_usd_per_day),
+            gc = format_usd_magnitude(c.gross_cex_usd_per_day),
+        );
+    }
+
+    if let Some(broad) = gex.broad.as_ref() {
+        let _ = writeln!(out);
+        if broad.expirations_used == broad.expirations_total_considered {
+            let _ = writeln!(out, "  All expirations  ({} used)", broad.expirations_used);
+        } else {
+            let _ = writeln!(
+                out,
+                "  Partial expirations  ({} used of {})",
+                broad.expirations_used, broad.expirations_total_considered
+            );
+        }
+        let _ = writeln!(
+            out,
+            "    Net GEX/1%      {net}    Gross GEX/1%    {gross}",
+            net = format_usd_signed(broad.net_gex_usd_per_1pct_move),
+            gross = format_usd_magnitude(broad.gross_gex_usd_per_1pct_move),
         );
     }
 }

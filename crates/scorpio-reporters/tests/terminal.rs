@@ -176,7 +176,8 @@ fn etf_terminal_emits_partial_data_note_for_missing_walls() {
 
     let rendered = render_final_report(&state);
     assert!(
-        rendered.contains("gamma walls unavailable"),
+        rendered.contains("gamma walls unavailable")
+            || rendered.contains("gamma walls and broad GEX unavailable"),
         "missing partial-data note: {rendered}"
     );
 }
@@ -270,4 +271,116 @@ fn etf_terminal_labels_fred_dgs3mo_rate_source_without_warning() {
         !rendered.contains("Risk-free rate unavailable"),
         "FRED success must not show the degraded banner: {rendered}"
     );
+}
+
+#[test]
+fn etf_terminal_renders_full_dealer_positioning_with_broad_and_secondary() {
+    use scorpio_core::state::{
+        AssetShape, BroadGex, CexSummary, DerivedValuation, EtfDataAvailability, EtfValuation,
+        GexSummary, PremiumBand, PremiumSnapshot, ScenarioValuation, StrikeGex, TradingState,
+        VexSummary,
+    };
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(620.0),
+                market_price: 620.4,
+                bid: Some(620.39),
+                ask: Some(620.41),
+                premium_pct: Some(0.06),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: Some(GexSummary {
+                net_gex_usd_per_1pct_move: 2.84e9,
+                gross_gex_usd_per_1pct_move: 7.12e9,
+                call_put_oi_ratio: 1.31,
+                max_pain_strike: 620.0,
+                near_term_expiration: chrono::NaiveDate::from_ymd_opt(2026, 5, 23).unwrap(),
+                strikes: vec![StrikeGex {
+                    strike: 625.0,
+                    net_gex_usd_per_1pct_move: 1.2e9,
+                }],
+                broad: Some(BroadGex {
+                    net_gex_usd_per_1pct_move: 8.4e9,
+                    gross_gex_usd_per_1pct_move: 22.1e9,
+                    expirations_used: 5,
+                    expirations_total_considered: 5,
+                }),
+                vex_summary: Some(VexSummary {
+                    net_vex_usd_per_volpt: -1.2e9,
+                    gross_vex_usd_per_volpt: 4.1e9,
+                }),
+                cex_summary: Some(CexSummary {
+                    net_cex_usd_per_day: 0.45e9,
+                    gross_cex_usd_per_day: 2.3e9,
+                }),
+            }),
+            category: None,
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(rendered.contains("Secondary sensitivities"));
+    assert!(rendered.contains("Net VEX/volpt"));
+    assert!(rendered.contains("Net CEX/day"));
+    assert!(rendered.contains("All expirations  (5 used)"));
+}
+
+#[test]
+fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
+    use scorpio_core::state::{
+        AssetShape, BroadGex, DerivedValuation, EtfDataAvailability, EtfValuation, GexSummary,
+        PremiumBand, PremiumSnapshot, ScenarioValuation, TradingState,
+    };
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(620.0),
+                market_price: 620.0,
+                bid: None,
+                ask: None,
+                premium_pct: None,
+                category_band: PremiumBand::Unknown,
+                bid_ask_spread_pct: None,
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: Some(GexSummary {
+                net_gex_usd_per_1pct_move: 1.0e9,
+                gross_gex_usd_per_1pct_move: 2.0e9,
+                call_put_oi_ratio: 1.0,
+                max_pain_strike: 620.0,
+                near_term_expiration: chrono::NaiveDate::from_ymd_opt(2026, 5, 23).unwrap(),
+                strikes: vec![],
+                broad: Some(BroadGex {
+                    net_gex_usd_per_1pct_move: 3.0e9,
+                    gross_gex_usd_per_1pct_move: 5.0e9,
+                    expirations_used: 3,
+                    expirations_total_considered: 5,
+                }),
+                vex_summary: None,
+                cex_summary: None,
+            }),
+            category: None,
+            leverage_factor: None,
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(rendered.contains("Partial expirations"));
+    assert!(rendered.contains("3 used of 5"));
 }
