@@ -1041,6 +1041,45 @@ fn no_valuator_selected(asset_shape: AssetShape) -> DerivedValuation {
     }
 }
 
+/// Extract the live ETF options snapshot from persisted technical state.
+///
+/// Returns `Some(&snapshot)` only when `TechnicalOptionsContext::Available`
+/// carries an `OptionsOutcome::Snapshot(_)`. Every other variant emits a
+/// `tracing::warn!` and returns `None` so the valuator leaves
+/// dealer-positioning absent cleanly.
+pub(crate) fn etf_options_from_state(
+    state: &crate::state::TradingState,
+) -> Option<&crate::data::traits::options::OptionsSnapshot> {
+    use crate::data::traits::options::OptionsOutcome;
+    use crate::state::TechnicalOptionsContext;
+
+    let technical = state.technical_indicators()?;
+    let options_context = technical.options_context.as_ref()?;
+    match options_context {
+        TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(snap),
+        } => Some(snap),
+        TechnicalOptionsContext::Available { outcome: other } => {
+            tracing::warn!(
+                target: "scorpio_core::workflow::analyst",
+                outcome = %other,
+                symbol = %state.asset_symbol,
+                "ETF options chain unavailable — dealer positioning skipped"
+            );
+            None
+        }
+        TechnicalOptionsContext::FetchFailed { reason } => {
+            tracing::warn!(
+                target: "scorpio_core::workflow::analyst",
+                symbol = %state.asset_symbol,
+                fetch_reason = %reason,
+                "ETF options fetch failed before valuation — dealer positioning skipped"
+            );
+            None
+        }
+    }
+}
+
 fn derive_runtime_valuation(
     state: &TradingState,
     valuation_inputs: &ValuationInputs,
@@ -1103,8 +1142,9 @@ fn derive_runtime_valuation(
             etf_holdings: valuation_inputs.etf_holdings.as_ref(),
             etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
             etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
-            etf_options: None,
-            as_of: chrono::Utc::now().date_naive(),
+            etf_options: etf_options_from_state(state),
+            as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
+                .unwrap_or_else(|_| chrono::Utc::now().date_naive()),
         },
         &provisional.asset_shape,
     )
@@ -1699,5 +1739,90 @@ mod tests {
         };
 
         assert_eq!(tracking_symbol, "^GSPC");
+    }
+
+    #[test]
+    fn etf_valuation_inputs_carry_options_when_technical_context_has_snapshot() {
+        use crate::data::traits::options::{
+            IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let snap = OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![IvTermPoint {
+                expiration: "2026-06-26".to_owned(),
+                atm_iv: 0.20,
+            }],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-06-26".to_owned(),
+            near_term_strikes: vec![NearTermStrike {
+                strike: 100.0,
+                call_iv: Some(0.20),
+                put_iv: Some(0.20),
+                call_volume: None,
+                put_volume: None,
+                call_oi: Some(1_000),
+                put_oi: Some(1_000),
+            }],
+        };
+
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "smoke".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(snap.clone()),
+            }),
+        });
+
+        let extracted = super::etf_options_from_state(&state);
+        assert!(matches!(extracted, Some(s) if s.spot_price == snap.spot_price));
+    }
+
+    #[test]
+    fn etf_valuation_inputs_drop_options_when_technical_context_is_fetch_failed() {
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "smoke".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "connection refused".to_owned(),
+            }),
+        });
+
+        let extracted = super::etf_options_from_state(&state);
+        assert!(extracted.is_none());
     }
 }
