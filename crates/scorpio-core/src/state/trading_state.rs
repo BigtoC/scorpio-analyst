@@ -26,6 +26,19 @@ pub struct DebateMessage {
     pub content: String,
 }
 
+/// Stage 2 — which live data source produced the ETF risk-free rate.
+///
+/// Persisted alongside the rate value so `scorpio report` can render the
+/// same source/degradation banner from a reloaded snapshot without re-fetching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EtfRiskFreeRateSource {
+    /// FRED DGS3-month constant-maturity Treasury yield (primary source).
+    FredDgs3Mo,
+    /// Most recent yfinance `^IRX` close (fallback when FRED is unavailable).
+    YFinanceIrx,
+}
+
 /// Persisted enrichment state for a single category.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EnrichmentState<T> {
@@ -177,6 +190,20 @@ pub struct TradingState {
     #[serde(default)]
     pub etf_routing_fallback_reason: Option<String>,
 
+    /// Stage 2 — risk-free rate (decimal fraction, e.g. 0.0427) sourced from
+    /// FRED DGS3MO at preflight when the active pack is `EtfBaseline`, or from
+    /// the most recent yfinance `^IRX` close when FRED is unavailable.
+    /// `None` when pack != EtfBaseline OR when both live rate sources fail. The
+    /// ETF valuator must degrade dealer-positioning to unavailable when `None`.
+    #[serde(default)]
+    pub etf_risk_free_rate: Option<f64>,
+
+    /// Stage 2 — Persisted origin of the ETF risk-free-rate input so live
+    /// runs and `scorpio report` render the same source/degradation banner from
+    /// reloaded snapshots.
+    #[serde(default)]
+    pub etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>,
+
     /// Token accounting.
     pub token_usage: TokenUsageTracker,
 }
@@ -243,6 +270,10 @@ struct TradingStateWire {
     analysis_runtime_policy: Option<RuntimePolicy>,
     #[serde(default)]
     etf_routing_fallback_reason: Option<String>,
+    #[serde(default)]
+    etf_risk_free_rate: Option<f64>,
+    #[serde(default)]
+    etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>,
     token_usage: TokenUsageTracker,
 }
 
@@ -289,6 +320,8 @@ impl From<TradingStateWire> for TradingState {
             analysis_pack_name: wire.analysis_pack_name,
             analysis_runtime_policy: wire.analysis_runtime_policy,
             etf_routing_fallback_reason: wire.etf_routing_fallback_reason,
+            etf_risk_free_rate: wire.etf_risk_free_rate,
+            etf_risk_free_rate_source: wire.etf_risk_free_rate_source,
             token_usage: wire.token_usage,
         }
     }
@@ -393,6 +426,8 @@ impl TradingState {
             analysis_pack_name: None,
             analysis_runtime_policy: None,
             etf_routing_fallback_reason: None,
+            etf_risk_free_rate: None,
+            etf_risk_free_rate_source: None,
             token_usage: TokenUsageTracker::default(),
         }
     }

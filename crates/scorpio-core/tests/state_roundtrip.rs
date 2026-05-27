@@ -774,6 +774,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
                     etf_routing_fallback_reason: None,
+                    etf_risk_free_rate: None,
+                    etf_risk_free_rate_source: None,
                     audit_status: scorpio_core::state::auditor::AuditStatus::Disabled,
                     audit_report: None,
                 }
@@ -1386,6 +1388,40 @@ fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
         }
         other => panic!("expected ETF scenario with gex, got {other:?}"),
     }
+}
+
+#[test]
+fn trading_state_etf_risk_free_rate_fields_roundtrip_with_serde_default() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.etf_risk_free_rate = Some(0.0427);
+    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
+
+    let json = serde_json::to_string(&state).expect("serialize");
+    let back: TradingState = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.etf_risk_free_rate, Some(0.0427));
+    assert_eq!(
+        back.etf_risk_free_rate_source,
+        Some(EtfRiskFreeRateSource::FredDgs3Mo)
+    );
+}
+
+#[test]
+fn legacy_trading_state_without_etf_risk_free_rate_fields_deserializes() {
+    // Strip the new fields from a current snapshot to simulate a legacy
+    // snapshot that predates the etf_risk_free_rate fields.
+    let state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    let mut value: serde_json::Value =
+        serde_json::to_value(&state).expect("serialize current state");
+    let obj = value.as_object_mut().expect("json is object");
+    obj.remove("etf_risk_free_rate");
+    obj.remove("etf_risk_free_rate_source");
+
+    let back: scorpio_core::state::TradingState =
+        serde_json::from_value(value).expect("legacy snapshot must deserialize");
+    assert!(back.etf_risk_free_rate.is_none());
+    assert!(back.etf_risk_free_rate_source.is_none());
 }
 
 #[test]
