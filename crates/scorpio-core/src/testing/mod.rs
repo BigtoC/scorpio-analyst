@@ -6,11 +6,15 @@
 //! per Unit 4a's structural authority migration.
 
 pub mod prompt_render;
+pub mod rate_clients;
 pub mod runtime_policy;
 
 pub use prompt_render::{
     PromptRenderOutput, PromptRenderScenario, canonical_fixture_identity,
     render_baseline_prompt_for_role, render_prompt_output_for_role,
+};
+pub use rate_clients::{
+    FakeFredClient, FakeYFinanceClient, with_fake_fred_client, with_fake_yfinance_client,
 };
 pub use runtime_policy::{
     baseline_pack_prompt_for_role, runtime_policy_from_manifest, with_baseline_runtime_policy,

@@ -3,7 +3,7 @@ mod context_bridge;
 pub mod pack_classifier;
 mod pipeline;
 mod snapshot;
-mod tasks;
+pub mod tasks;
 mod topology;
 
 #[cfg(any(test, feature = "test-helpers"))]

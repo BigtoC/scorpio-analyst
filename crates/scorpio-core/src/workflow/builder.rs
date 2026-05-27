@@ -71,11 +71,13 @@ pub fn build_graph_from_pack(
     let runtime_policy = resolve_runtime_policy_for_manifest(pack)
         .expect("build_graph_from_pack requires a valid analysis pack manifest");
 
-    let preflight = PreflightTask::with_runtime_policy(
+    let preflight = PreflightTask::with_runtime_policy_and_rate_clients(
         config.enrichment.clone(),
         config.api.alpha_vantage_api_key.is_some(),
         Arc::clone(&snapshot_store),
         runtime_policy,
+        Arc::new(fred.clone()),
+        Arc::new(yfinance.clone()),
     );
     graph.add_task(Arc::new(preflight));
 

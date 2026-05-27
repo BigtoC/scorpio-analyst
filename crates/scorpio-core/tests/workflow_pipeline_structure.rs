@@ -1045,3 +1045,158 @@ fn supported_etf_fund_routes_to_etf_baseline() {
     let result = classify_runtime_pack(Some(&profile), Some(&fund_info));
     assert_eq!(result, RuntimePackSelection::EtfBaseline);
 }
+
+// --- Task 19: Risk-free-rate preflight integration tests ---
+
+#[tokio::test]
+async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
+
+    let fred = with_fake_fred_client(|series| match series {
+        "DGS3MO" => Ok(Some(4.27)),
+        _ => Ok(None),
+    });
+    let yfinance = with_fake_yfinance_client(|symbol| {
+        panic!("^IRX fallback must not be called when FRED succeeds, got symbol={symbol}")
+    });
+
+    let mut state = TradingState::new(
+        "SPY".to_owned(),
+        chrono::Utc::now().date_naive().to_string(),
+    );
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        &fred,
+        &yfinance,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    let rate = state
+        .etf_risk_free_rate
+        .expect("etf_risk_free_rate must be set");
+    assert!(
+        (rate - 0.0427_f64).abs() < 1e-10,
+        "expected ~0.0427, got {rate}"
+    );
+    assert_eq!(
+        state.etf_risk_free_rate_source,
+        Some(EtfRiskFreeRateSource::FredDgs3Mo)
+    );
+}
+
+#[tokio::test]
+async fn preflight_skips_dgs3mo_for_historical_etf_pack() {
+    use scorpio_core::state::TradingState;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
+
+    let fred = with_fake_fred_client(|series| {
+        panic!("historical ETF run must not call latest FRED, but got series={series}")
+    });
+    let yfinance = with_fake_yfinance_client(|symbol| {
+        panic!("historical ETF run must not call latest ^IRX, but got symbol={symbol}")
+    });
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-01-01".to_owned());
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        &fred,
+        &yfinance,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    assert!(state.etf_risk_free_rate.is_none());
+    assert!(state.etf_risk_free_rate_source.is_none());
+}
+
+#[tokio::test]
+async fn preflight_skips_dgs3mo_for_non_etf_pack() {
+    use scorpio_core::state::TradingState;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
+
+    let fred = with_fake_fred_client(|series| {
+        panic!("non-ETF pack must not call FRED, but got series={series}")
+    });
+    let yfinance = with_fake_yfinance_client(|symbol| {
+        panic!("non-ETF pack must not call ^IRX, but got symbol={symbol}")
+    });
+
+    let mut state = TradingState::new("AAPL".to_owned(), "2026-05-27".to_owned());
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::Baseline,
+        &fred,
+        &yfinance,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    assert!(state.etf_risk_free_rate.is_none());
+    assert!(state.etf_risk_free_rate_source.is_none());
+}
+
+#[tokio::test]
+async fn preflight_falls_back_to_yfinance_irx_when_fred_returns_empty() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
+
+    let fred = with_fake_fred_client(|_| Ok(None));
+    let yfinance = with_fake_yfinance_client(|symbol| match symbol {
+        "^IRX" => Ok(Some(4.33)),
+        _ => Ok(None),
+    });
+
+    let mut state = TradingState::new(
+        "SPY".to_owned(),
+        chrono::Utc::now().date_naive().to_string(),
+    );
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        &fred,
+        &yfinance,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    let rate = state
+        .etf_risk_free_rate
+        .expect("etf_risk_free_rate must be set");
+    assert!(
+        (rate - 0.0433_f64).abs() < 1e-10,
+        "expected ~0.0433, got {rate}"
+    );
+    assert_eq!(
+        state.etf_risk_free_rate_source,
+        Some(EtfRiskFreeRateSource::YFinanceIrx)
+    );
+}
+
+#[tokio::test]
+async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
+    use scorpio_core::state::TradingState;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
+
+    let fred = with_fake_fred_client(|_| Ok(None));
+    let yfinance = with_fake_yfinance_client(|_| Ok(None));
+
+    let mut state = TradingState::new(
+        "SPY".to_owned(),
+        chrono::Utc::now().date_naive().to_string(),
+    );
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        &fred,
+        &yfinance,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    assert!(state.etf_risk_free_rate.is_none());
+    assert!(state.etf_risk_free_rate_source.is_none());
+}
