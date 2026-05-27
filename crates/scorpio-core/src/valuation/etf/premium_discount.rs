@@ -211,7 +211,7 @@ pub fn compute_gex_summary(
         as_of,
         near_term_expiration: &snapshot.near_term_expiration,
         near_term_strikes: &snapshot.near_term_strikes,
-        expirations: &[],
+        expirations: &snapshot.all_expirations,
         atm_iv_fallback: snapshot.atm_iv,
     });
 
@@ -252,6 +252,23 @@ pub fn compute_gex_summary(
         0.0
     };
 
+    let broad = agg.broad.as_ref().map(|b| crate::state::BroadGex {
+        net_gex_usd_per_1pct_move: b.net_gex_usd_per_1pct_move,
+        gross_gex_usd_per_1pct_move: b.gross_gex_usd_per_1pct_move,
+        expirations_used: b.expirations_used,
+        expirations_total_considered: b.expirations_total_considered,
+    });
+
+    let vex_summary = Some(crate::state::VexSummary {
+        net_vex_usd_per_volpt: near.net_vex_usd_per_volpt,
+        gross_vex_usd_per_volpt: near.gross_vex_usd_per_volpt,
+    });
+
+    let cex_summary = Some(crate::state::CexSummary {
+        net_cex_usd_per_day: near.net_cex_usd_per_day,
+        gross_cex_usd_per_day: near.gross_cex_usd_per_day,
+    });
+
     Some(GexSummary {
         net_gex_usd_per_1pct_move: near.net_gex_usd_per_1pct_move,
         gross_gex_usd_per_1pct_move: near.gross_gex_usd_per_1pct_move,
@@ -259,9 +276,9 @@ pub fn compute_gex_summary(
         max_pain_strike: snapshot.max_pain_strike,
         near_term_expiration: near.expiration,
         strikes: walls,
-        broad: None,
-        vex_summary: None,
-        cex_summary: None,
+        broad,
+        vex_summary,
+        cex_summary,
     })
 }
 
@@ -514,5 +531,48 @@ mod tests {
             result.scenario,
             ScenarioValuation::NotAssessed { ref reason } if reason == "etf_valuator_wrong_shape"
         ));
+    }
+
+    use crate::data::traits::options::ExpirationStrikes;
+
+    #[test]
+    fn compute_gex_summary_emits_broad_when_all_expirations_populated() {
+        let mut snap = sample_options_snapshot();
+        snap.all_expirations = vec![
+            ExpirationStrikes {
+                expiration: "2026-07-31".to_owned(),
+                strikes: snap.near_term_strikes.clone(),
+            },
+            ExpirationStrikes {
+                expiration: "2026-08-29".to_owned(),
+                strikes: snap.near_term_strikes.clone(),
+            },
+        ];
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary");
+        let broad = summary.broad.as_ref().expect("broad populated");
+        assert_eq!(broad.expirations_used, 3);
+        assert_eq!(broad.expirations_total_considered, 3);
+    }
+
+    #[test]
+    fn compute_gex_summary_emits_vex_and_cex_summaries() {
+        let snap = sample_options_snapshot();
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary");
+        let v = summary.vex_summary.as_ref().expect("vex");
+        let c = summary.cex_summary.as_ref().expect("cex");
+        assert!(v.gross_vex_usd_per_volpt >= v.net_vex_usd_per_volpt.abs());
+        assert!(c.gross_cex_usd_per_day >= c.net_cex_usd_per_day.abs());
     }
 }
