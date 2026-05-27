@@ -10,8 +10,9 @@ pub mod rate_clients;
 pub mod runtime_policy;
 
 pub use prompt_render::{
-    PromptRenderOutput, PromptRenderScenario, canonical_fixture_identity,
-    render_baseline_prompt_for_role, render_prompt_output_for_role,
+    LeverageWarningProbe, PromptRenderOutput, PromptRenderScenario, canonical_fixture_identity,
+    render_baseline_prompt_for_role, render_levered_etf_risk_prompts_for_gate,
+    render_prompt_output_for_role,
 };
 pub use rate_clients::{
     FakeFredClient, FakeYFinanceClient, with_fake_fred_client, with_fake_yfinance_client,

@@ -14,10 +14,11 @@ use crate::{
     },
     data::traits::options::{IvTermPoint, OptionsOutcome, OptionsSnapshot},
     state::{
-        DataCoverageReport, DebateMessage, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, MarketVolatilityData, NewsData, ProvenanceSummary, RiskLevel, RiskReport,
-        SentimentData, TechnicalData, TechnicalOptionsContext, TradeAction, TradeProposal,
-        TradingState, VixRegime, VixTrend,
+        AssetShape, DataCoverageReport, DebateMessage, DerivedValuation, EtfDataAvailability,
+        EtfValuation, EvidenceKind, EvidenceRecord, EvidenceSource, FundamentalData,
+        MarketVolatilityData, NewsData, PremiumBand, PremiumSnapshot, ProvenanceSummary, RiskLevel,
+        RiskReport, ScenarioValuation, SentimentData, TechnicalData, TechnicalOptionsContext,
+        TradeAction, TradeProposal, TradingState, VixRegime, VixTrend,
     },
     workflow::Role,
 };
@@ -538,5 +539,86 @@ fn sample_risk_report(level: RiskLevel, assessment: &str, flags_violation: bool)
         assessment: assessment.to_owned(),
         recommended_adjustments: vec!["tighten monitoring around support".to_owned()],
         flags_violation,
+    }
+}
+
+/// Rendered system-prompt strings for the slots relevant to the leverage-warning gate.
+///
+/// Returned by [`render_levered_etf_risk_prompts_for_gate`] so the integration
+/// test in `prompt_bundle_regression_gate.rs` can assert marker presence /
+/// absence without needing direct access to `pub(crate)` rendering helpers.
+pub struct LeverageWarningProbe {
+    /// ConservativeRisk prompt — leverage warning **must** be present.
+    pub conservative: String,
+    /// NeutralRisk prompt — leverage warning **must** be present.
+    pub neutral: String,
+    /// Auditor prompt — leverage warning **must** be present.
+    pub auditor: String,
+    /// AggressiveRisk prompt — leverage warning **must NOT** be present.
+    pub aggressive: String,
+    /// Trader raw bundle slot — leverage warning **must NOT** be present.
+    pub trader: String,
+    /// FundManager raw bundle slot — leverage warning **must NOT** be present.
+    pub fund_manager: String,
+}
+
+/// Build a 3× leveraged ETF state with the ETF baseline policy, then render
+/// the six prompt slots needed by the leverage-warning gate regression test.
+///
+/// This is the only integration-test-visible path to `render_risk_system_prompt`
+/// and `build_auditor_system_prompt`, which remain `pub(crate)`.
+#[must_use]
+pub fn render_levered_etf_risk_prompts_for_gate() -> LeverageWarningProbe {
+    use crate::analysis_packs::{PackId, resolve_pack};
+
+    let manifest = resolve_pack(PackId::EtfBaseline);
+    let policy = super::runtime_policy::runtime_policy_from_manifest(&manifest);
+
+    let mut state = TradingState::new("TQQQ".to_owned(), "2026-05-27".to_owned());
+    super::runtime_policy::with_runtime_policy(&mut state, policy);
+
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(50.0),
+                market_price: 50.0,
+                bid: None,
+                ask: None,
+                premium_pct: None,
+                category_band: PremiumBand::Unknown,
+                bid_ask_spread_pct: None,
+                as_of: Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: None,
+            leverage_factor: Some(3.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let policy_ref = state
+        .analysis_runtime_policy
+        .as_ref()
+        .expect("runtime policy hydrated above");
+    let bundle = &policy_ref.prompt_bundle;
+
+    let conservative =
+        render_risk_system_prompt(policy_ref, &state, |b| b.conservative_risk.as_ref(), true);
+    let neutral = render_risk_system_prompt(policy_ref, &state, |b| b.neutral_risk.as_ref(), true);
+    let auditor = build_auditor_system_prompt(&state)
+        .expect("auditor prompt must render for ETF state with runtime policy");
+    let aggressive =
+        render_risk_system_prompt(policy_ref, &state, |b| b.aggressive_risk.as_ref(), false);
+
+    LeverageWarningProbe {
+        conservative,
+        neutral,
+        auditor,
+        aggressive,
+        trader: bundle.trader.as_ref().to_owned(),
+        fund_manager: bundle.fund_manager.as_ref().to_owned(),
     }
 }
