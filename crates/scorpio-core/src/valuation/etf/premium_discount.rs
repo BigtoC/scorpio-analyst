@@ -66,10 +66,6 @@ impl Valuator for EtfPremiumDiscountValuator {
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
         let leverage_factor = inputs.etf_fund_info.and_then(|f| f.leverage_factor);
 
-        // Phase 2 dealer-positioning will compute once a live risk-free rate
-        // is sourced (Stage 2 / Task 20). No hardcoded rate fallback is allowed,
-        // so Stage 1 keeps the derived overlay absent.
-        let r: Option<f64> = None;
         let q = composition
             .as_ref()
             .and_then(|c| c.distribution_yield_ttm_pct)
@@ -77,8 +73,8 @@ impl Valuator for EtfPremiumDiscountValuator {
             .map(|y_pct| y_pct / 100.0)
             .unwrap_or(0.0);
         flags.options_chain_present = inputs.etf_options.is_some();
-        let options_gex = match (inputs.etf_options, r) {
-            (Some(snap), Some(rate)) => compute_gex_summary(snap, rate, q, inputs.as_of),
+        let options_gex = match (inputs.etf_options, inputs.etf_risk_free_rate) {
+            (Some(snap), Some(r)) => compute_gex_summary(snap, r, q, inputs.as_of),
             (Some(_), None) => {
                 tracing::warn!(
                     target: "scorpio_core::valuation::etf::gex",
@@ -434,6 +430,7 @@ mod tests {
             etf_ohlcv: None,
             etf_benchmark_ohlcv: None,
             etf_options: None,
+            etf_risk_free_rate: None,
             as_of: chrono::Utc::now().date_naive(),
         }
     }

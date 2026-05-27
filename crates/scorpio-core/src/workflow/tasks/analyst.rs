@@ -1080,6 +1080,10 @@ pub(crate) fn etf_options_from_state(
     }
 }
 
+pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) -> Option<f64> {
+    state.etf_risk_free_rate
+}
+
 fn derive_runtime_valuation(
     state: &TradingState,
     valuation_inputs: &ValuationInputs,
@@ -1143,6 +1147,7 @@ fn derive_runtime_valuation(
             etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
             etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
             etf_options: etf_options_from_state(state),
+            etf_risk_free_rate: etf_risk_free_rate_from_state(state),
             as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
                 .unwrap_or_else(|_| chrono::Utc::now().date_naive()),
         },
@@ -1824,5 +1829,19 @@ mod tests {
 
         let extracted = super::etf_options_from_state(&state);
         assert!(extracted.is_none());
+    }
+
+    #[test]
+    fn etf_valuation_inputs_thread_etf_risk_free_rate_from_state() {
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+
+        state.etf_risk_free_rate = Some(0.0427);
+        let inputs_rate = super::etf_risk_free_rate_from_state(&state);
+        assert_eq!(inputs_rate, Some(0.0427));
+
+        state.etf_risk_free_rate = None;
+        let inputs_rate_none = super::etf_risk_free_rate_from_state(&state);
+        assert!(inputs_rate_none.is_none());
     }
 }

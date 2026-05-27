@@ -103,6 +103,13 @@ pub struct ValuationInputs<'a> {
     /// is available or active pack is not `EtfBaseline`.
     pub etf_options: Option<&'a crate::data::traits::options::OptionsSnapshot>,
 
+    /// Phase 2 (Stage 2) — FRED `DGS3MO` snapshot threaded from preflight when
+    /// the active pack is `EtfBaseline`, or yfinance `^IRX` when FRED is
+    /// unavailable. `None` when pack != EtfBaseline OR when both live rate
+    /// sources failed. The ETF valuator must degrade dealer-positioning to
+    /// `None`; no hardcoded risk-free-rate fallback is allowed.
+    pub etf_risk_free_rate: Option<f64>,
+
     /// Phase 2 — Reference date for time-to-expiration math, sourced from
     /// `state.target_date`. Defaulted to `chrono::Utc::now().date_naive()` by
     /// the equity path which does not read it.
