@@ -1708,7 +1708,12 @@ Locate the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-co
         });
 
         let policy = state.analysis_runtime_policy.as_ref().unwrap();
-        let prompt = render_risk_system_prompt(policy, &state, |b| b.conservative_risk.as_ref());
+        let prompt = render_risk_system_prompt(
+            policy,
+            &state,
+            |b| b.conservative_risk.as_ref(),
+            true, // apply_leverage_warning — Conservative opts in
+        );
         assert!(
             prompt.contains("Daily-reset products"),
             "leveraged ETF prompt must carry the warning body: {prompt}"
@@ -1754,10 +1759,18 @@ Locate the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-co
         });
 
         let policy = state.analysis_runtime_policy.as_ref().unwrap();
-        let conservative = render_risk_system_prompt(policy, &state, |b| {
-            b.conservative_risk.as_ref()
-        });
-        let neutral = render_risk_system_prompt(policy, &state, |b| b.neutral_risk.as_ref());
+        let conservative = render_risk_system_prompt(
+            policy,
+            &state,
+            |b| b.conservative_risk.as_ref(),
+            true,
+        );
+        let neutral = render_risk_system_prompt(
+            policy,
+            &state,
+            |b| b.neutral_risk.as_ref(),
+            true,
+        );
         // "Daily-reset products" is exclusive to etf_leverage_warning.md.
         const WARNING_MARKER: &str = "Daily-reset products";
         assert!(
@@ -1786,13 +1799,14 @@ Expected: `render_risk_system_prompt_appends_leverage_warning_for_levered_etf` f
 
 - [ ] **Step 8.3: Read the ETF valuation off state and apply the helper**
 
-In `crates/scorpio-core/src/agents/risk/common.rs`, replace the existing `render_risk_system_prompt` function with:
+In `crates/scorpio-core/src/agents/risk/common.rs`, replace the existing `render_risk_system_prompt` function with the version below. **The function MUST take a caller-controlled `apply_leverage_warning: bool` flag** so Conservative and Neutral can inject the warning while Aggressive (and the Risk Moderator) opt out — Task 12's contract requires this asymmetry, and `bundle_slot` is a function pointer that cannot be discriminated at runtime.
 
 ```rust
 pub(crate) fn render_risk_system_prompt(
     policy: &crate::analysis_packs::RuntimePolicy,
     state: &TradingState,
     bundle_slot: fn(&PromptBundle) -> &str,
+    apply_leverage_warning: bool,
 ) -> String {
     let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
     let target_date = sanitize_date_for_prompt(&state.target_date);
@@ -1804,10 +1818,14 @@ pub(crate) fn render_risk_system_prompt(
         .replace("{past_memory_str}", "see untrusted user context")
         .replace("{analysis_emphasis}", &analysis_emphasis_for_prompt(state));
 
-    crate::analysis_packs::etf::append_leverage_warning_if_needed(
-        rendered,
-        etf_leverage_factor_from_state(state),
-    )
+    if apply_leverage_warning {
+        crate::analysis_packs::etf::append_leverage_warning_if_needed(
+            rendered,
+            etf_leverage_factor_from_state(state),
+        )
+    } else {
+        rendered
+    }
 }
 
 /// Extract the ETF leverage factor from `state.derived_valuation` when the
@@ -1815,20 +1833,27 @@ pub(crate) fn render_risk_system_prompt(
 /// scenario so non-ETF runs skip the warning entirely.
 fn etf_leverage_factor_from_state(state: &TradingState) -> Option<f64> {
     use crate::state::ScenarioValuation;
-    match state.derived_valuation.as_ref()?.scenario {
-        ScenarioValuation::Etf(ref etf) => etf.leverage_factor,
+    match state.derived_valuation().map(|d| &d.scenario)? {
+        ScenarioValuation::Etf(etf) => etf.leverage_factor,
         _ => None,
     }
 }
 ```
 
-Expose the helper from the `analysis_packs::etf` module because `baseline` is private:
+Thread the new flag through `RiskAgentCore::new` (or whichever constructor each risk agent uses) so each agent's construction site is the single source of truth for whether the warning applies:
+
+- `agents/risk/conservative.rs` passes `apply_leverage_warning: true`
+- `agents/risk/neutral.rs` passes `apply_leverage_warning: true`
+- `agents/risk/aggressive.rs` passes `apply_leverage_warning: false`
+- `agents/risk/moderator.rs` passes `apply_leverage_warning: false`
+
+Then expose the helper from the `analysis_packs::etf` module because `baseline` is private:
 
 ```bash
 grep -n 'pub mod baseline' crates/scorpio-core/src/analysis_packs/etf/mod.rs
 ```
 
-Add `pub(crate) use baseline::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/etf/mod.rs`, and call it via `crate::analysis_packs::etf::append_leverage_warning_if_needed(...)`.
+Add `pub(crate) use baseline::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/etf/mod.rs` and `pub(crate) use etf::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/mod.rs` (so `common.rs` can call `crate::analysis_packs::append_leverage_warning_if_needed(...)`). Test-only callers (e.g. the `testing::prompt_render` shims) must pass the same flag.
 
 - [ ] **Step 8.4: Run the tests to verify they pass**
 
@@ -2226,17 +2251,62 @@ fn etf_terminal_emits_partial_data_note_for_missing_walls() {
 
 #[test]
 fn etf_terminal_renders_degraded_rate_banner_when_rate_unavailable() {
-    use scorpio_core::state::TradingState;
+    use scorpio_core::state::{
+        AssetShape, DerivedValuation, EtfDataAvailability, EtfValuation, PremiumBand,
+        PremiumSnapshot, ScenarioValuation, TradingState,
+    };
 
     let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
     state.etf_risk_free_rate = None;
     state.etf_risk_free_rate_source = None;
+    // ETF scenario must be present for the degraded banner to fire — non-ETF
+    // runs have rate fields at default None and must not trigger the warning.
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: None,
+                market_price: 620.0,
+                bid: None,
+                ask: None,
+                premium_pct: None,
+                category_band: PremiumBand::Unknown,
+                bid_ask_spread_pct: None,
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: None,
+            category: None,
+            leverage_factor: None,
+            flags: EtfDataAvailability::default(),
+        }),
+    });
 
     let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
         rendered.contains("⚠ Risk-free rate unavailable")
             && rendered.contains("dealer positioning unavailable"),
         "degraded-rate banner missing: {rendered}"
+    );
+}
+
+#[test]
+fn non_etf_terminal_does_not_show_degraded_rate_banner() {
+    // Equity-only state. Both rate fields default to None — preflight only
+    // writes them on ETF baseline runs. The banner must stay silent so
+    // non-ETF reports aren't polluted with a warning about a rate that has
+    // no meaning for equity analyses.
+    use scorpio_core::state::TradingState;
+    let state = TradingState::new("AAPL".to_owned(), "2026-05-27".to_owned());
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(
+        !rendered.contains("Risk-free rate unavailable"),
+        "non-ETF report must not show rate-unavailable banner: {rendered}"
+    );
+    assert!(
+        !rendered.contains("dealer positioning unavailable"),
+        "non-ETF report must not advertise dealer-positioning state: {rendered}"
     );
 }
 
@@ -2286,7 +2356,7 @@ The banner tests rely on the Stage 2 rate-sourcing work landed in Tasks 18-20. S
 - [ ] **Step 11.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
-Expected: all five new tests fail (three for the dealer-positioning block, two for the rate-source banner; the unavailable case also fails for the same reason).
+Expected: all six new tests fail (three for the dealer-positioning block, two for the rate-source banner, one for the negative non-ETF gate; the unavailable case also fails for the same reason).
 
 - [ ] **Step 11.3: Implement `render_dealer_positioning_block`**
 
@@ -2443,6 +2513,15 @@ The rate-source data is populated in Stage 2 (Tasks 18-20). The validation gate 
 ```rust
 use std::fmt::Write as _;
 
+// Both None is the default state for every non-ETF run, so the degraded
+// warning must additionally observe an ETF-scenario marker to avoid
+// false-positive banners on equity reports (preflight only writes the
+// rate fields when `pack == EtfBaseline && today` — see Task 19).
+let is_etf_run = state
+    .derived_valuation()
+    .map(|d| matches!(d.scenario, scorpio_core::state::ScenarioValuation::Etf(_)))
+    .unwrap_or(false);
+
 match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
     (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::FredDgs3Mo)) => {
         let _ = writeln!(out, "  Risk-free rate    FRED DGS3MO ({:.2}%)", rate * 100.0);
@@ -2450,7 +2529,7 @@ match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
     (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::YFinanceIrx)) => {
         let _ = writeln!(out, "  Risk-free rate    yfinance ^IRX ({:.2}%)", rate * 100.0);
     }
-    (None, None) => {
+    (None, None) if is_etf_run => {
         let _ = writeln!(
             out,
             "  ⚠ Risk-free rate unavailable — dealer positioning unavailable"
@@ -2460,12 +2539,12 @@ match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
 }
 ```
 
-Match arms intentionally collapse mismatched `(Some, None)` / `(None, Some)` pairings to no-op; preflight always writes both fields or neither, so any other combination indicates state corruption and is not surfaced.
+Match arms intentionally collapse mismatched `(Some, None)` / `(None, Some)` pairings to no-op; preflight always writes both fields or neither, so any other combination indicates state corruption and is not surfaced. The `(None, None)` arm is gated on the ETF-scenario marker because equity runs default to `(None, None)` and must not surface a warning about a rate that is irrelevant to non-ETF analyses.
 
 - [ ] **Step 11.5: Run the reporter tests**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
-Expected: 5 new tests pass (3 dealer-positioning + 2 banner labels; the unavailable banner test also flips green once Step 11.4 lands).
+Expected: 6 new tests pass (3 dealer-positioning + 2 banner labels + 1 negative banner; the degraded banner test also flips green once Step 11.4 lands).
 
 - [ ] **Step 11.6: Run the full workspace test suite**
 
@@ -2565,14 +2644,19 @@ fn leverage_warning_appears_only_for_conservative_neutral_auditor_when_levered()
     const MARKER: &str = "Daily-reset products";
 
     let bundle = &state.analysis_runtime_policy.as_ref().unwrap().prompt_bundle;
-    // Slots that MUST carry the warning when the helper runs:
-    let conservative = scorpio_core::agents::risk::render_risk_system_prompt(
+    let policy = state.analysis_runtime_policy.as_ref().unwrap();
+    // Slots that MUST carry the warning — opt-in via apply_leverage_warning=true:
+    let conservative = scorpio_core::agents::risk::common::render_risk_system_prompt(
+        policy,
         &state,
         |b: &scorpio_core::prompts::PromptBundle| b.conservative_risk.as_ref(),
+        true,
     );
-    let neutral = scorpio_core::agents::risk::render_risk_system_prompt(
+    let neutral = scorpio_core::agents::risk::common::render_risk_system_prompt(
+        policy,
         &state,
         |b: &scorpio_core::prompts::PromptBundle| b.neutral_risk.as_ref(),
+        true,
     );
     let auditor = scorpio_core::agents::auditor::build_system_prompt(&state)
         .expect("auditor prompt");
@@ -2580,10 +2664,12 @@ fn leverage_warning_appears_only_for_conservative_neutral_auditor_when_levered()
     assert!(neutral.contains(MARKER), "neutral must carry warning");
     assert!(auditor.contains(MARKER), "auditor must carry warning");
 
-    // Slots that MUST NOT carry the warning:
-    let aggressive = scorpio_core::agents::risk::render_risk_system_prompt(
+    // Slots that MUST NOT carry the warning — opt-out via apply_leverage_warning=false:
+    let aggressive = scorpio_core::agents::risk::common::render_risk_system_prompt(
+        policy,
         &state,
         |b: &scorpio_core::prompts::PromptBundle| b.aggressive_risk.as_ref(),
+        false,
     );
     let trader = bundle.trader.as_ref();
     let fund_manager = bundle.fund_manager.as_ref();
@@ -2593,6 +2679,8 @@ fn leverage_warning_appears_only_for_conservative_neutral_auditor_when_levered()
     assert!(!fund_manager.contains(MARKER), "fund_manager must NOT carry warning");
 }
 ```
+
+In practice the test is most naturally written via a testing-facade helper (e.g. `scorpio_core::testing::render_levered_etf_risk_prompts_for_gate()` returning a `LeverageWarningProbe` struct) so the integration test doesn't need direct access to `pub(crate)` items. Use that pattern if the underlying functions aren't exposed under `test-helpers`.
 
 If `scorpio_core::agents::auditor::build_system_prompt` is not exported under `test-helpers`, expose the existing private function with `#[cfg(any(test, feature = "test-helpers"))] pub use prompt::build_system_prompt;` in `crates/scorpio-core/src/agents/auditor/mod.rs`.
 
