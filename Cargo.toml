@@ -70,6 +70,7 @@ finnhub = "0.2.2"
 yfinance-rs = "0.7.2"
 kand = "0.2.2"
 num-traits = "0.2"
+statrs = "0.18"
 quick-xml = "0.36"
 
 # Graph orchestration
