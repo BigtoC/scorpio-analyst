@@ -8,6 +8,15 @@
 
 **Tech Stack:** Rust 2024 (rustc 1.93+, edition 2024); `tokio` async runtime; `serde` + `schemars` for state/snapshot serialization; `chrono` for date math; existing `FredClient`, `YFinanceClient`, `SecEdgarClient` providers; `graph-flow` for task orchestration; `rig-core` for agents; `tracing` for structured warning logs; `nextest` for test execution. Reference: [`docs/superpowers/specs/2026-05-22-etf-baseline-phase2-design.md`](../specs/2026-05-22-etf-baseline-phase2-design.md).
 
+**Post-review execution constraints (authoritative):**
+
+- **Stage 1 stops at near-term GEX + gamma walls.** Implement `StrikeGex` and `GexSummary.strikes` in Stage 1. Defer `BroadGex`, `VexSummary`, `CexSummary`, `ExpirationStrikes`, broad aggregation, and stored VEX/CEX summaries until Stage 3. If an embedded Stage 1 snippet below still shows those Stage 3 surfaces, move that code to Tasks 13-16 before implementation.
+- **State-derived valuation inputs are assembled at the state-aware seam.** Keep `fetch_valuation_inputs` provider-only unless the plan explicitly changes its signature and all call sites. Populate `etf_options`, `etf_risk_free_rate`, and `as_of` where `crate::valuation::ValuationInputs` is constructed with access to `TradingState`.
+- **Stage 2 uses one generic dealer-positioning absence branch.** Stage 2 does not distinguish no options snapshot from an unusable snapshot unless an explicit derivation status is added first. Prompt/reporter copy should say no usable dealer-positioning overlay was available. A split reason can be added in Stage 3 only with a real status field.
+- **Prompt contracts must match available context.** The ETF technical prompt may discuss raw `options_context` / `options_summary` snapshot evidence. Do not ask it to cite `EtfValuation.options_gex` unless that derived payload is explicitly threaded into the prompt context. Valuation-aware downstream prompts may cite `options_gex` only after the context payload exists.
+- **The Stage 2 gate must evaluate the full reader experience.** Validate terminal output and generated technical/risk/auditor prose over positive and negative-control ETFs. Stage 3 additions (broad GEX, VEX/CEX, FRED risk-free rate) require separate evidence or separate sub-gate approval; Stage 2 success does not automatically justify all of them.
+- **FRED `DGS3MO` is date-sensitive.** Stage 3 may fetch latest `DGS3MO` only for live/today ETF runs. Historical runs must either skip the fetch and use the documented fallback path or fetch an observation as of `state.target_date` and persist the observation date.
+
 ---
 
 ## File Structure
@@ -16,10 +25,10 @@
 
 - **Create:** `crates/scorpio-core/src/indicators/gex.rs` — pure BSM math + chain aggregation
 - **Modify:** `crates/scorpio-core/src/indicators/mod.rs` — declare new module, re-export public surface
-- **Modify:** `crates/scorpio-core/src/state/derived.rs` — additive `StrikeGex`, `BroadGex`, `VexSummary`, `CexSummary` types and four new `GexSummary` fields (only `strikes` is populated in Stage 1; the rest stay `None` until Stage 3)
+- **Modify:** `crates/scorpio-core/src/state/derived.rs` — additive `StrikeGex` type and `GexSummary.strikes` field for Stage 1; defer `BroadGex`, `VexSummary`, `CexSummary`, and related fields until Stage 3
 - **Modify:** `crates/scorpio-core/src/valuation/mod.rs` — `ValuationInputs` gains `etf_options`, `etf_risk_free_rate`, `as_of`
 - **Modify:** `crates/scorpio-core/src/valuation/etf/premium_discount.rs` — add `compute_gex_summary` helper, populate `EtfValuation.options_gex`, derive `q` from `EtfComposition.distribution_yield_ttm_pct`
-- **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — ETF branch reads `TechnicalOptionsContext::Available { outcome: Snapshot(_) }` into `ValuationInputs.etf_options`
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — state-aware valuation assembly reads `TechnicalOptionsContext::Available { outcome: Snapshot(_) }` into `ValuationInputs.etf_options`
 - **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — additive `GexSummary` field serde compat
 
 ### Stage 2 — Surfaced validation slice
@@ -27,7 +36,7 @@
 - **Modify:** `crates/scorpio-core/src/analysis_packs/etf/baseline.rs` — update `append_leverage_warning_if_needed` to use the `---` divider and `1e-6` tolerance per spec; drop `#[allow(dead_code)]`
 - **Modify:** `crates/scorpio-core/src/agents/risk/common.rs::render_risk_system_prompt` — inject leverage warning into Conservative + Neutral slots
 - **Modify:** `crates/scorpio-core/src/agents/auditor/prompt.rs::build_system_prompt` — inject leverage warning into the auditor slot
-- **Modify:** `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md` — replace Phase 1 placeholder with the real dealer-positioning prompt contract
+- **Modify:** `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md` — replace Phase 1 placeholder with raw-options guidance that does not cite `EtfValuation.options_gex` unless a derived payload is threaded into context
 - **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add `render_dealer_positioning_block` (near-term GEX core + summary line + gamma walls + partial-data note)
 - **Modify:** `crates/scorpio-reporters/tests/terminal.rs` — assertions for the new block
 - **Modify:** `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs` — golden-byte coverage for the rewritten focus prompt + leverage-warning suffix
@@ -38,13 +47,13 @@
 
 - **Modify:** `crates/scorpio-core/src/data/traits/options.rs` — add `OptionsSnapshot.all_expirations: Vec<ExpirationStrikes>` with `#[serde(skip, default)]` and the `ExpirationStrikes` type
 - **Modify:** `crates/scorpio-core/src/data/yfinance/options.rs` — populate `all_expirations` from the existing per-expiration iteration
-- **Modify:** `crates/scorpio-core/src/indicators/gex.rs` — extend aggregator with broad GEX aggregation and Vanna/Charm helpers
+- **Modify:** `crates/scorpio-core/src/indicators/gex.rs` — extend aggregator with broad GEX aggregation and VEX/CEX surfacing
 - **Modify:** `crates/scorpio-core/src/valuation/etf/premium_discount.rs::compute_gex_summary` — emit `broad`, `vex_summary`, `cex_summary`
 - **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — strip `all_expirations` before `serialize_state_to_context`
 - **Modify:** `crates/scorpio-core/src/state/trading_state.rs` — add `etf_risk_free_rate: Option<f64>`, `etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>`, `EtfRiskFreeRateSource` enum; thread through `TradingStateWire`
 - **Modify:** `crates/scorpio-core/src/state/mod.rs` — re-export new types
 - **Modify:** `crates/scorpio-core/src/workflow/builder.rs` — thread `FredClient` into `PreflightTask` constructor
-- **Modify:** `crates/scorpio-core/src/workflow/tasks/preflight.rs` — opportunistic `DGS3MO` fetch when resolved pack is `EtfBaseline`
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/preflight.rs` — opportunistic `DGS3MO` fetch when resolved pack is `EtfBaseline` and `target_date` is today
 - **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add secondary sensitivities block, `All expirations` sub-block, risk-free-rate fallback banner
 - **Create:** `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`
 - **Create:** `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
@@ -327,6 +336,8 @@ ETF Phase 2 dealer-positioning aggregation."
 
 **Files:**
 - Modify: `crates/scorpio-core/src/indicators/gex.rs`
+
+> **Post-review override:** Task 2 is Stage 1 and must implement near-term GEX only. If the snippets below include `ExpirationStrikes`, broad aggregation, VEX, or CEX fields, defer those parts to Stage 3 Tasks 13-16 before coding.
 
 - [ ] **Step 2.1: Write failing aggregator tests**
 
@@ -788,6 +799,8 @@ ExpirationStrikes."
 
 **Files:**
 - Modify: `crates/scorpio-core/src/state/derived.rs`
+
+> **Post-review override:** Task 3 should add only `StrikeGex` and `GexSummary.strikes` in Stage 1. Move `BroadGex`, `VexSummary`, `CexSummary`, and their `GexSummary` fields to Stage 3 before implementation.
 
 - [ ] **Step 3.1: Write failing serde round-trip tests**
 
@@ -1291,12 +1304,10 @@ Replace with:
             .filter(|y| *y > 0.0)
             .map(|y_pct| y_pct / 100.0)
             .unwrap_or(0.0);
+        flags.options_chain_present = inputs.etf_options.is_some();
         let options_gex = inputs
             .etf_options
             .and_then(|snap| compute_gex_summary(snap, r, q, inputs.as_of));
-        if options_gex.is_some() {
-            flags.options_chain_present = true;
-        }
 
         DerivedValuation {
             asset_shape: shape.clone(),
@@ -1493,7 +1504,7 @@ pub(crate) fn etf_options_from_state(
 }
 ```
 
-Then locate `fetch_valuation_inputs` (or whichever method constructs `ValuationInputs` on the ETF branch — search with `grep -n 'ValuationInputs {' crates/scorpio-core/src/workflow/tasks/analyst.rs`) and update the ETF branch to populate the three new fields:
+Then locate the state-aware `crate::valuation::ValuationInputs` construction inside `derive_runtime_valuation` (search with `grep -n 'crate::valuation::ValuationInputs {' crates/scorpio-core/src/workflow/tasks/analyst.rs`) and populate the three new fields there. Do **not** thread `TradingState` into `fetch_valuation_inputs`; that function stays provider-fetch-only.
 
 ```rust
 let as_of = chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
@@ -1502,7 +1513,7 @@ let as_of = chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
 let valuation_inputs = ValuationInputs {
     // ... existing fields unchanged ...
     etf_options: etf_options_from_state(state),
-    etf_risk_free_rate: state.etf_risk_free_rate, // Stage 3 will populate this
+    etf_risk_free_rate: None, // Stage 3 Task 20 will read from state
     as_of,
 };
 ```
@@ -2168,22 +2179,22 @@ In addition to standard technicals:
   costly; >1.0% suggests active management or sampling mismatch.
 
 - **Dealer positioning (secondary baseline overlay)** — when `options_gex` is
-  present, treat it as a **secondary overlay** on top of premium/discount,
-  composition, and tracking evidence. Open the discussion with one
-  plain-English takeaway sentence aimed at a mainstream ETF reader, then back
-  it up with the structured fields below. Never let dealer positioning
-  displace premium/discount, composition, or tracking as the primary anchors.
+  available in the prompt context, treat it as a **secondary overlay** on top
+  of premium/discount, composition, and tracking evidence. Do not cite
+  `options_gex` fields from the technical prompt unless the implementation has
+  explicitly threaded that derived payload into the prompt context. When only
+  raw `options_context` / `options_summary` is available, discuss only the raw
+  snapshot signals present there.
 
-  Cite the following distinct signals — each is its own bullet, and each must
-  be named even when only some are populated:
+  When derived `options_gex` is available, cite present, decision-relevant
+  signals. Do not force named absence callouts for every unavailable sub-signal:
 
   - **Near-term gamma exposure** — `options_gex.net_gex_usd_per_1pct_move`.
     Positive net means dealer hedging tends to dampen near-term moves;
     negative net means hedging tends to amplify them.
   - **Broad gamma exposure** — `options_gex.broad.net_gex_usd_per_1pct_move`
     when present. Explicitly label this as an all-expirations
-    single-rate approximation. If `options_gex.broad` is `None`, say broad
-    dealer positioning is unavailable while near-term positioning is present.
+    single-rate approximation when present.
     If `options_gex.broad.expirations_used <
     options_gex.broad.expirations_total_considered`, label the broad line as
     `Partial expirations` and mention both counts.
@@ -2195,20 +2206,17 @@ In addition to standard technicals:
     `options_gex.cex_summary.net_cex_usd_per_day` when present, framed as a
     **conditional sensitivity to one calendar day of decay**.
   - **Gamma walls** — `options_gex.strikes` (top dealer concentrations by
-    `|net_gex|`). When `options_gex.strikes` is empty, say gamma walls are
-    unavailable. When both `broad` and `strikes` are unavailable, combine into
-    a single sentence stating both are unavailable.
+    `|net_gex|`) when present.
   - **Supporting evidence** — `options_gex.call_put_oi_ratio` and
     `options_gex.max_pain_strike` are **supporting**, not primary, evidence.
     Cite them only after the near-term GEX line.
 
-- **Absence handling** — if `options_gex` is absent because **no options
-  snapshot was available**, say dealer-positioning signals are unavailable
-  because no options chain snapshot was available. If `options_gex` is absent
-  because the **fetched snapshot did not produce a usable near-term
-  aggregate**, say dealer-positioning signals are unavailable because the
-  fetched options snapshot did not contain a usable near-term aggregate.
-  These two branches are distinct; do not collapse them.
+- **Absence handling** — Stage 2 uses a single generic branch: if no usable
+  derived dealer-positioning overlay is available in the prompt context, say
+  dealer-positioning signals are unavailable for this run and keep the rest of
+  the ETF analysis anchored on premium/discount, composition, and tracking.
+  Split no-snapshot vs unusable-snapshot copy only after adding an explicit
+  derivation-status field.
 ```
 
 - [ ] **Step 10.2: Run prompt-bundle structure tests**
@@ -2546,17 +2554,12 @@ if let Some(gex) = etf.options_gex.as_ref() {
     render_dealer_positioning_block(out, gex, policy);
 } else {
     // Surface the absence in DATA AVAILABILITY when an options chain was
-    // expected but not produced. The detection branch (no snapshot vs unusable
-    // snapshot) lives in `flags.options_chain_present` from the valuator path.
+    // expected but no usable dealer-positioning overlay was produced.
     if !etf.flags.options_chain_present {
-        // Distinct copy when the snapshot was simply never produced vs when it
-        // was produced but unusable. Stage 2 cannot distinguish these two
-        // without more state-side wiring; emit the no-snapshot copy by default.
-        // Stage 3 Task 22 may refine this if needed.
         let _ = std::fmt::Write::write_fmt(
             out,
             format_args!(
-                "  ⚠ Dealer positioning skipped — no options chain snapshot available\n"
+                "  ⚠ Dealer positioning skipped — no usable options-derived overlay available\n"
             ),
         );
     }
@@ -2606,11 +2609,11 @@ Read the file:
 head -120 crates/scorpio-core/tests/prompt_bundle_regression_gate.rs
 ```
 
-The gate compares rendered prompt bytes against either inline expected strings or files under `crates/scorpio-core/tests/fixtures/prompt_bundles/` (look for the actual layout). Identify the technical-analyst slot for the ETF baseline pack — its bytes changed in Task 10. Identify the three rendered slots that now receive the leverage warning suffix when a leveraged ETF state is provided (Conservative, Neutral, and Auditor).
+The gate compares rendered prompt bytes against either inline expected strings or files under `crates/scorpio-core/tests/fixtures/prompt_bundles/` (look for the actual layout). The current gate is baseline-oriented, so choose one ETF strategy before updating bytes: either make the fixture path pack-aware, or add a separate ETF fixture namespace/test path. Identify the technical-analyst slot for the ETF baseline pack — its bytes changed in Task 10. Identify the three rendered slots that now receive the leverage warning suffix when a leveraged ETF state is provided (Conservative, Neutral, and Auditor).
 
 - [ ] **Step 12.2: Refresh the technical-analyst goldens**
 
-For the ETF baseline pack, regenerate the technical-analyst slot's expected bytes. If the gate stores them inline in the test file, copy the new rendered output from a debug print:
+For the ETF baseline pack, regenerate the technical-analyst slot's expected bytes under the chosen ETF fixture strategy. If the gate stores them inline in the test file, copy the new rendered output from a debug print:
 
 ```rust
 #[test]
@@ -2713,8 +2716,8 @@ git add crates/scorpio-core/tests/prompt_bundle_regression_gate.rs crates/scorpi
 git commit -m "test(prompts): regression-gate coverage for Phase 2 Stage 2 prompt deltas
 
 Refreshes ETF technical-analyst goldens after etf_tracking_options_focus.md
-rewrite. Adds positive+negative leverage-warning coverage across the four
-risk slots and the auditor slot."
+rewrite. Adds positive+negative leverage-warning coverage across Conservative,
+Neutral, Aggressive-negative, Trader/FundManager-negative, and Auditor slots."
 ```
 
 ---
@@ -2723,16 +2726,19 @@ risk slots and the auditor slot."
 
 **Do not proceed past this point without an explicit proceed/stop decision from the user.**
 
-After Stage 2 ships, run the surfaced overlay against a representative ETF validation sample (e.g. SPY, QQQ, TQQQ, IWM, EFA). For each sample, capture:
+After Stage 2 ships, run the surfaced overlay against a validation sample that includes liquid positive cases and negative-control ETFs where dealer-positioning is expected to add little value (e.g. SPY, QQQ, TQQQ, IWM, EFA plus at least two lower-options-value mainstream ETFs). For each sample, capture terminal output and full generated technical/risk/auditor prose:
 
 1. **Distinctness** — does the DEALER POSITIONING block deliver a non-redundant risk/liquidity takeaway, or does it merely echo what premium/discount + composition + tracking already say?
 2. **Secondary-ness** — does the block stay clearly secondary to the existing ETF anchors, or does it dominate the read?
 3. **Mainstream-reader fit** — does the plain-English summary line work without prior options literacy?
+4. **Prompt-integrated fit** — do technical, risk, and auditor outputs keep dealer-positioning secondary in the final prose?
+5. **No-harm on negative controls** — when the overlay is absent or low-value, does the report stay concise instead of surfacing options bookkeeping?
 
 **Decision criteria (recorded by the writing-plans handoff, per the design):**
 
-- **Proceed to Stage 3** — Stage 2 overlay adds a distinct, non-redundant signal in ≥ 50% of the sample while remaining clearly secondary; the summary line reads cleanly for a mainstream audience.
+- **Proceed to Stage 3** — Stage 2 overlay adds a distinct, non-redundant signal in a strong majority of positive/mainstream cases; remains clearly secondary in terminal and generated prose; reads cleanly for a mainstream audience; and causes no clutter/regression in negative-control cases.
 - **Stop after Stage 2** — Stage 2 overlay is usually absent, redundant, or makes the report feel options-specialist. Close the Phase 2 plan here; document the stop reason in the implementation notes and revisit dealer positioning only if downstream evidence motivates it.
+- **Partial Stage 3** — if only one contingent addition is justified, schedule only that addition. Broad GEX, VEX/CEX, and FRED risk-free-rate sourcing require separate evidence; Stage 2 success is not blanket approval for all three.
 
 The decision owner is the user. **The executor must request explicit go/no-go before scheduling any Stage 3 task.**
 
@@ -3585,6 +3591,28 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
 }
 
 #[tokio::test]
+async fn preflight_skips_dgs3mo_for_historical_etf_pack() {
+    use scorpio_core::state::TradingState;
+    use scorpio_core::testing::with_fake_fred_client;
+
+    let fred = with_fake_fred_client(|series| {
+        panic!("historical ETF run must not call latest FRED, but got series={series}")
+    });
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-01-01".to_owned());
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        &fred,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    assert!(state.etf_risk_free_rate.is_none());
+    assert!(state.etf_risk_free_rate_source.is_none());
+}
+
+#[tokio::test]
 async fn preflight_skips_dgs3mo_for_non_etf_pack() {
     use scorpio_core::state::TradingState;
     use scorpio_core::testing::with_fake_fred_client;
@@ -3656,10 +3684,11 @@ In `crates/scorpio-core/src/workflow/tasks/preflight.rs`:
 
 1. Add `fred: Arc<crate::data::FredClient>` (or `Option<Arc<...>>` if the field must support test cases without FRED) to the `PreflightTask` struct. Provide a constructor `with_runtime_policy_and_fred(...)` that takes both the runtime policy and the FRED client.
 
-2. In the `Task::run` body, after the resolved-pack classification but before `serialize_state_to_context`, add the opportunistic DGS3MO fetch (copying the spec sketch verbatim except for the actual `state` mutation site):
+2. In the `Task::run` body, after the resolved-pack classification but before `serialize_state_to_context`, add the opportunistic DGS3MO fetch for live/today ETF runs only (copying the spec sketch verbatim except for the actual `state` mutation site):
 
 ```rust
-if matches!(resolved_pack, PackId::EtfBaseline) {
+let is_today = state.target_date == chrono::Utc::now().date_naive().to_string();
+if matches!(resolved_pack, PackId::EtfBaseline) && is_today {
     match self.fred.get_series_latest("DGS3MO").await {
         Ok(Some(pct)) => {
             tracing::info!(
@@ -3696,6 +3725,8 @@ if matches!(resolved_pack, PackId::EtfBaseline) {
 }
 ```
 
+For historical ETF runs, skip the latest-rate fetch so rerunning the same symbol/date remains reproducible. If a later task needs historical risk-free rates, add an as-of-date FRED query and persist the observation date with the source metadata.
+
 3. Add a `#[cfg(any(test, feature = "test-helpers"))]` test-shim function `run_for_test(state: &mut TradingState, pack_id: PackId, fred: &FredClient)` that exercises the DGS3MO logic in isolation against an injectable client. Place it next to `PreflightTask::with_runtime_policy_and_fred` in `crates/scorpio-core/src/workflow/tasks/preflight.rs`.
 
 4. Add `with_fake_fred_client(...)` to `crates/scorpio-core/src/testing/runtime_policy.rs` (or a new file `crates/scorpio-core/src/testing/fred.rs` exposed from `mod.rs`). Use a trait or function-pointer-backed wrapper around `FredClient::get_series_latest`. Suggested approach: introduce a thin trait `FredSeriesClient` that `FredClient` implements via blanket forwarding, then provide a fake in the testing module. If that requires too much churn, use a `tokio::test`-friendly mock HTTP server (the existing tests under `crates/scorpio-core/examples/fred_live_test.rs` may already point to one).
@@ -3721,9 +3752,10 @@ Expected: clean.
 git add crates/scorpio-core/src/workflow/builder.rs crates/scorpio-core/src/workflow/tasks/preflight.rs crates/scorpio-core/src/testing crates/scorpio-core/tests/workflow_pipeline_structure.rs
 git commit -m "feat(preflight): opportunistic FRED DGS3MO fetch for ETF baseline pack
 
-Gated on resolved_pack == EtfBaseline so non-ETF runs do not consume FRED
-quota. Successful fetch records FredDgs3Mo source + decimal-fraction rate;
-empty observation and HTTP error both record FallbackConst (no rate).
+Gated on resolved_pack == EtfBaseline and target_date == today so non-ETF
+and historical runs do not consume FRED quota or leak present-day rates into
+old analyses. Successful fetch records FredDgs3Mo source + decimal-fraction
+rate; empty observation and HTTP error both record FallbackConst (no rate).
 Warning logs follow the project's structured-fields-only convention."
 ```
 
@@ -4288,7 +4320,7 @@ Run through this list before declaring Stage 1, Stage 2, or Stage 3 done:
 
 2. **Placeholder scan** — no "TBD", no "fill in later", no "add appropriate handling". Each step shows the actual code or actual command.
 
-3. **Type consistency** — `compute_gex_summary` signature is the same across Tasks 4 and 16; `GexSummary` field names match the state struct in Task 3; `AggregateInputs` / `AggregateResult` / `NearTermAggregate` / `BroadAggregate` field names match between Tasks 2/13 and Task 4/16; `ExpirationStrikes` is defined once in Task 2 Step 2.4 and referenced unchanged in Tasks 13, 14, 15, 16.
+3. **Type consistency** — `compute_gex_summary` signature is the same across Tasks 4 and 16; Stage 1 `GexSummary` field names match the near-term state struct from Task 3; Stage 3 `BroadGex`, `VexSummary`, `CexSummary`, `AggregateInputs`, `AggregateResult`, `NearTermAggregate`, `BroadAggregate`, and `ExpirationStrikes` field names match consistently across Tasks 13-16.
 
 4. **Validation gate** — Stage 3 tasks start only after the user signals proceed at the gate. If the gate decision is stop, archive the plan and document the decision in `docs/solutions/`.
 
