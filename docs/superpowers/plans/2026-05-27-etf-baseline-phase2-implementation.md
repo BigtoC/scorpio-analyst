@@ -78,7 +78,7 @@
 - Create: `crates/scorpio-core/src/indicators/gex.rs`
 - Modify: `crates/scorpio-core/src/indicators/mod.rs`
 
-- [ ] **Step 1.1: Declare the module**
+- [x] **Step 1.1: Declare the module**
 
 Open `crates/scorpio-core/src/indicators/mod.rs` and add the `pub(crate) mod gex;` declaration alongside the existing private modules so the ETF valuator can import `crate::indicators::gex`. After editing, the module list at the top of the file should read:
 
@@ -92,7 +92,7 @@ mod types;
 mod utils;
 ```
 
-- [ ] **Step 1.2: Write failing unit tests for the BSM helpers**
+- [x] **Step 1.2: Write failing unit tests for the BSM helpers**
 
 Create `crates/scorpio-core/src/indicators/gex.rs` with **only the test module first** so the next step fails for a missing implementation. Use this exact content:
 
@@ -191,12 +191,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 1.3: Run the tests to verify failure**
+- [x] **Step 1.3: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: COMPILE FAILURE (`BsmInputs`, `bsm_gamma`, etc. not defined).
 
-- [ ] **Step 1.4: Implement the BSM helpers**
+- [x] **Step 1.4: Implement the BSM helpers**
 
 Replace the test-only stub of `crates/scorpio-core/src/indicators/gex.rs` with the production implementation **plus the existing test module**. Use this content (preserve the `#[cfg(test)] mod tests { ... }` from Step 1.2 verbatim — do not rewrite the tests):
 
@@ -316,17 +316,17 @@ statrs = "0.18"
 
 (Use whichever minor version the workspace already pins if `statrs` is already a transitive dep; otherwise `0.18` is the most recent stable line.)
 
-- [ ] **Step 1.5: Run the tests to verify they pass**
+- [x] **Step 1.5: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: 7 tests pass.
 
-- [ ] **Step 1.6: Lint and format**
+- [x] **Step 1.6: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 1.7: Commit**
+- [x] **Step 1.7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/indicators/gex.rs crates/scorpio-core/src/indicators/mod.rs crates/scorpio-core/Cargo.toml
@@ -345,7 +345,7 @@ ETF Phase 2 dealer-positioning aggregation."
 
 > **Post-review override:** Task 2 is Stage 1 and must implement near-term GEX only. If the snippets below include `ExpirationStrikes`, broad aggregation, VEX, or CEX fields, defer those parts to Stage 3 Tasks 13-16 before coding.
 
-- [ ] **Step 2.1: Write failing aggregator tests**
+- [x] **Step 2.1: Write failing aggregator tests**
 
 Append the following test cases inside the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `crates/scorpio-core/src/indicators/gex.rs`:
 
@@ -499,12 +499,12 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
     }
 ```
 
-- [ ] **Step 2.2: Run the tests to verify failure**
+- [x] **Step 2.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: COMPILE FAILURE (`aggregate`, `AggregateInputs`, `AggregateResult` not defined).
 
-- [ ] **Step 2.3: Implement the aggregator**
+- [x] **Step 2.3: Implement the aggregator**
 
 In `crates/scorpio-core/src/indicators/gex.rs`, **above** the `#[cfg(test)]` block, add:
 
@@ -687,17 +687,17 @@ pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
 }
 ```
 
-- [ ] **Step 2.4: Run the tests to verify they pass**
+- [x] **Step 2.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: 12 tests pass (7 from Task 1 + 5 new).
 
-- [ ] **Step 2.5: Lint and format**
+- [x] **Step 2.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 2.6: Commit**
+- [x] **Step 2.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/indicators/gex.rs
@@ -718,7 +718,7 @@ deferred to Stage 3."
 
 > **Post-review override:** Task 3 should add only `StrikeGex` and `GexSummary.strikes` in Stage 1. Move `BroadGex`, `VexSummary`, `CexSummary`, and their `GexSummary` fields to Stage 3 before implementation.
 
-- [ ] **Step 3.1: Write failing serde round-trip tests**
+- [x] **Step 3.1: Write failing serde round-trip tests**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `crates/scorpio-core/src/state/derived.rs`:
 
@@ -759,12 +759,12 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `
     }
 ```
 
-- [ ] **Step 3.2: Run the tests to verify failure**
+- [x] **Step 3.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core state::derived::tests`
 Expected: COMPILE FAILURE (`StrikeGex` type not defined; `GexSummary` missing the `strikes` field).
 
-- [ ] **Step 3.3: Add the new types and extend `GexSummary`**
+- [x] **Step 3.3: Add the new types and extend `GexSummary`**
 
 In `crates/scorpio-core/src/state/derived.rs`, locate the existing `GexSummary` definition (currently around line 290) and replace it with the additive version. Also add the new `StrikeGex` sibling struct **immediately after** the updated `GexSummary`. Use this exact content:
 
@@ -796,17 +796,17 @@ pub struct StrikeGex {
 }
 ```
 
-- [ ] **Step 3.4: Run the tests to verify they pass**
+- [x] **Step 3.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core state::derived::tests`
 Expected: previously-passing tests still pass; 2 new tests pass.
 
-- [ ] **Step 3.5: Lint and format**
+- [x] **Step 3.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 3.6: Commit**
+- [x] **Step 3.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/state/derived.rs
@@ -825,7 +825,7 @@ and VEX/CEX summaries are deferred to Stage 3."
 - Modify: `crates/scorpio-core/src/valuation/mod.rs`
 - Modify: `crates/scorpio-core/src/valuation/etf/premium_discount.rs`
 
-- [ ] **Step 4.1: Write a failing valuator integration test**
+- [x] **Step 4.1: Write a failing valuator integration test**
 
 Append to `crates/scorpio-core/src/valuation/etf/premium_discount.rs` inside its existing `#[cfg(test)] mod tests { ... }` block:
 
@@ -955,12 +955,12 @@ Append to `crates/scorpio-core/src/valuation/etf/premium_discount.rs` inside its
     }
 ```
 
-- [ ] **Step 4.2: Run the tests to verify failure**
+- [x] **Step 4.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core valuation::etf::premium_discount::tests`
 Expected: COMPILE FAILURE (`compute_gex_summary` not defined).
 
-- [ ] **Step 4.3: Extend `ValuationInputs`**
+- [x] **Step 4.3: Extend `ValuationInputs`**
 
 In `crates/scorpio-core/src/valuation/mod.rs`, append two Stage 1 fields to the `ValuationInputs` struct (preserving existing fields and their doc comments):
 ```rust
@@ -1004,7 +1004,7 @@ For each constructor, set the new fields to:
 
 In production code, `as_of` should come from `state.target_date` parsed via `chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")` with a fallback to `chrono::Utc::now().date_naive()` on parse failure. Apply that pattern only at the state-aware `crate::valuation::ValuationInputs` construction site in `workflow/tasks/analyst.rs` (Task 5 covers the touch).
 
-- [ ] **Step 4.4: Implement `compute_gex_summary`**
+- [x] **Step 4.4: Implement `compute_gex_summary`**
 
 In `crates/scorpio-core/src/valuation/etf/premium_discount.rs`, **above the existing test module**, add:
 
@@ -1089,7 +1089,7 @@ pub fn compute_gex_summary(
 }
 ```
 
-- [ ] **Step 4.5: Wire `compute_gex_summary` into the valuator**
+- [x] **Step 4.5: Wire `compute_gex_summary` into the valuator**
 
 Replace the placeholder `options_gex: None` at the existing line in
 `crates/scorpio-core/src/valuation/etf/premium_discount.rs` (currently
@@ -1157,17 +1157,17 @@ Replace with:
         }
 ```
 
-- [ ] **Step 4.6: Run the tests to verify they pass**
+- [x] **Step 4.6: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core valuation::etf::premium_discount::tests`
 Expected: previously-passing tests still pass; 4 new tests pass.
 
-- [ ] **Step 4.7: Lint and format**
+- [x] **Step 4.7: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean. If clippy fires on call sites that construct `ValuationInputs`, fix each one to populate `etf_options` and `as_of`.
 
-- [ ] **Step 4.8: Commit**
+- [x] **Step 4.8: Commit**
 
 ```bash
 git add crates/scorpio-core/src/valuation/mod.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs
@@ -1185,7 +1185,7 @@ Stage 2 supplies a live risk-free rate."
 **Files:**
 - Modify: `crates/scorpio-core/src/workflow/tasks/analyst.rs`
 
-- [ ] **Step 5.1: Write a failing hydration test**
+- [x] **Step 5.1: Write a failing hydration test**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/workflow/tasks/analyst.rs` (locate the file's existing test module and add at the end):
 
@@ -1288,12 +1288,12 @@ grep -n 'pub fn' /Users/bigtochan/Documents/dev/BigtoC/scorpio-analyst/crates/sc
 
 and use the matching helper name. If only `with_baseline_runtime_policy(&mut state)` exists, build a fresh `TradingState::new(...)` first and then apply it.
 
-- [ ] **Step 5.2: Run the tests to verify failure**
+- [x] **Step 5.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: COMPILE FAILURE (`etf_options_from_state` not defined).
 
-- [ ] **Step 5.3: Add the helper and wire it into the state-aware valuator input assembly**
+- [x] **Step 5.3: Add the helper and wire it into the state-aware valuator input assembly**
 
 In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, add the helper as a free function at module scope:
 
@@ -1353,17 +1353,17 @@ let valuation_inputs = ValuationInputs {
 
 Do not add an `etf_risk_free_rate` carrier here in Stage 1. Stage 2 Task 20 adds that `ValuationInputs` field and flips this construction site to read from state after `TradingState` has the durable rate-source fields.
 
-- [ ] **Step 5.4: Run the tests to verify they pass**
+- [x] **Step 5.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: existing tests still pass; both new tests pass.
 
-- [ ] **Step 5.5: Lint and format**
+- [x] **Step 5.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 5.6: Commit**
+- [x] **Step 5.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/workflow/tasks/analyst.rs
@@ -1381,7 +1381,7 @@ fall through to absent dealer-positioning."
 **Files:**
 - Modify: `crates/scorpio-core/tests/state_roundtrip.rs`
 
-- [ ] **Step 6.1: Write a failing roundtrip test**
+- [x] **Step 6.1: Write a failing roundtrip test**
 
 Append to `crates/scorpio-core/tests/state_roundtrip.rs`:
 
@@ -1461,17 +1461,17 @@ Check the existing file for whichever helper builds a fresh `TradingState` — i
 
 If `set_derived_valuation` is not the public mutator on `TradingState`, replace with whatever the existing roundtrip tests use (search `grep -n 'derived_valuation' crates/scorpio-core/tests/state_roundtrip.rs` to find the convention).
 
-- [ ] **Step 6.2: Run the tests to verify**
+- [x] **Step 6.2: Run the tests to verify**
 
 Run: `cargo nextest run -p scorpio-core --test state_roundtrip`
 Expected: 2 new tests pass.
 
-- [ ] **Step 6.3: Run the full workspace test suite as a sanity gate**
+- [x] **Step 6.3: Run the full workspace test suite as a sanity gate**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 Expected: no regressions. Investigate any failure immediately — Stage 1 is additive and must not break existing tests.
 
-- [ ] **Step 6.4: Commit**
+- [x] **Step 6.4: Commit**
 
 ```bash
 git add crates/scorpio-core/tests/state_roundtrip.rs
@@ -1491,7 +1491,7 @@ preserve gamma walls on serialize+deserialize."
 **Files:**
 - Modify: `crates/scorpio-core/src/analysis_packs/etf/baseline.rs`
 
-- [ ] **Step 7.1: Inspect the current helper**
+- [x] **Step 7.1: Inspect the current helper**
 
 Read `crates/scorpio-core/src/analysis_packs/etf/baseline.rs:71-86`. The existing helper:
 
@@ -1519,7 +1519,7 @@ Three changes per the spec:
 2. Insert an explicit `---` divider so the LLM sees a clear delimiter for the warning.
 3. Drop `#[allow(dead_code)]` — the helper is now used.
 
-- [ ] **Step 7.2: Write a failing unit test for the new format**
+- [x] **Step 7.2: Write a failing unit test for the new format**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `crates/scorpio-core/src/analysis_packs/etf/baseline.rs`:
 
@@ -1577,12 +1577,12 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `
     }
 ```
 
-- [ ] **Step 7.3: Run the tests to verify failure**
+- [x] **Step 7.3: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core analysis_packs::etf::baseline::tests`
 Expected: `append_leverage_warning_uses_divider_when_factor_diverges` fails because the current helper joins via `compose_prompt_sections` (no `---` divider).
 
-- [ ] **Step 7.4: Update the helper to use the divider, `1e-6` tolerance, and `{leverage_factor}` substitution**
+- [x] **Step 7.4: Update the helper to use the divider, `1e-6` tolerance, and `{leverage_factor}` substitution**
 
 `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_leverage_warning.md` contains a `{leverage_factor}` placeholder that today is never substituted (the current helper appends the file verbatim). The updated helper must substitute it, formatting integer factors without a decimal point (e.g. `3x`, `-2x`) and signed-leverage decimals to one place (e.g. `1.5x`).
 
@@ -1638,17 +1638,17 @@ Add a unit test for the substitution behaviour. Append to the same `#[cfg(test)]
     }
 ```
 
-- [ ] **Step 7.5: Run the tests to verify they pass**
+- [x] **Step 7.5: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core analysis_packs::etf::baseline::tests`
 Expected: all tests pass, including the 5 new ones.
 
-- [ ] **Step 7.6: Lint and format**
+- [x] **Step 7.6: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 7.7: Commit**
+- [x] **Step 7.7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/analysis_packs/etf/baseline.rs
@@ -1667,7 +1667,7 @@ f64::EPSILON to 1e-6 to absorb upstream floating-point noise. Drops the
 **Files:**
 - Modify: `crates/scorpio-core/src/agents/risk/common.rs`
 
-- [ ] **Step 8.1: Write a failing prompt-rendering test**
+- [x] **Step 8.1: Write a failing prompt-rendering test**
 
 Locate the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/agents/risk/common.rs` and append:
 
@@ -1792,12 +1792,12 @@ grep -rn "Daily-reset products" crates/scorpio-core/src/analysis_packs/
 
 Expected: a single match, in `etf_leverage_warning.md`.
 
-- [ ] **Step 8.2: Run the tests to verify failure**
+- [x] **Step 8.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core agents::risk::common::tests`
 Expected: `render_risk_system_prompt_appends_leverage_warning_for_levered_etf` fails because the renderer does not yet call the helper.
 
-- [ ] **Step 8.3: Read the ETF valuation off state and apply the helper**
+- [x] **Step 8.3: Read the ETF valuation off state and apply the helper**
 
 In `crates/scorpio-core/src/agents/risk/common.rs`, replace the existing `render_risk_system_prompt` function with the version below. **The function MUST take a caller-controlled `apply_leverage_warning: bool` flag** so Conservative and Neutral can inject the warning while Aggressive (and the Risk Moderator) opt out — Task 12's contract requires this asymmetry, and `bundle_slot` is a function pointer that cannot be discriminated at runtime.
 
@@ -1855,17 +1855,17 @@ grep -n 'pub mod baseline' crates/scorpio-core/src/analysis_packs/etf/mod.rs
 
 Add `pub(crate) use baseline::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/etf/mod.rs` and `pub(crate) use etf::append_leverage_warning_if_needed;` in `crates/scorpio-core/src/analysis_packs/mod.rs` (so `common.rs` can call `crate::analysis_packs::append_leverage_warning_if_needed(...)`). Test-only callers (e.g. the `testing::prompt_render` shims) must pass the same flag.
 
-- [ ] **Step 8.4: Run the tests to verify they pass**
+- [x] **Step 8.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core agents::risk::common::tests`
 Expected: all tests pass.
 
-- [ ] **Step 8.5: Lint and format**
+- [x] **Step 8.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 8.6: Commit**
+- [x] **Step 8.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/agents/risk/common.rs crates/scorpio-core/src/analysis_packs/etf/mod.rs
@@ -1883,7 +1883,7 @@ and skips entirely when factor is None or 1.0. Non-ETF runs are unaffected."
 **Files:**
 - Modify: `crates/scorpio-core/src/agents/auditor/prompt.rs`
 
-- [ ] **Step 9.1: Write a failing test**
+- [x] **Step 9.1: Write a failing test**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/agents/auditor/prompt.rs`:
 
@@ -1933,12 +1933,12 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio
     }
 ```
 
-- [ ] **Step 9.2: Run the tests to verify failure**
+- [x] **Step 9.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core agents::auditor::prompt::tests`
 Expected: the new test fails.
 
-- [ ] **Step 9.3: Apply the helper in `build_system_prompt`**
+- [x] **Step 9.3: Apply the helper in `build_system_prompt`**
 
 Replace the function body in `crates/scorpio-core/src/agents/auditor/prompt.rs`:
 
@@ -1982,17 +1982,17 @@ fn etf_leverage_factor_from_state(state: &TradingState) -> Option<f64> {
 
 (If Task 8 chose the `crate::analysis_packs::etf::append_leverage_warning_if_needed` re-export, use that path here too.)
 
-- [ ] **Step 9.4: Run the tests to verify they pass**
+- [x] **Step 9.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core agents::auditor::prompt::tests`
 Expected: all tests pass.
 
-- [ ] **Step 9.5: Lint and format**
+- [x] **Step 9.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 9.6: Commit**
+- [x] **Step 9.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/agents/auditor/prompt.rs
@@ -2010,7 +2010,7 @@ after placeholder substitution when the factor diverges from 1.0."
 **Files:**
 - Modify: `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md`
 
-- [ ] **Step 10.1: Replace the placeholder body**
+- [x] **Step 10.1: Replace the placeholder body**
 
 Open `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md` and replace the entire file contents with:
 
@@ -2064,12 +2064,12 @@ In addition to standard technicals:
   derivation-status field.
 ```
 
-- [ ] **Step 10.2: Run prompt-bundle structure tests**
+- [x] **Step 10.2: Run prompt-bundle structure tests**
 
 Run: `cargo nextest run -p scorpio-core analysis_packs::etf::baseline::tests::etf_baseline_populates_every_prompt_slot_with_runtime_placeholders`
 Expected: PASS — the file still contains `{ticker}` and `{current_date}` references via its outer-composition layers, and the ETF technical analyst slot remains non-empty. (The focus document itself does not need to contain those placeholders; the outer composed prompt does.)
 
-- [ ] **Step 10.3: Run the broader prompt-validation gate**
+- [x] **Step 10.3: Run the broader prompt-validation gate**
 
 Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 Expected: snapshot-byte tests will fail because the prompt bytes changed. That is expected; Task 12 refreshes those golden bytes. For now, capture the diff to confirm the change scope matches expectations:
@@ -2078,7 +2078,7 @@ Expected: snapshot-byte tests will fail because the prompt bytes changed. That i
 cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers 2>&1 | head -80
 ```
 
-- [ ] **Step 10.4: Commit**
+- [x] **Step 10.4: Commit**
 
 ```bash
 git add crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md
@@ -2098,7 +2098,7 @@ absence branch until an explicit derivation status exists."
 - Modify: `crates/scorpio-reporters/src/terminal/etf.rs`
 - Modify: `crates/scorpio-reporters/tests/terminal.rs`
 
-- [ ] **Step 11.1: Write failing assertions**
+- [x] **Step 11.1: Write failing assertions**
 
 Append to `crates/scorpio-reporters/tests/terminal.rs`:
 
@@ -2353,12 +2353,12 @@ and use whichever function returns the rendered string for a `TradingState`.
 
 The banner tests rely on the Stage 2 rate-sourcing work landed in Tasks 18-20. Stage 2 task ordering is therefore Task 18 → Task 19 → Task 20 → Task 11 (this task) → Task 12. Do not attempt this task before `state.etf_risk_free_rate` and `state.etf_risk_free_rate_source` exist on `TradingState`.
 
-- [ ] **Step 11.2: Run the tests to verify failure**
+- [x] **Step 11.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
 Expected: all six new tests fail (three for the dealer-positioning block, two for the rate-source banner, one for the negative non-ETF gate; the unavailable case also fails for the same reason).
 
-- [ ] **Step 11.3: Implement `render_dealer_positioning_block`**
+- [x] **Step 11.3: Implement `render_dealer_positioning_block`**
 
 In `crates/scorpio-reporters/src/terminal/etf.rs`, locate `render_etf_panel` (around line 46) and the surrounding block helpers. Add a new function:
 
@@ -2506,7 +2506,7 @@ if let Some(gex) = etf.options_gex.as_ref() {
 }
 ```
 
-- [ ] **Step 11.4: Render the risk-free-rate source banner**
+- [x] **Step 11.4: Render the risk-free-rate source banner**
 
 The rate-source data is populated in Stage 2 (Tasks 18-20). The validation gate evaluates terminal output, so the banner that names the source must render in Stage 2 as well. Locate the ETF report header (search `grep -n 'Analysis Pack' crates/scorpio-reporters/src/terminal/`), and insert the banner immediately after the `Analysis Pack    ETF Baseline` line:
 
@@ -2541,22 +2541,22 @@ match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
 
 Match arms intentionally collapse mismatched `(Some, None)` / `(None, Some)` pairings to no-op; preflight always writes both fields or neither, so any other combination indicates state corruption and is not surfaced. The `(None, None)` arm is gated on the ETF-scenario marker because equity runs default to `(None, None)` and must not surface a warning about a rate that is irrelevant to non-ETF analyses.
 
-- [ ] **Step 11.5: Run the reporter tests**
+- [x] **Step 11.5: Run the reporter tests**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
 Expected: 6 new tests pass (3 dealer-positioning + 2 banner labels + 1 negative banner; the degraded banner test also flips green once Step 11.4 lands).
 
-- [ ] **Step 11.6: Run the full workspace test suite**
+- [x] **Step 11.6: Run the full workspace test suite**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 Expected: no regressions outside `prompt_bundle_regression_gate` (covered in Task 12).
 
-- [ ] **Step 11.7: Lint and format**
+- [x] **Step 11.7: Lint and format**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 11.8: Commit**
+- [x] **Step 11.8: Commit**
 
 ```bash
 git add crates/scorpio-reporters/src/terminal/etf.rs crates/scorpio-reporters/tests/terminal.rs
@@ -2577,7 +2577,7 @@ sensitivities and all-expirations broad GEX."
 **Files:**
 - Modify: `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`
 
-- [ ] **Step 12.1: Inspect the existing gate**
+- [x] **Step 12.1: Inspect the existing gate**
 
 Read the file:
 
@@ -2587,7 +2587,7 @@ head -120 crates/scorpio-core/tests/prompt_bundle_regression_gate.rs
 
 The gate compares rendered prompt bytes against either inline expected strings or files under `crates/scorpio-core/tests/fixtures/prompt_bundles/` (look for the actual layout). The current gate is baseline-oriented, so choose one ETF strategy before updating bytes: either make the fixture path pack-aware, or add a separate ETF fixture namespace/test path. Identify the technical-analyst slot for the ETF baseline pack — its bytes changed in Task 10. Identify the three rendered slots that now receive the leverage warning suffix when a leveraged ETF state is provided (Conservative, Neutral, and Auditor).
 
-- [ ] **Step 12.2: Refresh the technical-analyst goldens**
+- [x] **Step 12.2: Refresh the technical-analyst goldens**
 
 For the ETF baseline pack, regenerate the technical-analyst slot's expected bytes under the chosen ETF fixture strategy. If the gate stores them inline in the test file, copy the new rendered output from a debug print:
 
@@ -2605,7 +2605,7 @@ Run with `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate
 
 If goldens live in `tests/fixtures/prompt_bundles/*.txt`, replace the file contents and let the gate match by file read.
 
-- [ ] **Step 12.3: Add leverage-warning coverage to the gate**
+- [x] **Step 12.3: Add leverage-warning coverage to the gate**
 
 Add a new gate scenario that exercises Conservative + Neutral + Auditor with a leveraged ETF state. Append to `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`:
 
@@ -2684,17 +2684,17 @@ In practice the test is most naturally written via a testing-facade helper (e.g.
 
 If `scorpio_core::agents::auditor::build_system_prompt` is not exported under `test-helpers`, expose the existing private function with `#[cfg(any(test, feature = "test-helpers"))] pub use prompt::build_system_prompt;` in `crates/scorpio-core/src/agents/auditor/mod.rs`.
 
-- [ ] **Step 12.4: Run the regression gate**
+- [x] **Step 12.4: Run the regression gate**
 
 Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 Expected: all assertions pass after the goldens are refreshed.
 
-- [ ] **Step 12.5: Run the full workspace test suite**
+- [x] **Step 12.5: Run the full workspace test suite**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 Expected: green.
 
-- [ ] **Step 12.6: Commit**
+- [x] **Step 12.6: Commit**
 
 ```bash
 git add crates/scorpio-core/tests/prompt_bundle_regression_gate.rs crates/scorpio-core/src/agents/risk crates/scorpio-core/src/agents/auditor
@@ -2763,7 +2763,7 @@ Do not implement Subtrack A just because Subtrack B is approved, or vice versa.
 
 > **Broad GEX normalization contract:** `OptionsSnapshot.near_term_strikes` is the authoritative front-month slice. `OptionsSnapshot.all_expirations` stores **non-front-month** expirations only, using the same NTM row-normalization as the front-month slice; it is not a full-chain row dump. Broad GEX therefore means "front-month NTM slice plus NTM slices for additional expirations," not every listed strike. Renderers and prompts must label it as an all-expirations single-rate approximation, not as full listed-chain exposure.
 
-- [ ] **Step 13.1: Write failing tests for broad aggregation**
+- [x] **Step 13.1: Write failing tests for broad aggregation**
 
 Append to the `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/indicators/gex.rs`:
 
@@ -2843,12 +2843,12 @@ Append to the `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src
     }
 ```
 
-- [ ] **Step 13.2: Run the tests to verify failure**
+- [x] **Step 13.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: the three new broad-aggregation tests fail because `aggregate` currently always emits `broad = None`.
 
-- [ ] **Step 13.3: Implement broad aggregation**
+- [x] **Step 13.3: Implement broad aggregation**
 
 First, extend the Stage 1 aggregator types in `crates/scorpio-core/src/indicators/gex.rs`:
 
@@ -3017,17 +3017,17 @@ Add these serde tests to the `#[cfg(test)] mod tests { ... }` block in `derived.
     }
 ```
 
-- [ ] **Step 13.4: Run the tests to verify they pass**
+- [x] **Step 13.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: all aggregator tests pass.
 
-- [ ] **Step 13.5: Lint and format**
+- [x] **Step 13.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 13.6: Commit**
+- [x] **Step 13.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/indicators/gex.rs crates/scorpio-core/src/data/traits/options.rs crates/scorpio-core/src/state/derived.rs
@@ -3046,7 +3046,7 @@ expiration contributed at least one usable row, and tracks
 **Files:**
 - Modify: `crates/scorpio-core/src/data/traits/options.rs`
 
-- [ ] **Step 14.1: Write a failing serde-skip test**
+- [x] **Step 14.1: Write a failing serde-skip test**
 
 Append to whichever test module exists in `crates/scorpio-core/src/data/traits/options.rs`. If there is no test module, add a `#[cfg(test)] mod tests { ... }` block at the bottom with:
 
@@ -3108,12 +3108,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 14.2: Run the tests to verify failure**
+- [x] **Step 14.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core data::traits::options`
 Expected: COMPILE FAILURE (`all_expirations` not defined on `OptionsSnapshot`).
 
-- [ ] **Step 14.3: Add the transient field**
+- [x] **Step 14.3: Add the transient field**
 
 In `crates/scorpio-core/src/data/traits/options.rs`, modify the `OptionsSnapshot` struct to add the transient field:
 
@@ -3138,17 +3138,17 @@ pub struct OptionsSnapshot {
 
 (`ExpirationStrikes` was added in Task 13 Step 13.3, so no new type needed.)
 
-- [ ] **Step 14.4: Run the tests to verify they pass**
+- [x] **Step 14.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core data::traits::options`
 Expected: all tests pass.
 
-- [ ] **Step 14.5: Lint and format**
+- [x] **Step 14.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean. If clippy fires on call sites that build `OptionsSnapshot` (likely in test fixtures across the workspace), add `all_expirations: Vec::new()` to each constructor.
 
-- [ ] **Step 14.6: Commit**
+- [x] **Step 14.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/traits/options.rs
@@ -3166,7 +3166,7 @@ from any persisted form. Bounded BroadGex stays the durable artifact."
 **Files:**
 - Modify: `crates/scorpio-core/src/data/yfinance/options.rs`
 
-- [ ] **Step 15.1: Inspect the existing fetch flow**
+- [x] **Step 15.1: Inspect the existing fetch flow**
 
 Read `crates/scorpio-core/src/data/yfinance/options.rs` to locate the loop that iterates listed expirations to compute the term-structure ATM-IV vector. The same loop is the natural place to capture per-expiration strikes.
 
@@ -3174,7 +3174,7 @@ Read `crates/scorpio-core/src/data/yfinance/options.rs` to locate the loop that 
 grep -n 'iv_term_structure\|near_term_strikes\|expirations\|fetch_snapshot_impl' crates/scorpio-core/src/data/yfinance/options.rs | head -40
 ```
 
-- [ ] **Step 15.2: Write a failing in-process test**
+- [x] **Step 15.2: Write a failing in-process test**
 
 Append to the test module in `crates/scorpio-core/src/data/yfinance/options.rs` (or create a `#[cfg(test)] mod tests` block if none exists):
 
@@ -3202,12 +3202,12 @@ Append to the test module in `crates/scorpio-core/src/data/yfinance/options.rs` 
 
 Adapt `build_test_normalized_snapshot()` to whatever helper the file already uses for constructing a `OptionsSnapshot` from fixture bytes. If no such helper exists, mark the assertion behind `#[ignore = "requires live HTTP"]` and instead add a unit test that exercises the per-expiration capture in isolation by extracting the relevant normalization helper.
 
-- [ ] **Step 15.3: Run the test to verify failure**
+- [x] **Step 15.3: Run the test to verify failure**
 
 Run: `cargo nextest run -p scorpio-core data::yfinance::options`
 Expected: failure (`all_expirations` empty).
 
-- [ ] **Step 15.4: Update the normalizer**
+- [x] **Step 15.4: Update the normalizer**
 
 In `crates/scorpio-core/src/data/yfinance/options.rs`, find the expiration loop and capture per-expiration strikes for non-front-month expirations. Outline:
 
@@ -3238,17 +3238,17 @@ OptionsSnapshot {
 
 The exact extraction depends on the existing normalizer's structure — preserve the existing front-month path verbatim, then add the additional capture as a side branch. No new HTTP calls; the chain for each expiration is already being fetched today.
 
-- [ ] **Step 15.5: Run the tests to verify they pass**
+- [x] **Step 15.5: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core data::yfinance::options`
 Expected: all tests pass.
 
-- [ ] **Step 15.6: Lint and format**
+- [x] **Step 15.6: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 15.7: Commit**
+- [x] **Step 15.7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/yfinance/options.rs
@@ -3266,7 +3266,7 @@ non-front-month expirations only. No new HTTP calls."
 **Files:**
 - Modify: `crates/scorpio-core/src/valuation/etf/premium_discount.rs`
 
-- [ ] **Step 16.1: Write failing tests**
+- [x] **Step 16.1: Write failing tests**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/valuation/etf/premium_discount.rs`:
 
@@ -3315,12 +3315,12 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio
     }
 ```
 
-- [ ] **Step 16.2: Run the tests to verify failure**
+- [x] **Step 16.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core valuation::etf::premium_discount::tests`
 Expected: 2 new tests fail.
 
-- [ ] **Step 16.3: Wire `broad`/`vex`/`cex` through `compute_gex_summary`**
+- [x] **Step 16.3: Wire `broad`/`vex`/`cex` through `compute_gex_summary`**
 
 First extend the near-term aggregator with VEX/CEX totals in `crates/scorpio-core/src/indicators/gex.rs`:
 
@@ -3445,17 +3445,17 @@ Also update the `AggregateInputs` call to pass `&snapshot.all_expirations` inste
     });
 ```
 
-- [ ] **Step 16.4: Run the tests to verify they pass**
+- [x] **Step 16.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core valuation::etf::premium_discount::tests`
 Expected: all tests pass.
 
-- [ ] **Step 16.5: Lint and format**
+- [x] **Step 16.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 16.6: Commit**
+- [x] **Step 16.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/indicators/gex.rs crates/scorpio-core/src/state/derived.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs
@@ -3473,7 +3473,7 @@ existing sums."
 **Files:**
 - Modify: `crates/scorpio-core/src/workflow/tasks/analyst.rs`
 
-- [ ] **Step 17.1: Write a failing test**
+- [x] **Step 17.1: Write a failing test**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/workflow/tasks/analyst.rs`:
 
@@ -3549,12 +3549,12 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio
     }
 ```
 
-- [ ] **Step 17.2: Run the tests to verify failure**
+- [x] **Step 17.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: COMPILE FAILURE (`strip_transient_all_expirations` not defined).
 
-- [ ] **Step 17.3: Implement the strip helper and wire into the analyst task**
+- [x] **Step 17.3: Implement the strip helper and wire into the analyst task**
 
 In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, add the helper at module scope:
 
@@ -3607,17 +3607,17 @@ grep -n 'serialize_state_to_context' crates/scorpio-core/src/workflow/tasks/anal
 
 Wrap the cleanup behind the `pack_id == PackId::EtfBaseline` guard so other packs are unaffected.
 
-- [ ] **Step 17.4: Run the tests to verify they pass**
+- [x] **Step 17.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: all tests pass.
 
-- [ ] **Step 17.5: Lint and format**
+- [x] **Step 17.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 17.6: Commit**
+- [x] **Step 17.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/workflow/tasks/analyst.rs crates/scorpio-core/src/state/trading_state.rs
@@ -3636,7 +3636,7 @@ The live run still derives broad GEX from the in-memory rows."
 - Modify: `crates/scorpio-core/src/state/trading_state.rs`
 - Modify: `crates/scorpio-core/src/state/mod.rs`
 
-- [ ] **Step 18.1: Write a failing roundtrip test**
+- [x] **Step 18.1: Write a failing roundtrip test**
 
 Append to `crates/scorpio-core/tests/state_roundtrip.rs`:
 
@@ -3673,12 +3673,12 @@ fn legacy_trading_state_without_etf_risk_free_rate_fields_deserializes() {
 }
 ```
 
-- [ ] **Step 18.2: Run the tests to verify failure**
+- [x] **Step 18.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core --test state_roundtrip`
 Expected: COMPILE FAILURE (`EtfRiskFreeRateSource`, `etf_risk_free_rate` fields not defined).
 
-- [ ] **Step 18.3: Add the enum and `TradingState` fields**
+- [x] **Step 18.3: Add the enum and `TradingState` fields**
 
 In `crates/scorpio-core/src/state/trading_state.rs`:
 
@@ -3725,17 +3725,17 @@ grep -n 'struct TradingStateWire\|impl From<TradingStateWire>' crates/scorpio-co
 
 5. Add `pub use trading_state::EtfRiskFreeRateSource;` to `crates/scorpio-core/src/state/mod.rs` (find the existing `pub use trading_state::...` line).
 
-- [ ] **Step 18.4: Run the tests to verify they pass**
+- [x] **Step 18.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core --test state_roundtrip`
 Expected: both new tests pass; all previously-passing tests still pass.
 
-- [ ] **Step 18.5: Lint and format**
+- [x] **Step 18.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 18.6: Commit**
+- [x] **Step 18.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/state/trading_state.rs crates/scorpio-core/src/state/mod.rs crates/scorpio-core/tests/state_roundtrip.rs
@@ -3754,7 +3754,7 @@ FRED DGS3MO from yfinance ^IRX and no-rate degradation after reload."
 - Modify: `crates/scorpio-core/src/workflow/builder.rs`
 - Modify: `crates/scorpio-core/src/workflow/tasks/preflight.rs`
 
-- [ ] **Step 19.1: Write a failing structure test**
+- [x] **Step 19.1: Write a failing structure test**
 
 Append to `crates/scorpio-core/tests/workflow_pipeline_structure.rs`:
 
@@ -3903,12 +3903,12 @@ async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
 
 `with_fake_fred_client`, `with_fake_yfinance_client`, and `preflight::run_for_test` are new test shims that you will add in Step 19.3. Their signatures appear in the assertions above.
 
-- [ ] **Step 19.2: Run the tests to verify failure**
+- [x] **Step 19.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core --test workflow_pipeline_structure`
 Expected: COMPILE FAILURE — both test helpers and the new code path are missing.
 
-- [ ] **Step 19.3: Thread FRED + yfinance risk-free-rate providers and add test shims**
+- [x] **Step 19.3: Thread FRED + yfinance risk-free-rate providers and add test shims**
 
 Open `crates/scorpio-core/src/workflow/builder.rs`. It already constructs `FredClient` and `YFinanceClient` in `PipelineDeps`. Pass both clients into `PreflightTask` by adding constructor parameters:
 
@@ -4007,22 +4007,22 @@ For historical ETF runs, skip latest-rate fetches so rerunning the same symbol/d
 
 4. Add `with_fake_fred_client(...)` and `with_fake_yfinance_client(...)` to `crates/scorpio-core/src/testing/runtime_policy.rs` (or new files exposed from `mod.rs`). Use function-pointer-backed wrappers that implement the two traits above.
 
-- [ ] **Step 19.4: Run the tests to verify they pass**
+- [x] **Step 19.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core --test workflow_pipeline_structure`
 Expected: all five new tests pass.
 
-- [ ] **Step 19.5: Run the full workspace test suite**
+- [x] **Step 19.5: Run the full workspace test suite**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 Expected: green.
 
-- [ ] **Step 19.6: Lint and format**
+- [x] **Step 19.6: Lint and format**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 19.7: Commit**
+- [x] **Step 19.7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/workflow/builder.rs crates/scorpio-core/src/workflow/tasks/preflight.rs crates/scorpio-core/src/testing crates/scorpio-core/tests/workflow_pipeline_structure.rs
@@ -4042,7 +4042,7 @@ dealer-positioning degrades to unavailable."
 **Files:**
 - Modify: `crates/scorpio-core/src/workflow/tasks/analyst.rs`
 
-- [ ] **Step 20.1: Write a failing test**
+- [x] **Step 20.1: Write a failing test**
 
 Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio-core/src/workflow/tasks/analyst.rs`:
 
@@ -4064,12 +4064,12 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio
     }
 ```
 
-- [ ] **Step 20.2: Run the tests to verify failure**
+- [x] **Step 20.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: COMPILE FAILURE (`etf_risk_free_rate_from_state` not defined).
 
-- [ ] **Step 20.3: Add the accessor and enforce no-rate degradation**
+- [x] **Step 20.3: Add the accessor and enforce no-rate degradation**
 
 In `crates/scorpio-core/src/valuation/mod.rs`, add the Stage 2 risk-free-rate carrier immediately after `etf_options`:
 
@@ -4114,17 +4114,17 @@ let options_gex = match (inputs.etf_options, inputs.etf_risk_free_rate) {
 };
 ```
 
-- [ ] **Step 20.4: Run the tests to verify they pass**
+- [x] **Step 20.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: all tests pass.
 
-- [ ] **Step 20.5: Lint and format**
+- [x] **Step 20.5: Lint and format**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 20.6: Commit**
+- [x] **Step 20.6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/valuation/mod.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs crates/scorpio-core/src/workflow/tasks/analyst.rs
@@ -4143,7 +4143,7 @@ dealer-positioning to unavailable when both live sources fail."
 - Modify: `crates/scorpio-reporters/src/terminal/etf.rs`
 - Modify: `crates/scorpio-reporters/tests/terminal.rs`
 
-- [ ] **Step 21.1: Write failing assertions**
+- [x] **Step 21.1: Write failing assertions**
 
 Append to `crates/scorpio-reporters/tests/terminal.rs`:
 
@@ -4264,12 +4264,12 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
 
 The risk-free-rate banner tests live in Task 11 (Stage 2), not here. Stage 3 only extends the dealer-positioning block with secondary sensitivities and the broad-GEX/partial-expirations sub-block.
 
-- [ ] **Step 21.2: Run the tests to verify failure**
+- [x] **Step 21.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
 Expected: two new tests fail (the two added in this step).
 
-- [ ] **Step 21.3: Extend the dealer-positioning block**
+- [x] **Step 21.3: Extend the dealer-positioning block**
 
 In `crates/scorpio-reporters/src/terminal/etf.rs`, extend `render_dealer_positioning_block` to emit the secondary-sensitivities and broad-GEX lines:
 
@@ -4327,17 +4327,17 @@ Also update the partial-data branch from Task 11 to cover the combined case per 
     }
 ```
 
-- [ ] **Step 21.4: Run the reporter tests**
+- [x] **Step 21.4: Run the reporter tests**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
 Expected: all new tests pass plus previously-passing tests still green.
 
-- [ ] **Step 21.5: Lint and format**
+- [x] **Step 21.5: Lint and format**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 21.6: Commit**
+- [x] **Step 21.6: Commit**
 
 ```bash
 git add crates/scorpio-reporters/src/terminal/etf.rs crates/scorpio-reporters/tests/terminal.rs
@@ -4355,13 +4355,13 @@ Stage 2 (Task 11)."
 **Files:**
 - Modify: `crates/scorpio-core/examples/fred_live_test.rs`
 
-- [ ] **Step 22.1: Locate the existing FEDFUNDS / CPI assertions**
+- [x] **Step 22.1: Locate the existing FEDFUNDS / CPI assertions**
 
 ```bash
 grep -n 'FEDFUNDS\|CPALTT01\|get_series_latest' crates/scorpio-core/examples/fred_live_test.rs
 ```
 
-- [ ] **Step 22.2: Add the DGS3MO assertion**
+- [x] **Step 22.2: Add the DGS3MO assertion**
 
 Append a new block near the existing FEDFUNDS/CPI assertions:
 
@@ -4378,7 +4378,7 @@ Append a new block near the existing FEDFUNDS/CPI assertions:
     );
 ```
 
-- [ ] **Step 22.3: Run the smoke manually**
+- [x] **Step 22.3: Run the smoke manually**
 
 This is not part of CI. Confirm locally:
 
@@ -4388,7 +4388,7 @@ SCORPIO_FRED_API_KEY=... cargo run -p scorpio-core --example fred_live_test
 
 Expected: the example prints all three series and exits 0.
 
-- [ ] **Step 22.4: Commit**
+- [x] **Step 22.4: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/fred_live_test.rs
@@ -4402,13 +4402,13 @@ git commit -m "test(smoke): assert DGS3MO is fetchable in the live FRED smoke"
 **Files:**
 - Modify: `crates/scorpio-core/examples/yfinance_live_test.rs`
 
-- [ ] **Step 23.1: Locate the existing OHLCV assertions**
+- [x] **Step 23.1: Locate the existing OHLCV assertions**
 
 ```bash
 grep -n 'get_ohlcv\|YFinanceClient\|AAPL\|SPY' crates/scorpio-core/examples/yfinance_live_test.rs
 ```
 
-- [ ] **Step 23.2: Add the `^IRX` latest-close assertion**
+- [x] **Step 23.2: Add the `^IRX` latest-close assertion**
 
 Append a new block near the existing OHLCV smoke assertions:
 
@@ -4432,7 +4432,7 @@ Append a new block near the existing OHLCV smoke assertions:
 
 Use the existing client variable name in `yfinance_live_test.rs`; if it is not `yf`, replace `yf` in the snippet with the local name already used by the smoke.
 
-- [ ] **Step 23.3: Run locally**
+- [x] **Step 23.3: Run locally**
 
 ```bash
 cargo run -p scorpio-core --example yfinance_live_test
@@ -4440,7 +4440,7 @@ cargo run -p scorpio-core --example yfinance_live_test
 
 Expected: the example prints the existing yfinance smoke output plus `^IRX latest close: ...` and exits 0.
 
-- [ ] **Step 23.4: Commit**
+- [x] **Step 23.4: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/yfinance_live_test.rs
@@ -4454,7 +4454,7 @@ git commit -m "test(smoke): assert yfinance can fetch ^IRX latest close"
 **Files:**
 - Create: `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`
 
-- [ ] **Step 24.1: Author the smoke**
+- [x] **Step 24.1: Author the smoke**
 
 Use the existing `yfinance_live_test.rs` and `etf_quote_live_test.rs` as templates. Create `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`:
 
@@ -4512,7 +4512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If `YFinanceClient::new_unrate_limited` does not exist, use whatever constructor the other smokes use (search `grep -n 'YFinanceClient::' crates/scorpio-core/examples/`).
 
-- [ ] **Step 24.2: Run locally**
+- [x] **Step 24.2: Run locally**
 
 ```bash
 cargo run -p scorpio-core --example yfinance_options_chain_live_test
@@ -4520,7 +4520,7 @@ cargo run -p scorpio-core --example yfinance_options_chain_live_test
 
 Expected: prints expirations and "OK".
 
-- [ ] **Step 24.3: Commit**
+- [x] **Step 24.3: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/yfinance_options_chain_live_test.rs
@@ -4534,7 +4534,7 @@ git commit -m "test(smoke): live yfinance options chain populates all_expiration
 **Files:**
 - Create: `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
 
-- [ ] **Step 25.1: Author the e2e smoke**
+- [x] **Step 25.1: Author the e2e smoke**
 
 Use `etf_pack_live_test.rs` as the template. Create `crates/scorpio-core/examples/etf_options_gex_live_test.rs`:
 
@@ -4586,7 +4586,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 If `AnalysisRuntime::from_env_with_pack` is not the canonical constructor, replace with whatever entry point `etf_pack_live_test.rs` uses.
 
-- [ ] **Step 25.2: Run locally**
+- [x] **Step 25.2: Run locally**
 
 ```bash
 SCORPIO_FRED_API_KEY=... cargo run -p scorpio-core --example etf_options_gex_live_test
@@ -4594,7 +4594,7 @@ SCORPIO_FRED_API_KEY=... cargo run -p scorpio-core --example etf_options_gex_liv
 
 Expected: prints the populated GEX summary and "OK".
 
-- [ ] **Step 25.3: Commit**
+- [x] **Step 25.3: Commit**
 
 ```bash
 git add crates/scorpio-core/examples/etf_options_gex_live_test.rs
