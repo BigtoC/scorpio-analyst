@@ -480,6 +480,9 @@ impl TradingState {
     pub fn technical_indicators(&self) -> Option<&TechnicalData> {
         self.equity.as_ref()?.technical_indicators.as_ref()
     }
+    pub(crate) fn technical_indicators_mut(&mut self) -> Option<&mut TechnicalData> {
+        self.equity.as_mut()?.technical_indicators.as_mut()
+    }
     pub fn set_technical_indicators(&mut self, v: TechnicalData) {
         self.equity_mut().technical_indicators = Some(v);
     }

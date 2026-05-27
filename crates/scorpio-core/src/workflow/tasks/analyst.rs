@@ -1084,6 +1084,31 @@ pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) 
     state.etf_risk_free_rate
 }
 
+/// Stage 3 cleanup: clear the transient `OptionsSnapshot.all_expirations`
+/// vector in place so persisted technical snapshots keep only the bounded
+/// `EtfValuation.options_gex.broad` summary, not the full non-front-month
+/// chain payload.
+///
+/// Called immediately before `serialize_state_to_context(...)` on the ETF
+/// branch; no-op for any other technical context shape.
+pub(crate) fn strip_transient_all_expirations(state: &mut crate::state::TradingState) {
+    use crate::data::traits::options::OptionsOutcome;
+    use crate::state::TechnicalOptionsContext;
+
+    let Some(technical) = state.technical_indicators_mut() else {
+        return;
+    };
+    let Some(options_context) = technical.options_context.as_mut() else {
+        return;
+    };
+    if let TechnicalOptionsContext::Available {
+        outcome: OptionsOutcome::Snapshot(snap),
+    } = options_context
+    {
+        snap.all_expirations.clear();
+    }
+}
+
 fn derive_runtime_valuation(
     state: &TradingState,
     valuation_inputs: &ValuationInputs,
@@ -1427,6 +1452,11 @@ impl Task for AnalystSyncTask {
             phase_duration_ms,
             agent_usage: token_usages.clone(),
         });
+
+        // Stage 3 cleanup: ETF-only transient field cleanup before snapshot persistence.
+        if matches!(pack_id, PackId::EtfBaseline) {
+            strip_transient_all_expirations(&mut state);
+        }
 
         serialize_state_to_context(&state, &context)
             .await
@@ -1844,5 +1874,81 @@ mod tests {
         state.etf_risk_free_rate = None;
         let inputs_rate_none = super::etf_risk_free_rate_from_state(&state);
         assert!(inputs_rate_none.is_none());
+    }
+
+    #[test]
+    fn strip_all_expirations_clears_transient_field_in_place() {
+        use crate::data::traits::options::{
+            ExpirationStrikes, IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let snap = OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![IvTermPoint {
+                expiration: "2026-06-26".to_owned(),
+                atm_iv: 0.20,
+            }],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-06-26".to_owned(),
+            near_term_strikes: vec![],
+            all_expirations: vec![ExpirationStrikes {
+                expiration: "2026-07-31".to_owned(),
+                strikes: vec![NearTermStrike {
+                    strike: 105.0,
+                    call_iv: Some(0.21),
+                    put_iv: None,
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(100),
+                    put_oi: None,
+                }],
+            }],
+        };
+
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "smoke".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(snap),
+            }),
+        });
+
+        super::strip_transient_all_expirations(&mut state);
+
+        let context = state
+            .technical_indicators()
+            .unwrap()
+            .options_context
+            .as_ref()
+            .unwrap();
+        match context {
+            TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(s),
+            } => {
+                assert!(
+                    s.all_expirations.is_empty(),
+                    "all_expirations must be cleared in place"
+                );
+            }
+            other => panic!("expected Available+Snapshot, got {other:?}"),
+        }
     }
 }
