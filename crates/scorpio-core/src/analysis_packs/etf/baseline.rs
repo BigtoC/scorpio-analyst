@@ -67,20 +67,32 @@ fn compose_etf_risk(raw: &'static str, stance: &str) -> Cow<'static, str> {
     ))
 }
 
-/// Runtime-only helper invoked after placeholder substitution. Trader + risk
-/// roles append the leverage warning when `leverage_factor != 1.0`.
-#[allow(dead_code)] // wired in Task 6 Step 2b but unused until Task 11/13 plumb it
+const LEVERAGE_TOLERANCE: f64 = 1e-6;
+
+/// Runtime-only helper invoked after placeholder substitution. Risk and
+/// auditor prompts append the leverage warning when `leverage_factor`
+/// diverges from 1.0 beyond the tolerance. Substitutes `{leverage_factor}`
+/// in the warning body with a human-friendly representation of the factor.
+#[allow(dead_code)] // wired in Tasks 8 and 9 (Stage 2)
 pub(crate) fn append_leverage_warning_if_needed(
     rendered: String,
     leverage_factor: Option<f64>,
 ) -> String {
-    if leverage_factor
-        .map(|factor| (factor - 1.0).abs() > f64::EPSILON)
-        .unwrap_or(false)
-    {
-        compose_prompt_sections(&rendered, &[ETF_LEVERAGE_WARNING])
+    match leverage_factor {
+        Some(factor) if (factor - 1.0).abs() > LEVERAGE_TOLERANCE => {
+            let warning = trim_trailing_newline(ETF_LEVERAGE_WARNING)
+                .replace("{leverage_factor}", &format_leverage_factor(factor));
+            format!("{rendered}\n\n---\n\n{warning}")
+        }
+        _ => rendered,
+    }
+}
+
+fn format_leverage_factor(factor: f64) -> String {
+    if (factor - factor.round()).abs() < LEVERAGE_TOLERANCE {
+        format!("{:.0}", factor)
     } else {
-        rendered
+        format!("{:.1}", factor)
     }
 }
 
@@ -296,5 +308,69 @@ mod tests {
         let pack = resolve_pack(PackId::EtfBaseline);
         assert!(pack.auditor_enabled);
         assert!(!pack.prompt_bundle.auditor.is_empty());
+    }
+
+    #[test]
+    fn append_leverage_warning_uses_divider_when_factor_diverges() {
+        let rendered = "BASE PROMPT".to_owned();
+        let result = append_leverage_warning_if_needed(rendered, Some(2.0));
+        assert!(
+            result.starts_with("BASE PROMPT"),
+            "rendered base prompt must remain at the head"
+        );
+        assert!(
+            result.contains("\n\n---\n\n"),
+            "must insert the explicit --- divider: {result}"
+        );
+        assert!(result.len() > "BASE PROMPT".len() + 8);
+    }
+
+    #[test]
+    fn append_leverage_warning_uses_1e_minus_6_tolerance() {
+        let base = "PROMPT".to_owned();
+        let untouched = append_leverage_warning_if_needed(base.clone(), Some(1.0 + f64::EPSILON));
+        assert_eq!(untouched, base, "EPSILON drift must not trigger warning");
+
+        let with_drift = append_leverage_warning_if_needed(base.clone(), Some(1.0 + 1e-5));
+        assert_ne!(with_drift, base, "1e-5 drift must trigger warning");
+    }
+
+    #[test]
+    fn append_leverage_warning_skips_for_unit_and_none() {
+        let base = "PROMPT".to_owned();
+        assert_eq!(append_leverage_warning_if_needed(base.clone(), None), base);
+        assert_eq!(
+            append_leverage_warning_if_needed(base.clone(), Some(1.0)),
+            base
+        );
+    }
+
+    #[test]
+    fn append_leverage_warning_triggers_for_leveraged_and_inverse() {
+        let base = "PROMPT".to_owned();
+        for factor in [2.0, 3.0, -1.0, -2.0, -3.0] {
+            let result = append_leverage_warning_if_needed(base.clone(), Some(factor));
+            assert!(
+                result.len() > base.len(),
+                "factor {factor} should append warning"
+            );
+        }
+    }
+
+    #[test]
+    fn append_leverage_warning_substitutes_leverage_factor_placeholder() {
+        let base = "PROMPT".to_owned();
+        let triple = append_leverage_warning_if_needed(base.clone(), Some(3.0));
+        assert!(triple.contains("3x"), "must substitute 3x: {triple}");
+        assert!(
+            !triple.contains("{leverage_factor}"),
+            "placeholder must be gone"
+        );
+
+        let inverse = append_leverage_warning_if_needed(base.clone(), Some(-1.0));
+        assert!(inverse.contains("-1x"), "must substitute -1x: {inverse}");
+
+        let half = append_leverage_warning_if_needed(base.clone(), Some(1.5));
+        assert!(half.contains("1.5x"), "must substitute 1.5x: {half}");
     }
 }
