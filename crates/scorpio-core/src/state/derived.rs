@@ -284,8 +284,11 @@ pub struct TrackingError {
     pub sample_days: u32,
 }
 
-/// Phase 2 placeholder (declared now so the variant signature is stable; the
-/// `EtfValuation.options_gex` field stays `None` in Phase 1).
+/// Dealer-positioning summary populated by `compute_gex_summary` from a live
+/// `OptionsSnapshot`. Phase 1 always emitted `options_gex: None`; Phase 2
+/// Stage 1/2 populates the legacy fields plus `strikes`. Stage 3 additionally
+/// adds broad GEX and secondary VEX/CEX summaries. The added `strikes` field
+/// carries `#[serde(default)]` so legacy snapshots remain readable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GexSummary {
     pub net_gex_usd_per_1pct_move: f64,
@@ -293,6 +296,18 @@ pub struct GexSummary {
     pub call_put_oi_ratio: f64,
     pub max_pain_strike: f64,
     pub near_term_expiration: chrono::NaiveDate,
+
+    /// Top-N strikes by `|net_gex_usd_per_1pct_move|` — gamma walls.
+    /// Populated by Stage 1/2.
+    #[serde(default)]
+    pub strikes: Vec<StrikeGex>,
+}
+
+/// Single gamma-wall row inside `GexSummary.strikes`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StrikeGex {
+    pub strike: f64,
+    pub net_gex_usd_per_1pct_move: f64,
 }
 
 /// Filing-age qualification for N-PORT-backed holdings.
@@ -652,5 +667,42 @@ mod tests {
         assert!(!flags.benchmark_resolved);
         assert!(!flags.options_chain_present);
         assert!(!flags.expense_ratio_available);
+    }
+
+    #[test]
+    fn gex_summary_with_strikes_field_roundtrips_json() {
+        let val = GexSummary {
+            net_gex_usd_per_1pct_move: 1_000_000.0,
+            gross_gex_usd_per_1pct_move: 2_000_000.0,
+            call_put_oi_ratio: 1.3,
+            max_pain_strike: 100.0,
+            near_term_expiration: chrono::NaiveDate::from_ymd_opt(2026, 6, 26).unwrap(),
+            strikes: vec![
+                StrikeGex {
+                    strike: 100.0,
+                    net_gex_usd_per_1pct_move: 500_000.0,
+                },
+                StrikeGex {
+                    strike: 105.0,
+                    net_gex_usd_per_1pct_move: -250_000.0,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: GexSummary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn legacy_phase1_gex_summary_without_strikes_still_deserializes() {
+        let json = r#"{
+            "net_gex_usd_per_1pct_move": 0.0,
+            "gross_gex_usd_per_1pct_move": 0.0,
+            "call_put_oi_ratio": 0.0,
+            "max_pain_strike": 0.0,
+            "near_term_expiration": "2026-06-26"
+        }"#;
+        let back: GexSummary = serde_json::from_str(json).expect("deserialize");
+        assert!(back.strikes.is_empty());
     }
 }
