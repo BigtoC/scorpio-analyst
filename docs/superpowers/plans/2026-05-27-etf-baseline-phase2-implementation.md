@@ -2,20 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the dealer-positioning signal reserved by Phase 1 (`EtfValuation.options_gex`) through three staged units of work — Stage 1 (near-term GEX core math + state plumbing), Stage 2 (validation slice: leverage-warning injection, technical-prompt rewrite, terminal rendering), and contingent Stage 3 (broad GEX + VEX/CEX surfacing + live FRED `DGS3MO`). Stage 2 is the go/no-go gate for Stage 3.
+**Goal:** Land the dealer-positioning signal reserved by Phase 1 (`EtfValuation.options_gex`) through three staged units of work — Stage 1 (near-term GEX core math + state plumbing), Stage 2 (validation slice: live risk-free-rate sourcing from FRED `DGS3MO` with yfinance `^IRX` fallback, leverage-warning injection, technical-prompt rewrite, terminal rendering), and contingent Stage 3 (broad GEX + VEX/CEX surfacing). Stage 2 is the go/no-go gate for Stage 3.
 
-**Architecture:** Pure BSM math (gamma, vanna, charm) in a new `crates/scorpio-core/src/indicators/gex.rs` module; aggregation uses the SqueezeMetrics dealer convention (short calls, long puts) to emit signed net + non-negative gross exposures. The ETF valuator (`valuation/etf/premium_discount.rs`) maps the math layer's `AggregateResult` directly into the additive `GexSummary` state shape — no separate wrapper module. Leverage-warning injection happens at prompt-assembly time inside `agents/risk/common.rs::render_risk_system_prompt` and `agents/auditor/prompt.rs::build_system_prompt` (renderer-side, not in the manifest). Stage 3 adds a transient `OptionsSnapshot.all_expirations` field that is carried through the technical → analyst-sync handoff but stripped before durable serialization, plus an opportunistic FRED `DGS3MO` preflight fetch gated on `pack == EtfBaseline`. All new state fields are additive with `#[serde(default)]`; no `THESIS_MEMORY_SCHEMA_VERSION` bump.
+**Architecture:** Pure BSM math (gamma, vanna, charm) in a new `crates/scorpio-core/src/indicators/gex.rs` module; aggregation uses the SqueezeMetrics dealer convention (short calls, long puts) to emit signed net + non-negative gross exposures. The ETF valuator (`valuation/etf/premium_discount.rs`) maps the math layer's `AggregateResult` directly into the additive `GexSummary` state shape — no separate wrapper module. Leverage-warning injection happens at prompt-assembly time inside `agents/risk/common.rs::render_risk_system_prompt` and `agents/auditor/prompt.rs::build_system_prompt` (renderer-side, not in the manifest). Stage 2 adds live/today risk-free-rate sourcing in preflight: fetch FRED `DGS3MO` first, fallback to the most recent yfinance `^IRX` close, and if both fail leave `etf_risk_free_rate = None` so downstream dealer-positioning derivation degrades to unavailable. Stage 3 adds a transient `OptionsSnapshot.all_expirations` field that is carried through the technical → analyst-sync handoff but stripped before durable serialization. All new state fields are additive with `#[serde(default)]`; no `THESIS_MEMORY_SCHEMA_VERSION` bump.
 
 **Tech Stack:** Rust 2024 (rustc 1.93+, edition 2024); `tokio` async runtime; `serde` + `schemars` for state/snapshot serialization; `chrono` for date math; existing `FredClient`, `YFinanceClient`, `SecEdgarClient` providers; `graph-flow` for task orchestration; `rig-core` for agents; `tracing` for structured warning logs; `nextest` for test execution. Reference: [`docs/superpowers/specs/2026-05-22-etf-baseline-phase2-design.md`](../specs/2026-05-22-etf-baseline-phase2-design.md).
 
 **Post-review execution constraints (authoritative):**
 
 - **Stage 1 stops at near-term GEX + gamma walls.** Implement `StrikeGex` and `GexSummary.strikes` in Stage 1. Defer `BroadGex`, `VexSummary`, `CexSummary`, `ExpirationStrikes`, broad aggregation, and stored VEX/CEX summaries until Stage 3. If an embedded Stage 1 snippet below still shows those Stage 3 surfaces, move that code to Tasks 13-16 before implementation.
-- **State-derived valuation inputs are assembled at the state-aware seam.** Keep `fetch_valuation_inputs` provider-only unless the plan explicitly changes its signature and all call sites. Populate `etf_options`, `etf_risk_free_rate`, and `as_of` where `crate::valuation::ValuationInputs` is constructed with access to `TradingState`.
+- **State-derived valuation inputs are assembled at the state-aware seam.** Keep `fetch_valuation_inputs` provider-only unless the plan explicitly changes its signature and all call sites. Stage 1 populates only `etf_options` and `as_of` where `crate::valuation::ValuationInputs` is constructed with access to `TradingState`; Stage 2 Tasks 18-20 add and populate `etf_risk_free_rate` before terminal validation.
 - **Stage 2 uses one generic dealer-positioning absence branch.** Stage 2 does not distinguish no options snapshot from an unusable snapshot unless an explicit derivation status is added first. Prompt/reporter copy should say no usable dealer-positioning overlay was available. A split reason can be added in Stage 3 only with a real status field.
 - **Prompt contracts must match available context.** The ETF technical prompt may discuss raw `options_context` / `options_summary` snapshot evidence. Do not ask it to cite `EtfValuation.options_gex` unless that derived payload is explicitly threaded into the prompt context. Valuation-aware downstream prompts may cite `options_gex` only after the context payload exists.
-- **The Stage 2 gate must evaluate the full reader experience that Stage 2 actually changes.** Validate terminal output plus generated prose surfaces that receive Stage 2 data (raw options/leverage context). If derived `options_gex` is not threaded into prompts, evaluate derived-GEX value in the terminal block only. Stage 3 additions (broad GEX, VEX/CEX, FRED risk-free rate) require separate evidence or separate sub-gate approval; Stage 2 success does not automatically justify all of them.
-- **FRED `DGS3MO` is date-sensitive.** Stage 3 may fetch latest `DGS3MO` only for live/today ETF runs. Historical runs must either skip the fetch and use the documented fallback path or fetch an observation as of `state.target_date` and persist the observation date.
+- **The Stage 2 gate must evaluate the full reader experience that Stage 2 actually changes.** Validate terminal output plus generated prose surfaces that receive Stage 2 data (raw options/leverage context). If derived `options_gex` is not threaded into prompts, evaluate derived-GEX value in the terminal block only. Stage 3 additions (broad GEX and VEX/CEX) require separate evidence or separate sub-gate approval; Stage 2 success does not automatically justify them.
+- **Risk-free rate has no hardcoded fallback.** Delete any `RISK_FREE_RATE_FALLBACK` / `0.045` plan snippets outside pure test fixtures. Stage 2 must fetch FRED `DGS3MO` for live/today ETF runs, fallback to yfinance `^IRX` most recent close if FRED is unavailable, and leave `etf_risk_free_rate = None` if both fail. Dealer-positioning consumers must degrade to `options_gex: None` when a rate is unavailable; they must not substitute a constant.
+- **FRED `DGS3MO` and yfinance `^IRX` are date-sensitive.** Stage 2 may fetch latest market rates only for live/today ETF runs. Historical runs must skip latest-rate fetches and degrade dealer-positioning, or add a true as-of-date rate query with persisted observation date before enabling historical GEX.
 
 ---
 
@@ -26,7 +27,7 @@
 - **Create:** `crates/scorpio-core/src/indicators/gex.rs` — pure BSM math + chain aggregation
 - **Modify:** `crates/scorpio-core/src/indicators/mod.rs` — declare new module, re-export public surface
 - **Modify:** `crates/scorpio-core/src/state/derived.rs` — additive `StrikeGex` type and `GexSummary.strikes` field for Stage 1; defer `BroadGex`, `VexSummary`, `CexSummary`, and related fields until Stage 3
-- **Modify:** `crates/scorpio-core/src/valuation/mod.rs` — `ValuationInputs` gains `etf_options`, `etf_risk_free_rate`, `as_of`
+- **Modify:** `crates/scorpio-core/src/valuation/mod.rs` — `ValuationInputs` gains `etf_options` and `as_of` in Stage 1; `etf_risk_free_rate` is added in Stage 2 Task 20
 - **Modify:** `crates/scorpio-core/src/valuation/etf/premium_discount.rs` — add `compute_gex_summary` helper, populate `EtfValuation.options_gex`, derive `q` from `EtfComposition.distribution_yield_ttm_pct`
 - **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — state-aware valuation assembly reads `TechnicalOptionsContext::Available { outcome: Snapshot(_) }` into `ValuationInputs.etf_options`
 - **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — additive `GexSummary` field serde compat
@@ -52,14 +53,14 @@
 - **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs` — strip `all_expirations` before `serialize_state_to_context`
 - **Modify:** `crates/scorpio-core/src/state/trading_state.rs` — add `etf_risk_free_rate: Option<f64>`, `etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>`, `EtfRiskFreeRateSource` enum; thread through `TradingStateWire`
 - **Modify:** `crates/scorpio-core/src/state/mod.rs` — re-export new types
-- **Modify:** `crates/scorpio-core/src/workflow/builder.rs` — thread `FredClient` into `PreflightTask` constructor
-- **Modify:** `crates/scorpio-core/src/workflow/tasks/preflight.rs` — opportunistic `DGS3MO` fetch when resolved pack is `EtfBaseline` and `target_date` is today
-- **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add secondary sensitivities block, `All expirations` sub-block, risk-free-rate fallback banner
+- **Modify:** `crates/scorpio-core/src/workflow/builder.rs` — thread `FredClient` + `YFinanceClient` into `PreflightTask` constructor
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/preflight.rs` — live/today `DGS3MO` fetch, yfinance `^IRX` close fallback, and no-rate degradation when both fail
+- **Modify:** `crates/scorpio-reporters/src/terminal/etf.rs` — add secondary sensitivities block, `All expirations` sub-block, and risk-free-rate unavailable/degraded banner
 - **Create:** `crates/scorpio-core/examples/yfinance_options_chain_live_test.rs`
 - **Create:** `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
 - **Modify:** `crates/scorpio-core/examples/fred_live_test.rs` — DGS3MO assertion
 - **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — new `TradingState` field roundtrip + populated `GexSummary` fields
-- **Modify:** `crates/scorpio-core/tests/workflow_pipeline_structure.rs` — verify FredClient threading + DGS3MO gating
+- **Modify:** `crates/scorpio-core/tests/workflow_pipeline_structure.rs` — verify FRED/yfinance rate-provider threading + live/today gating
 
 ---
 
@@ -111,10 +112,10 @@ mod tests {
 
     #[test]
     fn bsm_gamma_matches_analytical_reference() {
-        // Analytical Γ at the inputs above (computed offline) ≈ 0.05548.
+        // Analytical Γ at the inputs above (computed offline) ≈ 0.06931.
         let g = bsm_gamma(ref_inputs());
         assert!(
-            (g - 0.055_482).abs() < 1e-5,
+            (g - 0.069_313).abs() < 1e-5,
             "gamma drift: got {g}"
         );
     }
@@ -155,16 +156,15 @@ mod tests {
     }
 
     #[test]
-    fn bsm_charm_call_and_put_have_opposite_signs_at_the_money() {
+    fn bsm_charm_call_put_parity_gap_matches_dividend_yield() {
         let call = bsm_charm_call(ref_inputs());
         let put = bsm_charm_put(ref_inputs());
         assert!(call.is_finite() && put.is_finite());
-        // For an ATM contract with q < r, the call charm and put charm differ
-        // by `q·e^{-q·t}`. They are not exact negatives, but they should fall
-        // on opposite sides of zero in this regime.
+        // Charm parity: call charm - put charm = q·e^{-q·t}.
+        let expected_gap = ref_inputs().q * (-ref_inputs().q * ref_inputs().t_years).exp();
         assert!(
-            call * put < 0.0 || call.abs() < 1e-9 || put.abs() < 1e-9,
-            "expected opposite signs: call={call} put={put}"
+            ((call - put) - expected_gap).abs() < 1e-9,
+            "unexpected charm parity gap: call={call} put={put} expected_gap={expected_gap}"
         );
     }
 
@@ -384,11 +384,9 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
             as_of: chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
             near_term_expiration: &s.near_term_expiration,
             near_term_strikes: &s.near_term_strikes,
-            expirations: &[],
             atm_iv_fallback: s.atm_iv,
         });
         assert!(res.near_term.is_none());
-        assert!(res.broad.is_none());
         assert_eq!(res.strikes_total, 0);
         assert_eq!(res.strikes_used, 0);
     }
@@ -404,7 +402,6 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
             as_of: chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
             near_term_expiration: &s.near_term_expiration,
             near_term_strikes: &s.near_term_strikes,
-            expirations: &[],
             atm_iv_fallback: s.atm_iv,
         });
         let near = res.near_term.expect("near-term aggregate must be present");
@@ -420,7 +417,6 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
             as_of: chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
             near_term_expiration: &s2.near_term_expiration,
             near_term_strikes: &s2.near_term_strikes,
-            expirations: &[],
             atm_iv_fallback: s2.atm_iv,
         });
         let near2 = res2.near_term.expect("put-only aggregate present");
@@ -446,7 +442,6 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
             as_of: chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
             near_term_expiration: &s.near_term_expiration,
             near_term_strikes: &s.near_term_strikes,
-            expirations: &[],
             atm_iv_fallback: s.atm_iv,
         });
         // One call leg + one put leg = two fallbacks for the single row.
@@ -474,7 +469,6 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
             as_of: chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
             near_term_expiration: &s.near_term_expiration,
             near_term_strikes: &s.near_term_strikes,
-            expirations: &[],
             atm_iv_fallback: s.atm_iv,
         });
         assert!(res.near_term.is_none());
@@ -493,7 +487,6 @@ Append the following test cases inside the existing `#[cfg(test)] mod tests { ..
             as_of: chrono::NaiveDate::from_ymd_opt(2026, 6, 26).unwrap(),
             near_term_expiration: &s.near_term_expiration,
             near_term_strikes: &s.near_term_strikes,
-            expirations: &[],
             atm_iv_fallback: s.atm_iv,
         });
         assert!(res.near_term.is_none(), "same-day expiration must yield None");
@@ -521,7 +514,7 @@ pub struct PerStrikeAggregate {
     pub net_gex_usd_per_1pct_move: f64,
 }
 
-/// Input bundle for chain-level aggregation.
+/// Input bundle for near-term chain-level aggregation.
 pub struct AggregateInputs<'a> {
     pub spot: f64,
     pub r: f64,
@@ -529,16 +522,13 @@ pub struct AggregateInputs<'a> {
     pub as_of: chrono::NaiveDate,
     pub near_term_expiration: &'a str,
     pub near_term_strikes: &'a [NearTermStrike],
-    /// Stage 3 broad-aggregation input. Stage 1/2 always pass `&[]` here.
-    pub expirations: &'a [crate::data::traits::options::ExpirationStrikes],
     pub atm_iv_fallback: f64,
 }
 
-/// Result bundle covering near-term + broad aggregations.
+/// Result bundle covering the near-term front-month aggregate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AggregateResult {
     pub near_term: Option<NearTermAggregate>,
-    pub broad: Option<BroadAggregate>,
     pub iv_fallback_count: u32,
     pub strikes_total: u32,
     pub strikes_used: u32,
@@ -550,18 +540,6 @@ pub struct NearTermAggregate {
     pub per_strike: Vec<PerStrikeAggregate>,
     pub net_gex_usd_per_1pct_move: f64,
     pub gross_gex_usd_per_1pct_move: f64,
-    pub net_vex_usd_per_volpt: f64,
-    pub gross_vex_usd_per_volpt: f64,
-    pub net_cex_usd_per_day: f64,
-    pub gross_cex_usd_per_day: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct BroadAggregate {
-    pub net_gex_usd_per_1pct_move: f64,
-    pub gross_gex_usd_per_1pct_move: f64,
-    pub expirations_used: u32,
-    pub expirations_total_considered: u32,
 }
 
 const CONTRACT_MULTIPLIER: f64 = 100.0;
@@ -569,10 +547,6 @@ const CONTRACT_MULTIPLIER: f64 = 100.0;
 struct StrikeContribution {
     net_gex: f64,
     gross_gex: f64,
-    net_vex: f64,
-    gross_vex: f64,
-    net_cex: f64,
-    gross_cex: f64,
 }
 
 fn build_inputs(
@@ -586,10 +560,9 @@ fn build_inputs(
     BsmInputs { spot, strike, iv, r, q, t_years }
 }
 
-/// Compute a single strike's signed + magnitude contributions for all three
-/// Greeks. Returns `None` when the row has no usable IV on either leg and
-/// `atm_iv_fallback <= 0.0` — caller then increments `strikes_total` but
-/// not `strikes_used`.
+/// Compute a single strike's signed + magnitude GEX contributions. Returns
+/// `None` when the row has no usable IV on either leg and `atm_iv_fallback <= 0.0`
+/// — caller then increments `strikes_total` but not `strikes_used`.
 fn contribution_for_strike(
     spot: f64,
     r: f64,
@@ -619,10 +592,6 @@ fn contribution_for_strike(
 
     let gamma_call = bsm_gamma(call_in);
     let gamma_put = bsm_gamma(put_in);
-    let vanna_call = bsm_vanna(call_in);
-    let vanna_put = bsm_vanna(put_in);
-    let charm_call = bsm_charm_call(call_in);
-    let charm_put = bsm_charm_put(put_in);
 
     let spot_sq_pct = spot * spot * 0.01;
 
@@ -631,26 +600,9 @@ fn contribution_for_strike(
     let gross_gex =
         (gamma_call * call_oi + gamma_put * put_oi) * CONTRACT_MULTIPLIER * spot_sq_pct;
 
-    // VEX (vanna can be signed; gross uses absolute contributions)
-    let net_vex = (vanna_call * call_oi - vanna_put * put_oi) * CONTRACT_MULTIPLIER * spot;
-    let gross_vex =
-        ((vanna_call * call_oi).abs() + (vanna_put * put_oi).abs()) * CONTRACT_MULTIPLIER * spot;
-
-    // CEX (charm can be signed; gross uses absolute contributions)
-    let net_cex =
-        (charm_call * call_oi - charm_put * put_oi) * CONTRACT_MULTIPLIER * spot / 365.0;
-    let gross_cex = ((charm_call * call_oi).abs() + (charm_put * put_oi).abs())
-        * CONTRACT_MULTIPLIER
-        * spot
-        / 365.0;
-
     Some(StrikeContribution {
         net_gex,
         gross_gex,
-        net_vex,
-        gross_vex,
-        net_cex,
-        gross_cex,
     })
 }
 
@@ -667,10 +619,7 @@ fn years_until(expiration: chrono::NaiveDate, as_of: chrono::NaiveDate) -> f64 {
     }
 }
 
-/// Aggregate per-strike Greek contributions across the near-term chain.
-///
-/// Stage 1/2 always passes `expirations: &[]`. Stage 3 plumbs the transient
-/// non-front-month rows here for broad GEX.
+/// Aggregate per-strike GEX contributions across the near-term chain.
 pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
     let mut iv_fallback_count: u32 = 0;
     let mut strikes_total: u32 = 0;
@@ -685,10 +634,6 @@ pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
                 let mut per_strike: Vec<PerStrikeAggregate> = Vec::new();
                 let mut net_gex = 0.0;
                 let mut gross_gex = 0.0;
-                let mut net_vex = 0.0;
-                let mut gross_vex = 0.0;
-                let mut net_cex = 0.0;
-                let mut gross_cex = 0.0;
 
                 for row in inputs.near_term_strikes {
                     strikes_total = strikes_total.saturating_add(1);
@@ -710,10 +655,6 @@ pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
                     });
                     net_gex += c.net_gex;
                     gross_gex += c.gross_gex;
-                    net_vex += c.net_vex;
-                    gross_vex += c.gross_vex;
-                    net_cex += c.net_cex;
-                    gross_cex += c.gross_cex;
                 }
 
                 if strikes_used == 0 {
@@ -724,10 +665,6 @@ pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
                         per_strike,
                         net_gex_usd_per_1pct_move: net_gex,
                         gross_gex_usd_per_1pct_move: gross_gex,
-                        net_vex_usd_per_volpt: net_vex,
-                        gross_vex_usd_per_volpt: gross_vex,
-                        net_cex_usd_per_day: net_cex,
-                        gross_cex_usd_per_day: gross_cex,
                     })
                 }
             }
@@ -735,12 +672,8 @@ pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
         None => None,
     };
 
-    // Stage 3 fills this in. Stage 1/2 always produces broad = None.
-    let broad = None;
-
     AggregateResult {
         near_term,
-        broad,
         iv_fallback_count,
         strikes_total,
         strikes_used,
@@ -748,49 +681,26 @@ pub fn aggregate(inputs: AggregateInputs<'_>) -> AggregateResult {
 }
 ```
 
-Note: the aggregator references `crate::data::traits::options::ExpirationStrikes` — this type does not exist yet in Stage 1. For Stage 1 we **also** add the `ExpirationStrikes` type to `data/traits/options.rs` so the aggregator compiles. See Step 2.4 below.
-
-- [ ] **Step 2.4: Add the `ExpirationStrikes` type (Stage 1 stub)**
-
-Open `crates/scorpio-core/src/data/traits/options.rs` and append after the existing `NearTermStrike` struct:
-
-```rust
-/// Per-expiration strike rows for non-front-month expirations.
-///
-/// Populated by Stage 3 of ETF Phase 2 (`OptionsSnapshot.all_expirations`).
-/// Defined here in Stage 1 only to make the aggregator type-check; nothing in
-/// Stage 1/2 populates a non-empty `Vec<ExpirationStrikes>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ExpirationStrikes {
-    /// ISO-8601 expiration date.
-    pub expiration: String,
-    /// Per-strike rows for this expiration.
-    pub strikes: Vec<NearTermStrike>,
-}
-```
-
-Do **not** add `all_expirations` to `OptionsSnapshot` yet — that lands in Stage 3 Task 14.
-
-- [ ] **Step 2.5: Run the tests to verify they pass**
+- [ ] **Step 2.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
 Expected: 12 tests pass (7 from Task 1 + 5 new).
 
-- [ ] **Step 2.6: Lint and format**
+- [ ] **Step 2.5: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
 Expected: clean.
 
-- [ ] **Step 2.7: Commit**
+- [ ] **Step 2.6: Commit**
 
 ```bash
-git add crates/scorpio-core/src/indicators/gex.rs crates/scorpio-core/src/data/traits/options.rs
-git commit -m "feat(indicators): aggregate per-strike GEX/VEX/CEX with SqueezeMetrics signs
+git add crates/scorpio-core/src/indicators/gex.rs
+git commit -m "feat(indicators): aggregate per-strike GEX with SqueezeMetrics signs
 
-Near-term aggregation reads OptionsSnapshot.near_term_strikes, falls back to
+Near-term aggregation reads OptionsSnapshot.near_term_strikes, uses
 atm_iv when per-strike IVs are missing, and skips rows when neither call_iv,
-put_iv, nor atm_iv is available. Stage 3 plumbs the broad aggregation via
-ExpirationStrikes."
+put_iv, nor atm_iv is available. Broad aggregation and VEX/CEX surfacing are
+deferred to Stage 3."
 ```
 
 ---
@@ -819,9 +729,6 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `
                 StrikeGex { strike: 100.0, net_gex_usd_per_1pct_move: 500_000.0 },
                 StrikeGex { strike: 105.0, net_gex_usd_per_1pct_move: -250_000.0 },
             ],
-            broad: None,
-            vex_summary: None,
-            cex_summary: None,
         };
         let json = serde_json::to_string(&val).expect("serialize");
         let back: GexSummary = serde_json::from_str(&json).expect("deserialize");
@@ -833,7 +740,7 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `
         // Phase 1 GexSummary literally never serialized — `options_gex` was
         // always None — but the serde contract for newly added fields must
         // still default cleanly. Verify with a minimal JSON payload missing
-        // the four new fields.
+        // the Stage 1 field.
         let json = r#"{
             "net_gex_usd_per_1pct_move": 0.0,
             "gross_gex_usd_per_1pct_move": 0.0,
@@ -843,52 +750,24 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block at the bottom of `
         }"#;
         let back: GexSummary = serde_json::from_str(json).expect("deserialize");
         assert!(back.strikes.is_empty());
-        assert!(back.broad.is_none());
-        assert!(back.vex_summary.is_none());
-        assert!(back.cex_summary.is_none());
-    }
-
-    #[test]
-    fn broad_gex_with_partial_expiration_coverage_roundtrips() {
-        let val = BroadGex {
-            net_gex_usd_per_1pct_move: 5_000_000.0,
-            gross_gex_usd_per_1pct_move: 9_000_000.0,
-            expirations_used: 3,
-            expirations_total_considered: 5,
-        };
-        let json = serde_json::to_string(&val).expect("serialize");
-        let back: BroadGex = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(val, back);
-    }
-
-    #[test]
-    fn legacy_broad_gex_without_total_considered_defaults_to_zero() {
-        // Older snapshot variant that only persisted `expirations_used`.
-        let json = r#"{
-            "net_gex_usd_per_1pct_move": 0.0,
-            "gross_gex_usd_per_1pct_move": 0.0,
-            "expirations_used": 0
-        }"#;
-        let back: BroadGex = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(back.expirations_total_considered, 0);
     }
 ```
 
 - [ ] **Step 3.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core state::derived::tests`
-Expected: COMPILE FAILURE (`StrikeGex`, `BroadGex` types not defined; `GexSummary` missing the four new fields).
+Expected: COMPILE FAILURE (`StrikeGex` type not defined; `GexSummary` missing the `strikes` field).
 
 - [ ] **Step 3.3: Add the new types and extend `GexSummary`**
 
-In `crates/scorpio-core/src/state/derived.rs`, locate the existing `GexSummary` definition (currently around line 290) and replace it with the additive version. Also add the four new sibling structs **immediately after** the updated `GexSummary`. Use this exact content:
+In `crates/scorpio-core/src/state/derived.rs`, locate the existing `GexSummary` definition (currently around line 290) and replace it with the additive version. Also add the new `StrikeGex` sibling struct **immediately after** the updated `GexSummary`. Use this exact content:
 
 ```rust
 /// Dealer-positioning summary populated by `compute_gex_summary` from a live
 /// `OptionsSnapshot`. Phase 1 always emitted `options_gex: None`; Phase 2
-/// Stage 2 populates the legacy fields plus `strikes`. Stage 3 additionally
-/// populates `broad`, `vex_summary`, and `cex_summary`. All four added fields
-/// carry `#[serde(default)]` so legacy snapshots remain readable.
+/// Stage 1/2 populates the legacy fields plus `strikes`. Stage 3 additionally
+/// adds broad GEX and secondary VEX/CEX summaries. The added `strikes` field
+/// carries `#[serde(default)]` so legacy snapshots remain readable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GexSummary {
     pub net_gex_usd_per_1pct_move: f64,
@@ -898,24 +777,9 @@ pub struct GexSummary {
     pub near_term_expiration: chrono::NaiveDate,
 
     /// Top-N strikes by `|net_gex_usd_per_1pct_move|` — gamma walls.
-    /// Populated by Stage 2.
+    /// Populated by Stage 1/2.
     #[serde(default)]
     pub strikes: Vec<StrikeGex>,
-
-    /// Broad dealer-positioning aggregate across all listed expirations.
-    /// Populated by Stage 3. Stage 1/2 always leaves this `None`.
-    #[serde(default)]
-    pub broad: Option<BroadGex>,
-
-    /// Secondary sensitivity: dealer exposure to absolute IV moves.
-    /// Populated by Stage 3.
-    #[serde(default)]
-    pub vex_summary: Option<VexSummary>,
-
-    /// Secondary sensitivity: dealer exposure to one day of time decay.
-    /// Populated by Stage 3.
-    #[serde(default)]
-    pub cex_summary: Option<CexSummary>,
 }
 
 /// Single gamma-wall row inside `GexSummary.strikes`.
@@ -924,38 +788,12 @@ pub struct StrikeGex {
     pub strike: f64,
     pub net_gex_usd_per_1pct_move: f64,
 }
-
-/// Broad (all-expirations) GEX aggregate. Single-rate approximation — the
-/// renderer/prompt always labels this as such.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct BroadGex {
-    pub net_gex_usd_per_1pct_move: f64,
-    pub gross_gex_usd_per_1pct_move: f64,
-    pub expirations_used: u32,
-    #[serde(default)]
-    pub expirations_total_considered: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct VexSummary {
-    /// Per 1.0 vol-point change (callers typically divide by 100 at display
-    /// time to express "per 1% absolute IV move").
-    pub net_vex_usd_per_volpt: f64,
-    pub gross_vex_usd_per_volpt: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct CexSummary {
-    /// Per 1 calendar day of time decay.
-    pub net_cex_usd_per_day: f64,
-    pub gross_cex_usd_per_day: f64,
-}
 ```
 
 - [ ] **Step 3.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core state::derived::tests`
-Expected: previously-passing tests still pass; 4 new tests pass.
+Expected: previously-passing tests still pass; 2 new tests pass.
 
 - [ ] **Step 3.5: Lint and format**
 
@@ -966,11 +804,11 @@ Expected: clean.
 
 ```bash
 git add crates/scorpio-core/src/state/derived.rs
-git commit -m "feat(state): extend GexSummary with strikes/broad/vex/cex (additive)
+git commit -m "feat(state): extend GexSummary with gamma-wall strikes
 
-All four new fields carry #[serde(default)] so legacy Phase 1 snapshots
-(which always serialized options_gex: None) deserialize unchanged. Stage 2
-populates 'strikes'; Stage 3 populates the remaining three."
+The new strikes field carries #[serde(default)] so legacy Phase 1 snapshots
+(which always serialized options_gex: None) deserialize unchanged. Broad GEX
+and VEX/CEX summaries are deferred to Stage 3."
 ```
 
 ---
@@ -1118,8 +956,7 @@ Expected: COMPILE FAILURE (`compute_gex_summary` not defined).
 
 - [ ] **Step 4.3: Extend `ValuationInputs`**
 
-In `crates/scorpio-core/src/valuation/mod.rs`, append three fields to the `ValuationInputs` struct (preserving existing fields and their doc comments):
-
+In `crates/scorpio-core/src/valuation/mod.rs`, append two Stage 1 fields to the `ValuationInputs` struct (preserving existing fields and their doc comments):
 ```rust
 pub struct ValuationInputs<'a> {
     pub profile: Option<yfinance_rs::profile::Profile>,
@@ -1142,12 +979,6 @@ pub struct ValuationInputs<'a> {
     /// is available or active pack is not `EtfBaseline`.
     pub etf_options: Option<&'a crate::data::traits::options::OptionsSnapshot>,
 
-    /// Phase 2 (Stage 3) — FRED `DGS3MO` snapshot threaded from preflight when
-    /// the active pack is `EtfBaseline`. `None` when pack != EtfBaseline OR
-    /// when FRED was unreachable. The ETF valuator substitutes a const `0.045`
-    /// when `None`.
-    pub etf_risk_free_rate: Option<f64>,
-
     /// Phase 2 — Reference date for time-to-expiration math, sourced from
     /// `state.target_date`. Defaulted to `chrono::Utc::now().date_naive()` by
     /// the equity path which does not read it.
@@ -1163,7 +994,6 @@ grep -rn 'ValuationInputs {' crates/scorpio-core/src/ crates/scorpio-core/tests/
 
 For each constructor, set the new fields to:
 - `etf_options: None`
-- `etf_risk_free_rate: None`
 - `as_of: chrono::Utc::now().date_naive()` (or a fixed test date for tests)
 
 In production code, `as_of` should come from `state.target_date` parsed via `chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")` with a fallback to `chrono::Utc::now().date_naive()` on parse failure. Apply that pattern only at the state-aware `crate::valuation::ValuationInputs` construction site in `workflow/tasks/analyst.rs` (Task 5 covers the touch).
@@ -1183,10 +1013,9 @@ const MAX_GAMMA_WALLS: usize = 3;
 /// Returns `None` when the front-month near-term aggregate is unusable.
 ///
 /// Inputs:
-/// - `snapshot`: live front-month chain (plus Stage 3's transient
-///   `all_expirations` once that field exists)
-/// - `r`: decimal risk-free rate (Stage 3 may be FRED `DGS3MO` divided by
-///   100; Stage 1/2 callers pass the const `0.045`)
+/// - `snapshot`: live front-month chain
+/// - `r`: decimal risk-free rate. Tests pass fixed values; production callers
+///   must pass a live rate from FRED `DGS3MO` or yfinance `^IRX`.
 /// - `q`: decimal dividend yield (caller derives from
 ///   `EtfComposition.distribution_yield_ttm_pct / 100` when positive)
 /// - `as_of`: reference date for time-to-expiration math
@@ -1203,7 +1032,6 @@ pub fn compute_gex_summary(
         as_of,
         near_term_expiration: &snapshot.near_term_expiration,
         near_term_strikes: &snapshot.near_term_strikes,
-        expirations: &[], // Stage 3 will plumb snapshot.all_expirations here
         atm_iv_fallback: snapshot.atm_iv,
     });
 
@@ -1251,18 +1079,13 @@ pub fn compute_gex_summary(
         max_pain_strike: snapshot.max_pain_strike,
         near_term_expiration: near.expiration,
         strikes: walls,
-        // Stage 3 will fill these in from `agg.broad` and the near-term VEX/CEX
-        // sums. Stage 1/2 leaves them None.
-        broad: None,
-        vex_summary: None,
-        cex_summary: None,
     })
 }
 ```
 
 - [ ] **Step 4.5: Wire `compute_gex_summary` into the valuator**
 
-Replace the hardcoded `options_gex: None` at the existing line in
+Replace the placeholder `options_gex: None` at the existing line in
 `crates/scorpio-core/src/valuation/etf/premium_discount.rs` (currently
 around line 75 inside the `assess` method) with a real call. Locate this
 section:
@@ -1291,13 +1114,10 @@ Replace with:
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
         let leverage_factor = inputs.etf_fund_info.and_then(|f| f.leverage_factor);
 
-        // Phase 2 dealer-positioning. q comes from the TTM distribution
-        // yield (composition.distribution_yield_ttm_pct / 100) when the
-        // composition is present and the yield is positive, else 0.0. r
-        // comes from inputs.etf_risk_free_rate (FRED DGS3MO, Stage 3) when
-        // available, else the const 0.045 fallback.
-        const RISK_FREE_RATE_FALLBACK: f64 = 0.045;
-        let r = inputs.etf_risk_free_rate.unwrap_or(RISK_FREE_RATE_FALLBACK);
+        // Phase 2 dealer-positioning will be computed in Stage 3 after live
+        // risk-free-rate sourcing is available. No hardcoded rate fallback is
+        // allowed, so Stage 1/2 keeps the derived overlay absent.
+        let r: Option<f64> = None;
         let q = composition
             .as_ref()
             .and_then(|c| c.distribution_yield_ttm_pct)
@@ -1305,9 +1125,17 @@ Replace with:
             .map(|y_pct| y_pct / 100.0)
             .unwrap_or(0.0);
         flags.options_chain_present = inputs.etf_options.is_some();
-        let options_gex = inputs
-            .etf_options
-            .and_then(|snap| compute_gex_summary(snap, r, q, inputs.as_of));
+        let options_gex = match (inputs.etf_options, r) {
+            (Some(snap), Some(rate)) => compute_gex_summary(snap, rate, q, inputs.as_of),
+            (Some(_), None) => {
+                tracing::warn!(
+                    target: "scorpio_core::valuation::etf::gex",
+                    "ETF dealer-positioning skipped — risk-free rate unavailable"
+                );
+                None
+            }
+            (None, _) => None,
+        };
 
         DerivedValuation {
             asset_shape: shape.clone(),
@@ -1331,7 +1159,7 @@ Expected: previously-passing tests still pass; 4 new tests pass.
 - [ ] **Step 4.7: Lint and format**
 
 Run: `cargo clippy -p scorpio-core --all-targets -- -D warnings && cargo fmt -- --check`
-Expected: clean. If clippy fires on call sites that construct `ValuationInputs`, fix each one to populate `etf_options`, `etf_risk_free_rate`, and `as_of`.
+Expected: clean. If clippy fires on call sites that construct `ValuationInputs`, fix each one to populate `etf_options` and `as_of`.
 
 - [ ] **Step 4.8: Commit**
 
@@ -1340,8 +1168,8 @@ git add crates/scorpio-core/src/valuation/mod.rs crates/scorpio-core/src/valuati
 git commit -m "feat(valuation): populate EtfValuation.options_gex from live snapshot
 
 Inverts put/call OI to the canonical call/put ratio, sorts gamma walls
-by |net_gex|, truncates to top-3, and falls back to const 0.045 risk-free
-rate when state.etf_risk_free_rate is None (Stage 1/2 default)."
+by |net_gex|, truncates to top-3, and degrades to options_gex: None until
+Stage 2 supplies a live risk-free rate."
 ```
 
 ---
@@ -1468,8 +1296,8 @@ In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, add the helper as a free
 ///
 /// Returns `Some(&snapshot)` only when `TechnicalOptionsContext::Available`
 /// carries an `OptionsOutcome::Snapshot(_)`. Every other variant emits a
-/// `tracing::warn!` and returns `None` so the valuator falls back to
-/// `options_gex: None` cleanly.
+/// `tracing::warn!` and returns `None` so the valuator leaves
+/// dealer-positioning absent cleanly.
 pub(crate) fn etf_options_from_state(
     state: &crate::state::TradingState,
 ) -> Option<&crate::data::traits::options::OptionsSnapshot> {
@@ -1513,18 +1341,11 @@ let as_of = chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
 let valuation_inputs = ValuationInputs {
     // ... existing fields unchanged ...
     etf_options: etf_options_from_state(state),
-    etf_risk_free_rate: None, // Stage 3 Task 20 will read from state
     as_of,
 };
 ```
 
-Note: `state.etf_risk_free_rate` does not exist in Stage 1. To make the code compile now, **use `None` directly** rather than `state.etf_risk_free_rate`:
-
-```rust
-etf_risk_free_rate: None, // Stage 3 will replace with state.etf_risk_free_rate
-```
-
-Stage 3 Task 20 will flip this to read from state.
+Do not add an `etf_risk_free_rate` carrier here in Stage 1. Stage 2 Task 20 adds that `ValuationInputs` field and flips this construction site to read from state after `TradingState` has the durable rate-source fields.
 
 - [ ] **Step 5.4: Run the tests to verify they pass**
 
@@ -1544,7 +1365,7 @@ git commit -m "feat(workflow): hydrate ETF valuation_inputs.etf_options from tec
 
 Reads TechnicalOptionsContext::Available { outcome: Snapshot(_) } into
 the valuation carrier. All other variants emit a structured warn! and
-fall through to options_gex: None."
+fall through to absent dealer-positioning."
 ```
 
 ---
@@ -1595,9 +1416,6 @@ fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
                     StrikeGex { strike: 615.0, net_gex_usd_per_1pct_move: -0.4e9 },
                     StrikeGex { strike: 625.0, net_gex_usd_per_1pct_move: 0.2e9 },
                 ],
-                broad: None,
-                vex_summary: None,
-                cex_summary: None,
             }),
             category: Some("Large Blend".to_owned()),
             leverage_factor: Some(1.0),
@@ -1612,15 +1430,14 @@ fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
         Some(ScenarioValuation::Etf(etf)) => {
             let g = etf.options_gex.as_ref().expect("gex");
             assert_eq!(g.strikes.len(), 3);
-            assert!(g.broad.is_none());
         }
         other => panic!("expected ETF scenario with gex, got {other:?}"),
     }
 }
 
 #[test]
-fn legacy_etf_snapshot_without_phase2_gex_fields_still_deserializes() {
-    // Minimal JSON missing strikes/broad/vex_summary/cex_summary — must default.
+fn legacy_etf_snapshot_without_phase2_gex_strikes_still_deserializes() {
+    // Minimal JSON missing strikes — must default.
     let json = r#"{
         "net_gex_usd_per_1pct_move": 100.0,
         "gross_gex_usd_per_1pct_move": 200.0,
@@ -1631,9 +1448,6 @@ fn legacy_etf_snapshot_without_phase2_gex_fields_still_deserializes() {
     let summary: scorpio_core::state::GexSummary = serde_json::from_str(json)
         .expect("legacy summary must deserialize");
     assert!(summary.strikes.is_empty());
-    assert!(summary.broad.is_none());
-    assert!(summary.vex_summary.is_none());
-    assert!(summary.cex_summary.is_none());
 }
 ```
 
@@ -1657,9 +1471,9 @@ Expected: no regressions. Investigate any failure immediately — Stage 1 is add
 git add crates/scorpio-core/tests/state_roundtrip.rs
 git commit -m "test(state): roundtrip GexSummary.strikes through TradingState
 
-Locks in the additive-serde contract: legacy snapshots missing the four
-new GexSummary fields deserialize with defaults; populated snapshots
-preserve strikes/broad/vex/cex on serialize+deserialize."
+Locks in the additive-serde contract: legacy snapshots missing the new
+GexSummary.strikes field deserialize with defaults; populated snapshots
+preserve gamma walls on serialize+deserialize."
 ```
 
 ---
@@ -2591,7 +2405,7 @@ Compact near-term GEX block: plain-English summary line, signed net/gross
 GEX per 1% move, call/put OI, max-pain strike, top-3 gamma walls. Emits
 a partial-data note when walls are unavailable. Stage 3 will extend with
 secondary sensitivities, all-expirations broad GEX, and the risk-free-rate
-fallback banner."
+source/degradation banner."
 ```
 
 ---
@@ -2722,6 +2536,18 @@ Neutral, Aggressive-negative, Trader/FundManager-negative, and Auditor slots."
 
 ---
 
+### Required Stage 2 Risk-Free-Rate Work
+
+Complete the detailed Tasks 18-20 before running the Stage 2 validation gate. These tasks are promoted into Stage 2 because production dealer-positioning must not use a hardcoded risk-free-rate fallback.
+
+- Task 18 adds durable `etf_risk_free_rate` / source state.
+- Task 19 fetches FRED `DGS3MO`, falls back to yfinance `^IRX`, and degrades to no rate if both fail.
+- Task 20 threads the live rate into `ValuationInputs` and leaves `options_gex` absent when no rate is available.
+
+The detailed task bodies remain below to preserve the existing task numbering, but they are no longer contingent Stage 3 work.
+
+---
+
 ## ⚠️ Stage 2 Validation Gate ⚠️
 
 **Do not proceed past this point without an explicit proceed/stop decision from the user.**
@@ -2738,7 +2564,7 @@ After Stage 2 ships, run the surfaced overlay against a validation sample that i
 
 - **Proceed to Stage 3** — Stage 2 overlay adds a distinct, non-redundant signal in a strong majority of positive/mainstream cases; remains clearly secondary in terminal and generated prose; reads cleanly for a mainstream audience; and causes no clutter/regression in negative-control cases.
 - **Stop after Stage 2** — Stage 2 overlay is usually absent, redundant, or makes the report feel options-specialist. Close the Phase 2 plan here; document the stop reason in the implementation notes and revisit dealer positioning only if downstream evidence motivates it.
-- **Partial Stage 3** — if only one contingent addition is justified, schedule only that addition. Broad GEX, VEX/CEX, and FRED risk-free-rate sourcing require separate evidence; Stage 2 success is not blanket approval for all three.
+- **Partial Stage 3** — if only one contingent addition is justified, schedule only that addition. Broad GEX and VEX/CEX require separate evidence; Stage 2 success is not blanket approval for both.
 
 The decision owner is the user. **The executor must request explicit go/no-go before scheduling any Stage 3 task.**
 
@@ -2746,12 +2572,23 @@ The decision owner is the user. **The executor must request explicit go/no-go be
 
 ## Stage 3 — Contingent context expansion
 
-> Stage 3 work begins only after the Stage 2 validation gate clears with an explicit proceed decision. If the user says stop after Stage 2, archive this plan and skip the tasks below.
+> Stage 3 work begins only after the Stage 2 validation gate clears with an explicit proceed decision. If the user says stop after Stage 2, archive this plan and skip the contingent tasks below. Tasks 18-20 are listed later for numbering continuity but are required Stage 2 risk-free-rate work, not contingent Stage 3 work.
+
+Stage 3 has independent subtracks. After the validation gate, schedule only the subtracks approved by the user:
+
+- **Subtrack A — Broad GEX:** Tasks 13-15 plus the broad portion of Task 16 and Task 21. Adds transient `all_expirations`, NTM-per-expiration broad aggregation, and all/partial-expiration reporter output.
+- **Subtrack B — Secondary VEX/CEX:** VEX/CEX portions of Task 13, Task 16, and Task 21. Adds near-term secondary sensitivity summaries and reporter output.
+- **Subtrack C — Live smokes:** Tasks 22-24. Optional manual evidence after whichever Stage 3 subtracks are approved.
+
+Do not implement Subtrack A just because Subtrack B is approved, or vice versa.
 
 ### Task 13: Aggregator extensions — broad path + VEX/CEX surfacing
 
 **Files:**
 - Modify: `crates/scorpio-core/src/indicators/gex.rs`
+- Modify: `crates/scorpio-core/src/state/derived.rs`
+
+> **Broad GEX normalization contract:** `OptionsSnapshot.near_term_strikes` is the authoritative front-month slice. `OptionsSnapshot.all_expirations` stores **non-front-month** expirations only, using the same NTM row-normalization as the front-month slice; it is not a full-chain row dump. Broad GEX therefore means "front-month NTM slice plus NTM slices for additional expirations," not every listed strike. Renderers and prompts must label it as an all-expirations single-rate approximation, not as full listed-chain exposure.
 
 - [ ] **Step 13.1: Write failing tests for broad aggregation**
 
@@ -2840,6 +2677,38 @@ Expected: the three new broad-aggregation tests fail because `aggregate` current
 
 - [ ] **Step 13.3: Implement broad aggregation**
 
+First, extend the Stage 1 aggregator types in `crates/scorpio-core/src/indicators/gex.rs`:
+
+```rust
+pub struct AggregateInputs<'a> {
+    pub spot: f64,
+    pub r: f64,
+    pub q: f64,
+    pub as_of: chrono::NaiveDate,
+    pub near_term_expiration: &'a str,
+    pub near_term_strikes: &'a [NearTermStrike],
+    pub expirations: &'a [crate::data::traits::options::ExpirationStrikes],
+    pub atm_iv_fallback: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AggregateResult {
+    pub near_term: Option<NearTermAggregate>,
+    pub broad: Option<BroadAggregate>,
+    pub iv_fallback_count: u32,
+    pub strikes_total: u32,
+    pub strikes_used: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BroadAggregate {
+    pub net_gex_usd_per_1pct_move: f64,
+    pub gross_gex_usd_per_1pct_move: f64,
+    pub expirations_used: u32,
+    pub expirations_total_considered: u32,
+}
+```
+
 In `crates/scorpio-core/src/indicators/gex.rs`, replace the `// Stage 3 fills this in. Stage 1/2 always produces broad = None.` block in `aggregate` with:
 
 ```rust
@@ -2909,6 +2778,72 @@ In `crates/scorpio-core/src/indicators/gex.rs`, replace the `// Stage 3 fills th
     };
 ```
 
+Also add the `ExpirationStrikes` type in `crates/scorpio-core/src/data/traits/options.rs` after `NearTermStrike`:
+
+```rust
+/// Per-expiration NTM strike rows for non-front-month expirations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExpirationStrikes {
+    /// ISO-8601 expiration date.
+    pub expiration: String,
+    /// NTM per-strike rows for this expiration, normalized with the same helper
+    /// used for `OptionsSnapshot.near_term_strikes`.
+    pub strikes: Vec<NearTermStrike>,
+}
+```
+
+Then extend `crates/scorpio-core/src/state/derived.rs` with the Stage 3 durable broad-GEX state type and field:
+
+```rust
+pub struct GexSummary {
+    // ... existing fields unchanged ...
+
+    /// Broad dealer-positioning aggregate across NTM slices for all listed
+    /// expirations. Populated by Stage 3.
+    #[serde(default)]
+    pub broad: Option<BroadGex>,
+}
+
+/// Broad (all-expirations) GEX aggregate. Single-rate approximation — the
+/// renderer/prompt always labels this as such.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BroadGex {
+    pub net_gex_usd_per_1pct_move: f64,
+    pub gross_gex_usd_per_1pct_move: f64,
+    pub expirations_used: u32,
+    #[serde(default)]
+    pub expirations_total_considered: u32,
+}
+```
+
+Add these serde tests to the `#[cfg(test)] mod tests { ... }` block in `derived.rs`:
+
+```rust
+    #[test]
+    fn broad_gex_with_partial_expiration_coverage_roundtrips() {
+        let val = BroadGex {
+            net_gex_usd_per_1pct_move: 5_000_000.0,
+            gross_gex_usd_per_1pct_move: 9_000_000.0,
+            expirations_used: 3,
+            expirations_total_considered: 5,
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: BroadGex = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn legacy_broad_gex_without_total_considered_defaults_to_zero() {
+        let json = r#"{
+            "net_gex_usd_per_1pct_move": 0.0,
+            "gross_gex_usd_per_1pct_move": 0.0,
+            "expirations_used": 0
+        }"#;
+        let back: BroadGex = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(back.expirations_total_considered, 0);
+    }
+```
+
 - [ ] **Step 13.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core indicators::gex::tests`
@@ -2922,7 +2857,7 @@ Expected: clean.
 - [ ] **Step 13.6: Commit**
 
 ```bash
-git add crates/scorpio-core/src/indicators/gex.rs
+git add crates/scorpio-core/src/indicators/gex.rs crates/scorpio-core/src/data/traits/options.rs crates/scorpio-core/src/state/derived.rs
 git commit -m "feat(indicators): aggregate broad GEX across all listed expirations
 
 Single-rate approximation: reuses the per-strike helper for each additional
@@ -3028,7 +2963,7 @@ pub struct OptionsSnapshot {
 }
 ```
 
-(`ExpirationStrikes` was added in Task 2 Step 2.4, so no new type needed.)
+(`ExpirationStrikes` was added in Task 13 Step 13.3, so no new type needed.)
 
 - [ ] **Step 14.4: Run the tests to verify they pass**
 
@@ -3214,6 +3149,86 @@ Expected: 2 new tests fail.
 
 - [ ] **Step 16.3: Wire `broad`/`vex`/`cex` through `compute_gex_summary`**
 
+First extend the near-term aggregator with VEX/CEX totals in `crates/scorpio-core/src/indicators/gex.rs`:
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct NearTermAggregate {
+    pub expiration: chrono::NaiveDate,
+    pub per_strike: Vec<PerStrikeAggregate>,
+    pub net_gex_usd_per_1pct_move: f64,
+    pub gross_gex_usd_per_1pct_move: f64,
+    pub net_vex_usd_per_volpt: f64,
+    pub gross_vex_usd_per_volpt: f64,
+    pub net_cex_usd_per_day: f64,
+    pub gross_cex_usd_per_day: f64,
+}
+
+struct StrikeContribution {
+    net_gex: f64,
+    gross_gex: f64,
+    net_vex: f64,
+    gross_vex: f64,
+    net_cex: f64,
+    gross_cex: f64,
+}
+```
+
+Inside `contribution_for_strike`, compute the extra Greeks after gamma:
+
+```rust
+let vanna_call = bsm_vanna(call_in);
+let vanna_put = bsm_vanna(put_in);
+let charm_call = bsm_charm_call(call_in);
+let charm_put = bsm_charm_put(put_in);
+
+let net_vex = (vanna_call * call_oi - vanna_put * put_oi) * CONTRACT_MULTIPLIER * spot;
+let gross_vex =
+    ((vanna_call * call_oi).abs() + (vanna_put * put_oi).abs()) * CONTRACT_MULTIPLIER * spot;
+
+let net_cex =
+    (charm_call * call_oi - charm_put * put_oi) * CONTRACT_MULTIPLIER * spot / 365.0;
+let gross_cex = ((charm_call * call_oi).abs() + (charm_put * put_oi).abs())
+    * CONTRACT_MULTIPLIER
+    * spot
+    / 365.0;
+```
+
+Accumulate those fields in `aggregate` alongside `net_gex` and `gross_gex`, then set the four new `NearTermAggregate` fields when constructing `Some(NearTermAggregate { ... })`.
+
+Then extend `crates/scorpio-core/src/state/derived.rs` with secondary-sensitivity state:
+
+```rust
+pub struct GexSummary {
+    // ... existing fields unchanged ...
+
+    /// Secondary sensitivity: dealer exposure to absolute IV moves.
+    /// Populated by Stage 3.
+    #[serde(default)]
+    pub vex_summary: Option<VexSummary>,
+
+    /// Secondary sensitivity: dealer exposure to one day of time decay.
+    /// Populated by Stage 3.
+    #[serde(default)]
+    pub cex_summary: Option<CexSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VexSummary {
+    /// Per 1.0 vol-point change (callers typically divide by 100 at display
+    /// time to express "per 1% absolute IV move").
+    pub net_vex_usd_per_volpt: f64,
+    pub gross_vex_usd_per_volpt: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CexSummary {
+    /// Per 1 calendar day of time decay.
+    pub net_cex_usd_per_day: f64,
+    pub gross_cex_usd_per_day: f64,
+}
+```
+
 Replace the construction of `GexSummary` at the bottom of `compute_gex_summary` (in `crates/scorpio-core/src/valuation/etf/premium_discount.rs`) with:
 
 ```rust
@@ -3270,7 +3285,7 @@ Expected: clean.
 - [ ] **Step 16.6: Commit**
 
 ```bash
-git add crates/scorpio-core/src/valuation/etf/premium_discount.rs
+git add crates/scorpio-core/src/indicators/gex.rs crates/scorpio-core/src/state/derived.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs
 git commit -m "feat(valuation): emit broad/vex_summary/cex_summary on GexSummary
 
 Stage 3 only — broad GEX comes from the aggregator's broad path over
@@ -3501,7 +3516,7 @@ In `crates/scorpio-core/src/state/trading_state.rs`:
 #[serde(rename_all = "snake_case")]
 pub enum EtfRiskFreeRateSource {
     FredDgs3Mo,
-    FallbackConst,
+    YFinanceIrx,
 }
 ```
 
@@ -3511,15 +3526,16 @@ pub enum EtfRiskFreeRateSource {
 pub struct TradingState {
     // ... existing fields ...
 
-    /// Stage 3 — risk-free rate (decimal fraction, e.g. 0.0427) sourced from
-    /// FRED DGS3MO at preflight when the active pack is `EtfBaseline`.
-    /// `None` when pack != EtfBaseline OR when FRED was unreachable. The ETF
-    /// valuator substitutes a const `0.045` when `None`.
+    /// Stage 2 — risk-free rate (decimal fraction, e.g. 0.0427) sourced from
+    /// FRED DGS3MO at preflight when the active pack is `EtfBaseline`, or from
+    /// the most recent yfinance `^IRX` close when FRED is unavailable.
+    /// `None` when pack != EtfBaseline OR when both live rate sources fail. The
+    /// ETF valuator must degrade dealer-positioning to unavailable when `None`.
     #[serde(default)]
     pub etf_risk_free_rate: Option<f64>,
 
-    /// Stage 3 — Persisted origin of the ETF risk-free-rate input so live
-    /// runs and `scorpio report` render the same fallback banner from
+    /// Stage 2 — Persisted origin of the ETF risk-free-rate input so live
+    /// runs and `scorpio report` render the same source/degradation banner from
     /// reloaded snapshots.
     #[serde(default)]
     pub etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>,
@@ -3553,13 +3569,13 @@ git add crates/scorpio-core/src/state/trading_state.rs crates/scorpio-core/src/s
 git commit -m "feat(state): add etf_risk_free_rate + source on TradingState
 
 Additive: both fields are #[serde(default)] so legacy snapshots without
-them deserialize unchanged. The source enum lets scorpio report render
-the FRED-vs-fallback header banner from a reloaded snapshot."
+them deserialize unchanged. The source enum lets scorpio report distinguish
+FRED DGS3MO from yfinance ^IRX and no-rate degradation after reload."
 ```
 
 ---
 
-### Task 19: Thread `FredClient` into `PreflightTask` and fetch `DGS3MO`
+### Task 19: Thread live risk-free-rate providers into `PreflightTask`
 
 **Files:**
 - Modify: `crates/scorpio-core/src/workflow/builder.rs`
@@ -3573,11 +3589,14 @@ Append to `crates/scorpio-core/tests/workflow_pipeline_structure.rs`:
 #[tokio::test]
 async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
     use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
-    use scorpio_core::testing::with_fake_fred_client;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
 
     let fred = with_fake_fred_client(|series| match series {
         "DGS3MO" => Ok(Some(4.27)), // FRED returns percent
         _ => Ok(None),
+    });
+    let yfinance = with_fake_yfinance_client(|symbol| {
+        panic!("^IRX fallback must not be called when FRED succeeds, got symbol={symbol}")
     });
 
     let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
@@ -3585,6 +3604,7 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
         &fred,
+        &yfinance,
     )
     .await
     .expect("preflight must succeed");
@@ -3599,10 +3619,13 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
 #[tokio::test]
 async fn preflight_skips_dgs3mo_for_historical_etf_pack() {
     use scorpio_core::state::TradingState;
-    use scorpio_core::testing::with_fake_fred_client;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
 
     let fred = with_fake_fred_client(|series| {
         panic!("historical ETF run must not call latest FRED, but got series={series}")
+    });
+    let yfinance = with_fake_yfinance_client(|symbol| {
+        panic!("historical ETF run must not call latest ^IRX, but got symbol={symbol}")
     });
 
     let mut state = TradingState::new("SPY".to_owned(), "2026-01-01".to_owned());
@@ -3610,6 +3633,7 @@ async fn preflight_skips_dgs3mo_for_historical_etf_pack() {
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
         &fred,
+        &yfinance,
     )
     .await
     .expect("preflight must succeed");
@@ -3621,10 +3645,13 @@ async fn preflight_skips_dgs3mo_for_historical_etf_pack() {
 #[tokio::test]
 async fn preflight_skips_dgs3mo_for_non_etf_pack() {
     use scorpio_core::state::TradingState;
-    use scorpio_core::testing::with_fake_fred_client;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
 
     let fred = with_fake_fred_client(|series| {
         panic!("non-ETF pack must not call FRED, but got series={series}")
+    });
+    let yfinance = with_fake_yfinance_client(|symbol| {
+        panic!("non-ETF pack must not call ^IRX, but got symbol={symbol}")
     });
 
     let mut state = TradingState::new("AAPL".to_owned(), "2026-05-27".to_owned());
@@ -3632,6 +3659,7 @@ async fn preflight_skips_dgs3mo_for_non_etf_pack() {
         &mut state,
         scorpio_core::analysis_packs::PackId::Baseline,
         &fred,
+        &yfinance,
     )
     .await
     .expect("preflight must succeed");
@@ -3641,106 +3669,150 @@ async fn preflight_skips_dgs3mo_for_non_etf_pack() {
 }
 
 #[tokio::test]
-async fn preflight_records_fallback_source_when_fred_returns_empty() {
+async fn preflight_falls_back_to_yfinance_irx_when_fred_returns_empty() {
     use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
-    use scorpio_core::testing::with_fake_fred_client;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
 
     let fred = with_fake_fred_client(|_| Ok(None));
+    let yfinance = with_fake_yfinance_client(|symbol| match symbol {
+        "^IRX" => Ok(Some(4.33)), // ^IRX close is quoted in percent
+        _ => Ok(None),
+    });
 
     let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
         &fred,
+        &yfinance,
+    )
+    .await
+    .expect("preflight must succeed");
+
+    assert_eq!(state.etf_risk_free_rate, Some(0.0433));
+    assert_eq!(
+        state.etf_risk_free_rate_source,
+        Some(EtfRiskFreeRateSource::YFinanceIrx)
+    );
+}
+
+#[tokio::test]
+async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
+    use scorpio_core::state::TradingState;
+    use scorpio_core::testing::{with_fake_fred_client, with_fake_yfinance_client};
+
+    let fred = with_fake_fred_client(|_| Ok(None));
+    let yfinance = with_fake_yfinance_client(|_| Ok(None));
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    scorpio_core::workflow::tasks::preflight::run_for_test(
+        &mut state,
+        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        &fred,
+        &yfinance,
     )
     .await
     .expect("preflight must succeed");
 
     assert!(state.etf_risk_free_rate.is_none());
-    assert_eq!(
-        state.etf_risk_free_rate_source,
-        Some(EtfRiskFreeRateSource::FallbackConst)
-    );
+    assert!(state.etf_risk_free_rate_source.is_none());
 }
 ```
 
-`with_fake_fred_client` and `preflight::run_for_test` are new test shims that you will add in Step 19.3. Their signatures appear in the assertions above.
+`with_fake_fred_client`, `with_fake_yfinance_client`, and `preflight::run_for_test` are new test shims that you will add in Step 19.3. Their signatures appear in the assertions above.
 
 - [ ] **Step 19.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-core --test workflow_pipeline_structure`
 Expected: COMPILE FAILURE — both test helpers and the new code path are missing.
 
-- [ ] **Step 19.3: Thread the `FredClient`, fetch DGS3MO, and add the test shim**
+- [ ] **Step 19.3: Thread FRED + yfinance risk-free-rate providers and add test shims**
 
-Open `crates/scorpio-core/src/workflow/builder.rs`. It already constructs a `FredClient` (line 219). Pass that client into `PreflightTask` by adding a constructor parameter:
+Open `crates/scorpio-core/src/workflow/builder.rs`. It already constructs `FredClient` and `YFinanceClient` in `PipelineDeps`. Pass both clients into `PreflightTask` by adding constructor parameters:
 
 ```rust
 // crates/scorpio-core/src/workflow/builder.rs (sketch)
-let preflight = PreflightTask::with_runtime_policy_and_fred(
+let preflight = PreflightTask::with_runtime_policy_and_rate_clients(
     enrichment.clone(),
     transcripts_enabled,
     snapshot_store.clone(),
     runtime_policy.clone(),
     fred_client.clone(),
+    yfinance_client.clone(),
 );
 ```
 
 In `crates/scorpio-core/src/workflow/tasks/preflight.rs`:
 
-1. Add `fred: Arc<crate::data::FredClient>` (or `Option<Arc<...>>` if the field must support test cases without FRED) to the `PreflightTask` struct. Provide a constructor `with_runtime_policy_and_fred(...)` that takes both the runtime policy and the FRED client.
+1. Add `fred: Arc<dyn FredSeriesClient>` and `yfinance: Arc<dyn RiskFreeRateYFinanceClient>` to the `PreflightTask` struct. Provide a constructor `with_runtime_policy_and_rate_clients(...)` that takes the runtime policy plus both clients.
 
-2. In the `Task::run` body, after the resolved-pack classification but before `serialize_state_to_context`, add the opportunistic DGS3MO fetch for live/today ETF runs only (copying the spec sketch verbatim except for the actual `state` mutation site):
+Use small async traits so tests can inject fakes without wrapping concrete clients:
 
 ```rust
-let is_today = state.target_date == chrono::Utc::now().date_naive().to_string();
-if matches!(resolved_pack, PackId::EtfBaseline) && is_today {
-    match self.fred.get_series_latest("DGS3MO").await {
-        Ok(Some(pct)) => {
-            tracing::info!(
-                target: "scorpio_core::workflow::preflight",
-                series = "DGS3MO",
-                rate_pct = pct,
-                "fetched ETF risk-free rate"
-            );
-            state.etf_risk_free_rate = Some(pct / 100.0);
-            state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
-        }
-        Ok(None) => {
-            tracing::warn!(
-                target: "scorpio_core::workflow::preflight",
-                series = "DGS3MO",
-                "DGS3MO observation empty — falling back to const 0.045"
-            );
-            state.etf_risk_free_rate = None;
-            state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FallbackConst);
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "scorpio_core::workflow::preflight",
-                series = "DGS3MO",
-                error.kind = "fred_fetch",
-                "DGS3MO fetch failed — falling back to const 0.045"
-            );
-            // error.kind only — never the raw error text per CLAUDE.md
-            let _ = e;
-            state.etf_risk_free_rate = None;
-            state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FallbackConst);
-        }
+#[async_trait::async_trait]
+pub(crate) trait FredSeriesClient: Send + Sync {
+    async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError>;
+}
+
+#[async_trait::async_trait]
+impl FredSeriesClient for crate::data::FredClient {
+    async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
+        crate::data::FredClient::get_series_latest(self, series_id).await
+    }
+}
+
+#[async_trait::async_trait]
+pub(crate) trait RiskFreeRateYFinanceClient: Send + Sync {
+    async fn latest_close_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError>;
+}
+
+#[async_trait::async_trait]
+impl RiskFreeRateYFinanceClient for crate::data::YFinanceClient {
+    async fn latest_close_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError> {
+        let today = chrono::Utc::now().date_naive();
+        let start = today - chrono::Duration::days(14);
+        let candles = self
+            .get_ohlcv(symbol, &start.to_string(), &today.to_string())
+            .await?;
+        Ok(candles.last().map(|c| c.close))
     }
 }
 ```
 
-For historical ETF runs, skip the latest-rate fetch so rerunning the same symbol/date remains reproducible. If a later task needs historical risk-free rates, add an as-of-date FRED query and persist the observation date with the source metadata.
+2. In the `Task::run` body, after the resolved-pack classification but before `serialize_state_to_context`, add the live/today ETF risk-free-rate fetch. FRED is authoritative; yfinance `^IRX` is the only fallback. If both fail, leave both fields `None` so downstream GEX degrades cleanly:
 
-3. Add a `#[cfg(any(test, feature = "test-helpers"))]` test-shim function `run_for_test(state: &mut TradingState, pack_id: PackId, fred: &FredClient)` that exercises the DGS3MO logic in isolation against an injectable client. Place it next to `PreflightTask::with_runtime_policy_and_fred` in `crates/scorpio-core/src/workflow/tasks/preflight.rs`.
+```rust
+let is_today = state.target_date == chrono::Utc::now().date_naive().to_string();
+if matches!(resolved_pack, PackId::EtfBaseline) && is_today {
+    if let Ok(Some(pct)) = self.fred.get_series_latest("DGS3MO").await {
+        state.etf_risk_free_rate = Some(pct / 100.0);
+        state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
+    } else if let Ok(Some(pct)) = self.yfinance.latest_close_pct("^IRX").await {
+        state.etf_risk_free_rate = Some(pct / 100.0);
+        state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::YFinanceIrx);
+    } else {
+        tracing::warn!(
+            target: "scorpio_core::workflow::preflight",
+            fred_series = "DGS3MO",
+            yfinance_symbol = "^IRX",
+            "ETF risk-free rate unavailable — dealer positioning will degrade"
+        );
+        state.etf_risk_free_rate = None;
+        state.etf_risk_free_rate_source = None;
+    }
+}
+```
 
-4. Add `with_fake_fred_client(...)` to `crates/scorpio-core/src/testing/runtime_policy.rs` (or a new file `crates/scorpio-core/src/testing/fred.rs` exposed from `mod.rs`). Use a trait or function-pointer-backed wrapper around `FredClient::get_series_latest`. Suggested approach: introduce a thin trait `FredSeriesClient` that `FredClient` implements via blanket forwarding, then provide a fake in the testing module. If that requires too much churn, use a `tokio::test`-friendly mock HTTP server (the existing tests under `crates/scorpio-core/examples/fred_live_test.rs` may already point to one).
+For historical ETF runs, skip latest-rate fetches so rerunning the same symbol/date remains reproducible. If a later task needs historical risk-free rates, add as-of-date FRED/yfinance queries and persist the observation date with the source metadata.
+
+3. Add a `#[cfg(any(test, feature = "test-helpers"))]` test-shim function `run_for_test(state: &mut TradingState, pack_id: PackId, fred: &dyn FredSeriesClient, yfinance: &dyn RiskFreeRateYFinanceClient)` that exercises the risk-free-rate logic in isolation against injectable clients. Place it next to `PreflightTask::with_runtime_policy_and_rate_clients` in `crates/scorpio-core/src/workflow/tasks/preflight.rs`.
+
+4. Add `with_fake_fred_client(...)` and `with_fake_yfinance_client(...)` to `crates/scorpio-core/src/testing/runtime_policy.rs` (or new files exposed from `mod.rs`). Use function-pointer-backed wrappers that implement the two traits above.
 
 - [ ] **Step 19.4: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core --test workflow_pipeline_structure`
-Expected: all four new tests pass.
+Expected: all five new tests pass.
 
 - [ ] **Step 19.5: Run the full workspace test suite**
 
@@ -3756,13 +3828,13 @@ Expected: clean.
 
 ```bash
 git add crates/scorpio-core/src/workflow/builder.rs crates/scorpio-core/src/workflow/tasks/preflight.rs crates/scorpio-core/src/testing crates/scorpio-core/tests/workflow_pipeline_structure.rs
-git commit -m "feat(preflight): opportunistic FRED DGS3MO fetch for ETF baseline pack
+git commit -m "feat(preflight): fetch live ETF risk-free rate with IRX fallback
 
 Gated on resolved_pack == EtfBaseline and target_date == today so non-ETF
-and historical runs do not consume FRED quota or leak present-day rates into
-old analyses. Successful fetch records FredDgs3Mo source + decimal-fraction
-rate; empty observation and HTTP error both record FallbackConst (no rate).
-Warning logs follow the project's structured-fields-only convention."
+and historical runs do not consume rate-provider quota or leak present-day
+rates into old analyses. FRED DGS3MO is authoritative; yfinance ^IRX latest
+close is the only fallback. If both fail, the rate remains None and downstream
+dealer-positioning degrades to unavailable."
 ```
 
 ---
@@ -3799,19 +3871,50 @@ Append to the existing `#[cfg(test)] mod tests { ... }` block in `crates/scorpio
 Run: `cargo nextest run -p scorpio-core workflow::tasks::analyst`
 Expected: COMPILE FAILURE (`etf_risk_free_rate_from_state` not defined).
 
-- [ ] **Step 20.3: Add the accessor and flip the carrier**
+- [ ] **Step 20.3: Add the accessor and enforce no-rate degradation**
+
+In `crates/scorpio-core/src/valuation/mod.rs`, add the Stage 2 risk-free-rate carrier immediately after `etf_options`:
+
+```rust
+    /// Phase 2 (Stage 3) — FRED `DGS3MO` snapshot threaded from preflight when
+    /// the active pack is `EtfBaseline`, or yfinance `^IRX` when FRED is
+    /// unavailable. `None` when pack != EtfBaseline OR when both live rate
+    /// sources failed. The ETF valuator must degrade dealer-positioning to
+    /// `None`; no hardcoded risk-free-rate fallback is allowed.
+    pub etf_risk_free_rate: Option<f64>,
+```
 
 In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, add:
 
 ```rust
-pub(crate) fn etf_risk_free_rate_from_state(
-    state: &crate::state::TradingState,
-) -> Option<f64> {
+pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) -> Option<f64> {
     state.etf_risk_free_rate
 }
 ```
 
-Then update the state-aware `crate::valuation::ValuationInputs` construction site modified in Task 5 Step 5.3 to replace the `etf_risk_free_rate: None` placeholder with `etf_risk_free_rate: etf_risk_free_rate_from_state(state)`.
+Then update every existing call site that constructs `ValuationInputs` to populate the new field:
+
+```bash
+grep -rn 'ValuationInputs {' crates/scorpio-core/src/ crates/scorpio-core/tests/
+```
+
+Use `etf_risk_free_rate: None` for non-state-aware or non-ETF constructors. At the state-aware `crate::valuation::ValuationInputs` construction site modified in Task 5 Step 5.3, add `etf_risk_free_rate: etf_risk_free_rate_from_state(state)`.
+
+Finally ensure `crates/scorpio-core/src/valuation/etf/premium_discount.rs` contains no `RISK_FREE_RATE_FALLBACK`, no `0.045` production fallback, and degrades `options_gex` when the carrier is unavailable:
+
+```rust
+let options_gex = match (inputs.etf_options, inputs.etf_risk_free_rate) {
+    (Some(snap), Some(r)) => compute_gex_summary(snap, r, q, inputs.as_of),
+    (Some(_), None) => {
+        tracing::warn!(
+            target: "scorpio_core::valuation::etf::gex",
+            "ETF dealer-positioning skipped — risk-free rate unavailable"
+        );
+        None
+    }
+    (None, _) => None,
+};
+```
 
 - [ ] **Step 20.4: Run the tests to verify they pass**
 
@@ -3826,18 +3929,17 @@ Expected: clean.
 - [ ] **Step 20.6: Commit**
 
 ```bash
-git add crates/scorpio-core/src/workflow/tasks/analyst.rs
+git add crates/scorpio-core/src/valuation/mod.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs crates/scorpio-core/src/workflow/tasks/analyst.rs
 git commit -m "feat(workflow): thread state.etf_risk_free_rate into ValuationInputs
 
-The valuator already falls back to the 0.045 const when the carrier is None,
-so equity packs and non-ETF runs remain unaffected. ETF baseline runs now
-consume the FRED-fetched rate when preflight succeeded and fall through to
-the const otherwise."
+The valuator never substitutes a hardcoded risk-free rate. ETF baseline runs
+consume FRED DGS3MO or yfinance ^IRX when preflight succeeded and degrade
+dealer-positioning to unavailable when both live sources fail."
 ```
 
 ---
 
-### Task 21: Reporter Stage 3 expansion (secondary sensitivities, broad GEX line, fallback banner)
+### Task 21: Reporter Stage 3 expansion (secondary sensitivities, broad GEX line, rate-source banner)
 
 **Files:**
 - Modify: `crates/scorpio-reporters/src/terminal/etf.rs`
@@ -3961,18 +4063,34 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
 }
 
 #[test]
-fn etf_terminal_renders_risk_free_rate_fallback_banner() {
-    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+fn etf_terminal_renders_degraded_rate_banner_when_rate_unavailable() {
+    use scorpio_core::state::TradingState;
 
     let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
     state.etf_risk_free_rate = None;
-    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FallbackConst);
+    state.etf_risk_free_rate_source = None;
 
     let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
-        rendered.contains("⚠ Risk-free rate fallback")
-            && rendered.contains("DGS3MO unavailable"),
-        "fallback banner missing: {rendered}"
+        rendered.contains("⚠ Risk-free rate unavailable")
+            && rendered.contains("dealer positioning unavailable"),
+        "degraded-rate banner missing: {rendered}"
+    );
+}
+
+#[test]
+fn etf_terminal_labels_yfinance_irx_rate_source_without_warning() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.etf_risk_free_rate = Some(0.0433);
+    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::YFinanceIrx);
+
+    let rendered = scorpio_reporters::terminal::render_final_report(&state);
+    assert!(rendered.contains("Risk-free rate    yfinance ^IRX"));
+    assert!(
+        !rendered.contains("Risk-free rate unavailable"),
+        "^IRX fallback is a live source, not a hardcoded fallback warning: {rendered}"
     );
 }
 
@@ -3986,7 +4104,7 @@ fn etf_terminal_hides_risk_free_rate_banner_on_successful_fetch() {
 
     let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(
-        !rendered.contains("Risk-free rate fallback"),
+        !rendered.contains("Risk-free rate unavailable"),
         "successful fetch must not show the banner: {rendered}"
     );
 }
@@ -3995,7 +4113,7 @@ fn etf_terminal_hides_risk_free_rate_banner_on_successful_fetch() {
 - [ ] **Step 21.2: Run the tests to verify failure**
 
 Run: `cargo nextest run -p scorpio-reporters --test terminal`
-Expected: four new tests fail.
+Expected: five new tests fail.
 
 - [ ] **Step 21.3: Extend the dealer-positioning block**
 
@@ -4055,18 +4173,25 @@ Also update the partial-data branch from Task 11 to cover the combined case per 
     }
 ```
 
-- [ ] **Step 21.4: Add the risk-free-rate fallback banner**
+- [ ] **Step 21.4: Add risk-free-rate source and degraded-rate banner**
 
 In `crates/scorpio-reporters/src/terminal/etf.rs` (or wherever the ETF report header is composed — search `grep -n 'Analysis Pack' crates/scorpio-reporters/src/terminal/`), insert the banner immediately after the `Analysis Pack    ETF Baseline` line:
 
 ```rust
-if let Some(scorpio_core::state::EtfRiskFreeRateSource::FallbackConst) =
-    state.etf_risk_free_rate_source
-{
-    let _ = writeln!(
-        out,
-        "  ⚠ Risk-free rate fallback — FRED DGS3MO unavailable; using 0.045 const"
-    );
+match (state.etf_risk_free_rate, state.etf_risk_free_rate_source) {
+    (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::FredDgs3Mo)) => {
+        let _ = writeln!(out, "  Risk-free rate    FRED DGS3MO ({:.2}%)", rate * 100.0);
+    }
+    (Some(rate), Some(scorpio_core::state::EtfRiskFreeRateSource::YFinanceIrx)) => {
+        let _ = writeln!(out, "  Risk-free rate    yfinance ^IRX ({:.2}%)", rate * 100.0);
+    }
+    (None, None) => {
+        let _ = writeln!(
+            out,
+            "  ⚠ Risk-free rate unavailable — dealer positioning unavailable"
+        );
+    }
+    _ => {}
 }
 ```
 
@@ -4087,8 +4212,8 @@ git add crates/scorpio-reporters/src/terminal/etf.rs crates/scorpio-reporters/te
 git commit -m "feat(reporter): Stage 3 dealer-positioning expansion
 
 Adds Secondary sensitivities (VEX/CEX) and All expirations / Partial
-expirations sub-blocks, plus the risk-free-rate fallback banner under
-Analysis Pack when state.etf_risk_free_rate_source == FallbackConst."
+expirations sub-blocks, plus risk-free-rate source/degraded banners under
+Analysis Pack. No hardcoded rate fallback is rendered or implied."
 ```
 
 ---
@@ -4266,8 +4391,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match state.etf_risk_free_rate_source {
         Some(EtfRiskFreeRateSource::FredDgs3Mo) => println!("FRED DGS3MO path"),
-        Some(EtfRiskFreeRateSource::FallbackConst) => println!("FRED fallback path"),
-        None => println!("no source recorded (test bypass?)"),
+        Some(EtfRiskFreeRateSource::YFinanceIrx) => println!("yfinance ^IRX path"),
+        None => return Err("risk-free rate source missing; GEX should have degraded".into()),
     }
 
     println!("OK");
