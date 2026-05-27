@@ -1513,7 +1513,7 @@ Note: `state.etf_risk_free_rate` does not exist in Stage 1. To make the code com
 etf_risk_free_rate: None, // Stage 3 will replace with state.etf_risk_free_rate
 ```
 
-Stage 3 Task 21 will flip this to read from state.
+Stage 3 Task 20 will flip this to read from state.
 
 - [ ] **Step 5.4: Run the tests to verify they pass**
 
@@ -1810,7 +1810,7 @@ Add a unit test for the substitution behaviour. Append to the same `#[cfg(test)]
 - [ ] **Step 7.5: Run the tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core analysis_packs::etf::baseline::tests`
-Expected: all tests pass, including the 4 new ones.
+Expected: all tests pass, including the 5 new ones.
 
 - [ ] **Step 7.6: Lint and format**
 
@@ -2218,11 +2218,11 @@ Expected: PASS — the file still contains `{ticker}` and `{current_date}` refer
 
 - [ ] **Step 10.3: Run the broader prompt-validation gate**
 
-Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate`
+Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 Expected: snapshot-byte tests will fail because the prompt bytes changed. That is expected; Task 12 refreshes those golden bytes. For now, capture the diff to confirm the change scope matches expectations:
 
 ```bash
-cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate 2>&1 | head -80
+cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers 2>&1 | head -80
 ```
 
 - [ ] **Step 10.4: Commit**
@@ -2606,7 +2606,7 @@ Read the file:
 head -120 crates/scorpio-core/tests/prompt_bundle_regression_gate.rs
 ```
 
-The gate compares rendered prompt bytes against either inline expected strings or files under `crates/scorpio-core/tests/fixtures/prompt_bundles/` (look for the actual layout). Identify the technical-analyst slot for the ETF baseline pack — its bytes changed in Task 10. Identify the four risk-related slots that now receive the leverage warning suffix when a leveraged ETF state is provided.
+The gate compares rendered prompt bytes against either inline expected strings or files under `crates/scorpio-core/tests/fixtures/prompt_bundles/` (look for the actual layout). Identify the technical-analyst slot for the ETF baseline pack — its bytes changed in Task 10. Identify the three rendered slots that now receive the leverage warning suffix when a leveraged ETF state is provided (Conservative, Neutral, and Auditor).
 
 - [ ] **Step 12.2: Refresh the technical-analyst goldens**
 
@@ -2622,7 +2622,7 @@ fn _dump_etf_technical_analyst() {
 }
 ```
 
-Run with `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate _dump_etf_technical_analyst --nocapture` and copy the captured bytes into the gate fixture. Remove the dump test before committing.
+Run with `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers _dump_etf_technical_analyst --nocapture` and copy the captured bytes into the gate fixture. Remove the dump test before committing.
 
 If goldens live in `tests/fixtures/prompt_bundles/*.txt`, replace the file contents and let the gate match by file read.
 
@@ -2698,7 +2698,7 @@ If `render_risk_system_prompt_for_test` and `build_system_prompt_for_test` do no
 
 - [ ] **Step 12.4: Run the regression gate**
 
-Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate`
+Run: `cargo nextest run -p scorpio-core --test prompt_bundle_regression_gate --features test-helpers`
 Expected: all assertions pass after the goldens are refreshed.
 
 - [ ] **Step 12.5: Run the full workspace test suite**
