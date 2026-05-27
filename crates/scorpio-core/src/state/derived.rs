@@ -301,6 +301,46 @@ pub struct GexSummary {
     /// Populated by Stage 1/2.
     #[serde(default)]
     pub strikes: Vec<StrikeGex>,
+
+    /// Broad dealer-positioning aggregate across NTM slices for all listed
+    /// expirations. Populated by Stage 3.
+    #[serde(default)]
+    pub broad: Option<BroadGex>,
+
+    /// Secondary sensitivity: dealer exposure to absolute IV moves.
+    /// Populated by Stage 3.
+    #[serde(default)]
+    pub vex_summary: Option<VexSummary>,
+
+    /// Secondary sensitivity: dealer exposure to one day of time decay.
+    /// Populated by Stage 3.
+    #[serde(default)]
+    pub cex_summary: Option<CexSummary>,
+}
+
+/// Broad (all-expirations) GEX aggregate. Single-rate approximation — the
+/// renderer/prompt always labels this as such.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BroadGex {
+    pub net_gex_usd_per_1pct_move: f64,
+    pub gross_gex_usd_per_1pct_move: f64,
+    pub expirations_used: u32,
+    #[serde(default)]
+    pub expirations_total_considered: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VexSummary {
+    /// Per 1.0 vol-point change.
+    pub net_vex_usd_per_volpt: f64,
+    pub gross_vex_usd_per_volpt: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CexSummary {
+    /// Per 1 calendar day of time decay.
+    pub net_cex_usd_per_day: f64,
+    pub gross_cex_usd_per_day: f64,
 }
 
 /// Single gamma-wall row inside `GexSummary.strikes`.
@@ -687,6 +727,9 @@ mod tests {
                     net_gex_usd_per_1pct_move: -250_000.0,
                 },
             ],
+            broad: None,
+            vex_summary: None,
+            cex_summary: None,
         };
         let json = serde_json::to_string(&val).expect("serialize");
         let back: GexSummary = serde_json::from_str(&json).expect("deserialize");
@@ -704,5 +747,29 @@ mod tests {
         }"#;
         let back: GexSummary = serde_json::from_str(json).expect("deserialize");
         assert!(back.strikes.is_empty());
+    }
+
+    #[test]
+    fn broad_gex_with_partial_expiration_coverage_roundtrips() {
+        let val = BroadGex {
+            net_gex_usd_per_1pct_move: 5_000_000.0,
+            gross_gex_usd_per_1pct_move: 9_000_000.0,
+            expirations_used: 3,
+            expirations_total_considered: 5,
+        };
+        let json = serde_json::to_string(&val).expect("serialize");
+        let back: BroadGex = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn legacy_broad_gex_without_total_considered_defaults_to_zero() {
+        let json = r#"{
+            "net_gex_usd_per_1pct_move": 0.0,
+            "gross_gex_usd_per_1pct_move": 0.0,
+            "expirations_used": 0
+        }"#;
+        let back: BroadGex = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(back.expirations_total_considered, 0);
     }
 }

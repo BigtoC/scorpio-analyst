@@ -96,3 +96,13 @@ pub struct NearTermStrike {
     /// Put open interest at this strike, if available.
     pub put_oi: Option<u64>,
 }
+
+/// Per-expiration NTM strike rows for non-front-month expirations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExpirationStrikes {
+    /// ISO-8601 expiration date.
+    pub expiration: String,
+    /// NTM per-strike rows for this expiration, normalized with the same helper
+    /// used for `OptionsSnapshot.near_term_strikes`.
+    pub strikes: Vec<NearTermStrike>,
+}

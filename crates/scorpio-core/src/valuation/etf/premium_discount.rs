@@ -211,6 +211,7 @@ pub fn compute_gex_summary(
         as_of,
         near_term_expiration: &snapshot.near_term_expiration,
         near_term_strikes: &snapshot.near_term_strikes,
+        expirations: &[],
         atm_iv_fallback: snapshot.atm_iv,
     });
 
@@ -258,6 +259,9 @@ pub fn compute_gex_summary(
         max_pain_strike: snapshot.max_pain_strike,
         near_term_expiration: near.expiration,
         strikes: walls,
+        broad: None,
+        vex_summary: None,
+        cex_summary: None,
     })
 }
 
