@@ -1,6 +1,8 @@
 pub mod model_selection;
 pub mod steps;
 
+mod health_check;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
