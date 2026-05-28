@@ -27,6 +27,10 @@ use scorpio_core::{
 use tempfile::tempdir;
 use workflow_pipeline_make_pipeline::{make_pipeline, make_pipeline_from_pack};
 
+fn market_today() -> String {
+    scorpio_core::testing::market_local_date_eastern().to_string()
+}
+
 fn sample_state() -> TradingState {
     TradingState::new("AAPL", "2026-03-19")
 }
@@ -1063,7 +1067,7 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
 
     let mut state = TradingState::new(
         "SPY".to_owned(),
-        chrono::Utc::now().date_naive().to_string(),
+        market_today(),
     );
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
@@ -1152,7 +1156,7 @@ async fn preflight_falls_back_to_yfinance_irx_when_fred_returns_empty() {
 
     let mut state = TradingState::new(
         "SPY".to_owned(),
-        chrono::Utc::now().date_naive().to_string(),
+        market_today(),
     );
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
@@ -1186,7 +1190,7 @@ async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
 
     let mut state = TradingState::new(
         "SPY".to_owned(),
-        chrono::Utc::now().date_naive().to_string(),
+        market_today(),
     );
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
