@@ -181,6 +181,13 @@ fn init_langfuse_tracer() -> (
     let exporter = match ExporterBuilder::new()
         .with_host(&host)
         .with_basic_auth(&public_key, &secret_key)
+        // Langfuse's OTel ingestion endpoint requires this header per
+        // their docs (https://langfuse.com/integrations/native/opentelemetry).
+        // Without it, spans may be silently dropped or routed to a legacy
+        // ingestion path that doesn't surface them in the dashboard.
+        // The `opentelemetry-langfuse` 0.6 crate does NOT add this header
+        // automatically — we have to set it ourselves.
+        .with_header("x-langfuse-ingestion-version", "4")
         .build()
     {
         Ok(e) => e,
