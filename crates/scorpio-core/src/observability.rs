@@ -31,22 +31,81 @@ fn build_env_filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
 }
 
+/// Outcome of [`init_langfuse_tracer`] — describes whether Langfuse export
+/// is active, intentionally off, or failed to set up. Surfaced via a startup
+/// log so operators can verify the integration without polling the
+/// dashboard.
+enum LangfuseStatus {
+    /// All env vars present and the exporter built successfully.
+    Enabled { host: String },
+    /// At least one required env var is unset; Langfuse export is off by
+    /// design (local dev / CI).
+    Disabled { missing_var: &'static str },
+    /// Env vars were set but the exporter builder returned an error.
+    Failed { reason: String },
+}
+
 /// Set up the Langfuse OpenTelemetry tracer provider if all required
 /// `SCORPIO_LANGFUSE_*` environment variables are present.
 ///
-/// Returns `Some(tracer)` on success, `None` if env vars are missing or
-/// initialization fails. This allows running without Langfuse in local dev
-/// or CI environments.
-fn init_langfuse_tracer() -> Option<opentelemetry_sdk::trace::Tracer> {
-    let public_key = std::env::var("SCORPIO_LANGFUSE_PUBLIC_KEY").ok()?;
-    let secret_key = std::env::var("SCORPIO_LANGFUSE_SECRET_KEY").ok()?;
-    let host = std::env::var("SCORPIO_LANGFUSE_BASE_URL").ok()?;
+/// Returns the tracer plus a status describing what happened. The status
+/// is logged after the subscriber is initialized so the operator sees one
+/// of:
+///
+/// - `Langfuse tracing enabled` — spans will be exported
+/// - `Langfuse tracing disabled — <var> not set` — intentional off
+/// - `Langfuse tracing setup failed` — env vars present but exporter
+///   could not be built (bad URL, malformed credentials, etc.)
+fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, LangfuseStatus) {
+    let public_key = match std::env::var("SCORPIO_LANGFUSE_PUBLIC_KEY") {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                None,
+                LangfuseStatus::Disabled {
+                    missing_var: "SCORPIO_LANGFUSE_PUBLIC_KEY",
+                },
+            );
+        }
+    };
+    let secret_key = match std::env::var("SCORPIO_LANGFUSE_SECRET_KEY") {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                None,
+                LangfuseStatus::Disabled {
+                    missing_var: "SCORPIO_LANGFUSE_SECRET_KEY",
+                },
+            );
+        }
+    };
+    let host = match std::env::var("SCORPIO_LANGFUSE_BASE_URL") {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                None,
+                LangfuseStatus::Disabled {
+                    missing_var: "SCORPIO_LANGFUSE_BASE_URL",
+                },
+            );
+        }
+    };
 
-    let exporter = ExporterBuilder::new()
+    let exporter = match ExporterBuilder::new()
         .with_host(&host)
         .with_basic_auth(&public_key, &secret_key)
         .build()
-        .ok()?;
+    {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                None,
+                LangfuseStatus::Failed {
+                    reason: e.to_string(),
+                },
+            );
+        }
+    };
 
     let provider = SdkTracerProvider::builder()
         .with_simple_exporter(exporter)
@@ -55,7 +114,36 @@ fn init_langfuse_tracer() -> Option<opentelemetry_sdk::trace::Tracer> {
     let tracer = provider.tracer("scorpio-analyst");
     global::set_tracer_provider(provider);
 
-    Some(tracer)
+    (Some(tracer), LangfuseStatus::Enabled { host })
+}
+
+/// Emit the Langfuse startup status. Called once after the tracing
+/// subscriber is initialized so the log actually reaches the configured
+/// sink (stdout / JSON).
+fn log_langfuse_status(status: &LangfuseStatus) {
+    match status {
+        LangfuseStatus::Enabled { host } => {
+            tracing::info!(
+                target: "scorpio_core::observability",
+                langfuse_host = %host,
+                "Langfuse tracing enabled — exporting OTLP spans"
+            );
+        }
+        LangfuseStatus::Disabled { missing_var } => {
+            tracing::info!(
+                target: "scorpio_core::observability",
+                missing_var,
+                "Langfuse tracing disabled — env var not set"
+            );
+        }
+        LangfuseStatus::Failed { reason } => {
+            tracing::warn!(
+                target: "scorpio_core::observability",
+                reason = %reason,
+                "Langfuse tracing setup failed — running without it"
+            );
+        }
+    }
 }
 
 /// Initialize the global tracing subscriber with structured JSON output.
@@ -63,7 +151,8 @@ fn init_langfuse_tracer() -> Option<opentelemetry_sdk::trace::Tracer> {
 /// The log level defaults to `info` but can be overridden via the `RUST_LOG` env var.
 /// Call this once during application startup.
 pub fn init_tracing_json() {
-    if let Some(tracer) = init_langfuse_tracer() {
+    let (tracer, status) = init_langfuse_tracer();
+    if let Some(tracer) = tracer {
         tracing_subscriber::registry()
             .with(build_env_filter())
             .with(tracing_opentelemetry::layer().with_tracer(tracer))
@@ -75,12 +164,14 @@ pub fn init_tracing_json() {
             .with(fmt::layer().json().flatten_event(true))
             .init();
     }
+    log_langfuse_status(&status);
 }
 
 /// Initialize tracing with a human-readable (non-JSON) format, primarily for local
 /// development and test runs.
 pub fn init_tracing_pretty() {
-    if let Some(tracer) = init_langfuse_tracer() {
+    let (tracer, status) = init_langfuse_tracer();
+    if let Some(tracer) = tracer {
         tracing_subscriber::registry()
             .with(build_env_filter())
             .with(tracing_opentelemetry::layer().with_tracer(tracer))
@@ -92,4 +183,5 @@ pub fn init_tracing_pretty() {
             .with(fmt::layer().pretty())
             .init();
     }
+    log_langfuse_status(&status);
 }
