@@ -718,6 +718,76 @@ Live smokes are NOT in CI — invoke via `cargo run -p scorpio-core --example <n
 
 The smoke-coverage rule is a standing requirement: any new external fetch path added during Phase 2 implementation (or any later phase) gets its own `examples/*_live_test.rs` file. The spec lists the three expected smokes above; implementation may add more.
 
+## Data integrity follow-up (post-Phase 2 implementation)
+
+Three Phase 1-era data-plumbing gaps surfaced during Phase 2 validation runs, leaving the trust-signal renderer printing `NAV ✗ Bid/Ask ✗ Holdings ✗ Benchmark ✗` for representative ETFs. Each gap was fixed alongside Phase 2 completion. The fixes are independent of every Phase 2 architectural decision above — they touch fetcher and resolver layers that Phase 1 introduced but did not exercise end-to-end on real ETF tickers.
+
+| Symptom (renderer output)                                        | Root cause                                                                                                                                                  | Fix                                                                                                                                                                                                                                                       |
+|------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `NAV unavailable` + `Bid/Ask unavailable`                        | `yfinance-rs` 0.7 `Quote`/`Info` types do not expose `navPrice`, `bid`, or `ask`; `EtfQuote.{nav, bid, ask}` always resolved to `None`.                     | Direct Yahoo `v10/quoteSummary` HTTP fetch with manual cookie + crumb auth, populating all three fields in one call.                                                                                                                                      |
+| `Tracking error skipped — benchmark not resolved`                | `FundInfo.stated_benchmark` is rarely populated upstream for ETFs; N-PORT-P also lacks a benchmark field for most tickers.                                  | Static `ETF → ^index` lookup (`^GSPC`, `^NDX`, `^DJI`, `^RUT`, `^MID`, `^SP600`, `^SOX`) consulted as a third fallback after the upstream sources in `resolve_benchmark_symbol`.                                                                          |
+| `Holdings unavailable — N-PORT-P data missing or too stale`      | `resolve_fund_cik` only consulted `/files/company_tickers.json`, which lists operating companies (10-K/10-Q filers). ETFs file as fund series elsewhere.    | Add `/files/company_tickers_mf.json` as a lazy-loaded second source; `resolve_fund_cik` tries the equity map first, then the MF map. SOXX/SPY/QQQ etc. now resolve to a CIK and the N-PORT-P fetch proceeds.                                              |
+
+### NAV / bid / ask backfill via Yahoo `quoteSummary`
+
+**Files:**
+
+- **New:** `crates/scorpio-core/src/data/yfinance/summary.rs` — pure-HTTP `SummaryHttp` client, ~300 lines incl. tests. Performs the cookie/crumb dance (`GET fc.yahoo.com` → extract `Set-Cookie` → `GET getcrumb` → reuse on subsequent requests), then hits `query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=summaryDetail&crumb=…`. A schema-validating parser extracts `navPrice` / `bid` / `ask` from the `summaryDetail` block. Cookie + crumb are cached in an `Arc<RwLock<AuthState>>`; a 401/403 response clears both and triggers one-shot retry.
+- **Modify:** `crates/scorpio-core/src/data/yfinance/client.rs` — `YfSession` gains a `summary: SummaryHttp` field with a `pub(super) fn summary(&self) -> &SummaryHttp` accessor.
+- **Modify:** `crates/scorpio-core/src/data/yfinance/etf.rs::get_quote` — after the existing `Ticker::quote()` + `Ticker::info()` calls, additionally invokes `self.session.summary().fetch(symbol)` under the same rate limiter. Any failure leaves `EtfQuote.nav/bid/ask` as `None`; the trust-signal renderer's existing fail-soft path remains unchanged.
+
+**Why manual cookie handling:** workspace `reqwest` is configured without the `cookies` feature. Rather than expand the workspace dependency surface, this module extracts the first `Set-Cookie` header value and attaches it as a `Cookie` header on follow-on requests — the same degree of state the `yfinance-rs` auth flow needs internally. The pattern mirrors `yfinance-rs/src/core/client/auth.rs` step-for-step.
+
+### Static ETF → benchmark lookup
+
+**Files:**
+
+- **New:** `crates/scorpio-core/src/data/etf_benchmarks.rs` — pure-function `resolve(etf_symbol: &str) -> Option<&'static str>` keyed off a `match` over uppercase-normalized tickers. Returns the Yahoo Finance index ticker (`^GSPC`, `^NDX`, …) that `PriceHistoryProvider` can already fetch via the existing OHLCV path.
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs::resolve_benchmark_symbol` — added `etf_symbol: &str` as the first parameter and appended a third `.or_else()` clause consulting the static lookup. The existing priority chain becomes: yfinance `FundInfo.stated_benchmark` → SEC N-PORT `stated_benchmark` → static map. Both call sites were updated to pass the ETF symbol.
+
+**Coverage scope.** ~15 mappings covering ~95% of liquid US ETF volume: S&P 500 family (SPY/IVV/VOO/SPLG), Nasdaq-100 (QQQ/QQQM), Nasdaq Composite (ONEQ), Dow (DIA), Russell 2000 (IWM/VTWO), S&P MidCap 400 (IJH/MDY), S&P SmallCap 600 (IJR/SLY), PHLX Semiconductor (SMH/SOXX/SOXL/SOXS), and proxy mappings VTI/ITOT → `^GSPC`.
+
+**Intentional omissions.** ETFs tracking indices that Yahoo Finance does not publish as a free symbol — MSCI EAFE/EM (EFA, VEA, VWO, EEM), Bloomberg Aggregate (AGG, BND), Treasury indices (TLT, IEF), commodities (GLD, SLV), S&P GICS sector sub-indices (XLF, XLK, XLE, …), and unconstrained funds (ARKK) — are deliberately not mapped. Mapping them to a near-neighbor proxy would silently corrupt tracking-error against the stated benchmark. These ETFs continue to surface `Tracking error skipped — benchmark not resolved` until a different benchmark data source is added in a follow-up.
+
+### SEC `company_tickers_mf.json` fallback for ETF CIK resolution
+
+**Files:**
+
+- **Modify:** `crates/scorpio-core/src/data/sec_edgar/mod.rs`:
+  - New constant `COMPANY_TICKERS_MF_PATH = "/files/company_tickers_mf.json"`.
+  - New deserializer `MfTickersResponse { fields: Vec<String>, data: Vec<(u32, String, String, String)> }` modeling the SEC column-oriented response shape `{ "fields": ["cik", "seriesId", "classId", "symbol"], "data": [[1100663, "S000004354", "C000012084", "SOXX"], …] }`.
+  - New parser `parse_company_tickers_mf` — validates `fields[0] == "cik"` and `fields[3] == "symbol"` so a silent SEC column reorder fails loudly rather than emitting wrong CIKs.
+  - New cache field `cik_mf_cache: Arc<RwLock<Option<HashMap<String, u32>>>>` — independent lazy load.
+  - New public method `lookup_cik_mf(ticker) -> Result<Option<u32>, TradingError>` — mirrors the existing `lookup_cik` behavior (shared circuit breaker, shared rate limiter, same fail-soft contract).
+  - Updated `resolve_fund_cik` — tries `lookup_cik` first, then falls back to `lookup_cik_mf`. Returns the zero-padded 10-digit CIK from whichever map hits.
+
+**Why this matters.** Phase 1's holdings path looked up CIKs only in the equity map. SPY (CIK 884394, series S000003474), QQQ, IWM, SOXX (CIK 1100663, series S000004354) all live in the MF map, so the lookup always returned `Ok(None)` and the entire N-PORT-P fetch was silently skipped — producing the `Holdings unavailable — N-PORT-P data missing or too stale` warning regardless of whether SEC actually had a recent N-PORT for the fund. With this fallback, the existing 180-day staleness threshold and N-PORT-P parser apply unchanged; only the CIK gate moves out of the way.
+
+**Downstream effect on trader confidence.** With holdings now populated, the valuation context delivered to the trader agent no longer renders `EtfComposition` as `null`. The trader prompt's existing instruction — `"Treat any analyst input rendered as null or a null research consensus as missing upstream context. Explicitly acknowledge the material data gap in rationale and calibrate confidence conservatively."` — stops triggering on the holdings field, and confidence normalizes without a prompt change.
+
+### Smoke test consolidation
+
+The four pre-existing ETF live smokes (`etf_quote_live_test.rs`, `etf_options_gex_live_test.rs`, `etf_pack_live_test.rs`) plus the new `etf_data_gap_live_test.rs` were merged into a single sectioned smoke at `crates/scorpio-core/examples/etf_live_test.rs`. The merged binary runs four sequential sections behind clear `§N` banners and treats each section's failure as fail-soft (one section's failure is reported to stderr but does not abort the others). The Stage 4 `dealer_positioning_smoke` retains its `Result`-based contract — `assert!` calls were converted to a `require()` helper to preserve assertion intent without panicking the whole run.
+
+| Section               | Surface covered                                                                                           |
+|-----------------------|-----------------------------------------------------------------------------------------------------------|
+| §1 ETF surface        | `get_profile` / `get_quote` / `get_fund_info` / `get_distribution_yield_ttm` over SPY/QQQ/TQQQ/AAPL/BOGUS |
+| §2 Data-gap fill      | NAV + bid + ask + benchmark resolution across SPY/QQQ/IWM/VTI/SMH/SOXX/AAPL/XYZ123_BOGUS                  |
+| §3 Pack routing       | `classify_runtime_pack` over SPY/AAPL/BOGUS                                                               |
+| §4 Dealer positioning | Full Stage 3 GEX path on SPY (optional `SCORPIO_FRED_API_KEY`)                                            |
+
+Run: `cargo run -p scorpio-core --example etf_live_test` (`SCORPIO_FRED_API_KEY=…` prefix for §4's preferred rate source).
+
+### Additive test coverage
+
+| Layer                    | Location                                                          | Coverage                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|--------------------------|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Yahoo summary parser     | `crates/scorpio-core/src/data/yfinance/summary.rs#tests`          | Full payload roundtrip; partial payload missing `navPrice`; empty `result[]`; null `result`; missing `summaryDetail`; garbage/empty body returns `None`.                                                                                                                                                                                                                                                                                          |
+| Static benchmark lookup  | `crates/scorpio-core/src/data/etf_benchmarks.rs#tests`            | Each mapped family resolves to the documented Yahoo ticker (`^GSPC`, `^NDX`, `^DJI`, `^RUT`, `^MID`, `^SP600`, `^SOX`); case insensitivity + trim; proxy mappings (VTI/ITOT → `^GSPC`); unmapped tickers return `None`; blank/whitespace returns `None`.                                                                                                                                                                                          |
+| `resolve_benchmark_symbol` fallback | `crates/scorpio-core/src/workflow/tasks/analyst.rs#tests` | Existing fund-info/N-PORT priority preserved; new fallback path: when both upstream sources are silent, the static lookup keyed by ETF symbol resolves the benchmark; unmapped symbol with all sources silent returns `None`.                                                                                                                                                                                                                     |
+| SEC MF parser            | `crates/scorpio-core/src/data/sec_edgar/mod.rs#tests`             | Real SOXX/SPY rows extract the right CIK; case normalization; column-reorder schema check fires (header validation prevents silent corruption); type-mismatch column move (e.g. cik no longer at position 0) fails via serde; malformed/empty JSON returns `Err`.                                                                                                                                                                                 |
+| `resolve_fund_cik` MF fallback | `crates/scorpio-core/src/data/sec_edgar/mod.rs#tests` (mocked HTTP) | Equity map misses → MF map hits → SOXX resolves to `"0001100663"`; equity map hits → MF endpoint is never queried; both maps miss → `None`; preloaded MF cache short-circuits without HTTP.                                                                                                                                                                                                                                                       |
+
 ## Out of scope
 
 - **iNAV / real-time NAV** — yfinance only provides end-of-prior-day NAV (carried from Phase 1).
@@ -729,6 +799,7 @@ The smoke-coverage rule is a standing requirement: any new external fetch path a
 - **GEX in non-USD denominations** — output is always USD; ETFs traded in non-USD venues are out of scope.
 - **Deterministic fund-manager veto on dealer-positioning extremes** — GEX/VEX/CEX stay LLM-visible evidence; no `gex_pinning_extreme` analogue to Phase 1's `tracking_failure` / `extreme_premium` / `leverage_decay` triggers.
 - **N-PORT cache and storage consolidation** — durability work for SEC holdings fetches, SQLite layout changes, and any cache-path/config migration are deferred to a later design pass.
+- **Non-Yahoo benchmark resolution for international / bond / sector ETFs** — the static ETF→benchmark map added in the data-integrity follow-up intentionally omits MSCI EAFE/EM, Bloomberg Aggregate, Treasury indices, commodities, S&P GICS sector sub-indices, and unconstrained funds because Yahoo Finance does not publish their actual benchmarks as a free index symbol. Resolving these would require a different benchmark price-history source and is deferred.
 
 ## Open questions
 

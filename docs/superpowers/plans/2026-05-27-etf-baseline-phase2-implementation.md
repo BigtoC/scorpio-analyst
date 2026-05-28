@@ -68,6 +68,21 @@
 - **Modify:** `crates/scorpio-core/examples/fred_live_test.rs` — DGS3MO assertion
 - **Modify:** `crates/scorpio-core/tests/state_roundtrip.rs` — populated Stage 3 `GexSummary` fields roundtrip
 
+### Post-implementation data integrity fixes (shipped alongside Phase 2 completion)
+
+Three Phase 1-era data-plumbing gaps surfaced during Phase 2 validation. Fixed in Tasks 26-29. Independent of every Phase 2 decision above.
+
+- **Create:** `crates/scorpio-core/src/data/etf_benchmarks.rs` — static ETF→Yahoo-index lookup (Task 26)
+- **Modify:** `crates/scorpio-core/src/data/mod.rs` — export `etf_benchmarks` module (Task 26)
+- **Modify:** `crates/scorpio-core/src/workflow/tasks/analyst.rs::resolve_benchmark_symbol` — add `etf_symbol: &str` parameter and a third `.or_else()` fallback over the static map (Task 26)
+- **Create:** `crates/scorpio-core/src/data/yfinance/summary.rs` — Yahoo `v10/quoteSummary` HTTP client with manual cookie/crumb auth (Task 27)
+- **Modify:** `crates/scorpio-core/src/data/yfinance/mod.rs` — register `summary` module (Task 27)
+- **Modify:** `crates/scorpio-core/src/data/yfinance/client.rs` — add `SummaryHttp` field to `YfSession` (Task 27)
+- **Modify:** `crates/scorpio-core/src/data/yfinance/etf.rs::get_quote` — enrich `EtfQuote.{nav, bid, ask}` from `summary().fetch(symbol)` (Task 27)
+- **Modify:** `crates/scorpio-core/src/data/sec_edgar/mod.rs` — add `COMPANY_TICKERS_MF_PATH` constant, `MfTickersResponse` deserializer, `parse_company_tickers_mf` parser with schema validation, `cik_mf_cache` field, `lookup_cik_mf` method, and a two-step `resolve_fund_cik` fallback (Task 28)
+- **Create:** `crates/scorpio-core/examples/etf_live_test.rs` — single consolidated four-section smoke (Task 29)
+- **Delete:** `crates/scorpio-core/examples/etf_quote_live_test.rs`, `etf_options_gex_live_test.rs`, `etf_pack_live_test.rs`, `etf_data_gap_live_test.rs` — replaced by the merged smoke (Task 29)
+
 ---
 
 ## Stage 1 — Near-term dealer positioning core
@@ -4603,6 +4618,263 @@ git commit -m "test(smoke): live ETF run populates options_gex with broad/vex/ce
 
 ---
 
+## Post-implementation data integrity fixes
+
+> **Context:** Tasks 26-28 fix Phase 1-era data-plumbing gaps that surfaced during Phase 2 validation runs (the renderer printed `NAV ✗ Bid/Ask ✗ Holdings ✗ Benchmark ✗` for representative ETFs). Task 29 consolidates ETF live smokes. These tasks ship alongside Phase 2 completion and are independent of every Phase 2 architectural decision above — they touch fetcher and resolver layers that Phase 1 introduced but did not exercise end-to-end on real ETF tickers. Test discipline: unit tests for parsers + mocked-HTTP integration tests for resolvers, no live network in CI.
+
+### Task 26: Static ETF → benchmark lookup
+
+**Files:**
+- Create: `crates/scorpio-core/src/data/etf_benchmarks.rs`
+- Modify: `crates/scorpio-core/src/data/mod.rs`
+- Modify: `crates/scorpio-core/src/workflow/tasks/analyst.rs`
+
+- [x] **Step 26.1: Author the static lookup module**
+
+`resolve(etf_symbol: &str) -> Option<&'static str>` keyed off a `match` over uppercase-normalized tickers. Returns Yahoo Finance index tickers (`^GSPC`, `^NDX`, …) that `PriceHistoryProvider` can already fetch via the existing OHLCV path. Coverage: ~15 mappings — SPY/IVV/VOO/SPLG → `^GSPC`, QQQ/QQQM → `^NDX`, ONEQ → `^IXIC`, DIA → `^DJI`, IWM/VTWO → `^RUT`, IJH/MDY → `^MID`, IJR/SLY → `^SP600`, SMH/SOXX/SOXL/SOXS → `^SOX`, VTI/ITOT → `^GSPC` (noted as proxy). Doc-comment intentionally explains why MSCI EAFE/EM, Bloomberg Aggregate, Treasury indices, commodities, S&P GICS sector sub-indices, and unconstrained funds are omitted — a misleading proxy would silently corrupt tracking-error.
+
+Unit tests cover each mapped family, case-insensitivity + whitespace trim, proxy mappings, unmapped tickers returning `None`, and blank input returning `None`.
+
+- [x] **Step 26.2: Register the module**
+
+In `crates/scorpio-core/src/data/mod.rs`, add `pub mod etf_benchmarks;` alongside the existing data sub-modules.
+
+- [x] **Step 26.3: Wire the fallback into `resolve_benchmark_symbol`**
+
+In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, add `etf_symbol: &str` as the first parameter to `resolve_benchmark_symbol` and append a third `.or_else()` clause:
+
+```rust
+fn resolve_benchmark_symbol(
+    etf_symbol: &str,
+    fund_info: Option<&FundInfo>,
+    nport: Option<&NPortHoldings>,
+) -> Option<String> {
+    fund_info
+        .and_then(|info| info.stated_benchmark.as_deref())
+        .and_then(normalize_benchmark_symbol)
+        .or_else(|| {
+            nport
+                .and_then(|holdings| holdings.stated_benchmark.as_deref())
+                .and_then(normalize_benchmark_symbol)
+        })
+        .or_else(|| crate::data::etf_benchmarks::resolve(etf_symbol).map(str::to_owned))
+}
+```
+
+Update both call sites — the hydration site (line ~933, `symbol` already in scope) and the `derive_runtime_valuation` site (line ~1115, extract `state.symbol` via `.as_ref().and_then(crate::domain::Symbol::as_equity).map(|t| t.as_str()).unwrap_or("")`).
+
+- [x] **Step 26.4: Test the fallback**
+
+Add two new tests next to `benchmark_symbol_prefers_fund_info_*`:
+- `benchmark_symbol_falls_back_to_static_lookup_when_upstream_silent` — fund_info + nport both have `stated_benchmark: None`, ETF symbol "QQQ" → `Some("^NDX")`.
+- `benchmark_symbol_static_lookup_yields_none_for_unmapped_symbol` — upstream silent + unmapped symbol → `None`.
+
+Update the two existing benchmark resolver tests to pass `"SPY"` as the new first argument.
+
+- [x] **Step 26.5: Verify**
+
+```bash
+cargo nextest run -p scorpio-core data::etf_benchmarks workflow::tasks::analyst -- --no-fail-fast
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+```
+
+---
+
+### Task 27: Yahoo `quoteSummary` fetcher for NAV / bid / ask
+
+**Files:**
+- Create: `crates/scorpio-core/src/data/yfinance/summary.rs`
+- Modify: `crates/scorpio-core/src/data/yfinance/mod.rs`
+- Modify: `crates/scorpio-core/src/data/yfinance/client.rs`
+- Modify: `crates/scorpio-core/src/data/yfinance/etf.rs`
+
+- [x] **Step 27.1: Author the HTTP client**
+
+`yfinance-rs` 0.7 `Quote`/`Info` types do not expose `navPrice`, `bid`, or `ask`. Create `summary.rs` with a `SummaryHttp` struct that hits Yahoo's `v10/quoteSummary` endpoint directly, mirroring the cookie/crumb auth flow that `yfinance-rs` performs internally:
+
+1. `GET https://fc.yahoo.com` — extract first `Set-Cookie` header value (keep only `name=value` portion).
+2. `GET https://query1.finance.yahoo.com/v1/test/getcrumb` with that cookie → parse text body as crumb.
+3. `GET https://query2.finance.yahoo.com/v10/finance/quoteSummary/{sym}?modules=summaryDetail&crumb=…` with cookie + crumb → parse `summaryDetail.{navPrice, bid, ask}.raw`.
+
+Cookie + crumb cache in `Arc<RwLock<AuthState>>`. A 401/403 response clears both and triggers one-shot retry. Every error path emits `tracing::warn!(symbol, error)` and returns `None`. Manual cookie handling rather than enabling reqwest's `cookies` feature — keeps the workspace dependency surface unchanged.
+
+Parser is a pure function `parse_summary_response(body: &str) -> Option<EtfSummary>` for ease of unit testing. Schema: nested camelCase via `#[serde(rename_all = "camelCase")]`; `QuoteSummary.result` is `Option<Vec<_>>` to handle SEC's null-on-error response; `RawValue { raw: Option<f64> }` tolerates Yahoo's occasional missing-`raw` payloads.
+
+Tests (no network): full payload roundtrip; partial payload missing `navPrice`; empty `result[]`; null `result`; missing `summaryDetail`; garbage/empty body returns `None`.
+
+- [x] **Step 27.2: Register the module**
+
+In `crates/scorpio-core/src/data/yfinance/mod.rs`, add `pub mod summary;` alongside the existing sub-modules.
+
+- [x] **Step 27.3: Thread `SummaryHttp` through `YfSession`**
+
+In `crates/scorpio-core/src/data/yfinance/client.rs`, add a `summary: SummaryHttp` field to `YfSession`, initialize it in `new` / `from_config`, and expose `pub(super) fn summary(&self) -> &SummaryHttp`. The session's shared rate limiter wraps the summary fetch the same way it wraps `Ticker::quote()` calls.
+
+- [x] **Step 27.4: Enrich `get_quote()`**
+
+In `crates/scorpio-core/src/data/yfinance/etf.rs::get_quote`, after the existing `Ticker::quote()` + `Ticker::info()` calls and before constructing `EtfQuote`, invoke the summary fetch under the rate limiter:
+
+```rust
+let summary = self
+    .session
+    .with_rate_limit(self.session.summary().fetch(symbol))
+    .await
+    .unwrap_or_default();
+```
+
+Populate `EtfQuote.{nav, bid, ask}` from `summary.{nav, bid, ask}`. Any failure leaves the corresponding field as `None`; downstream trust-signal flags surface the gap.
+
+Update the upstream-gap doc comment at the top of `etf.rs` to note that `nav`/`bid`/`ask` are now backfilled via `super::summary`.
+
+- [x] **Step 27.5: Verify**
+
+```bash
+cargo nextest run -p scorpio-core data::yfinance::summary
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+```
+
+---
+
+### Task 28: SEC `company_tickers_mf.json` fallback for ETF CIK resolution
+
+**Files:**
+- Modify: `crates/scorpio-core/src/data/sec_edgar/mod.rs`
+
+- [x] **Step 28.1: Diagnose the gap**
+
+`Holdings unavailable — N-PORT-P data missing or too stale` fires for every ETF. Root cause: `resolve_fund_cik` only consulted `/files/company_tickers.json`, which lists operating companies that file 10-K/10-Q (equities — AAPL, MSFT, TSLA). ETFs file as fund series and live in `/files/company_tickers_mf.json` instead. SPY (CIK 884394), SOXX (CIK 1100663), QQQ, IWM, etc. all live exclusively there.
+
+Verify with curl using SEC's fair-use User-Agent — the MF file is column-oriented: `{ "fields": ["cik", "seriesId", "classId", "symbol"], "data": [[1100663, "S000004354", "C000012084", "SOXX"], …] }`.
+
+- [x] **Step 28.2: Add the MF parser**
+
+Constant + deserializer + parser inside `crates/scorpio-core/src/data/sec_edgar/mod.rs`:
+
+```rust
+const COMPANY_TICKERS_MF_PATH: &str = "/files/company_tickers_mf.json";
+
+#[derive(Deserialize)]
+struct MfTickersResponse {
+    fields: Vec<String>,
+    data: Vec<(u32, String, String, String)>,
+}
+
+fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, u32>, String> {
+    let raw: MfTickersResponse = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    if raw.fields.first().map(String::as_str) != Some("cik")
+        || raw.fields.get(3).map(String::as_str) != Some("symbol")
+    {
+        return Err(format!(
+            "unexpected company_tickers_mf.json schema: {:?}",
+            raw.fields
+        ));
+    }
+    Ok(raw
+        .data
+        .into_iter()
+        .map(|(cik, _series_id, _class_id, symbol)| (symbol.to_uppercase(), cik))
+        .collect())
+}
+```
+
+The header check defends against silent SEC column reorder — if SEC moves columns in a way the tuple types still accept, the `fields[]` validation rejects rather than silently emitting wrong CIKs.
+
+Unit tests: real SOXX/SPY rows extract the right CIK; case normalization; column-reorder schema check fires; type-mismatch column move fails via serde; malformed/empty JSON returns `Err`.
+
+- [x] **Step 28.3: Add MF cache + lookup method**
+
+`SecEdgarClient` gains `cik_mf_cache: Arc<RwLock<Option<HashMap<String, u32>>>>` (independent lazy load from the equity cache). Initialize in `new`, `with_http`, `with_preloaded_cache`; add a new `with_preloaded_mf_cache` constructor for tests.
+
+Add `pub async fn lookup_cik_mf(&self, ticker: &str) -> Result<Option<u32>, TradingError>` that mirrors `lookup_cik` — same circuit breaker, same rate limiter, same fail-soft contract (`Ok(None)` on any error), same warning shape with `source = "sec_edgar_cik_mf_lookup"`.
+
+- [x] **Step 28.4: Update `resolve_fund_cik`**
+
+Two-step fallback:
+
+```rust
+pub async fn resolve_fund_cik(&self, ticker: &str) -> Option<String> {
+    if let Ok(Some(cik)) = self.lookup_cik(ticker).await {
+        return Some(format!("{cik:010}"));
+    }
+    if let Ok(Some(cik)) = self.lookup_cik_mf(ticker).await {
+        return Some(format!("{cik:010}"));
+    }
+    None
+}
+```
+
+Equity map first (existing behavior preserved for non-ETF tickers), then MF fallback for ETFs. The shared circuit breaker means a sustained SEC outage trips both lookups together.
+
+- [x] **Step 28.5: Mocked-HTTP integration tests**
+
+Using `MockEdgarHttp`:
+- `resolve_fund_cik_falls_back_to_mf_when_equity_map_misses` — equity map returns AAPL only, MF map returns SOXX → `resolve_fund_cik("SOXX")` yields `"0001100663"`.
+- `resolve_fund_cik_prefers_equity_map_when_both_have_ticker` — equity map hits, MF endpoint expectation is not set; if MF were queried the mock would panic. Verifies the equity-first ordering.
+- `resolve_fund_cik_returns_none_when_both_maps_miss` — both endpoints respond with empty payloads, return `None`.
+- `lookup_cik_mf_returns_from_cache_without_hitting_http` — preloaded MF cache short-circuits the lookup.
+
+- [x] **Step 28.6: Verify**
+
+```bash
+cargo nextest run -p scorpio-core data::sec_edgar
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+cargo nextest run --workspace --all-features --locked --no-fail-fast
+```
+
+Trader confidence: no code change. The trader prompt's existing `"calibrate confidence conservatively"` rule fired because the valuation context rendered `EtfComposition` as `null`. With holdings now populated for SOXX/SPY/QQQ, the null marker disappears and confidence normalizes on its own.
+
+---
+
+### Task 29: Consolidate ETF live smokes into a single sectioned binary
+
+**Files:**
+- Create: `crates/scorpio-core/examples/etf_live_test.rs`
+- Delete: `crates/scorpio-core/examples/etf_quote_live_test.rs`
+- Delete: `crates/scorpio-core/examples/etf_options_gex_live_test.rs`
+- Delete: `crates/scorpio-core/examples/etf_pack_live_test.rs`
+- Delete: `crates/scorpio-core/examples/etf_data_gap_live_test.rs`
+
+- [x] **Step 29.1: Merge the four smokes**
+
+Single `etf_live_test.rs` binary with four sequential sections behind clear `§N` banners:
+
+| Section | Surface covered | Source |
+|---|---|---|
+| §1 ETF surface       | `get_profile` / `get_quote` / `get_fund_info` / `get_distribution_yield_ttm` over SPY/QQQ/TQQQ/AAPL/BOGUS | from `etf_quote_live_test` |
+| §2 Data-gap fill     | NAV + bid + ask + benchmark resolution across SPY/QQQ/IWM/VTI/SMH/SOXX/AAPL/XYZ123_BOGUS | from `etf_data_gap_live_test` |
+| §3 Pack routing      | `classify_runtime_pack` over SPY/AAPL/BOGUS | from `etf_pack_live_test` |
+| §4 Dealer positioning | Full Stage 3 GEX path on SPY (optional `SCORPIO_FRED_API_KEY`) | from `etf_options_gex_live_test` |
+
+Single shared `YFinanceClient::default()` passed by reference to §1-§3; consumed by `YFinanceOptionsProvider::new(yf)` in §4 (kept last so the move is OK).
+
+§4's hard `assert!` calls become `require()` returning `Result<(), Box<dyn Error>>` so a §4 failure logs to stderr but does not abort §1-§3. `dealer_positioning_smoke(yf).await` is wrapped: `if let Err(e) = ... { eprintln!("§4 failed: {e}"); }`.
+
+- [x] **Step 29.2: Delete the four originals**
+
+```bash
+rm crates/scorpio-core/examples/etf_quote_live_test.rs \
+   crates/scorpio-core/examples/etf_options_gex_live_test.rs \
+   crates/scorpio-core/examples/etf_pack_live_test.rs \
+   crates/scorpio-core/examples/etf_data_gap_live_test.rs
+```
+
+- [x] **Step 29.3: Verify**
+
+```bash
+cargo build -p scorpio-core --example etf_live_test
+cargo clippy -p scorpio-core --example etf_live_test -- -D warnings
+cargo fmt --check
+# Live run:
+cargo run -p scorpio-core --example etf_live_test
+#   With FRED for §4's preferred rate source:
+SCORPIO_FRED_API_KEY=... cargo run -p scorpio-core --example etf_live_test
+```
+
+---
+
 ## Self-review checklist
 
 Run through this list before declaring Stage 1, Stage 2, or Stage 3 done:
@@ -4633,6 +4905,10 @@ Run through this list before declaring Stage 1, Stage 2, or Stage 3 done:
    - yfinance_live_test ^IRX → Task 23 (Stage 2 smoke, optional)
    - yfinance_options_chain smoke → Task 24 (Stage 3, optional)
    - e2e etf_options_gex smoke → Task 25 (Stage 3, optional)
+   - Static ETF→benchmark lookup + `resolve_benchmark_symbol` fallback → Task 26 (post-implementation data integrity)
+   - Yahoo `quoteSummary` NAV/bid/ask backfill → Task 27 (post-implementation data integrity)
+   - SEC `company_tickers_mf.json` fallback for ETF CIK resolution → Task 28 (post-implementation data integrity)
+   - Consolidated ETF live smokes → Task 29 (post-implementation data integrity)
 
 2. **Placeholder scan** — no "TBD", no "fill in later", no "add appropriate handling". Each step shows the actual code or actual command.
 
