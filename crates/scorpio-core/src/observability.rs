@@ -90,7 +90,7 @@ impl TracingGuard {
 ///
 /// If `SCORPIO_LANGFUSE_PUBLIC_KEY`, `SCORPIO_LANGFUSE_SECRET_KEY`, and
 /// `SCORPIO_LANGFUSE_BASE_URL` are set, traces are also exported to Langfuse
-/// via OpenTelemetry.
+/// via OpenTelemetry. Precedence: process env > `.env` file > `config.toml`.
 ///
 /// Returns a [`TracingGuard`] that must be held until program exit so the
 /// batch span processor flushes its final buffer.
@@ -99,10 +99,49 @@ pub fn init_tracing() -> TracingGuard {
     // Silently ignored when no .env file exists (e.g. CI / production).
     dotenvy::dotenv().ok();
 
+    // Fall back to ~/.scorpio-analyst/config.toml for SCORPIO_LANGFUSE_* values
+    // that neither the process env nor .env supplied. This lets `scorpio setup`
+    // persist Langfuse credentials without forcing users to also edit a .env file.
+    apply_langfuse_config_fallback();
+
     if std::env::var("SCORPIO_LOG_FORMAT").as_deref() == Ok("pretty") {
         init_tracing_pretty()
     } else {
         init_tracing_json()
+    }
+}
+
+/// Populate `SCORPIO_LANGFUSE_*` env vars from the persisted user config when
+/// they are not already set. Existing env vars are never overwritten so that
+/// process env and `.env` keep their precedence over the config file.
+fn apply_langfuse_config_fallback() {
+    let Ok(cfg) = crate::settings::load_user_config() else {
+        return;
+    };
+    set_env_var_if_unset(
+        "SCORPIO_LANGFUSE_PUBLIC_KEY",
+        cfg.langfuse_public_key.as_deref(),
+    );
+    set_env_var_if_unset(
+        "SCORPIO_LANGFUSE_SECRET_KEY",
+        cfg.langfuse_secret_key.as_deref(),
+    );
+    set_env_var_if_unset(
+        "SCORPIO_LANGFUSE_BASE_URL",
+        cfg.langfuse_base_url.as_deref(),
+    );
+}
+
+fn set_env_var_if_unset(name: &str, value: Option<&str>) {
+    let Some(value) = value else { return };
+    if std::env::var_os(name).is_some() {
+        return;
+    }
+    // SAFETY: `init_tracing` is invoked once, synchronously, at the very top
+    // of `main` before any tokio task or thread is spawned, so no other
+    // thread can be reading the environment concurrently.
+    unsafe {
+        std::env::set_var(name, value);
     }
 }
 
