@@ -98,6 +98,12 @@ pub(crate) fn render_etf_panel_with_policy(
     render_trust_signals(out, etf, policy);
     if let Some(gex) = etf.options_gex.as_ref() {
         render_dealer_positioning_block(out, gex);
+    } else {
+        let _ = writeln!(
+            out,
+            "{} Dealer positioning skipped — no usable options-derived overlay available",
+            policy.warn()
+        );
     }
 }
 

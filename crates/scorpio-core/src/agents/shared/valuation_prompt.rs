@@ -80,7 +80,10 @@ fn build_etf_valuation_context(etf: &crate::state::EtfValuation) -> String {
     )];
 
     if let Some(category) = etf.category.as_deref() {
-        lines.push(format!("  - category: {}", sanitize_prompt_context(category)));
+        lines.push(format!(
+            "  - category: {}",
+            sanitize_prompt_context(category)
+        ));
     }
     if let Some(tracking) = etf.tracking.as_ref() {
         lines.push(format!(

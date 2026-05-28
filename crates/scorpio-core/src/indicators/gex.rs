@@ -159,6 +159,16 @@ fn build_inputs(spot: f64, strike: f64, iv: f64, r: f64, q: f64, t_years: f64) -
     }
 }
 
+fn leg_iv_or_fallback(iv: Option<f64>, atm_iv_fallback: f64, iv_fallback_count: &mut u32) -> f64 {
+    match iv {
+        Some(value) if value > 0.0 => value,
+        _ => {
+            *iv_fallback_count = iv_fallback_count.saturating_add(1);
+            atm_iv_fallback
+        }
+    }
+}
+
 /// Compute a single strike's signed + magnitude GEX contributions.
 fn contribution_for_strike(
     spot: f64,
@@ -169,14 +179,8 @@ fn contribution_for_strike(
     row: &NearTermStrike,
     iv_fallback_count: &mut u32,
 ) -> Option<StrikeContribution> {
-    let call_iv = row.call_iv.unwrap_or_else(|| {
-        *iv_fallback_count = iv_fallback_count.saturating_add(1);
-        atm_iv_fallback
-    });
-    let put_iv = row.put_iv.unwrap_or_else(|| {
-        *iv_fallback_count = iv_fallback_count.saturating_add(1);
-        atm_iv_fallback
-    });
+    let call_iv = leg_iv_or_fallback(row.call_iv, atm_iv_fallback, iv_fallback_count);
+    let put_iv = leg_iv_or_fallback(row.put_iv, atm_iv_fallback, iv_fallback_count);
     if call_iv <= 0.0 && put_iv <= 0.0 {
         return None;
     }
@@ -554,6 +558,34 @@ mod tests {
         });
         assert_eq!(res.iv_fallback_count, 2);
         assert_eq!(res.strikes_used, 1);
+    }
+
+    #[test]
+    fn aggregate_treats_non_positive_leg_iv_as_missing() {
+        let mut malformed = row(100.0, 1_000, 0);
+        malformed.call_iv = Some(0.0);
+        let s = snap(vec![malformed]);
+
+        let res = aggregate(AggregateInputs {
+            spot: s.spot_price,
+            r: 0.045,
+            q: 0.015,
+            as_of: chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+            near_term_expiration: &s.near_term_expiration,
+            near_term_strikes: &s.near_term_strikes,
+            expirations: &[],
+            atm_iv_fallback: s.atm_iv,
+        });
+
+        let near = res
+            .near_term
+            .expect("zero-IV call leg should use ATM IV fallback");
+        assert_eq!(res.iv_fallback_count, 1);
+        assert_eq!(res.strikes_used, 1);
+        assert!(
+            near.net_gex_usd_per_1pct_move > 0.0,
+            "call-only OI with zero leg IV should not be zeroed"
+        );
     }
 
     #[test]
