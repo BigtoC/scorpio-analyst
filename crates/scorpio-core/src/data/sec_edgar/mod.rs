@@ -37,6 +37,18 @@ const COMPANY_TICKERS_PATH: &str = "/files/company_tickers.json";
 const COMPANY_TICKERS_MF_PATH: &str = "/files/company_tickers_mf.json";
 const SUBMISSIONS_PATH_PREFIX: &str = "/submissions/CIK";
 
+/// EDGAR browse-edgar endpoint — series-aware filing index.
+///
+/// Multi-series fund trusts (e.g. iShares Trust CIK 1100663 holds ~100 ETFs)
+/// publish one N-PORT-P per series under the trust CIK. The submissions
+/// endpoint returns them all undifferentiated. The full-text search endpoint
+/// at `efts.sec.gov` does **not** support series filtering (the `series=`
+/// query parameter is silently ignored). The legacy `browse-edgar` endpoint
+/// does support series filtering by accepting a series identifier where a
+/// CIK normally goes, and returns an Atom feed listing filings specific to
+/// that series.
+const EDGAR_BROWSE_PATH: &str = "/cgi-bin/browse-edgar";
+
 /// Number of consecutive HTTP/transport failures before the circuit opens.
 const CIRCUIT_OPEN_THRESHOLD: u32 = 5;
 /// How long the breaker stays open before allowing one trial request.
@@ -153,6 +165,20 @@ struct MfTickersResponse {
     data: Vec<(u32, String, String, String)>,
 }
 
+/// Resolved MF/ETF ticker record — CIK identifies the parent trust, series
+/// identifies the specific fund within that trust.
+///
+/// For multi-series trusts (iShares Trust, Vanguard Group, etc.), `cik` alone
+/// is not enough to isolate a specific ETF's N-PORT-P filing because the
+/// trust files one per series under the same CIK. The `series_id` is the
+/// missing key that EDGAR's full-text search uses to filter filings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MfTickerEntry {
+    pub cik: u32,
+    /// EDGAR series identifier, e.g. `"S000004354"` for SOXX.
+    pub series_id: String,
+}
+
 /// Shape of `https://data.sec.gov/submissions/CIK<10-digit>.json`.
 #[derive(Deserialize)]
 struct EdgarSubmissionsResponse {
@@ -188,15 +214,16 @@ fn parse_company_tickers(body: &str) -> Result<HashMap<String, u32>, String> {
         .collect())
 }
 
-/// Parse the MF/ETF tickers JSON into a `ticker → CIK` map.
+/// Parse the MF/ETF tickers JSON into a `ticker → MfTickerEntry` map.
 ///
 /// Defends against silent column reordering by checking the `fields` header
-/// — the parser requires `cik` to be the first column and `symbol` to be the
-/// fourth. If SEC ever changes the schema, we fail loudly rather than emit
-/// wrong CIKs.
-fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, u32>, String> {
+/// — the parser requires `cik` at index 0, `seriesId` at index 1, and
+/// `symbol` at index 3. If SEC ever changes the schema, we fail loudly rather
+/// than emit wrong CIK/series-ID pairs.
+fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, MfTickerEntry>, String> {
     let raw: MfTickersResponse = serde_json::from_str(body).map_err(|e| e.to_string())?;
     if raw.fields.first().map(String::as_str) != Some("cik")
+        || raw.fields.get(1).map(String::as_str) != Some("seriesId")
         || raw.fields.get(3).map(String::as_str) != Some("symbol")
     {
         return Err(format!(
@@ -207,8 +234,111 @@ fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, u32>, String> 
     Ok(raw
         .data
         .into_iter()
-        .map(|(cik, _series_id, _class_id, symbol)| (symbol.to_uppercase(), cik))
+        .map(|(cik, series_id, _class_id, symbol)| {
+            (symbol.to_uppercase(), MfTickerEntry { cik, series_id })
+        })
         .collect())
+}
+
+/// Parse a `browse-edgar` Atom feed into ordered `FilingHeader` rows.
+///
+/// SEC's `browse-edgar` Atom output lists filings most-recent-first. Each
+/// `<entry>` carries a nested `<content>` block with `<accession-number>`,
+/// `<filing-date>`, and `<filing-type>` children. The owning CIK is passed
+/// in by the caller (it's the trust CIK we already have from
+/// `MfTickerEntry`), avoiding any dependency on parsing the `<filing-href>`
+/// URL.
+///
+/// Constructs the primary document URL using the standard N-PORT-P
+/// convention (`primary_doc.xml`); SEC has filed every N-PORT-P with this
+/// fixed filename since the form was introduced.
+fn parse_browse_edgar_atom(
+    body: &str,
+    owner_cik: u32,
+    form_filter: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<FilingHeader>, String> {
+    let mut reader = quick_xml::reader::Reader::from_str(body);
+    reader.config_mut().trim_text(true);
+
+    let mut out: Vec<FilingHeader> = Vec::new();
+    let mut in_entry = false;
+    let mut accession: Option<String> = None;
+    let mut filing_date: Option<String> = None;
+    let mut filing_type: Option<String> = None;
+    let mut current_field: Option<Vec<u8>> = None;
+    let mut current_text = String::new();
+
+    loop {
+        match reader.read_event() {
+            Err(e) => return Err(format!("atom parse: {e}")),
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(quick_xml::events::Event::Start(e)) => {
+                let name = e.name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"entry" => {
+                        in_entry = true;
+                        accession = None;
+                        filing_date = None;
+                        filing_type = None;
+                    }
+                    b"accession-number" | b"filing-date" | b"filing-type" if in_entry => {
+                        current_field = Some(name);
+                        current_text.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(quick_xml::events::Event::Text(t)) => {
+                if current_field.is_some()
+                    && let Ok(s) = t.unescape()
+                {
+                    current_text.push_str(&s);
+                }
+            }
+            Ok(quick_xml::events::Event::End(e)) => {
+                let name = e.name().as_ref().to_vec();
+                if let Some(field) = current_field.as_ref()
+                    && field == &name
+                {
+                    let value = current_text.trim().to_owned();
+                    match name.as_slice() {
+                        b"accession-number" => accession = Some(value),
+                        b"filing-date" => filing_date = Some(value),
+                        b"filing-type" => filing_type = Some(value),
+                        _ => {}
+                    }
+                    current_field = None;
+                }
+                if name == b"entry" {
+                    in_entry = false;
+                    if let (Some(acc), Some(date), Some(form)) =
+                        (accession.take(), filing_date.take(), filing_type.take())
+                        && form.eq_ignore_ascii_case(form_filter)
+                        && date.as_str() >= from
+                        && date.as_str() <= to
+                    {
+                        let accession_no_dashes = acc.replace('-', "");
+                        let primary_doc_url = format!(
+                            "{EDGAR_WWW_BASE_URL}/Archives/edgar/data/{owner_cik}/{accession_no_dashes}/primary_doc.xml"
+                        );
+                        out.push(FilingHeader {
+                            cik: owner_cik,
+                            accession_number: acc,
+                            form_type: form,
+                            filing_date: date,
+                            primary_doc_url,
+                            item_codes: String::new(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(out)
 }
 
 fn parse_submissions(
@@ -275,10 +405,12 @@ pub struct SecEdgarClient {
     /// Lazy-loaded ticker→CIK map from `company_tickers.json` (operating
     /// companies only — equities filing 10-K/10-Q).
     cik_cache: Arc<RwLock<Option<HashMap<String, u32>>>>,
-    /// Lazy-loaded ticker→CIK map from `company_tickers_mf.json` (ETFs and
-    /// mutual fund series). Populated only on first ETF miss in
-    /// [`Self::resolve_fund_cik`].
-    cik_mf_cache: Arc<RwLock<Option<HashMap<String, u32>>>>,
+    /// Lazy-loaded ticker→`MfTickerEntry` map from `company_tickers_mf.json`
+    /// (ETFs and mutual fund series). Populated only on first ETF miss in
+    /// [`Self::resolve_fund_cik`] or [`Self::fetch_latest_nport_p_for_ticker`].
+    /// The series ID is kept alongside the CIK so multi-series trusts can be
+    /// resolved to a specific fund.
+    cik_mf_cache: Arc<RwLock<Option<HashMap<String, MfTickerEntry>>>>,
     breaker: Arc<Mutex<CircuitBreakerState>>,
 }
 
@@ -344,7 +476,7 @@ impl SecEdgarClient {
     fn with_preloaded_mf_cache(
         http: Arc<dyn EdgarHttp>,
         limiter: SharedRateLimiter,
-        mf_cache: HashMap<String, u32>,
+        mf_cache: HashMap<String, MfTickerEntry>,
     ) -> Self {
         Self {
             http,
@@ -519,18 +651,21 @@ impl SecEdgarClient {
         }
     }
 
-    /// Look up the CIK for a ticker in EDGAR's MF/ETF ticker index.
+    /// Look up the full MF ticker entry (CIK + series ID) for a ticker in
+    /// EDGAR's MF/ETF ticker index.
     ///
     /// Used by [`Self::resolve_fund_cik`] as a fallback when the operating-
-    /// company map ([`Self::lookup_cik`]) misses. Same fail-soft contract:
+    /// company map ([`Self::lookup_cik`]) misses, and by
+    /// [`Self::fetch_latest_nport_p_for_ticker`] to obtain the series ID
+    /// needed to disambiguate multi-series trusts. Same fail-soft contract:
     /// `Ok(None)` on transport error, non-200 status, or unknown ticker.
-    pub async fn lookup_cik_mf(&self, ticker: &str) -> Result<Option<u32>, TradingError> {
+    pub async fn lookup_cik_mf(&self, ticker: &str) -> Result<Option<MfTickerEntry>, TradingError> {
         let ticker_upper = ticker.to_uppercase();
 
         {
             let guard = self.cik_mf_cache.read().await;
             if let Some(cache) = guard.as_ref() {
-                return Ok(cache.get(&ticker_upper).copied());
+                return Ok(cache.get(&ticker_upper).cloned());
             }
         }
 
@@ -586,9 +721,9 @@ impl SecEdgarClient {
                 }
                 Ok(map) => {
                     self.breaker.lock().await.record_success();
-                    let cik = map.get(&ticker_upper).copied();
+                    let entry = map.get(&ticker_upper).cloned();
                     *self.cik_mf_cache.write().await = Some(map);
-                    Ok(cik)
+                    Ok(entry)
                 }
             },
         }
@@ -609,8 +744,8 @@ impl SecEdgarClient {
         if let Ok(Some(cik)) = self.lookup_cik(ticker).await {
             return Some(format!("{cik:010}"));
         }
-        if let Ok(Some(cik)) = self.lookup_cik_mf(ticker).await {
-            return Some(format!("{cik:010}"));
+        if let Ok(Some(entry)) = self.lookup_cik_mf(ticker).await {
+            return Some(format!("{cik:010}", cik = entry.cik));
         }
         None
     }
@@ -649,6 +784,151 @@ impl SecEdgarClient {
             chrono::NaiveDate::parse_from_str(&latest.filing_date, "%Y-%m-%d").ok()?;
         let xml = self.fetch_document_text(&latest.primary_doc_url).await?;
         nport::parse_nport_p(&xml, filing_date)
+    }
+
+    /// Fetch the most recent N-PORT-P filing for a specific fund **series**
+    /// within a trust.
+    ///
+    /// For multi-series trusts (iShares Trust holds ~100 ETFs under CIK
+    /// 1100663), the per-CIK submissions endpoint returns N-PORT-P filings
+    /// for every series in the trust undifferentiated. SEC's legacy
+    /// `browse-edgar` endpoint accepts a series identifier where a CIK
+    /// normally goes and returns an Atom feed listing only that series'
+    /// filings — that's the disambiguation path. (EDGAR's full-text search
+    /// at `efts.sec.gov` silently ignores the `series=` parameter and falls
+    /// back to all matching forms, which gives back the wrong filing.)
+    ///
+    /// `owner_cik` is the trust CIK that owns the series; it's used to
+    /// construct the standard `primary_doc.xml` URL after the accession
+    /// number is extracted from the Atom feed.
+    ///
+    /// Fail-soft contract identical to [`Self::fetch_latest_nport_p`]: any
+    /// transport error, non-200 status, parse failure, or empty result set
+    /// returns `None` with a `tracing::warn!` log.
+    pub async fn fetch_latest_nport_p_for_series(
+        &self,
+        owner_cik: u32,
+        series_id: &str,
+        max_age_days: u32,
+    ) -> Option<NPortHoldings> {
+        {
+            let breaker = self.breaker.lock().await;
+            if breaker.is_open() {
+                tracing::debug!(
+                    series_id,
+                    "SEC EDGAR circuit breaker open; skipping series N-PORT fetch"
+                );
+                return None;
+            }
+        }
+
+        let today = chrono::Utc::now().date_naive();
+        let earliest = today - chrono::Duration::days(max_age_days as i64);
+        // browse-edgar uses the series ID itself as the CIK parameter. SEC
+        // has supported this since the Investment Company Series and Class
+        // identifiers were introduced.
+        let url = format!(
+            "{EDGAR_WWW_BASE_URL}{EDGAR_BROWSE_PATH}\
+             ?action=getcompany&CIK={series_id}&type=NPORT-P\
+             &dateb=&owner=include&count=10&output=atom",
+        );
+
+        self.limiter.acquire().await;
+        let (status, body) = match self.http.get(&url).await {
+            Ok(pair) => pair,
+            Err(transport_err) => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar_browse_series",
+                    series_id,
+                    error = %transport_err,
+                    "EDGAR browse-edgar transport error"
+                );
+                return None;
+            }
+        };
+        if status != 200 {
+            self.breaker.lock().await.record_failure();
+            tracing::warn!(
+                kind = "catalyst_fetch_failed",
+                source = "sec_edgar_browse_series",
+                series_id,
+                http_status = status,
+                "EDGAR browse-edgar returned non-200"
+            );
+            return None;
+        }
+
+        let filings = match parse_browse_edgar_atom(
+            &body,
+            owner_cik,
+            "NPORT-P",
+            &earliest.format("%Y-%m-%d").to_string(),
+            &today.format("%Y-%m-%d").to_string(),
+        ) {
+            Ok(rows) => rows,
+            Err(parse_err) => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar_browse_series",
+                    series_id,
+                    error = %parse_err,
+                    "EDGAR browse-edgar parse failed"
+                );
+                return None;
+            }
+        };
+        self.breaker.lock().await.record_success();
+
+        let latest = filings.first()?;
+        if !is_allowed_sec_document_url(&latest.primary_doc_url) {
+            tracing::warn!(
+                url = %latest.primary_doc_url,
+                series_id,
+                "skipping non-SEC or non-HTTPS N-PORT document url"
+            );
+            return None;
+        }
+        let filing_date =
+            chrono::NaiveDate::parse_from_str(&latest.filing_date, "%Y-%m-%d").ok()?;
+        let xml = self.fetch_document_text(&latest.primary_doc_url).await?;
+        nport::parse_nport_p(&xml, filing_date)
+    }
+
+    /// Fetch the most recent N-PORT-P for a ticker, choosing the right
+    /// resolution strategy based on which SEC index the ticker lives in.
+    ///
+    /// Lookup order:
+    /// 1. `company_tickers.json` (operating companies) — uses CIK-level
+    ///    `fetch_latest_nport_p`. This path covers the rare case of a fund
+    ///    that also files 10-K, and any single-series trust whose CIK alone
+    ///    is sufficient.
+    /// 2. `company_tickers_mf.json` (ETF / mutual fund series) — uses
+    ///    `fetch_latest_nport_p_for_series` with the `(cik, series_id)`
+    ///    pair from the MF index. This is the path that disambiguates
+    ///    multi-series trusts (iShares, Vanguard, SPDR families).
+    ///
+    /// Fail-soft: returns `None` when both resolution paths miss or when
+    /// the downstream fetch fails.
+    pub async fn fetch_latest_nport_p_for_ticker(
+        &self,
+        ticker: &str,
+        max_age_days: u32,
+    ) -> Option<NPortHoldings> {
+        if let Ok(Some(cik)) = self.lookup_cik(ticker).await {
+            let cik_str = format!("{cik:010}");
+            if let Some(holdings) = self.fetch_latest_nport_p(&cik_str, max_age_days).await {
+                return Some(holdings);
+            }
+        }
+        if let Ok(Some(entry)) = self.lookup_cik_mf(ticker).await {
+            return self
+                .fetch_latest_nport_p_for_series(entry.cik, &entry.series_id, max_age_days)
+                .await;
+        }
+        None
     }
 
     /// Fetch a raw filing document body. Fail-soft: returns `None` on any
@@ -743,7 +1023,7 @@ mod tests {
     // ── company_tickers_mf.json parsing ──────────────────────────────────────
 
     #[test]
-    fn parse_company_tickers_mf_extracts_etf_to_cik_map() {
+    fn parse_company_tickers_mf_extracts_etf_to_entry_map() {
         let json = r#"{
             "fields": ["cik", "seriesId", "classId", "symbol"],
             "data": [
@@ -752,8 +1032,20 @@ mod tests {
             ]
         }"#;
         let map = parse_company_tickers_mf(json).expect("parse should succeed");
-        assert_eq!(map.get("SOXX"), Some(&1100663u32));
-        assert_eq!(map.get("SPY"), Some(&884394u32));
+        assert_eq!(
+            map.get("SOXX"),
+            Some(&MfTickerEntry {
+                cik: 1100663,
+                series_id: "S000004354".to_owned(),
+            })
+        );
+        assert_eq!(
+            map.get("SPY"),
+            Some(&MfTickerEntry {
+                cik: 884394,
+                series_id: "S000003474".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -763,8 +1055,23 @@ mod tests {
             "data": [[1100663, "S000004354", "C000012084", "soxx"]]
         }"#;
         let map = parse_company_tickers_mf(json).expect("parse should succeed");
-        assert_eq!(map.get("SOXX"), Some(&1100663u32));
+        let entry = map.get("SOXX").expect("uppercase key present");
+        assert_eq!(entry.cik, 1100663);
+        assert_eq!(entry.series_id, "S000004354");
         assert_eq!(map.get("soxx"), None);
+    }
+
+    #[test]
+    fn parse_company_tickers_mf_rejects_when_series_id_column_moved() {
+        // fields[1] is no longer `seriesId`. Tuple types still deserialize
+        // (still u32/str/str/str positions) but the header check must catch
+        // it — otherwise we'd silently map classId strings to series_id.
+        let json = r#"{
+            "fields": ["cik", "classId", "seriesId", "symbol"],
+            "data": [[1100663, "C000012084", "S000004354", "SOXX"]]
+        }"#;
+        let err = parse_company_tickers_mf(json).expect_err("schema check must fire");
+        assert!(err.contains("schema"), "unexpected error message: {err}");
     }
 
     #[test]
@@ -886,14 +1193,247 @@ mod tests {
         // Preloaded MF cache → no HTTP call should be made.
         let mock = MockEdgarHttp::new();
         let mut preload = HashMap::new();
-        preload.insert("SOXX".to_owned(), 1100663);
+        preload.insert(
+            "SOXX".to_owned(),
+            MfTickerEntry {
+                cik: 1100663,
+                series_id: "S000004354".to_owned(),
+            },
+        );
         let client = SecEdgarClient::with_preloaded_mf_cache(
             Arc::new(mock),
             SharedRateLimiter::new("test_sec_edgar", 100),
             preload,
         );
-        let cik = client.lookup_cik_mf("SOXX").await.expect("ok");
-        assert_eq!(cik, Some(1100663));
+        let entry = client
+            .lookup_cik_mf("SOXX")
+            .await
+            .expect("ok")
+            .expect("hit");
+        assert_eq!(entry.cik, 1100663);
+        assert_eq!(entry.series_id, "S000004354");
+    }
+
+    // ── browse-edgar atom feed parsing (series-aware N-PORT) ─────────────────
+
+    fn atom_entry(accession: &str, form: &str, date: &str) -> String {
+        format!(
+            r#"<entry>
+                <category label="form type" scheme="https://www.sec.gov/" term="{form}"/>
+                <content type="text/xml">
+                    <accession-number>{accession}</accession-number>
+                    <act>40</act>
+                    <filing-date>{date}</filing-date>
+                    <filing-type>{form}</filing-type>
+                </content>
+                <id>urn:tag:sec.gov,2008:accession-number={accession}</id>
+                <title>{form} - iShares Trust</title>
+                <updated>{date}T16:01:23-04:00</updated>
+            </entry>"#
+        )
+    }
+
+    fn atom_feed(entries: &[String]) -> String {
+        let body = entries.join("\n");
+        format!(
+            r#"<?xml version="1.0" encoding="ISO-8859-1" ?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <author><email>webmaster@sec.gov</email><name>Webmaster</name></author>
+    <company-info>
+        <cik>0001100663</cik>
+        <conformed-name>iShares Trust</conformed-name>
+    </company-info>
+    {body}
+</feed>"#
+        )
+    }
+
+    #[test]
+    fn parse_browse_edgar_atom_extracts_entries_most_recent_first() {
+        let feed = atom_feed(&[
+            atom_entry("0001752724-26-001234", "NPORT-P", "2026-04-15"),
+            atom_entry("0001752724-26-000567", "NPORT-P", "2026-01-15"),
+        ]);
+        let rows = parse_browse_edgar_atom(&feed, 1100663, "NPORT-P", "2025-01-01", "2027-01-01")
+            .expect("parse");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].filing_date, "2026-04-15");
+        assert_eq!(rows[0].cik, 1100663);
+        assert!(
+            rows[0]
+                .primary_doc_url
+                .ends_with("/000175272426001234/primary_doc.xml"),
+            "unexpected URL shape: {}",
+            rows[0].primary_doc_url
+        );
+    }
+
+    #[test]
+    fn parse_browse_edgar_atom_filters_out_non_matching_forms() {
+        let feed = atom_feed(&[atom_entry("0001752724-26-001234", "N-CSR", "2026-04-15")]);
+        let rows = parse_browse_edgar_atom(&feed, 1100663, "NPORT-P", "2025-01-01", "2027-01-01")
+            .expect("parse");
+        assert!(rows.is_empty(), "non-matching form must be filtered out");
+    }
+
+    #[test]
+    fn parse_browse_edgar_atom_filters_out_filings_outside_date_window() {
+        let feed = atom_feed(&[atom_entry("0001752724-24-001234", "NPORT-P", "2024-04-15")]);
+        let rows = parse_browse_edgar_atom(&feed, 1100663, "NPORT-P", "2026-01-01", "2026-12-31")
+            .expect("parse");
+        assert!(rows.is_empty(), "stale filing must be filtered out");
+    }
+
+    #[test]
+    fn parse_browse_edgar_atom_empty_feed_yields_empty_vec() {
+        let feed = atom_feed(&[]);
+        let rows = parse_browse_edgar_atom(&feed, 1100663, "NPORT-P", "2025-01-01", "2027-01-01")
+            .expect("parse");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parse_browse_edgar_atom_handles_truncated_xml_as_empty_result() {
+        // quick-xml's default config silently reaches EOF on truncated
+        // input rather than returning Err. That's acceptable for the
+        // fail-soft contract: if SEC returns garbage, we emit no filings
+        // rather than panicking. The caller's downstream
+        // `filings.first()?` then returns `None`.
+        let rows = parse_browse_edgar_atom(
+            "<feed><entry><accession-number>missing close",
+            1100663,
+            "NPORT-P",
+            "2025-01-01",
+            "2027-01-01",
+        )
+        .expect("truncated input must not panic");
+        assert!(rows.is_empty(), "truncated input must yield no filings");
+    }
+
+    #[test]
+    fn parse_browse_edgar_atom_rejects_mismatched_closing_tag() {
+        // quick-xml *does* error when an explicit close tag mismatches an
+        // open tag — that's a real structural error.
+        let err = parse_browse_edgar_atom(
+            "<feed><entry></wrongclose></entry></feed>",
+            1100663,
+            "NPORT-P",
+            "2025-01-01",
+            "2027-01-01",
+        );
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn fetch_latest_nport_p_for_ticker_uses_mf_series_path_when_equity_misses() {
+        // Equity map misses → MF map returns SOXX with series ID →
+        // browse-edgar atom feed returns a recent N-PORT-P for that
+        // specific series → primary document fetches → parser returns the
+        // holdings.
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_PATH))
+            .returning(|_| Ok((200, "{}".to_owned())));
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_MF_PATH))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{
+                        "fields": ["cik", "seriesId", "classId", "symbol"],
+                        "data": [[1100663, "S000004354", "C000012084", "SOXX"]]
+                    }"#
+                    .to_owned(),
+                ))
+            });
+        // browse-edgar request must (a) hit cgi-bin/browse-edgar, (b) pass
+        // the series ID as the CIK parameter, and (c) ask for atom output.
+        // The series ID is what SEC uses to isolate the specific ETF inside
+        // the multi-series trust.
+        mock.expect_get()
+            .withf(|url: &str| {
+                url.contains("/cgi-bin/browse-edgar")
+                    && url.contains("CIK=S000004354")
+                    && url.contains("output=atom")
+            })
+            .returning(|_| {
+                let feed = r#"<?xml version="1.0" encoding="ISO-8859-1" ?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <author><email>webmaster@sec.gov</email><name>Webmaster</name></author>
+    <company-info>
+        <cik>0001100663</cik>
+        <conformed-name>iShares Trust</conformed-name>
+    </company-info>
+    <entry>
+        <category label="form type" scheme="https://www.sec.gov/" term="NPORT-P"/>
+        <content type="text/xml">
+            <accession-number>0001752724-26-001234</accession-number>
+            <act>40</act>
+            <filing-date>2026-04-15</filing-date>
+            <filing-type>NPORT-P</filing-type>
+        </content>
+        <id>urn:tag:sec.gov,2008:accession-number=0001752724-26-001234</id>
+        <title>NPORT-P - iShares Trust</title>
+        <updated>2026-04-15T16:01:23-04:00</updated>
+    </entry>
+</feed>"#;
+                Ok((200, feed.to_owned()))
+            });
+        // The primary doc URL — reuse the existing SPY N-PORT fixture so the
+        // parser actually returns Some(_) with real holdings shape.
+        mock.expect_get()
+            .withf(|url: &str| {
+                url.contains("/Archives/edgar/data/1100663/000175272426001234/primary_doc.xml")
+            })
+            .returning(|_| {
+                Ok((
+                    200,
+                    include_str!("../../../tests/fixtures/nport/spy_2026_04_30_excerpt.xml")
+                        .to_owned(),
+                ))
+            });
+
+        let client = SecEdgarClient::with_http(
+            Arc::new(mock),
+            SharedRateLimiter::new("test_sec_edgar", 100),
+        );
+        let holdings = client
+            .fetch_latest_nport_p_for_ticker("SOXX", 180)
+            .await
+            .expect("series-aware path must populate holdings");
+        assert!(!holdings.holdings.is_empty(), "fixture has holdings rows");
+        // Filing date plumbed through the EFTS path:
+        assert_eq!(
+            holdings.filing_date,
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 15).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_latest_nport_p_for_ticker_returns_none_when_both_indexes_miss() {
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_PATH))
+            .returning(|_| Ok((200, "{}".to_owned())));
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_MF_PATH))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{"fields":["cik","seriesId","classId","symbol"],"data":[]}"#.to_owned(),
+                ))
+            });
+
+        let client = SecEdgarClient::with_http(
+            Arc::new(mock),
+            SharedRateLimiter::new("test_sec_edgar", 100),
+        );
+        assert!(
+            client
+                .fetch_latest_nport_p_for_ticker("UNKNOWN_TICKER", 180)
+                .await
+                .is_none()
+        );
     }
 
     // ── submissions JSON parsing ──────────────────────────────────────────────

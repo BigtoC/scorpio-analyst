@@ -32,6 +32,14 @@ tokio = { version = "1", features = ["full"] }
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+# opentelemetry-langfuse 0.6 only supports the opentelemetry 0.31 family.
+# Pin the rest of the OTel ecosystem to matching majors so the SpanExporter
+# trait identities line up (langfuse exporter → SdkTracerProvider builder).
+# tracing-opentelemetry 0.32.x is the version compatible with opentelemetry 0.31.
+tracing-opentelemetry = "0.32"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "=0.31.0", features = ["trace", "rt-tokio"] }
+opentelemetry-langfuse = "0.6"
 
 # Rate limiting
 governor = "0.10.4"

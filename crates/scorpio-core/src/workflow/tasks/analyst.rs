@@ -908,21 +908,19 @@ async fn fetch_valuation_inputs(
         etf_distribution_yield_ttm_pct = yld_opt;
         etf_ohlcv = etf_ohlcv_opt;
 
-        // Sequential N-PORT-P fetch (depends on CIK resolution).
-        if let Some(edgar) = sec_edgar
-            && let Some(cik) = fetch_with_timeout(
-                symbol,
-                "fund_cik",
-                fetch_timeout,
-                edgar.resolve_fund_cik(symbol),
-            )
-            .await
-        {
+        // N-PORT-P holdings fetch.
+        //
+        // `fetch_latest_nport_p_for_ticker` orchestrates CIK + series-ID
+        // resolution: it tries the operating-company map first (single-series
+        // funds) and falls back to the MF index for ETFs in multi-series
+        // trusts (iShares Trust hosts ~100 ETFs under CIK 1100663, so the
+        // series ID is what isolates SOXX from its siblings).
+        if let Some(edgar) = sec_edgar {
             etf_holdings = fetch_with_timeout(
                 symbol,
                 "nport_holdings",
                 fetch_timeout,
-                edgar.fetch_latest_nport_p(&cik, 180),
+                edgar.fetch_latest_nport_p_for_ticker(symbol, 180),
             )
             .await;
         }
