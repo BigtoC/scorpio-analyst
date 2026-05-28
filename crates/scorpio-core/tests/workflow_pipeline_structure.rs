@@ -1065,10 +1065,7 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
         panic!("^IRX fallback must not be called when FRED succeeds, got symbol={symbol}")
     });
 
-    let mut state = TradingState::new(
-        "SPY".to_owned(),
-        market_today(),
-    );
+    let mut state = TradingState::new("SPY".to_owned(), market_today());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
@@ -1154,10 +1151,7 @@ async fn preflight_falls_back_to_yfinance_irx_when_fred_returns_empty() {
         _ => Ok(None),
     });
 
-    let mut state = TradingState::new(
-        "SPY".to_owned(),
-        market_today(),
-    );
+    let mut state = TradingState::new("SPY".to_owned(), market_today());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,
@@ -1188,10 +1182,7 @@ async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
     let fred = with_fake_fred_client(|_| Ok(None));
     let yfinance = with_fake_yfinance_client(|_| Ok(None));
 
-    let mut state = TradingState::new(
-        "SPY".to_owned(),
-        market_today(),
-    );
+    let mut state = TradingState::new("SPY".to_owned(), market_today());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
         scorpio_core::analysis_packs::PackId::EtfBaseline,

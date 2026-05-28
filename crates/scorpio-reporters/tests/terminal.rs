@@ -98,7 +98,7 @@ fn etf_terminal_renders_dealer_positioning_block_when_gex_present() {
 }
 
 #[test]
-fn etf_terminal_hides_dealer_positioning_block_when_gex_absent() {
+fn etf_terminal_renders_dealer_positioning_absence_when_gex_absent() {
     use scorpio_core::state::{
         AssetShape, DerivedValuation, EtfDataAvailability, EtfValuation, PremiumBand,
         PremiumSnapshot, ScenarioValuation,
@@ -129,8 +129,9 @@ fn etf_terminal_hides_dealer_positioning_block_when_gex_absent() {
 
     let rendered = render_final_report(&state);
     assert!(
-        !rendered.contains("DEALER POSITIONING"),
-        "block must be hidden when options_gex is None: {rendered}"
+        rendered.contains("Dealer positioning skipped")
+            && rendered.contains("no usable options-derived overlay"),
+        "absence notice must render when options_gex is None: {rendered}"
     );
 }
 
