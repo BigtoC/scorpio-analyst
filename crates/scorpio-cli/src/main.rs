@@ -18,7 +18,11 @@ const UPDATE_NOTICE_GRACE: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
+    // Bind the tracing guard for the lifetime of main so the OTel
+    // BatchSpanProcessor flushes its final buffer on shutdown. Dropping
+    // this guard before main exits would lose the trailing batch of
+    // Langfuse spans.
+    let _tracing_guard = init_tracing();
     let cli = Cli::parse();
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.

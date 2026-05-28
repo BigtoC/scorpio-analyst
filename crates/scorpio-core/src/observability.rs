@@ -10,6 +10,52 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+/// RAII guard that triggers a final OTel span flush on `Drop`.
+///
+/// `BatchSpanProcessor` buffers spans and flushes on a schedule (default
+/// every 5 s) **and** on `provider.shutdown()`. Without an explicit
+/// shutdown, the spans created in the last few seconds of a run can be
+/// lost when the tokio runtime tears down before the next scheduled
+/// flush. Hold this guard for the lifetime of `main` and the `Drop` impl
+/// will run `provider.shutdown()` while tokio is still alive.
+///
+/// Bind it to a `_`-prefixed local so it lives until the end of scope:
+///
+/// ```ignore
+/// let _tracing = scorpio_core::observability::init_tracing();
+/// // ... run analysis ...
+/// // _tracing drops here, final OTel flush fires
+/// ```
+#[must_use = "TracingGuard must be held until program exit; dropping it flushes pending OTel spans to Langfuse"]
+pub struct TracingGuard {
+    provider: Option<SdkTracerProvider>,
+}
+
+impl TracingGuard {
+    fn empty() -> Self {
+        Self { provider: None }
+    }
+
+    fn with_provider(provider: SdkTracerProvider) -> Self {
+        Self {
+            provider: Some(provider),
+        }
+    }
+}
+
+impl Drop for TracingGuard {
+    fn drop(&mut self) {
+        if let Some(provider) = self.provider.take()
+            && let Err(e) = provider.shutdown()
+        {
+            // Best-effort log on shutdown — `tracing` subscriber may
+            // already be torn down at this point, so use eprintln so the
+            // operator can see flush failures during teardown.
+            eprintln!("[observability] OTel provider shutdown error: {e}");
+        }
+    }
+}
+
 /// Initialize tracing based on the `SCORPIO_LOG_FORMAT` environment variable.
 ///
 /// - `SCORPIO_LOG_FORMAT=pretty` → human-readable output (local development)
@@ -18,15 +64,18 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 /// If `SCORPIO_LANGFUSE_PUBLIC_KEY`, `SCORPIO_LANGFUSE_SECRET_KEY`, and
 /// `SCORPIO_LANGFUSE_BASE_URL` are set, traces are also exported to Langfuse
 /// via OpenTelemetry.
-pub fn init_tracing() {
+///
+/// Returns a [`TracingGuard`] that must be held until program exit so the
+/// batch span processor flushes its final buffer.
+pub fn init_tracing() -> TracingGuard {
     // Load .env before reading env vars so values set in .env are respected.
     // Silently ignored when no .env file exists (e.g. CI / production).
     dotenvy::dotenv().ok();
 
     if std::env::var("SCORPIO_LOG_FORMAT").as_deref() == Ok("pretty") {
-        init_tracing_pretty();
+        init_tracing_pretty()
     } else {
-        init_tracing_json();
+        init_tracing_json()
     }
 }
 
@@ -60,11 +109,16 @@ enum LangfuseStatus {
 /// - `Langfuse tracing disabled — <var> not set` — intentional off
 /// - `Langfuse tracing setup failed` — env vars present but exporter
 ///   could not be built (bad URL, malformed credentials, etc.)
-fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, LangfuseStatus) {
+fn init_langfuse_tracer() -> (
+    Option<opentelemetry_sdk::trace::Tracer>,
+    Option<SdkTracerProvider>,
+    LangfuseStatus,
+) {
     let public_key = match std::env::var("SCORPIO_LANGFUSE_PUBLIC_KEY") {
         Ok(v) => v,
         Err(_) => {
             return (
+                None,
                 None,
                 LangfuseStatus::Disabled {
                     missing_var: "SCORPIO_LANGFUSE_PUBLIC_KEY",
@@ -77,6 +131,7 @@ fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, Langfuse
         Err(_) => {
             return (
                 None,
+                None,
                 LangfuseStatus::Disabled {
                     missing_var: "SCORPIO_LANGFUSE_SECRET_KEY",
                 },
@@ -87,6 +142,7 @@ fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, Langfuse
         Ok(v) => v,
         Err(_) => {
             return (
+                None,
                 None,
                 LangfuseStatus::Disabled {
                     missing_var: "SCORPIO_LANGFUSE_BASE_URL",
@@ -103,6 +159,7 @@ fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, Langfuse
         Ok(e) => e,
         Err(e) => {
             return (
+                None,
                 None,
                 LangfuseStatus::Failed {
                     reason: e.to_string(),
@@ -128,9 +185,18 @@ fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, Langfuse
         .build();
 
     let tracer = provider.tracer("scorpio-analyst");
+    // Clone before moving into global so the guard can call shutdown()
+    // while the tokio runtime is still alive. The Arc<TracerProviderInner>
+    // inside SdkTracerProvider means both references point at the same
+    // underlying state.
+    let provider_for_guard = provider.clone();
     global::set_tracer_provider(provider);
 
-    (Some(tracer), LangfuseStatus::Enabled { host })
+    (
+        Some(tracer),
+        Some(provider_for_guard),
+        LangfuseStatus::Enabled { host },
+    )
 }
 
 /// Emit the Langfuse startup status. Called once after the tracing
@@ -166,8 +232,8 @@ fn log_langfuse_status(status: &LangfuseStatus) {
 ///
 /// The log level defaults to `info` but can be overridden via the `RUST_LOG` env var.
 /// Call this once during application startup.
-pub fn init_tracing_json() {
-    let (tracer, status) = init_langfuse_tracer();
+pub fn init_tracing_json() -> TracingGuard {
+    let (tracer, provider, status) = init_langfuse_tracer();
     if let Some(tracer) = tracer {
         tracing_subscriber::registry()
             .with(build_env_filter())
@@ -181,12 +247,16 @@ pub fn init_tracing_json() {
             .init();
     }
     log_langfuse_status(&status);
+    match provider {
+        Some(p) => TracingGuard::with_provider(p),
+        None => TracingGuard::empty(),
+    }
 }
 
 /// Initialize tracing with a human-readable (non-JSON) format, primarily for local
 /// development and test runs.
-pub fn init_tracing_pretty() {
-    let (tracer, status) = init_langfuse_tracer();
+pub fn init_tracing_pretty() -> TracingGuard {
+    let (tracer, provider, status) = init_langfuse_tracer();
     if let Some(tracer) = tracer {
         tracing_subscriber::registry()
             .with(build_env_filter())
@@ -200,4 +270,8 @@ pub fn init_tracing_pretty() {
             .init();
     }
     log_langfuse_status(&status);
+    match provider {
+        Some(p) => TracingGuard::with_provider(p),
+        None => TracingGuard::empty(),
+    }
 }
