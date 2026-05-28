@@ -1,4 +1,3 @@
-use opentelemetry::KeyValue;
 use opentelemetry::global;
 // `TracerProvider` is the trait that provides the `.tracer(name)` method
 // on `SdkTracerProvider`. Must be in scope at the call site.
@@ -45,13 +44,41 @@ impl TracingGuard {
 
 impl Drop for TracingGuard {
     fn drop(&mut self) {
-        if let Some(provider) = self.provider.take()
-            && let Err(e) = provider.shutdown()
-        {
-            // Best-effort log on shutdown — `tracing` subscriber may
-            // already be torn down at this point, so use eprintln so the
-            // operator can see flush failures during teardown.
-            eprintln!("[observability] OTel provider shutdown error: {e}");
+        if let Some(provider) = self.provider.take() {
+            // Manual flush per Langfuse's "Manual Flushing" guidance —
+            // ensures any spans still buffered in the BatchSpanProcessor
+            // (default flush interval is 5s) get sent before we trigger
+            // shutdown. Without this, the trailing batch of a fast run
+            // can be lost on teardown.
+            if let Err(e) = provider.force_flush() {
+                eprintln!("[observability] OTel force_flush error: {e}");
+            }
+            if let Err(e) = provider.shutdown() {
+                // Best-effort log on shutdown — `tracing` subscriber may
+                // already be torn down at this point, so use eprintln so
+                // the operator can see flush failures during teardown.
+                eprintln!("[observability] OTel provider shutdown error: {e}");
+            }
+        }
+    }
+}
+
+impl TracingGuard {
+    /// Explicit flush + shutdown for callers that want to drain spans
+    /// before `main` returns (e.g. short-lived CLI invocations where
+    /// relying on `Drop` order is fragile).
+    ///
+    /// Consumes the guard so it can't be double-flushed. After this call
+    /// any further span emissions will be dropped at the
+    /// `BatchSpanProcessor`.
+    pub fn flush_and_shutdown(mut self) {
+        if let Some(provider) = self.provider.take() {
+            if let Err(e) = provider.force_flush() {
+                eprintln!("[observability] OTel force_flush error: {e}");
+            }
+            if let Err(e) = provider.shutdown() {
+                eprintln!("[observability] OTel provider shutdown error: {e}");
+            }
         }
     }
 }
@@ -168,18 +195,26 @@ fn init_langfuse_tracer() -> (
         }
     };
 
-    // Batch processor backed by the tokio runtime — required for async apps.
-    // `SimpleSpanProcessor` blocks the reactor on each export and routinely
-    // drops spans during process teardown; `BatchSpanProcessor` buffers and
-    // flushes on `shutdown` / `Drop` so spans actually reach Langfuse.
+    // MUST use the Tokio-runtime BatchSpanProcessor (NOT
+    // `with_batch_exporter`). The langfuse exporter uses an async
+    // `reqwest::Client` and requires a tokio runtime to drive HTTP. The
+    // default `with_batch_exporter` spawns a `std::thread` with no tokio
+    // runtime in scope — the export future panics there, the worker
+    // thread dies, and every subsequent span hits "BatchSpanProcessor.
+    // OnEnd.AfterShutdown" (channel disconnected).
     //
-    // `service.name` on the Resource is what Langfuse uses to identify the
-    // app; without it traces may be filtered out at ingestion.
+    // Rig's published examples use `with_batch_exporter`, but that's
+    // because they use `opentelemetry-otlp` with the blocking reqwest
+    // client, which doesn't need a tokio runtime. We don't have that
+    // option with langfuse — async reqwest only.
+    //
+    // `with_service_name` is the canonical helper for setting the Resource
+    // `service.name` attribute Langfuse uses to identify the app.
     let provider = SdkTracerProvider::builder()
         .with_span_processor(BatchSpanProcessor::builder(exporter, Tokio).build())
         .with_resource(
             Resource::builder()
-                .with_attributes(vec![KeyValue::new("service.name", "scorpio-analyst")])
+                .with_service_name("scorpio-analyst")
                 .build(),
         )
         .build();
@@ -234,11 +269,14 @@ fn log_langfuse_status(status: &LangfuseStatus) {
 /// Call this once during application startup.
 pub fn init_tracing_json() -> TracingGuard {
     let (tracer, provider, status) = init_langfuse_tracer();
+    // Layer order mirrors rig's own otel examples: filter → fmt → otel.
+    // The otel layer comes last so it sees spans after the fmt layer has
+    // already attached its event hooks.
     if let Some(tracer) = tracer {
         tracing_subscriber::registry()
             .with(build_env_filter())
-            .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .with(fmt::layer().json().flatten_event(true))
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .init();
     } else {
         tracing_subscriber::registry()
@@ -260,8 +298,8 @@ pub fn init_tracing_pretty() -> TracingGuard {
     if let Some(tracer) = tracer {
         tracing_subscriber::registry()
             .with(build_env_filter())
-            .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .with(fmt::layer().pretty())
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .init();
     } else {
         tracing_subscriber::registry()
