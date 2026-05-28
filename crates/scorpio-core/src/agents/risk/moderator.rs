@@ -68,6 +68,7 @@ impl RiskModerator {
                 |bundle| bundle.risk_moderator.as_ref(),
                 state,
                 llm_config,
+                false,
             )?,
             transcript_fetch: transcript_fetch.cloned(),
         })
@@ -284,6 +285,8 @@ mod tests {
             analysis_pack_name: None,
             analysis_runtime_policy: None,
             etf_routing_fallback_reason: None,
+            etf_risk_free_rate: None,
+            etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
         }

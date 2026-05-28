@@ -171,6 +171,7 @@ mod tests {
                     put_oi: Some(4_500),
                 },
             ],
+            all_expirations: vec![],
         };
 
         TechnicalData {
@@ -323,6 +324,7 @@ mod tests {
             max_pain_strike: 100.0,
             near_term_expiration: "2026-01-17".to_owned(),
             near_term_strikes: vec![],
+            all_expirations: vec![],
         };
         let mut data = sample_technical_with_options_context_for_projection_tests();
         data.options_context = Some(TechnicalOptionsContext::Available {
@@ -408,6 +410,7 @@ mod tests {
                     put_oi: Some(0),
                 },
             ],
+            all_expirations: vec![],
         };
         let mut data = sample_technical_with_options_context_for_projection_tests();
         data.options_context = Some(TechnicalOptionsContext::Available {

@@ -20,6 +20,7 @@
 
 mod batch;
 mod core_math;
+pub(crate) mod gex;
 mod support_resistance;
 mod tools;
 mod types;

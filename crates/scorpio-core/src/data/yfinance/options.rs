@@ -12,8 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::TimeZone as _;
-use chrono_tz::US::Eastern;
 use futures::StreamExt as _;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -96,8 +94,7 @@ impl YFinanceOptionsProvider {
         }
 
         // ── Check market-local date ──────────────────────────────────────
-        let market_today = market_local_today_eastern();
-        if target_date != market_today {
+        if !crate::market_time::target_is_market_local_date(target_date) {
             return Ok(OptionsOutcome::HistoricalRun);
         }
 
@@ -184,6 +181,26 @@ impl YFinanceOptionsProvider {
         // ── IV term structure ────────────────────────────────────────────
         let iv_term_structure = build_term_structure(&all_chains, spot);
 
+        // Collect NTM rows for non-front-month expirations (front-month is index 0
+        // after sort_unstable_by_key above).
+        let all_expirations: Vec<crate::data::traits::options::ExpirationStrikes> = all_chains
+            .iter()
+            .skip(1)
+            .filter_map(|(ts, chain)| {
+                let rows = build_ntm_slice(chain, spot)?;
+                let expiration = chain
+                    .calls
+                    .first()
+                    .or_else(|| chain.puts.first())
+                    .map(|c| c.expiration_date.to_string())
+                    .unwrap_or_else(|| timestamp_to_date_str(*ts));
+                Some(crate::data::traits::options::ExpirationStrikes {
+                    expiration,
+                    strikes: rows,
+                })
+            })
+            .collect();
+
         Ok(OptionsOutcome::Snapshot(OptionsSnapshot {
             spot_price: spot,
             atm_iv,
@@ -193,6 +210,7 @@ impl YFinanceOptionsProvider {
             max_pain_strike,
             near_term_expiration,
             near_term_strikes,
+            all_expirations,
         }))
     }
 }
@@ -213,12 +231,6 @@ impl OptionsProvider for YFinanceOptionsProvider {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Return current US/Eastern calendar date as `"YYYY-MM-DD"`.
-fn market_local_today_eastern() -> String {
-    let eastern_now = Eastern.from_utc_datetime(&chrono::Utc::now().naive_utc());
-    eastern_now.date_naive().to_string()
-}
 
 /// Map a `YfError` to the nearest `TradingError` variant.
 fn map_yf_options_err(e: YfError) -> TradingError {
@@ -554,8 +566,7 @@ async fn fetch_from_stub(
     target_date: &str,
 ) -> Result<OptionsOutcome, TradingError> {
     // Check market-local date.
-    let market_today = market_local_today_eastern();
-    if target_date != market_today {
+    if !crate::market_time::target_is_market_local_date(target_date) {
         return Ok(OptionsOutcome::HistoricalRun);
     }
 
@@ -650,6 +661,25 @@ async fn fetch_from_stub(
     let (put_call_volume_ratio, put_call_oi_ratio) = compute_pc_ratios(&all_chains);
     let iv_term_structure = build_term_structure(&all_chains, spot);
 
+    // Collect NTM rows for non-front-month expirations (front-month is index 0).
+    let all_expirations: Vec<crate::data::traits::options::ExpirationStrikes> = all_chains
+        .iter()
+        .skip(1)
+        .filter_map(|(ts, chain)| {
+            let rows = build_ntm_slice(chain, spot)?;
+            let expiration = chain
+                .calls
+                .first()
+                .or_else(|| chain.puts.first())
+                .map(|c| c.expiration_date.to_string())
+                .unwrap_or_else(|| timestamp_to_date_str(*ts));
+            Some(crate::data::traits::options::ExpirationStrikes {
+                expiration,
+                strikes: rows,
+            })
+        })
+        .collect();
+
     Ok(OptionsOutcome::Snapshot(OptionsSnapshot {
         spot_price: spot,
         atm_iv,
@@ -659,6 +689,7 @@ async fn fetch_from_stub(
         max_pain_strike,
         near_term_expiration,
         near_term_strikes,
+        all_expirations,
     }))
 }
 
@@ -939,7 +970,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use chrono::NaiveDate;
-    use chrono::TimeZone as _;
     use yfinance_rs::ticker::{OptionChain, OptionContract};
 
     use super::*;
@@ -949,13 +979,11 @@ mod tests {
     // ── Test helpers ──────────────────────────────────────────────────────
 
     fn today_eastern() -> String {
-        let eastern_now = Eastern.from_utc_datetime(&chrono::Utc::now().naive_utc());
-        eastern_now.date_naive().to_string()
+        crate::market_time::market_local_date_eastern().to_string()
     }
 
     fn yesterday_eastern() -> String {
-        let eastern_now = Eastern.from_utc_datetime(&chrono::Utc::now().naive_utc());
-        (eastern_now.date_naive() - chrono::Duration::days(1)).to_string()
+        (crate::market_time::market_local_date_eastern() - chrono::Duration::days(1)).to_string()
     }
 
     fn aapl() -> Symbol {
@@ -1053,6 +1081,7 @@ mod tests {
                 call_oi: Some(500),
                 put_oi: Some(400),
             }],
+            all_expirations: vec![],
         })
     }
 
@@ -1702,6 +1731,91 @@ mod tests {
             OptionsOutcome::HistoricalRun,
             "yesterday's US/Eastern date should return HistoricalRun"
         );
+    }
+
+    // ── all_expirations population tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn normalized_snapshot_carries_all_expirations_with_distinct_dates() {
+        // Two expirations: ts1 (front-month) and ts2 (second month).
+        // all_expirations must be non-empty and must not include the front-month
+        // expiration date (it's already in near_term_expiration/near_term_strikes).
+        let spot = 150.0;
+        let ts1 = expiry_ts();
+        let ts2 = expiry_ts2();
+        let expiry1 = "2030-01-18";
+        let expiry2 = "2030-02-15";
+
+        // Front-month: 5 strikes around spot so NTM slice passes.
+        let chain1 = OptionChain {
+            calls: vec![
+                make_contract(142.5, Some(0.33), Some(50), Some(300), expiry1),
+                make_contract(145.0, Some(0.32), Some(60), Some(350), expiry1),
+                make_contract(150.0, Some(0.30), Some(100), Some(500), expiry1),
+                make_contract(155.0, Some(0.28), Some(80), Some(400), expiry1),
+                make_contract(157.5, Some(0.27), Some(60), Some(300), expiry1),
+            ],
+            puts: vec![
+                make_contract(142.5, Some(0.33), Some(50), Some(300), expiry1),
+                make_contract(145.0, Some(0.32), Some(60), Some(350), expiry1),
+                make_contract(150.0, Some(0.29), Some(80), Some(400), expiry1),
+                make_contract(155.0, Some(0.27), Some(80), Some(400), expiry1),
+                make_contract(157.5, Some(0.26), Some(60), Some(300), expiry1),
+            ],
+        };
+
+        // Second month: enough strikes for NTM slice.
+        let chain2 = OptionChain {
+            calls: vec![
+                make_contract(142.5, Some(0.35), Some(40), Some(200), expiry2),
+                make_contract(145.0, Some(0.34), Some(50), Some(250), expiry2),
+                make_contract(150.0, Some(0.32), Some(90), Some(450), expiry2),
+                make_contract(155.0, Some(0.30), Some(70), Some(350), expiry2),
+                make_contract(157.5, Some(0.29), Some(50), Some(250), expiry2),
+            ],
+            puts: vec![
+                make_contract(142.5, Some(0.35), Some(40), Some(200), expiry2),
+                make_contract(145.0, Some(0.34), Some(50), Some(250), expiry2),
+                make_contract(150.0, Some(0.31), Some(70), Some(400), expiry2),
+                make_contract(155.0, Some(0.29), Some(70), Some(350), expiry2),
+                make_contract(157.5, Some(0.28), Some(50), Some(250), expiry2),
+            ],
+        };
+
+        let mut chains = BTreeMap::new();
+        chains.insert(ts1, chain1);
+        chains.insert(ts2, chain2);
+
+        let provider = provider_with_stub(StubbedFinancialResponses {
+            ohlcv: Some(vec![make_candle(spot)]),
+            option_expirations: Some(vec![ts1, ts2]),
+            option_chains: chains,
+            ..StubbedFinancialResponses::default()
+        });
+
+        let outcome = provider
+            .fetch_snapshot_impl(&aapl(), &today_eastern())
+            .await
+            .expect("should succeed");
+
+        if let OptionsOutcome::Snapshot(snap) = outcome {
+            assert!(
+                !snap.all_expirations.is_empty(),
+                "in-memory snapshot must populate all_expirations"
+            );
+            for extra in &snap.all_expirations {
+                assert_ne!(
+                    extra.expiration, snap.near_term_expiration,
+                    "all_expirations must not include the front-month slice"
+                );
+                assert!(
+                    !extra.strikes.is_empty(),
+                    "each ExpirationStrikes entry must have non-empty strikes"
+                );
+            }
+        } else {
+            panic!("expected Snapshot, got {outcome:?}");
+        }
     }
 
     // ── serialize_options_outcome_for_tool unit tests ────────────────────

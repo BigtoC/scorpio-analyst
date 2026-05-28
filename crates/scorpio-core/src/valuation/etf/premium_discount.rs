@@ -66,13 +66,30 @@ impl Valuator for EtfPremiumDiscountValuator {
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
         let leverage_factor = inputs.etf_fund_info.and_then(|f| f.leverage_factor);
 
+        let q = inputs
+            .etf_distribution_yield_ttm
+            .filter(|y| *y > 0.0)
+            .unwrap_or(0.0);
+        flags.options_chain_present = inputs.etf_options.is_some();
+        let options_gex = match (inputs.etf_options, inputs.etf_risk_free_rate) {
+            (Some(snap), Some(r)) => compute_gex_summary(snap, r, q, inputs.as_of),
+            (Some(_), None) => {
+                tracing::warn!(
+                    target: "scorpio_core::valuation::etf::gex",
+                    "ETF dealer-positioning skipped — risk-free rate unavailable"
+                );
+                None
+            }
+            (None, _) => None,
+        };
+
         DerivedValuation {
             asset_shape: shape.clone(),
             scenario: ScenarioValuation::Etf(EtfValuation {
                 premium: snapshot,
                 composition,
                 tracking,
-                options_gex: None,
+                options_gex,
                 category,
                 leverage_factor,
                 flags,
@@ -171,10 +188,224 @@ fn build_composition(
     })
 }
 
+use crate::data::traits::options::OptionsSnapshot;
+use crate::indicators::gex::{self, AggregateInputs};
+use crate::state::{GexSummary, StrikeGex};
+
+const MAX_GAMMA_WALLS: usize = 3;
+
+/// Map a live options snapshot into the persistent `GexSummary` shape.
+/// Returns `None` when the front-month near-term aggregate is unusable.
+pub fn compute_gex_summary(
+    snapshot: &OptionsSnapshot,
+    r: f64,
+    q: f64,
+    as_of: chrono::NaiveDate,
+) -> Option<GexSummary> {
+    let agg = gex::aggregate(AggregateInputs {
+        spot: snapshot.spot_price,
+        r,
+        q,
+        as_of,
+        near_term_expiration: &snapshot.near_term_expiration,
+        near_term_strikes: &snapshot.near_term_strikes,
+        expirations: &snapshot.all_expirations,
+        atm_iv_fallback: snapshot.atm_iv,
+    });
+
+    let near = agg.near_term?;
+
+    if agg.iv_fallback_count > agg.strikes_used.saturating_div(2) {
+        tracing::warn!(
+            target: "scorpio_core::valuation::etf::gex",
+            iv_fallback_count = agg.iv_fallback_count,
+            strikes_used = agg.strikes_used,
+            "GEX computed with majority ATM-IV fallbacks — gamma skew may be understated"
+        );
+    }
+
+    let mut walls: Vec<StrikeGex> = near
+        .per_strike
+        .iter()
+        .map(|p| StrikeGex {
+            strike: p.strike,
+            net_gex_usd_per_1pct_move: p.net_gex_usd_per_1pct_move,
+        })
+        .collect();
+    walls.sort_by(|a, b| {
+        b.net_gex_usd_per_1pct_move
+            .abs()
+            .partial_cmp(&a.net_gex_usd_per_1pct_move.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    walls.truncate(MAX_GAMMA_WALLS);
+
+    let call_put_oi_ratio = if snapshot.put_call_oi_ratio > 0.0 {
+        1.0 / snapshot.put_call_oi_ratio
+    } else {
+        tracing::warn!(
+            target: "scorpio_core::valuation::etf::gex",
+            "put_call_oi_ratio is zero — call_put_oi_ratio set to 0.0"
+        );
+        0.0
+    };
+
+    let broad = agg.broad.as_ref().map(|b| crate::state::BroadGex {
+        net_gex_usd_per_1pct_move: b.net_gex_usd_per_1pct_move,
+        gross_gex_usd_per_1pct_move: b.gross_gex_usd_per_1pct_move,
+        expirations_used: b.expirations_used,
+        expirations_total_considered: b.expirations_total_considered,
+    });
+
+    let vex_summary = Some(crate::state::VexSummary {
+        net_vex_usd_per_volpt: near.net_vex_usd_per_volpt,
+        gross_vex_usd_per_volpt: near.gross_vex_usd_per_volpt,
+    });
+
+    let cex_summary = Some(crate::state::CexSummary {
+        net_cex_usd_per_day: near.net_cex_usd_per_day,
+        gross_cex_usd_per_day: near.gross_cex_usd_per_day,
+    });
+
+    Some(GexSummary {
+        net_gex_usd_per_1pct_move: near.net_gex_usd_per_1pct_move,
+        gross_gex_usd_per_1pct_move: near.gross_gex_usd_per_1pct_move,
+        call_put_oi_ratio,
+        max_pain_strike: snapshot.max_pain_strike,
+        near_term_expiration: near.expiration,
+        strikes: walls,
+        broad,
+        vex_summary,
+        cex_summary,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::traits::options::{IvTermPoint, NearTermStrike, OptionsSnapshot};
     use chrono::Utc;
+
+    fn sample_options_snapshot() -> OptionsSnapshot {
+        OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![IvTermPoint {
+                expiration: "2026-06-26".to_owned(),
+                atm_iv: 0.20,
+            }],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 0.8, // call-heavy → call_put_oi_ratio = 1.25
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-06-26".to_owned(),
+            near_term_strikes: vec![
+                NearTermStrike {
+                    strike: 95.0,
+                    call_iv: Some(0.22),
+                    put_iv: Some(0.24),
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(1_500),
+                    put_oi: Some(500),
+                },
+                NearTermStrike {
+                    strike: 100.0,
+                    call_iv: Some(0.20),
+                    put_iv: Some(0.20),
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(3_000),
+                    put_oi: Some(2_500),
+                },
+                NearTermStrike {
+                    strike: 105.0,
+                    call_iv: Some(0.21),
+                    put_iv: Some(0.23),
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(800),
+                    put_oi: Some(2_000),
+                },
+                NearTermStrike {
+                    strike: 110.0,
+                    call_iv: Some(0.25),
+                    put_iv: Some(0.27),
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(200),
+                    put_oi: Some(1_200),
+                },
+            ],
+            all_expirations: vec![],
+        }
+    }
+
+    #[test]
+    fn compute_gex_summary_returns_none_when_expiration_is_unparseable() {
+        let mut snap = sample_options_snapshot();
+        snap.near_term_expiration = "not-a-date".to_owned();
+        let result = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn compute_gex_summary_emits_top_3_strikes_sorted_by_abs_net_gex() {
+        let snap = sample_options_snapshot();
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary present");
+        assert_eq!(summary.strikes.len(), 3, "must truncate to top-3");
+        let w = &summary.strikes;
+        assert!(
+            w[0].net_gex_usd_per_1pct_move.abs() >= w[1].net_gex_usd_per_1pct_move.abs(),
+            "strikes[0] must dominate strikes[1]: {w:?}"
+        );
+        assert!(
+            w[1].net_gex_usd_per_1pct_move.abs() >= w[2].net_gex_usd_per_1pct_move.abs(),
+            "strikes[1] must dominate strikes[2]: {w:?}"
+        );
+    }
+
+    #[test]
+    fn compute_gex_summary_inverts_put_call_oi_ratio_correctly() {
+        let snap = sample_options_snapshot();
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary present");
+        // 1 / 0.8 = 1.25
+        assert!(
+            (summary.call_put_oi_ratio - 1.25).abs() < 1e-9,
+            "expected 1.25, got {}",
+            summary.call_put_oi_ratio
+        );
+    }
+
+    #[test]
+    fn compute_gex_summary_returns_zero_call_put_when_put_oi_ratio_is_zero() {
+        let mut snap = sample_options_snapshot();
+        snap.put_call_oi_ratio = 0.0;
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary present");
+        assert_eq!(summary.call_put_oi_ratio, 0.0);
+    }
 
     fn quote_with(market_price: f64, nav: Option<f64>) -> EtfQuote {
         EtfQuote {
@@ -218,6 +449,10 @@ mod tests {
             etf_holdings: None,
             etf_ohlcv: None,
             etf_benchmark_ohlcv: None,
+            etf_options: None,
+            etf_risk_free_rate: None,
+            etf_distribution_yield_ttm: None,
+            as_of: chrono::Utc::now().date_naive(),
         }
     }
 
@@ -250,6 +485,45 @@ mod tests {
         assert_eq!(
             etf.premium.category_band,
             crate::state::PremiumBand::Unknown
+        );
+    }
+
+    #[test]
+    fn assess_uses_distribution_yield_as_gex_dividend_yield() {
+        let quote = quote_with(100.0, Some(100.0));
+        let info = fund_info_with(Some("Large Blend"), Some(1.0));
+        let options = sample_options_snapshot();
+
+        let mut zero_yield_inputs = empty_inputs();
+        zero_yield_inputs.etf_quote = Some(&quote);
+        zero_yield_inputs.etf_fund_info = Some(&info);
+        zero_yield_inputs.etf_options = Some(&options);
+        zero_yield_inputs.etf_risk_free_rate = Some(0.045);
+        zero_yield_inputs.as_of = chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap();
+
+        let mut yield_inputs = empty_inputs();
+        yield_inputs.etf_quote = Some(&quote);
+        yield_inputs.etf_fund_info = Some(&info);
+        yield_inputs.etf_options = Some(&options);
+        yield_inputs.etf_risk_free_rate = Some(0.045);
+        yield_inputs.as_of = chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap();
+        yield_inputs.etf_distribution_yield_ttm = Some(0.03);
+
+        let zero_yield = EtfPremiumDiscountValuator.assess(zero_yield_inputs, &AssetShape::Fund);
+        let with_yield = EtfPremiumDiscountValuator.assess(yield_inputs, &AssetShape::Fund);
+
+        let zero_gex = match zero_yield.scenario {
+            ScenarioValuation::Etf(etf) => etf.options_gex.expect("zero-yield gex"),
+            other => panic!("expected ETF valuation, got {other:?}"),
+        };
+        let yield_gex = match with_yield.scenario {
+            ScenarioValuation::Etf(etf) => etf.options_gex.expect("yield-adjusted gex"),
+            other => panic!("expected ETF valuation, got {other:?}"),
+        };
+
+        assert_ne!(
+            zero_gex.net_gex_usd_per_1pct_move, yield_gex.net_gex_usd_per_1pct_move,
+            "distribution yield must influence BSM q used by options_gex"
         );
     }
 
@@ -295,5 +569,48 @@ mod tests {
             result.scenario,
             ScenarioValuation::NotAssessed { ref reason } if reason == "etf_valuator_wrong_shape"
         ));
+    }
+
+    use crate::data::traits::options::ExpirationStrikes;
+
+    #[test]
+    fn compute_gex_summary_emits_broad_when_all_expirations_populated() {
+        let mut snap = sample_options_snapshot();
+        snap.all_expirations = vec![
+            ExpirationStrikes {
+                expiration: "2026-07-31".to_owned(),
+                strikes: snap.near_term_strikes.clone(),
+            },
+            ExpirationStrikes {
+                expiration: "2026-08-29".to_owned(),
+                strikes: snap.near_term_strikes.clone(),
+            },
+        ];
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary");
+        let broad = summary.broad.as_ref().expect("broad populated");
+        assert_eq!(broad.expirations_used, 3);
+        assert_eq!(broad.expirations_total_considered, 3);
+    }
+
+    #[test]
+    fn compute_gex_summary_emits_vex_and_cex_summaries() {
+        let snap = sample_options_snapshot();
+        let summary = compute_gex_summary(
+            &snap,
+            0.045,
+            0.015,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+        )
+        .expect("summary");
+        let v = summary.vex_summary.as_ref().expect("vex");
+        let c = summary.cex_summary.as_ref().expect("cex");
+        assert!(v.gross_vex_usd_per_volpt >= v.net_vex_usd_per_volpt.abs());
+        assert!(c.gross_cex_usd_per_day >= c.net_cex_usd_per_day.abs());
     }
 }

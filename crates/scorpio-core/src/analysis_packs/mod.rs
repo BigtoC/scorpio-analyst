@@ -26,6 +26,7 @@ mod registry;
 mod selection;
 
 pub use completeness::{CompletenessError, validate_active_pack_completeness};
+pub(crate) use etf::append_leverage_warning_if_needed;
 pub use manifest::{
     AnalysisPackManifest, EnrichmentIntent, PackId, StrategyFocus, ValuationAssessment,
 };

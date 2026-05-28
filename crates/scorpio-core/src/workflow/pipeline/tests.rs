@@ -401,7 +401,14 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
         api: Default::default(),
         providers: Default::default(),
         storage: Default::default(),
-        rate_limits: Default::default(),
+        // reddit_rpm = 0 disables the Reddit sentiment lane so this test
+        // remains deterministic — without it the prefetch pulls live Reddit
+        // articles and adds "reddit" to providers_used, which is incidental
+        // to what this test is verifying (stale-evidence reset on reused state).
+        rate_limits: crate::config::RateLimitConfig {
+            reddit_rpm: 0,
+            ..Default::default()
+        },
         enrichment: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
@@ -1236,6 +1243,7 @@ async fn run_analysis_cycle_preserves_options_context_in_technical_state() {
                 max_pain_strike: 100.0,
                 near_term_expiration: "2026-05-16".to_owned(),
                 near_term_strikes: vec![],
+                all_expirations: vec![],
             }),
         }),
     };

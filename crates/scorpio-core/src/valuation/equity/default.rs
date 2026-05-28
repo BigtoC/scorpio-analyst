@@ -57,6 +57,10 @@ mod tests {
             etf_holdings: None,
             etf_ohlcv: None,
             etf_benchmark_ohlcv: None,
+            etf_options: None,
+            etf_risk_free_rate: None,
+            etf_distribution_yield_ttm: None,
+            as_of: chrono::Utc::now().date_naive(),
         };
         let via_trait = EquityDefaultValuator.assess(inputs, &AssetShape::Unknown);
         let via_fn = derive_valuation(None, None, None, None, None, None, None);

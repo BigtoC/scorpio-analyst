@@ -853,11 +853,8 @@ async fn fetch_valuation_inputs(
     let mut etf_distribution_yield_ttm_pct = None;
 
     if pack_id == PackId::EtfBaseline {
-        let is_historical_target_date = target_date
-            != chrono::Utc::now()
-                .date_naive()
-                .format("%Y-%m-%d")
-                .to_string();
+        let is_historical_target_date =
+            !crate::market_time::target_is_market_local_date(target_date);
 
         if is_historical_target_date {
             return ValuationInputs {
@@ -933,7 +930,8 @@ async fn fetch_valuation_inputs(
         // Benchmark OHLCV depends on the stated benchmark symbol pulled from
         // fund_info — kept sequential to avoid issuing a phantom fetch when
         // the benchmark is unknown.
-        if let Some(bench) = resolve_benchmark_symbol(etf_fund_info.as_ref(), etf_holdings.as_ref())
+        if let Some(bench) =
+            resolve_benchmark_symbol(symbol, etf_fund_info.as_ref(), etf_holdings.as_ref())
         {
             etf_benchmark_ohlcv = fetch_with_timeout(
                 symbol,
@@ -962,6 +960,7 @@ async fn fetch_valuation_inputs(
 }
 
 fn resolve_benchmark_symbol(
+    etf_symbol: &str,
     fund_info: Option<&FundInfo>,
     nport: Option<&NPortHoldings>,
 ) -> Option<String> {
@@ -973,6 +972,7 @@ fn resolve_benchmark_symbol(
                 .and_then(|holdings| holdings.stated_benchmark.as_deref())
                 .and_then(normalize_benchmark_symbol)
         })
+        .or_else(|| crate::data::etf_benchmarks::resolve(etf_symbol).map(str::to_owned))
 }
 
 async fn fetch_with_timeout<T, F>(
@@ -1041,13 +1041,88 @@ fn no_valuator_selected(asset_shape: AssetShape) -> DerivedValuation {
     }
 }
 
+/// Extract the live ETF options snapshot from persisted technical state.
+///
+/// Returns `Some(&snapshot)` only when `TechnicalOptionsContext::Available`
+/// carries an `OptionsOutcome::Snapshot(_)`. Every other variant emits a
+/// `tracing::warn!` and returns `None` so the valuator leaves
+/// dealer-positioning absent cleanly.
+pub(crate) fn etf_options_from_state(
+    state: &crate::state::TradingState,
+) -> Option<&crate::data::traits::options::OptionsSnapshot> {
+    use crate::data::traits::options::OptionsOutcome;
+    use crate::state::TechnicalOptionsContext;
+
+    let technical = state.technical_indicators()?;
+    let options_context = technical.options_context.as_ref()?;
+    match options_context {
+        TechnicalOptionsContext::Available {
+            outcome: OptionsOutcome::Snapshot(snap),
+        } => Some(snap),
+        TechnicalOptionsContext::Available { outcome: other } => {
+            tracing::warn!(
+                target: "scorpio_core::workflow::analyst",
+                outcome = %other,
+                symbol = %state.asset_symbol,
+                "ETF options chain unavailable — dealer positioning skipped"
+            );
+            None
+        }
+        TechnicalOptionsContext::FetchFailed { reason } => {
+            tracing::warn!(
+                target: "scorpio_core::workflow::analyst",
+                symbol = %state.asset_symbol,
+                fetch_reason = %reason,
+                "ETF options fetch failed before valuation — dealer positioning skipped"
+            );
+            None
+        }
+    }
+}
+
+pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) -> Option<f64> {
+    state.etf_risk_free_rate
+}
+
+/// Stage 3 cleanup: clear the transient `OptionsSnapshot.all_expirations`
+/// vector in place so persisted technical snapshots keep only the bounded
+/// `EtfValuation.options_gex.broad` summary, not the full non-front-month
+/// chain payload.
+///
+/// Called immediately before `serialize_state_to_context(...)` on the ETF
+/// branch; no-op for any other technical context shape.
+pub(crate) fn strip_transient_all_expirations(state: &mut crate::state::TradingState) {
+    use crate::data::traits::options::OptionsOutcome;
+    use crate::state::TechnicalOptionsContext;
+
+    let Some(technical) = state.technical_indicators_mut() else {
+        return;
+    };
+    let Some(options_context) = technical.options_context.as_mut() else {
+        return;
+    };
+    if let TechnicalOptionsContext::Available {
+        outcome: OptionsOutcome::Snapshot(snap),
+    } = options_context
+    {
+        snap.all_expirations.clear();
+    }
+}
+
 fn derive_runtime_valuation(
     state: &TradingState,
     valuation_inputs: &ValuationInputs,
     current_price: Option<f64>,
 ) -> DerivedValuation {
     let mut etf_fund_info = valuation_inputs.etf_fund_info.clone();
+    let state_symbol = state
+        .symbol
+        .as_ref()
+        .and_then(crate::domain::Symbol::as_equity)
+        .map(|t| t.as_str())
+        .unwrap_or("");
     if let Some(benchmark_symbol) = resolve_benchmark_symbol(
+        state_symbol,
         valuation_inputs.etf_fund_info.as_ref(),
         valuation_inputs.etf_holdings.as_ref(),
     ) && let Some(info) = etf_fund_info.as_mut()
@@ -1103,6 +1178,11 @@ fn derive_runtime_valuation(
             etf_holdings: valuation_inputs.etf_holdings.as_ref(),
             etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
             etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
+            etf_options: etf_options_from_state(state),
+            etf_risk_free_rate: etf_risk_free_rate_from_state(state),
+            etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
+            as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
+                .unwrap_or_else(|_| chrono::Utc::now().date_naive()),
         },
         &provisional.asset_shape,
     )
@@ -1381,6 +1461,11 @@ impl Task for AnalystSyncTask {
             agent_usage: token_usages.clone(),
         });
 
+        // Stage 3 cleanup: ETF-only transient field cleanup before snapshot persistence.
+        if matches!(pack_id, PackId::EtfBaseline) {
+            strip_transient_all_expirations(&mut state);
+        }
+
         serialize_state_to_context(&state, &context)
             .await
             .map_err(|error| {
@@ -1576,7 +1661,7 @@ mod tests {
         };
 
         assert_eq!(
-            super::resolve_benchmark_symbol(Some(&fund_info), Some(&nport)),
+            super::resolve_benchmark_symbol("SPY", Some(&fund_info), Some(&nport)),
             Some("^GSPC".to_owned())
         );
     }
@@ -1601,8 +1686,44 @@ mod tests {
         };
 
         assert_eq!(
-            super::resolve_benchmark_symbol(Some(&fund_info), Some(&nport)),
+            super::resolve_benchmark_symbol("SPY", Some(&fund_info), Some(&nport)),
             Some("^NDX".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_symbol_falls_back_to_static_lookup_when_upstream_silent() {
+        // Both fund_info and nport lack a stated_benchmark: the static
+        // lookup keyed by the ETF symbol should resolve it.
+        let fund_info = FundInfo {
+            symbol: "QQQ".into(),
+            category: None,
+            fund_family: None,
+            expense_ratio: None,
+            total_assets: None,
+            leverage_factor: Some(1.0),
+            fund_kind: Some("etf".into()),
+            stated_benchmark: None,
+        };
+        let nport = NPortHoldings {
+            filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            holdings: vec![],
+            sector_breakdown: vec![],
+            stated_benchmark: None,
+        };
+
+        assert_eq!(
+            super::resolve_benchmark_symbol("QQQ", Some(&fund_info), Some(&nport)),
+            Some("^NDX".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_symbol_static_lookup_yields_none_for_unmapped_symbol() {
+        // Upstream silent + symbol not in the static map → None.
+        assert_eq!(
+            super::resolve_benchmark_symbol("EXOTIC_ETF_XYZ", None, None),
+            None
         );
     }
 
@@ -1697,5 +1818,181 @@ mod tests {
         };
 
         assert_eq!(tracking_symbol, "^GSPC");
+    }
+
+    #[test]
+    fn etf_valuation_inputs_carry_options_when_technical_context_has_snapshot() {
+        use crate::data::traits::options::{
+            IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let snap = OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![IvTermPoint {
+                expiration: "2026-06-26".to_owned(),
+                atm_iv: 0.20,
+            }],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-06-26".to_owned(),
+            near_term_strikes: vec![NearTermStrike {
+                strike: 100.0,
+                call_iv: Some(0.20),
+                put_iv: Some(0.20),
+                call_volume: None,
+                put_volume: None,
+                call_oi: Some(1_000),
+                put_oi: Some(1_000),
+            }],
+            all_expirations: vec![],
+        };
+
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "smoke".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(snap.clone()),
+            }),
+        });
+
+        let extracted = super::etf_options_from_state(&state);
+        assert!(matches!(extracted, Some(s) if s.spot_price == snap.spot_price));
+    }
+
+    #[test]
+    fn etf_valuation_inputs_drop_options_when_technical_context_is_fetch_failed() {
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "smoke".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::FetchFailed {
+                reason: "connection refused".to_owned(),
+            }),
+        });
+
+        let extracted = super::etf_options_from_state(&state);
+        assert!(extracted.is_none());
+    }
+
+    #[test]
+    fn etf_valuation_inputs_thread_etf_risk_free_rate_from_state() {
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+
+        state.etf_risk_free_rate = Some(0.0427);
+        let inputs_rate = super::etf_risk_free_rate_from_state(&state);
+        assert_eq!(inputs_rate, Some(0.0427));
+
+        state.etf_risk_free_rate = None;
+        let inputs_rate_none = super::etf_risk_free_rate_from_state(&state);
+        assert!(inputs_rate_none.is_none());
+    }
+
+    #[test]
+    fn strip_all_expirations_clears_transient_field_in_place() {
+        use crate::data::traits::options::{
+            ExpirationStrikes, IvTermPoint, NearTermStrike, OptionsOutcome, OptionsSnapshot,
+        };
+        use crate::state::{TechnicalData, TechnicalOptionsContext};
+
+        let snap = OptionsSnapshot {
+            spot_price: 100.0,
+            atm_iv: 0.20,
+            iv_term_structure: vec![IvTermPoint {
+                expiration: "2026-06-26".to_owned(),
+                atm_iv: 0.20,
+            }],
+            put_call_volume_ratio: 1.0,
+            put_call_oi_ratio: 1.0,
+            max_pain_strike: 100.0,
+            near_term_expiration: "2026-06-26".to_owned(),
+            near_term_strikes: vec![],
+            all_expirations: vec![ExpirationStrikes {
+                expiration: "2026-07-31".to_owned(),
+                strikes: vec![NearTermStrike {
+                    strike: 105.0,
+                    call_iv: Some(0.21),
+                    put_iv: None,
+                    call_volume: None,
+                    put_volume: None,
+                    call_oi: Some(100),
+                    put_oi: None,
+                }],
+            }],
+        };
+
+        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
+        crate::testing::with_baseline_runtime_policy(&mut state);
+        state.set_technical_indicators(TechnicalData {
+            rsi: None,
+            macd: None,
+            atr: None,
+            sma_20: None,
+            sma_50: None,
+            ema_12: None,
+            ema_26: None,
+            bollinger_upper: None,
+            bollinger_lower: None,
+            support_level: None,
+            resistance_level: None,
+            volume_avg: None,
+            summary: "smoke".to_owned(),
+            options_summary: None,
+            options_context: Some(TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(snap),
+            }),
+        });
+
+        super::strip_transient_all_expirations(&mut state);
+
+        let context = state
+            .technical_indicators()
+            .unwrap()
+            .options_context
+            .as_ref()
+            .unwrap();
+        match context {
+            TechnicalOptionsContext::Available {
+                outcome: OptionsOutcome::Snapshot(s),
+            } => {
+                assert!(
+                    s.all_expirations.is_empty(),
+                    "all_expirations must be cleared in place"
+                );
+            }
+            other => panic!("expected Available+Snapshot, got {other:?}"),
+        }
     }
 }

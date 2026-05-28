@@ -23,14 +23,54 @@ use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::debug;
 
 use crate::{
-    analysis_packs::{RuntimePolicy, validate_active_pack_completeness},
+    analysis_packs::{PackId, RuntimePolicy, validate_active_pack_completeness},
     data::{adapters::ProviderCapabilities, resolve_symbol},
+    error::TradingError,
     workflow::{
         SnapshotStore,
         context_bridge::{deserialize_state_from_context, serialize_state_to_context},
         topology::{RoutingFlags, build_run_topology},
     },
 };
+
+// ── Rate-client traits ──────────────────────────────────────────────────────
+
+/// Minimal async abstraction over FRED for risk-free-rate lookups.
+///
+/// `pub` so the `testing` module's fake impls can reference it via
+/// `crate::workflow::tasks::preflight::FredSeriesClient`.
+#[async_trait]
+pub trait FredSeriesClient: Send + Sync {
+    async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError>;
+}
+
+#[async_trait]
+impl FredSeriesClient for crate::data::FredClient {
+    async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
+        crate::data::FredClient::get_series_latest(self, series_id).await
+    }
+}
+
+/// Minimal async abstraction over yfinance for the `^IRX` fallback.
+///
+/// `pub` for the same reason as [`FredSeriesClient`].
+#[async_trait]
+pub trait RiskFreeRateYFinanceClient: Send + Sync {
+    /// Return the latest close as an annualised Treasury yield in percent units.
+    async fn latest_risk_free_rate_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError>;
+}
+
+#[async_trait]
+impl RiskFreeRateYFinanceClient for crate::data::YFinanceClient {
+    async fn latest_risk_free_rate_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError> {
+        let today = crate::market_time::market_local_date_eastern();
+        let start = today - chrono::Duration::days(14);
+        let candles = self
+            .get_ohlcv(symbol, &start.to_string(), &today.to_string())
+            .await?;
+        Ok(candles.last().map(|c| c.close))
+    }
+}
 
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
@@ -41,6 +81,25 @@ use super::common::{
 use super::handoff;
 
 const TASK_ID: &str = "preflight";
+
+/// No-op rate client used by the test-only constructors that don't inject
+/// live providers.  Production constructors always supply real clients via
+/// [`PreflightTask::with_runtime_policy_and_rate_clients`].
+struct NoOpRateClient;
+
+#[async_trait]
+impl FredSeriesClient for NoOpRateClient {
+    async fn get_series_latest(&self, _series_id: &str) -> Result<Option<f64>, TradingError> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl RiskFreeRateYFinanceClient for NoOpRateClient {
+    async fn latest_risk_free_rate_pct(&self, _symbol: &str) -> Result<Option<f64>, TradingError> {
+        Ok(None)
+    }
+}
 
 /// Staleness window for prior thesis lookup: snapshots older than this are
 /// ignored even if they exist for the same symbol.
@@ -68,6 +127,10 @@ pub struct PreflightTask {
     /// [`KEY_RUNTIME_PACK_ROUTE`] / [`KEY_ROUTING_FALLBACK_REASON`] for
     /// downstream report rendering.
     routing_fallback_reason: Option<String>,
+    /// Live FRED client for DGS3MO lookups (ETF pack + today only).
+    fred: Arc<dyn FredSeriesClient>,
+    /// Live yfinance client for `^IRX` fallback (ETF pack + today only).
+    yfinance: Arc<dyn RiskFreeRateYFinanceClient>,
 }
 
 impl PreflightTask {
@@ -104,10 +167,15 @@ impl PreflightTask {
             snapshot_store,
             runtime_policy: crate::analysis_packs::resolve_runtime_policy(&pack_id),
             routing_fallback_reason: None,
+            fred: Arc::new(NoOpRateClient),
+            yfinance: Arc::new(NoOpRateClient),
         }
     }
 
     /// Create a new `PreflightTask` from an already-resolved runtime policy.
+    ///
+    /// Uses no-op rate clients; prefer
+    /// [`Self::with_runtime_policy_and_rate_clients`] for production ETF runs.
     pub fn with_runtime_policy(
         enrichment: crate::config::DataEnrichmentConfig,
         transcripts_enabled: bool,
@@ -120,6 +188,29 @@ impl PreflightTask {
             snapshot_store,
             runtime_policy: Ok(runtime_policy),
             routing_fallback_reason: None,
+            fred: Arc::new(NoOpRateClient),
+            yfinance: Arc::new(NoOpRateClient),
+        }
+    }
+
+    /// Create a new `PreflightTask` from an already-resolved runtime policy
+    /// with live rate-data clients for the ETF risk-free-rate fetch.
+    pub fn with_runtime_policy_and_rate_clients(
+        enrichment: crate::config::DataEnrichmentConfig,
+        transcripts_enabled: bool,
+        snapshot_store: Arc<SnapshotStore>,
+        runtime_policy: RuntimePolicy,
+        fred: Arc<dyn FredSeriesClient>,
+        yfinance: Arc<dyn RiskFreeRateYFinanceClient>,
+    ) -> Self {
+        Self {
+            enrichment,
+            transcripts_enabled,
+            snapshot_store,
+            runtime_policy: Ok(runtime_policy),
+            routing_fallback_reason: None,
+            fred,
+            yfinance,
         }
     }
 }
@@ -218,6 +309,10 @@ impl Task for PreflightTask {
         state.analysis_pack_name = Some(runtime_policy.pack_id.to_string());
         state.analysis_runtime_policy = Some(runtime_policy.clone());
         state.etf_routing_fallback_reason = routing_fallback_reason.clone();
+
+        // ── ETF risk-free-rate fetch (today-only, EtfBaseline only) ──────────
+        let resolved_pack_id = runtime_policy.pack_id;
+        apply_risk_free_rate(&mut state, resolved_pack_id, &*self.fred, &*self.yfinance).await;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -330,6 +425,60 @@ impl Task for PreflightTask {
 
         Ok(TaskResult::new(None, NextAction::Continue))
     }
+}
+
+/// Core rate-fetch logic shared between `Task::run` and `run_for_test`.
+///
+/// Fetches FRED `DGS3MO` (primary) or yfinance `^IRX` (fallback) and writes
+/// the result into `state.etf_risk_free_rate` and
+/// `state.etf_risk_free_rate_source`.  Rate values from both providers are in
+/// percent (e.g. `4.27`); we divide by 100 before storing.
+///
+/// Skips the fetch when either:
+/// - `pack_id != EtfBaseline`, or
+/// - `state.target_date` is not today (UTC anchor — historical runs).
+async fn apply_risk_free_rate(
+    state: &mut crate::state::TradingState,
+    pack_id: PackId,
+    fred: &dyn FredSeriesClient,
+    yfinance: &dyn RiskFreeRateYFinanceClient,
+) {
+    use crate::state::EtfRiskFreeRateSource;
+
+    let is_today = crate::market_time::target_is_market_local_date(&state.target_date);
+    if !matches!(pack_id, PackId::EtfBaseline) || !is_today {
+        return;
+    }
+
+    if let Ok(Some(pct)) = fred.get_series_latest("DGS3MO").await {
+        state.etf_risk_free_rate = Some(pct / 100.0);
+        state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
+    } else if let Ok(Some(pct)) = yfinance.latest_risk_free_rate_pct("^IRX").await {
+        state.etf_risk_free_rate = Some(pct / 100.0);
+        state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::YFinanceIrx);
+    } else {
+        tracing::warn!(
+            target: "scorpio_core::workflow::preflight",
+            fred_series = "DGS3MO",
+            yfinance_symbol = "^IRX",
+            "ETF risk-free rate unavailable — dealer positioning will degrade"
+        );
+        state.etf_risk_free_rate = None;
+        state.etf_risk_free_rate_source = None;
+    }
+}
+
+/// Test-only entry point that exercises just the rate-fetch logic without
+/// the full `PreflightTask` graph plumbing.
+#[cfg(any(test, feature = "test-helpers"))]
+pub async fn run_for_test(
+    state: &mut crate::state::TradingState,
+    pack_id: PackId,
+    fred: &dyn FredSeriesClient,
+    yfinance: &dyn RiskFreeRateYFinanceClient,
+) -> Result<(), TradingError> {
+    apply_risk_free_rate(state, pack_id, fred, yfinance).await;
+    Ok(())
 }
 
 /// Seed `KEY_TRANSCRIPT_FETCH_STATUS` to the serialized `TranscriptFetch::Unavailable`

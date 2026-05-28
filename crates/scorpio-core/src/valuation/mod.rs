@@ -97,4 +97,25 @@ pub struct ValuationInputs<'a> {
     pub etf_holdings: Option<&'a crate::data::sec_edgar_nport::NPortHoldings>,
     pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
     pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
+
+    /// Phase 2 — Live ETF options snapshot threaded through from the persisted
+    /// `TechnicalOptionsContext` before valuation runs. `None` when no snapshot
+    /// is available or active pack is not `EtfBaseline`.
+    pub etf_options: Option<&'a crate::data::traits::options::OptionsSnapshot>,
+
+    /// Phase 2 (Stage 2) — FRED `DGS3MO` snapshot threaded from preflight when
+    /// the active pack is `EtfBaseline`, or yfinance `^IRX` when FRED is
+    /// unavailable. `None` when pack != EtfBaseline OR when both live rate
+    /// sources failed. The ETF valuator must degrade dealer-positioning to
+    /// `None`; no hardcoded risk-free-rate fallback is allowed.
+    pub etf_risk_free_rate: Option<f64>,
+
+    /// Phase 2 — trailing distribution yield in decimal units (e.g. 0.015 for
+    /// 1.5%), used as continuous dividend yield `q` in ETF options Greeks.
+    pub etf_distribution_yield_ttm: Option<f64>,
+
+    /// Phase 2 — Reference date for time-to-expiration math, sourced from
+    /// `state.target_date`. Defaulted to `chrono::Utc::now().date_naive()` by
+    /// the equity path which does not read it.
+    pub as_of: chrono::NaiveDate,
 }

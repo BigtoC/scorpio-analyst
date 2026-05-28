@@ -29,6 +29,7 @@
 pub mod adapters;
 pub mod alpha_vantage;
 pub mod entity;
+pub mod etf_benchmarks;
 pub mod finnhub;
 pub mod fred;
 mod provider_impls;

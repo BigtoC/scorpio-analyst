@@ -228,6 +228,7 @@ fn arb_technical_options_context() -> impl Strategy<Value = Option<TechnicalOpti
                 max_pain_strike: 180.0,
                 near_term_expiration: "2026-01-17".to_owned(),
                 near_term_strikes: vec![],
+                all_expirations: vec![],
             }),
         })),
     ]
@@ -774,6 +775,8 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     analysis_pack_name: None,
                     analysis_runtime_policy: None,
                     etf_routing_fallback_reason: None,
+                    etf_risk_free_rate: None,
+                    etf_risk_free_rate_source: None,
                     audit_status: scorpio_core::state::auditor::AuditStatus::Disabled,
                     audit_report: None,
                 }
@@ -1327,4 +1330,113 @@ async fn etf_variant_requires_snapshot_schema_version_above_v3() {
         stored_schema_version.0 > 3,
         "ETF-bearing snapshots are not reverse-compatible with schema v3 readers"
     );
+}
+
+#[test]
+fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
+    let mut state = TradingState::new("SPY", "2026-05-27");
+    state.equity = None;
+
+    let derived = DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(620.0),
+                market_price: 620.4,
+                bid: Some(620.39),
+                ask: Some(620.41),
+                premium_pct: Some(0.06),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.003),
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            options_gex: Some(GexSummary {
+                net_gex_usd_per_1pct_move: 1.2e9,
+                gross_gex_usd_per_1pct_move: 3.4e9,
+                call_put_oi_ratio: 1.25,
+                max_pain_strike: 620.0,
+                near_term_expiration: chrono::NaiveDate::from_ymd_opt(2026, 6, 26).unwrap(),
+                strikes: vec![
+                    StrikeGex {
+                        strike: 620.0,
+                        net_gex_usd_per_1pct_move: 0.6e9,
+                    },
+                    StrikeGex {
+                        strike: 615.0,
+                        net_gex_usd_per_1pct_move: -0.4e9,
+                    },
+                    StrikeGex {
+                        strike: 625.0,
+                        net_gex_usd_per_1pct_move: 0.2e9,
+                    },
+                ],
+                broad: None,
+                vex_summary: None,
+                cex_summary: None,
+            }),
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    };
+    state.set_derived_valuation(derived);
+
+    let json = serde_json::to_string(&state).expect("serialize");
+    let back: TradingState = serde_json::from_str(&json).expect("deserialize");
+    match back.derived_valuation().map(|d| &d.scenario) {
+        Some(ScenarioValuation::Etf(etf)) => {
+            let g = etf.options_gex.as_ref().expect("gex");
+            assert_eq!(g.strikes.len(), 3);
+        }
+        other => panic!("expected ETF scenario with gex, got {other:?}"),
+    }
+}
+
+#[test]
+fn trading_state_etf_risk_free_rate_fields_roundtrip_with_serde_default() {
+    use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    state.etf_risk_free_rate = Some(0.0427);
+    state.etf_risk_free_rate_source = Some(EtfRiskFreeRateSource::FredDgs3Mo);
+
+    let json = serde_json::to_string(&state).expect("serialize");
+    let back: TradingState = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.etf_risk_free_rate, Some(0.0427));
+    assert_eq!(
+        back.etf_risk_free_rate_source,
+        Some(EtfRiskFreeRateSource::FredDgs3Mo)
+    );
+}
+
+#[test]
+fn legacy_trading_state_without_etf_risk_free_rate_fields_deserializes() {
+    // Strip the new fields from a current snapshot to simulate a legacy
+    // snapshot that predates the etf_risk_free_rate fields.
+    let state = TradingState::new("SPY".to_owned(), "2026-05-27".to_owned());
+    let mut value: serde_json::Value =
+        serde_json::to_value(&state).expect("serialize current state");
+    let obj = value.as_object_mut().expect("json is object");
+    obj.remove("etf_risk_free_rate");
+    obj.remove("etf_risk_free_rate_source");
+
+    let back: scorpio_core::state::TradingState =
+        serde_json::from_value(value).expect("legacy snapshot must deserialize");
+    assert!(back.etf_risk_free_rate.is_none());
+    assert!(back.etf_risk_free_rate_source.is_none());
+}
+
+#[test]
+fn legacy_etf_snapshot_without_phase2_gex_strikes_still_deserializes() {
+    let json = r#"{
+        "net_gex_usd_per_1pct_move": 100.0,
+        "gross_gex_usd_per_1pct_move": 200.0,
+        "call_put_oi_ratio": 1.0,
+        "max_pain_strike": 100.0,
+        "near_term_expiration": "2026-06-26"
+    }"#;
+    let summary: GexSummary = serde_json::from_str(json).expect("legacy summary must deserialize");
+    assert!(summary.strikes.is_empty());
 }

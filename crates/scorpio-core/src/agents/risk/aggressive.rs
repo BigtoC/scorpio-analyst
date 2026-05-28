@@ -68,6 +68,7 @@ impl AggressiveRiskAgent {
             |bundle| bundle.aggressive_risk.as_ref(),
             state,
             llm_config,
+            false,
         )?;
         let chat_history = initial_untrusted_history(state, transcript_fetch);
         Ok(Self { core, chat_history })
@@ -264,6 +265,8 @@ mod tests {
             analysis_pack_name: None,
             analysis_runtime_policy: None,
             etf_routing_fallback_reason: None,
+            etf_risk_free_rate: None,
+            etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
         }

@@ -448,6 +448,8 @@ mod tests {
             analysis_pack_name: None,
             analysis_runtime_policy: None,
             etf_routing_fallback_reason: None,
+            etf_risk_free_rate: None,
+            etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
         };
@@ -668,6 +670,7 @@ mod tests {
                     put_oi: Some(4_500),
                 },
             ],
+            all_expirations: vec![],
         };
 
         crate::state::TechnicalData {

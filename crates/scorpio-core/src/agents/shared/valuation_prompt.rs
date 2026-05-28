@@ -1,4 +1,4 @@
-use crate::state::{ScenarioValuation, TradingState};
+use crate::state::{GexSummary, PremiumBand, ScenarioValuation, StrikeGex, TradingState};
 
 use super::prompt::sanitize_prompt_context;
 
@@ -20,15 +20,7 @@ pub(crate) fn build_valuation_context(state: &TradingState) -> String {
                  Do not fabricate DCF, EV/EBITDA, Forward P/E, or PEG values."
             )
         }
-        ScenarioValuation::Etf(_) => {
-            // Phase 1: ETF valuator not yet wired. The variant exists so the
-            // type system can carry future ETF outputs, but in this phase no
-            // ETF context is rendered into the prompt — emit the same
-            // not-computed guard so downstream agents do not fabricate metrics.
-            "Deterministic scenario valuation: not computed for this run. \
-             Do not fabricate valuation metrics."
-                .to_owned()
-        }
+        ScenarioValuation::Etf(etf) => build_etf_valuation_context(etf),
         ScenarioValuation::CorporateEquity(equity) => {
             let mut lines: Vec<String> = Vec::new();
 
@@ -77,14 +69,143 @@ pub(crate) fn build_valuation_context(state: &TradingState) -> String {
     }
 }
 
+fn build_etf_valuation_context(etf: &crate::state::EtfValuation) -> String {
+    let mut lines = vec![format!(
+        "  - premium band: {}{}",
+        premium_band_label(&etf.premium.category_band),
+        etf.premium
+            .premium_pct
+            .map(|pct| format!(" ({pct:+.2}%)"))
+            .unwrap_or_default(),
+    )];
+
+    if let Some(category) = etf.category.as_deref() {
+        lines.push(format!(
+            "  - category: {}",
+            sanitize_prompt_context(category)
+        ));
+    }
+    if let Some(tracking) = etf.tracking.as_ref() {
+        lines.push(format!(
+            "  - tracking error: 90d {:.2}%, 1y {:.2}% vs {}",
+            tracking.te_pct_90d,
+            tracking.te_pct_1y,
+            sanitize_prompt_context(&tracking.benchmark_symbol),
+        ));
+    }
+    match etf.options_gex.as_ref() {
+        Some(gex) => push_options_gex_lines(&mut lines, gex),
+        None => lines.push(
+            "  - options_gex: unavailable; do not fabricate dealer-positioning signals".to_owned(),
+        ),
+    }
+
+    format!(
+        "Deterministic scenario valuation (ETF, pre-computed):\n{}",
+        lines.join("\n"),
+    )
+}
+
+fn push_options_gex_lines(lines: &mut Vec<String>, gex: &GexSummary) {
+    lines.push(format!(
+        "  - options_gex near-term net GEX/1%: {} (gross {}, exp {})",
+        format_usd_signed(gex.net_gex_usd_per_1pct_move),
+        format_usd_magnitude(gex.gross_gex_usd_per_1pct_move),
+        gex.near_term_expiration,
+    ));
+    lines.push(format!(
+        "  - options_gex support: call/put OI {:.2}, max pain ${:.0}",
+        gex.call_put_oi_ratio, gex.max_pain_strike,
+    ));
+    if !gex.strikes.is_empty() {
+        lines.push(format!(
+            "  - options_gex gamma walls: {}",
+            gex.strikes
+                .iter()
+                .map(format_strike_gex)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    if let Some(broad) = gex.broad.as_ref() {
+        let coverage = if broad.expirations_total_considered > broad.expirations_used {
+            format!(
+                "partial {}/{} expirations",
+                broad.expirations_used, broad.expirations_total_considered,
+            )
+        } else {
+            format!("{} expirations", broad.expirations_used)
+        };
+        lines.push(format!(
+            "  - options_gex broad net GEX/1%: {} ({coverage})",
+            format_usd_signed(broad.net_gex_usd_per_1pct_move),
+        ));
+    }
+    if let Some(vex) = gex.vex_summary.as_ref() {
+        lines.push(format!(
+            "  - options_gex net VEX/volpt: {} (conditional absolute IV move)",
+            format_usd_signed(vex.net_vex_usd_per_volpt),
+        ));
+    }
+    if let Some(cex) = gex.cex_summary.as_ref() {
+        lines.push(format!(
+            "  - options_gex net CEX/day: {} (one calendar day decay)",
+            format_usd_signed(cex.net_cex_usd_per_day),
+        ));
+    }
+}
+
+fn premium_band_label(band: &PremiumBand) -> &'static str {
+    match band {
+        PremiumBand::Normal => "Normal",
+        PremiumBand::Elevated => "Elevated",
+        PremiumBand::Extreme => "Extreme",
+        PremiumBand::Unknown => "Unknown",
+    }
+}
+
+fn format_strike_gex(strike: &StrikeGex) -> String {
+    format!(
+        "{} @ ${:.0}",
+        format_usd_signed(strike.net_gex_usd_per_1pct_move),
+        strike.strike,
+    )
+}
+
+fn format_usd_signed(value: f64) -> String {
+    let abs = value.abs();
+    let sign = if value >= 0.0 { '+' } else { '-' };
+    let (suffix, scaled) = scale_usd(abs);
+    format!("{sign}${scaled:.2}{suffix}")
+}
+
+fn format_usd_magnitude(value: f64) -> String {
+    let (suffix, scaled) = scale_usd(value.abs());
+    format!("${scaled:.2}{suffix}")
+}
+
+fn scale_usd(value: f64) -> (&'static str, f64) {
+    if value >= 1.0e9 {
+        ("B", value / 1.0e9)
+    } else if value >= 1.0e6 {
+        ("M", value / 1.0e6)
+    } else if value >= 1.0e3 {
+        ("K", value / 1.0e3)
+    } else {
+        ("", value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
 
     use super::*;
     use crate::state::{
-        AssetShape, CorporateEquityValuation, DcfValuation, DerivedValuation, EvEbitdaValuation,
-        ForwardPeValuation, PegValuation, ThesisMemory,
+        AssetShape, BroadGex, CorporateEquityValuation, DcfValuation, DerivedValuation,
+        EtfDataAvailability, EtfValuation, EvEbitdaValuation, ForwardPeValuation, GexSummary,
+        PegValuation, PremiumBand, PremiumSnapshot, ScenarioValuation, StrikeGex, ThesisMemory,
+        VexSummary,
     };
 
     fn empty_state() -> TradingState {
@@ -200,6 +321,64 @@ mod tests {
         let ctx = build_valuation_context(&state);
         assert!(ctx.contains("no metrics computable"));
         assert!(ctx.contains("Do not fabricate"));
+    }
+
+    #[test]
+    fn build_valuation_context_etf_surfaces_options_gex() {
+        let mut state = empty_state();
+        state.set_derived_valuation(DerivedValuation {
+            asset_shape: AssetShape::Fund,
+            scenario: ScenarioValuation::Etf(EtfValuation {
+                premium: PremiumSnapshot {
+                    nav: Some(100.0),
+                    market_price: 101.0,
+                    bid: None,
+                    ask: None,
+                    premium_pct: Some(1.0),
+                    category_band: PremiumBand::Elevated,
+                    bid_ask_spread_pct: None,
+                    as_of: Utc::now(),
+                },
+                composition: None,
+                tracking: None,
+                options_gex: Some(GexSummary {
+                    net_gex_usd_per_1pct_move: -1_250_000_000.0,
+                    gross_gex_usd_per_1pct_move: 3_000_000_000.0,
+                    call_put_oi_ratio: 1.25,
+                    max_pain_strike: 100.0,
+                    near_term_expiration: chrono::NaiveDate::from_ymd_opt(2026, 6, 26).unwrap(),
+                    strikes: vec![StrikeGex {
+                        strike: 99.0,
+                        net_gex_usd_per_1pct_move: -700_000_000.0,
+                    }],
+                    broad: Some(BroadGex {
+                        net_gex_usd_per_1pct_move: -2_000_000_000.0,
+                        gross_gex_usd_per_1pct_move: 4_000_000_000.0,
+                        expirations_used: 2,
+                        expirations_total_considered: 3,
+                    }),
+                    vex_summary: Some(VexSummary {
+                        net_vex_usd_per_volpt: -50_000_000.0,
+                        gross_vex_usd_per_volpt: 90_000_000.0,
+                    }),
+                    cex_summary: None,
+                }),
+                category: Some("Large Blend".to_owned()),
+                leverage_factor: Some(1.0),
+                flags: EtfDataAvailability::default(),
+            }),
+        });
+
+        let ctx = build_valuation_context(&state);
+
+        assert!(ctx.contains("ETF"));
+        assert!(ctx.contains("premium band: Elevated"));
+        assert!(ctx.contains("options_gex"));
+        assert!(ctx.contains("near-term net GEX/1%: -$1.25B"));
+        assert!(ctx.contains("broad net GEX/1%: -$2.00B (partial 2/3 expirations)"));
+        assert!(ctx.contains("net VEX/volpt: -$50.00M"));
+        assert!(ctx.contains("gamma walls: -$700.00M @ $99"));
+        assert!(!ctx.contains("not computed"));
     }
 
     #[test]

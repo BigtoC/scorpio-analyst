@@ -433,6 +433,19 @@ parameter.
 │  │  Section is omitted entirely when                │   │
 │  │    AuditStatus::Disabled.                        │   │
 │  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  ETF-only sections                                      │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ Dealer Positioning                               │   │
+│  │  Near-term GEX (net/gross per 1% move)           │   │
+│  │  Summary line (dampens/amplifies regime)         │   │
+│  │  Gamma walls (top-3 strikes)                     │   │
+│  │  Call/Put OI, Max-pain strike                    │   │
+│  │  Broad GEX (Stage 3, all-expirations)            │   │
+│  │  Secondary sensitivities VEX/CEX (Stage 3)       │   │
+│  │  Risk-free rate source / degradation banner      │   │
+│  │  Block hidden when options_gex is absent         │   │
+│  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -488,8 +501,18 @@ pub struct TradingState {
     // Forward-looking catalyst calendar (Tier 1 + Tier 2; #[serde(default)])
     pub enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
 
+    // ETF Phase 2 — risk-free rate for dealer-positioning math (#[serde(default)])
+    pub etf_risk_free_rate: Option<f64>,
+    pub etf_risk_free_rate_source: Option<EtfRiskFreeRateSource>,
+
     // Token Usage Tracking
     pub token_usage: TokenUsageTracker,
+}
+
+/// Persisted origin of the ETF risk-free-rate input.
+pub enum EtfRiskFreeRateSource {
+    FredDgs3Mo,   // FRED DGS3MO (3-month Treasury bill)
+    YFinanceIrx,  // yfinance ^IRX (13-week Treasury bill) latest close
 }
 
 /// Advisory audit status produced by the post-decision `AuditorTask`.
@@ -824,19 +847,21 @@ The Technical Analyst identifies actionable entry and exit signals based entirel
   call. On prefetch failure the tool is omitted and the prompt is rendered with a variant that omits all
   options-tool guidance and explicitly states the live options provider was unavailable for this run.
 * **Execution Logic**: The LLM calls the OHLCV, indicator, and options tools during its reasoning pass, then
-  interprets the `f64` statistical outputs — RSI overbought/oversold conditions (>70 / <30), MACD signal-line
-  crossovers, ATR historical volatility, Bollinger Band support/resistance boundaries, and implied-volatility regime
-  plus positioning skew from the options snapshot — producing a `TechnicalAnalystResponse` (the LLM output contract).
-  After inference, `TechnicalAnalyst::run()` applies a merge step to construct the persisted `TechnicalData`:
-  `options_context: Option<TechnicalOptionsContext>` is set from the pre-fetched result, carrying either the live
-  `OptionsOutcome` or an explicit `FetchFailed { reason }` record; `options_summary` (the model-authored interpretation)
-  is cleared if `options_context` does not carry a live snapshot, preventing hallucinated options analysis from reaching
-  downstream agents. The `options_context` field flows to researchers, trader, risk managers, and fund manager via the
-  serialized `technical_report`, providing Rust-owned structured options evidence alongside the model-authored
-  `options_summary`. The LLM does not perform the mathematical calculations; it invokes the tools and interprets the
-  results. This MVP interpretation path is designed for traditional long-term investing workflows; crypto-native
-  interpretation concerns such as logarithmic scaling, 24/7 market structure, and MVRV-style on-chain metrics are
-  intentionally deferred beyond the MVP.
+   interprets the `f64` statistical outputs — RSI overbought/oversold conditions (>70 / <30), MACD signal-line
+   crossovers, ATR historical volatility, Bollinger Band support/resistance boundaries, and implied-volatility regime
+   plus positioning skew from the options snapshot — producing a `TechnicalAnalystResponse` (the LLM output contract).
+   After inference, `TechnicalAnalyst::run()` applies a merge step to construct the persisted `TechnicalData`:
+   `options_context: Option<TechnicalOptionsContext>` is set from the pre-fetched result, carrying either the live
+   `OptionsOutcome` or an explicit `FetchFailed { reason }` record; `options_summary` (the model-authored interpretation)
+   is cleared if `options_context` does not carry a live snapshot, preventing hallucinated options analysis from reaching
+   downstream agents. The `options_context` field flows to researchers, trader, risk managers, and fund manager via the
+   serialized `technical_report`, providing Rust-owned structured options evidence alongside the model-authored
+   `options_summary`. For **ETF runs**, the `AnalystSyncTask` extracts the live `OptionsSnapshot` from
+   `TechnicalOptionsContext::Available { outcome: Snapshot(_) }` and threads it into `ValuationInputs.etf_options`
+   so the ETF valuator can compute the `GexSummary` dealer-positioning overlay. The LLM does not perform the
+   mathematical calculations; it invokes the tools and interprets the results. This MVP interpretation path is
+   designed for traditional long-term investing workflows; crypto-native interpretation concerns such as logarithmic
+   scaling, 24/7 market structure, and MVRV-style on-chain metrics are intentionally deferred beyond the MVP.
 * **Prompt specification**: [Market / Technical Analyst](docs/prompts.md#market--technical-analyst)
 
 ### The Researcher Team: Dialectical Synthesis
@@ -885,13 +910,16 @@ debate pattern within the risk phase. They use `yfinance-rs` Corporate Calendar 
   — *Prompt specification*: [Aggressive Risk Analyst](docs/prompts.md#aggressive-risk-analyst)
 
 * **Risk-Conservative Agent**: Evaluates the proposal entirely from the perspective of Maximum Drawdown. It actively
-  vetoes trades if the asset exhibits overbought RSI conditions, severe macroeconomic uncertainty, or high beta relative
-  to the broader market, demanding strict adherence to capital preservation.
-  — *Prompt specification*: [Conservative Risk Analyst](docs/prompts.md#conservative-risk-analyst)
+   vetoes trades if the asset exhibits overbought RSI conditions, severe macroeconomic uncertainty, or high beta relative
+   to the broader market, demanding strict adherence to capital preservation. For leveraged/inverse ETFs
+   (`leverage_factor` ≠ 1.0), the system prompt carries a leverage warning suffix with `{leverage_factor}` substitution
+   (e.g., `3x`, `-2x`) sourced from `etf_leverage_warning.md`, separated by an explicit `---` divider.
+   — *Prompt specification*: [Conservative Risk Analyst](docs/prompts.md#conservative-risk-analyst)
 
 * **Neutral Risk Agent**: Functions as the moderating force, attempting to optimize the Sharpe Ratio by balancing the
-  aggressive upside targets against the conservative downside protections.
-  — *Prompt specification*: [Neutral Risk Analyst](docs/prompts.md#neutral-risk-analyst)
+   aggressive upside targets against the conservative downside protections. Like the Conservative agent, leveraged/inverse
+   ETF runs receive a leverage warning suffix in the system prompt.
+   — *Prompt specification*: [Neutral Risk Analyst](docs/prompts.md#neutral-risk-analyst)
 
 A `RiskModerator` node coordinates the discussion loop, identical in structure to the `DebateModerator` in the
 Researcher Team, and exits once consensus is reached or `max_risk_rounds` is exhausted. Acting as a reflective
@@ -925,9 +953,10 @@ completed analysis and never alters `final_execution_status`.
   usage, and snapshot internals are explicitly omitted.
 
 * **Two-layer review**: Deterministic checks run locally first (e.g., BUY with `target_price < current_price`,
-  `stop_loss > target_price`, or other obvious ordering contradictions). The quick-thinker LLM tier then handles
-  semantic consistency, sourcing of numeric claims, cross-phase contradictions, and bounded numeric heuristics such as
-  valuation sanity-band warnings (terminal value share, WACC bands).
+   `stop_loss > target_price`, or other obvious ordering contradictions). The quick-thinker LLM tier then handles
+   semantic consistency, sourcing of numeric claims, cross-phase contradictions, and bounded numeric heuristics such as
+   valuation sanity-band warnings (terminal value share, WACC bands). For leveraged/inverse ETFs, the auditor prompt
+   carries the same leverage warning suffix injected into the Conservative and Neutral risk prompts.
 
 * **Output schema**: The auditor produces an `AuditorReport` containing up to 20 `Finding` entries
   (`severity` ∈ {Critical, Warning, Info}, `location`, `description`, optional `excerpt`) plus a one-paragraph
@@ -1003,16 +1032,16 @@ The equity baseline pack adapts eight portable analytical frameworks from
 These are quality-floor improvements (not a new user-selectable strategy mode) that tighten evidentiary discipline and
 report structure for roles the baseline pack already runs:
 
-| Theme | Frame                                              | Inserted into                                                              | Status                                                                         |
-|-------|----------------------------------------------------|----------------------------------------------------------------------------|--------------------------------------------------------------------------------|
-| A     | Valuation sanity bands (WACC, multiples, terminal) | `fundamental_analyst.md`, `conservative_risk.md`                           | ✅ Ship                                                                         |
-| B     | Industry KPI matrix (sector-specific metrics)      | `fundamental_analyst.md`                                                   | ✅ Ship                                                                         |
-| C     | Management-commentary red-flag taxonomy            | `news_analyst.md`, `sentiment_analyst.md`, `conservative_risk.md`          | ⚠️ Degraded mode (full power needs `TranscriptEvidence` provider)              |
-| D     | Beat/miss decision tree (actual vs consensus)      | `news_analyst.md`, `trader.md`                                             | ⚠️ Gated on a prerequisite audit: same-period actual + consensus must be wired |
-| E     | Falsifiable theses (pillars + thesis breakers)     | `bullish_researcher.md`, `bearish_researcher.md`, `debate_moderator.md`, `neutral_risk.md` | ✅ Ship                                                        |
-| F     | "Contrarian needs a catalyst" rule                 | `bullish_researcher.md`, `aggressive_risk.md`                              | ✅ Ship                                                                         |
-| G     | Catalyst taxonomy + H/M/L impact tier              | `news_analyst.md`                                                          | ✅ Wired via the Tier 1 catalyst calendar; Tier 3 gaps remain deferred          |
-| H     | Sourcing hierarchy + injection defense             | `fundamental_analyst.md`, `news_analyst.md`, `sentiment_analyst.md`, `technical_analyst.md`, `trader.md` | ✅ Ship                                           |
+| Theme | Frame                                              | Inserted into                                                                                            | Status                                                                         |
+|-------|----------------------------------------------------|----------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| A     | Valuation sanity bands (WACC, multiples, terminal) | `fundamental_analyst.md`, `conservative_risk.md`                                                         | ✅ Ship                                                                         |
+| B     | Industry KPI matrix (sector-specific metrics)      | `fundamental_analyst.md`                                                                                 | ✅ Ship                                                                         |
+| C     | Management-commentary red-flag taxonomy            | `news_analyst.md`, `sentiment_analyst.md`, `conservative_risk.md`                                        | ⚠️ Degraded mode (full power needs `TranscriptEvidence` provider)              |
+| D     | Beat/miss decision tree (actual vs consensus)      | `news_analyst.md`, `trader.md`                                                                           | ⚠️ Gated on a prerequisite audit: same-period actual + consensus must be wired |
+| E     | Falsifiable theses (pillars + thesis breakers)     | `bullish_researcher.md`, `bearish_researcher.md`, `debate_moderator.md`, `neutral_risk.md`               | ✅ Ship                                                                         |
+| F     | "Contrarian needs a catalyst" rule                 | `bullish_researcher.md`, `aggressive_risk.md`                                                            | ✅ Ship                                                                         |
+| G     | Catalyst taxonomy + H/M/L impact tier              | `news_analyst.md`                                                                                        | ✅ Wired via the Tier 1 catalyst calendar; Tier 3 gaps remain deferred          |
+| H     | Sourcing hierarchy + injection defense             | `fundamental_analyst.md`, `news_analyst.md`, `sentiment_analyst.md`, `technical_analyst.md`, `trader.md` | ✅ Ship                                                                         |
 
 Acceptance is verified by deterministic checks (prompt-bundle regression fixtures + targeted
 `render_baseline_prompt_for_role(...)` string assertions) plus a single live smoke run per shipped batch. Themes C and
@@ -1026,6 +1055,121 @@ Theme E's required output shape is consumed downstream: the Debate Moderator mar
 an evidence anchor or a thesis breaker lacks a measurable signal, names the surviving Bull and Bear pillars at the end
 of debate, and ends the consensus summary with an explicit `Buy`, `Sell`, or `Hold` stance. The Neutral Risk agent
 runs a falsifiability check against the surviving pillars.
+
+## ETF Baseline Pack — Dealer-Positioning Overlay (Phase 2)
+
+The ETF baseline pack extends the equity analysis pipeline with a secondary dealer-positioning overlay derived from
+listed equity options chains. This overlay is designed as a **secondary signal** that sits beneath the primary ETF
+anchors (premium/discount, composition, tracking) and adds a quantitative lens on how dealer hedging activity may
+dampen or amplify near-term price moves.
+
+### Architecture: BSM Greeks and Chain Aggregation
+
+Dealer-positioning math lives in `crates/scorpio-core/src/indicators/gex.rs` — a pure, I/O-free module that computes
+Black-Scholes-Merton gamma, vanna, and charm, then aggregates per-strike contributions across the options chain using
+the SqueezeMetrics dealer convention (short calls, long puts). Degenerate inputs (σ ≤ 0, t ≤ 0, S ≤ 0) return `0.0`.
+The aggregator emits:
+
+- **Near-term GEX** — front-month expiration, per-strike + aggregate signed net and non-negative gross exposures
+  denominated in USD per 1% spot move.
+- **Broad GEX** (Stage 3) — all-expirations single-rate approximation combining the front-month slice with
+  NTM slices for additional listed expirations.
+- **VEX/CEX** (Stage 3) — secondary sensitivities to absolute IV moves (vanna-derived) and one calendar day of
+  time decay (charm-derived).
+
+The `compute_gex_summary` helper in the ETF valuator (`valuation/etf/premium_discount.rs`) maps the aggregator's
+`AggregateResult` directly into the additive `GexSummary` state shape. Gamma walls (top-N strikes by `|net_gex|`)
+are sorted and truncated to the top 3 for the durable state. The call/put OI ratio is inverted from the yfinance
+put/call convention to the canonical call/put form.
+
+### Risk-Free-Rate Sourcing
+
+Dealer-positioning math requires a risk-free rate (`r`). The system enforces a strict no-hardcoded-fallback policy:
+
+1. For **live/today ETF runs**, the `PreflightTask` fetches FRED `DGS3MO` (3-month Treasury bill rate). If FRED
+   is unavailable, it falls back to the most recent yfinance `^IRX` (13-week Treasury bill) close.
+2. If **both sources fail**, `etf_risk_free_rate` remains `None` and the downstream valuator degrades
+   `options_gex` to `None` — the report honestly states dealer-positioning is unavailable.
+3. **Historical runs** skip live-rate fetches entirely to preserve reproducibility; dealer-positioning degrades
+   to unavailable.
+
+The rate source (`FredDgs3Mo` or `YFinanceIrx`) is persisted on `TradingState` so `scorpio report` can render
+the same source/degradation banner from reloaded snapshots.
+
+### Leverage-Warning Injection
+
+Leveraged and inverse ETFs (e.g., TQQQ, SQQQ, SPXU) carry structural decay risks that standard analysis may
+understate. When `EtfValuation.leverage_factor` diverges from `1.0` beyond a `1e-6` tolerance, the system injects
+a leverage warning into:
+
+- **Conservative Risk** and **Neutral Risk** system prompts (renderer-side, after placeholder substitution)
+- **Auditor** system prompt (same injection point)
+
+The warning is sourced from `etf_leverage_warning.md` and carries a `{leverage_factor}` placeholder that is
+substituted at runtime (e.g., `3x`, `-2x`, `1.5x`). An explicit `---` divider separates the base prompt from
+the warning. The Aggressive Risk, Trader, and Fund Manager prompts are intentionally excluded — the warning is
+a conservative/neutral concern, not a universal signal.
+
+### State Schema Additions
+
+The `GexSummary` struct on `EtfValuation` carries the following fields (all additive with `#[serde(default)]`,
+no `THESIS_MEMORY_SCHEMA_VERSION` bump):
+
+| Field                         | Type                 | Stage | Description                                          |
+|:------------------------------|:---------------------|:------|:-----------------------------------------------------|
+| `net_gex_usd_per_1pct_move`   | `f64`                | 1     | Signed net near-term GEX per 1% spot move            |
+| `gross_gex_usd_per_1pct_move` | `f64`                | 1     | Non-negative gross near-term GEX                     |
+| `call_put_oi_ratio`           | `f64`                | 1     | Call OI / put OI (inverted from yfinance convention) |
+| `max_pain_strike`             | `f64`                | 1     | Max-pain strike from the options chain               |
+| `near_term_expiration`        | `NaiveDate`          | 1     | Front-month expiration date                          |
+| `strikes`                     | `Vec<StrikeGex>`     | 1     | Top-3 gamma walls by `                               |net_gex|` |
+| `broad`                       | `Option<BroadGex>`   | 3     | All-expirations single-rate approximation            |
+| `vex_summary`                 | `Option<VexSummary>` | 3     | Vanna-derived sensitivity to IV moves                |
+| `cex_summary`                 | `Option<CexSummary>` | 3     | Charm-derived sensitivity to time decay              |
+
+`TradingState` gains two additional additive fields:
+
+| Field                       | Type                            | Description                                  |
+|:----------------------------|:--------------------------------|:---------------------------------------------|
+| `etf_risk_free_rate`        | `Option<f64>`                   | Decimal risk-free rate from FRED or yfinance |
+| `etf_risk_free_rate_source` | `Option<EtfRiskFreeRateSource>` | Persisted origin (FRED/yfinance)             |
+
+### Terminal Reporter: DEALER POSITIONING Block
+
+When `options_gex` is populated, the terminal report renders a `DEALER POSITIONING` block after the tracking
+section containing:
+
+- **Summary line** — plain-English regime description (dampens/amplifies moves) plus gamma-wall strike range
+- **Net/Gross GEX** per 1% spot move (signed USD, scaled to B/M/K)
+- **Call/Put OI ratio** and **Max-pain strike**
+- **Gamma walls** — top-3 strikes with signed net GEX
+- **Partial-data note** — when walls or broad GEX are unavailable
+- **Secondary sensitivities** (Stage 3) — VEX/CEX net/gross exposures
+- **All expirations** (Stage 3) — broad GEX with expiration coverage label
+
+When `options_gex` is absent, the block is hidden and a one-line warning appears in the data-availability
+section. A risk-free-rate source/degradation banner renders under the Analysis Pack header.
+
+### Prompt Integration
+
+The ETF technical analyst prompt (`etf_tracking_options_focus.md`) discusses dealer-positioning as a secondary
+overlay on top of premium/discount, composition, and tracking evidence. It uses a single generic absence branch:
+if no usable derived dealer-positioning overlay is available, it says so and anchors the rest of the analysis on
+the primary ETF signals. Split no-snapshot vs unusable-snapshot copy is deferred until an explicit derivation
+status field exists.
+
+### Stage Gating
+
+Phase 2 is delivered in three stages:
+
+- **Stage 1** — Near-term GEX core math + state plumbing (BSM helpers, per-strike aggregation, `GexSummary`
+  schema, `compute_gex_summary` mapping, `AnalystSyncTask` hydration, roundtrip tests).
+- **Stage 2** — Surfaced validation slice (leverage-warning injection, technical-prompt rewrite, terminal
+  `DEALER POSITIONING` block, live risk-free-rate sourcing with FRED `DGS3MO` + yfinance `^IRX` fallback,
+  prompt-bundle regression-gate refresh). **Stage 2 is the go/no-go gate for Stage 3.**
+- **Stage 3** — Contingent context expansion (broad GEX, VEX/CEX surfacing, `OptionsSnapshot.all_expirations`
+  transient field, reporter Stage 3 expansion, live smoke tests). Requires explicit user approval after Stage 2
+  validation.
 
 ## User Interaction Interface
 
@@ -1092,11 +1236,14 @@ to minimize latency overhead.
 The CLI supports multiple output formats to accommodate both human operators and downstream tooling:
 
 * **Human-readable** (default): Richly formatted terminal output using the `colored` or `comfy-table` crate, displaying
-  agent phase transitions, debate summaries, final trade proposals with color-coded risk indicators, and a post-run
-  statistics summary showing per-phase and per-agent token usage and latency. The final report includes two additional
-  sections after the analyst evidence snapshot: **Data Quality and Coverage** (listing required and missing analyst
-  inputs) and **Evidence Provenance** (listing the data providers used and any caveats). If the backing state fields
-  are absent, these sections render the fallback string "Unavailable" rather than omitting the section.
+   agent phase transitions, debate summaries, final trade proposals with color-coded risk indicators, and a post-run
+   statistics summary showing per-phase and per-agent token usage and latency. The final report includes two additional
+   sections after the analyst evidence snapshot: **Data Quality and Coverage** (listing required and missing analyst
+   inputs) and **Evidence Provenance** (listing the data providers used and any caveats). If the backing state fields
+   are absent, these sections render the fallback string "Unavailable" rather than omitting the section. For ETF runs
+   with a populated `options_gex`, a **Dealer Positioning** block renders after the tracking section with near-term GEX
+   summary, gamma walls, and (Stage 3) secondary sensitivities and broad GEX. A risk-free-rate source/degradation banner
+   appears under the Analysis Pack header.
 * **JSON** (`--output json`): Machine-readable structured output mirroring the serialized `TradingState` (including the
   full `TokenUsageTracker`, `DataCoverageReport`, and `ProvenanceSummary`), enabling piping into `jq`, logging
   infrastructure, or external dashboards.
@@ -1371,13 +1518,13 @@ call may bypass the accounting layer.
 
 Each phase of the execution graph records its own `PhaseTokenUsage` entry:
 
-| Phase                      | Agents Tracked                                                       |
-|:---------------------------|:---------------------------------------------------------------------|
-| Phase 1: Analyst Team      | Fundamental, Sentiment, News, Technical (each individually)          |
-| Phase 2: Researcher Debate | Bullish Researcher, Bearish Researcher (per round), Debate Moderator |
-| Phase 3: Trader Synthesis  | Trader Agent                                                         |
-| Phase 4: Risk Discussion   | Aggressive, Conservative, Neutral (per round), Risk Moderator        |
-| Phase 5: Fund Manager      | Fund Manager                                                         |
+| Phase                                                    | Agents Tracked                                                                                         |
+|:---------------------------------------------------------|:-------------------------------------------------------------------------------------------------------|
+| Phase 1: Analyst Team                                    | Fundamental, Sentiment, News, Technical (each individually)                                            |
+| Phase 2: Researcher Debate                               | Bullish Researcher, Bearish Researcher (per round), Debate Moderator                                   |
+| Phase 3: Trader Synthesis                                | Trader Agent                                                                                           |
+| Phase 4: Risk Discussion                                 | Aggressive, Conservative, Neutral (per round), Risk Moderator                                          |
+| Phase 5: Fund Manager                                    | Fund Manager                                                                                           |
 | Phase 5+: Auditor (advisory, gated on `auditor_enabled`) | Auditor (quick-thinking tier; attributed to quick-thinking model usage in the token-summary breakdown) |
 
 Within each phase, individual `AgentTokenUsage` entries capture the model used, prompt/completion token counts, and

@@ -16,6 +16,7 @@ pub mod news;
 pub mod ohlcv;
 pub mod options;
 pub mod price;
+pub mod summary;
 
 pub use etf::{EtfQuote, FundInfo, is_supported_etf_kind};
 pub use news::YFinanceNewsProvider;

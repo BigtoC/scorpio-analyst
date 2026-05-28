@@ -24,6 +24,7 @@ pub mod data;
 pub mod domain;
 pub mod error;
 pub mod indicators;
+pub(crate) mod market_time;
 pub mod observability;
 pub mod prompts;
 pub mod providers;

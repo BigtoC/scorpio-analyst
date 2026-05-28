@@ -3,8 +3,8 @@
 use std::fmt::Write;
 
 use scorpio_core::state::{
-    EtfComposition, EtfValuation, HoldingsAgeBand, PremiumBand, ScenarioValuation, TrackingError,
-    TradingState,
+    EtfComposition, EtfValuation, GexSummary, HoldingsAgeBand, PremiumBand, ScenarioValuation,
+    StrikeGex, TrackingError, TradingState,
 };
 
 /// Render policy. Picks glyphs + layout based on terminal capability.
@@ -96,6 +96,15 @@ pub(crate) fn render_etf_panel_with_policy(
         }
     }
     render_trust_signals(out, etf, policy);
+    if let Some(gex) = etf.options_gex.as_ref() {
+        render_dealer_positioning_block(out, gex);
+    } else {
+        let _ = writeln!(
+            out,
+            "{} Dealer positioning skipped — no usable options-derived overlay available",
+            policy.warn()
+        );
+    }
 }
 
 fn render_premium_block(
@@ -288,6 +297,153 @@ fn age_band_label(b: HoldingsAgeBand) -> &'static str {
         HoldingsAgeBand::Aging => "Aging",
         HoldingsAgeBand::Stale => "Stale",
         HoldingsAgeBand::Unknown => "Unknown",
+    }
+}
+
+fn render_dealer_positioning_block(out: &mut String, gex: &GexSummary) {
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  ─── DEALER POSITIONING ──────────────────────────────────────────────"
+    );
+    let _ = writeln!(out, "  Near-term  ({})", gex.near_term_expiration);
+
+    let summary_line = build_dealer_summary_line(gex);
+    let _ = writeln!(out, "    Summary         {summary_line}");
+    let _ = writeln!(
+        out,
+        "    Net GEX/1%      {net}    Gross GEX/1%    {gross}",
+        net = format_usd_signed(gex.net_gex_usd_per_1pct_move),
+        gross = format_usd_magnitude(gex.gross_gex_usd_per_1pct_move),
+    );
+    let _ = writeln!(
+        out,
+        "    Call/Put OI     {cp:.2}      Max-pain        ${mp:.0}",
+        cp = gex.call_put_oi_ratio,
+        mp = gex.max_pain_strike,
+    );
+
+    if !gex.strikes.is_empty() {
+        let walls = gex
+            .strikes
+            .iter()
+            .map(format_strike_gex)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "    Gamma walls    {walls}");
+    }
+
+    let walls_missing = gex.strikes.is_empty();
+    let broad_missing = gex.broad.is_none();
+    if walls_missing && broad_missing {
+        let _ = writeln!(
+            out,
+            "    Dealer positioning partial — gamma walls and broad GEX unavailable"
+        );
+    } else if walls_missing {
+        let _ = writeln!(
+            out,
+            "    Dealer positioning partial — gamma walls unavailable"
+        );
+    } else if broad_missing {
+        let _ = writeln!(
+            out,
+            "    Dealer positioning partial — broad GEX unavailable"
+        );
+    }
+
+    if let (Some(v), Some(c)) = (gex.vex_summary.as_ref(), gex.cex_summary.as_ref()) {
+        let _ = writeln!(out, "    Secondary sensitivities");
+        let _ = writeln!(
+            out,
+            "      Net VEX/volpt {nv}    Gross VEX       {gv}",
+            nv = format_usd_signed(v.net_vex_usd_per_volpt),
+            gv = format_usd_magnitude(v.gross_vex_usd_per_volpt),
+        );
+        let _ = writeln!(
+            out,
+            "      Net CEX/day   {nc}    Gross CEX       {gc}",
+            nc = format_usd_signed(c.net_cex_usd_per_day),
+            gc = format_usd_magnitude(c.gross_cex_usd_per_day),
+        );
+    }
+
+    if let Some(broad) = gex.broad.as_ref() {
+        let _ = writeln!(out);
+        if broad.expirations_used == broad.expirations_total_considered {
+            let _ = writeln!(out, "  All expirations  ({} used)", broad.expirations_used);
+        } else {
+            let _ = writeln!(
+                out,
+                "  Partial expirations  ({} used of {})",
+                broad.expirations_used, broad.expirations_total_considered
+            );
+        }
+        let _ = writeln!(
+            out,
+            "    Net GEX/1%      {net}    Gross GEX/1%    {gross}",
+            net = format_usd_signed(broad.net_gex_usd_per_1pct_move),
+            gross = format_usd_magnitude(broad.gross_gex_usd_per_1pct_move),
+        );
+    }
+}
+
+fn format_strike_gex(s: &StrikeGex) -> String {
+    format!(
+        "{} @ ${:.0}",
+        format_usd_signed(s.net_gex_usd_per_1pct_move),
+        s.strike
+    )
+}
+
+fn format_usd_signed(value: f64) -> String {
+    let abs = value.abs();
+    let (suffix, scaled) = scale_for_usd(abs);
+    let sign = if value >= 0.0 { '+' } else { '-' };
+    format!("{sign}${scaled:.2}{suffix}")
+}
+
+fn format_usd_magnitude(value: f64) -> String {
+    let (suffix, scaled) = scale_for_usd(value.abs());
+    format!("${scaled:.2}{suffix}")
+}
+
+fn scale_for_usd(value: f64) -> (&'static str, f64) {
+    const B: f64 = 1.0e9;
+    const M: f64 = 1.0e6;
+    const K: f64 = 1.0e3;
+    if value >= B {
+        ("B", value / B)
+    } else if value >= M {
+        ("M", value / M)
+    } else if value >= K {
+        ("K", value / K)
+    } else {
+        ("", value)
+    }
+}
+
+fn build_dealer_summary_line(gex: &GexSummary) -> String {
+    let regime = if gex.net_gex_usd_per_1pct_move > 0.0 {
+        "Dealer hedging likely dampens near-term moves"
+    } else if gex.net_gex_usd_per_1pct_move < 0.0 {
+        "Dealer hedging likely amplifies near-term moves"
+    } else {
+        "Dealer hedging is roughly neutral on near-term moves"
+    };
+
+    if gex.strikes.is_empty() {
+        regime.to_owned()
+    } else {
+        let mut strikes_sorted: Vec<f64> = gex.strikes.iter().map(|w| w.strike).collect();
+        strikes_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let lo = strikes_sorted.first().copied().unwrap_or(0.0);
+        let hi = strikes_sorted.last().copied().unwrap_or(0.0);
+        if (hi - lo).abs() < f64::EPSILON {
+            format!("{regime}; gamma walls cluster near ${lo:.0}")
+        } else {
+            format!("{regime}; gamma walls cluster near ${lo:.0}-${hi:.0}")
+        }
     }
 }
 

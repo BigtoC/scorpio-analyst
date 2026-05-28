@@ -5,6 +5,7 @@
 
 use yfinance_rs::YfClient;
 
+use super::summary::SummaryHttp;
 use crate::config::RateLimitConfig;
 use crate::rate_limit::SharedRateLimiter;
 
@@ -14,9 +15,12 @@ use crate::rate_limit::SharedRateLimiter;
 /// [`super::ohlcv::YFinanceClient`] wraps this together with an OHLCV cache;
 /// [`super::financials`] accesses it via the `pub(super)` field on
 /// `YFinanceClient` to build `FundamentalsBuilder` / `AnalysisBuilder` queries.
+/// [`super::summary::SummaryHttp`] piggybacks on the same rate limiter for
+/// direct `quoteSummary` HTTP calls that bypass `yfinance-rs`.
 #[derive(Clone)]
 pub(super) struct YfSession {
     client: YfClient,
+    summary: SummaryHttp,
     limiter: SharedRateLimiter,
 }
 
@@ -33,6 +37,7 @@ impl YfSession {
     pub(super) fn new(limiter: SharedRateLimiter) -> Self {
         Self {
             client: YfClient::default(),
+            summary: SummaryHttp::new(),
             limiter,
         }
     }
@@ -49,6 +54,11 @@ impl YfSession {
     /// Borrow the underlying `YfClient` for building queries.
     pub(super) fn client(&self) -> &YfClient {
         &self.client
+    }
+
+    /// Borrow the direct-HTTP `quoteSummary` fetcher.
+    pub(super) fn summary(&self) -> &SummaryHttp {
+        &self.summary
     }
 
     /// Borrow the rate limiter (for direct acquire or inspection).

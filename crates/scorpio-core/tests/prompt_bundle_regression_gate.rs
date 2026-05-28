@@ -28,7 +28,8 @@ use scorpio_core::{
     analysis_packs::{PackId, resolve_pack, validate_active_pack_completeness},
     testing::{
         PromptRenderScenario, canonical_fixture_identity, render_baseline_prompt_for_role,
-        render_prompt_output_for_role, runtime_policy_from_manifest,
+        render_levered_etf_risk_prompts_for_gate, render_prompt_output_for_role,
+        runtime_policy_from_manifest,
     },
     workflow::{Role, build_run_topology},
 };
@@ -708,4 +709,45 @@ fn analytical_theme_port_coverage_matrix_remains_intact() {
             }
         }
     }
+}
+
+// --- Leverage-warning gate (Tasks 8-9 of ETF Phase 2 Stage 2) ---
+
+/// Leverage warning must appear in Conservative, Neutral, and Auditor prompts
+/// for a 3× leveraged ETF, and must NOT appear in Aggressive, Trader, or
+/// FundManager prompts.
+///
+/// The marker `"Daily-reset products"` is the first unique phrase from
+/// `etf_leverage_warning.md` and serves as the canonical sentinel.
+#[test]
+fn leverage_warning_appears_only_for_conservative_neutral_auditor_when_levered() {
+    const MARKER: &str = "Daily-reset products";
+
+    let probe = render_levered_etf_risk_prompts_for_gate();
+
+    assert!(
+        probe.conservative.contains(MARKER),
+        "conservative risk prompt must carry the leverage warning marker"
+    );
+    assert!(
+        probe.neutral.contains(MARKER),
+        "neutral risk prompt must carry the leverage warning marker"
+    );
+    assert!(
+        probe.auditor.contains(MARKER),
+        "auditor prompt must carry the leverage warning marker"
+    );
+
+    assert!(
+        !probe.aggressive.contains(MARKER),
+        "aggressive risk prompt must NOT carry the leverage warning marker"
+    );
+    assert!(
+        !probe.trader.contains(MARKER),
+        "trader bundle slot must NOT carry the leverage warning marker"
+    );
+    assert!(
+        !probe.fund_manager.contains(MARKER),
+        "fund_manager bundle slot must NOT carry the leverage warning marker"
+    );
 }
