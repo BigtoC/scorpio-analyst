@@ -18,7 +18,13 @@ const UPDATE_NOTICE_GRACE: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
+    // Hold the tracing guard for the lifetime of main and explicitly
+    // call `flush_and_shutdown()` before every exit path. `Drop` is not
+    // enough because the non-zero exit branch below calls
+    // `std::process::exit` which BYPASSES destructors entirely. Without
+    // an explicit flush, the trailing batch of Langfuse spans would be
+    // lost on any failed run.
+    let tracing_guard = init_tracing();
     let cli = Cli::parse();
 
     // Capture command-shape guards before `cli.command` is moved by dispatch.
@@ -125,6 +131,13 @@ async fn main() {
             eprintln!("{notice}");
         }
     }
+
+    // Flush Langfuse spans BEFORE any exit. `std::process::exit` does
+    // not run destructors, so relying on `Drop` would lose spans on the
+    // failure branch. On the success branch the explicit flush is still
+    // useful — it drains while tokio is fully healthy, avoiding any
+    // race between Drop and tokio runtime teardown.
+    tracing_guard.flush_and_shutdown();
 
     if exit_code != 0 {
         std::process::exit(exit_code);

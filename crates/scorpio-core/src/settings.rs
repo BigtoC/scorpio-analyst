@@ -66,6 +66,12 @@ struct UserConfigFile {
     openrouter_rpm: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     deepseek_rpm: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    langfuse_public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    langfuse_secret_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    langfuse_base_url: Option<String>,
 }
 
 #[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,6 +149,9 @@ impl From<UserConfigFile> for PartialConfig {
             deepseek_rpm: deepseek.rpm.or(value.deepseek_rpm),
             xiaomimimo_rpm: xiaomimimo.rpm,
             copilot_rpm: copilot.rpm,
+            langfuse_public_key: value.langfuse_public_key,
+            langfuse_secret_key: value.langfuse_secret_key,
+            langfuse_base_url: value.langfuse_base_url,
         }
     }
 }
@@ -203,6 +212,9 @@ impl From<&PartialConfig> for UserConfigFile {
             gemini_rpm: None,
             openrouter_rpm: None,
             deepseek_rpm: None,
+            langfuse_public_key: value.langfuse_public_key.clone(),
+            langfuse_secret_key: value.langfuse_secret_key.clone(),
+            langfuse_base_url: value.langfuse_base_url.clone(),
         }
     }
 }
@@ -326,6 +338,19 @@ pub struct PartialConfig {
     /// Optional GitHub Copilot requests-per-minute override.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub copilot_rpm: Option<u32>,
+    /// Langfuse public key for OpenTelemetry tracing export.
+    ///
+    /// When all three `langfuse_*` fields are set (or their `SCORPIO_LANGFUSE_*`
+    /// env vars are present), LLM spans are exported to Langfuse. Env vars
+    /// always win over config-file values.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub langfuse_public_key: Option<String>,
+    /// Langfuse secret key for OpenTelemetry tracing export.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub langfuse_secret_key: Option<String>,
+    /// Langfuse base URL (e.g. `https://cloud.langfuse.com` or a self-hosted host).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub langfuse_base_url: Option<String>,
 }
 
 /// Redacts an `Option<String>` API-key field for `Debug` output.
@@ -368,6 +393,9 @@ impl std::fmt::Debug for PartialConfig {
             .field("gemini_rpm", &self.gemini_rpm)
             .field("openrouter_rpm", &self.openrouter_rpm)
             .field("deepseek_rpm", &self.deepseek_rpm)
+            .field("langfuse_public_key", &redact(&self.langfuse_public_key))
+            .field("langfuse_secret_key", &redact(&self.langfuse_secret_key))
+            .field("langfuse_base_url", &self.langfuse_base_url)
             .finish()
     }
 }
@@ -598,6 +626,9 @@ mod tests {
             deepseek_rpm: Some(61),
             xiaomimimo_rpm: Some(75),
             copilot_rpm: Some(30),
+            langfuse_public_key: Some("pk-lf-test".into()),
+            langfuse_secret_key: Some("sk-lf-test".into()),
+            langfuse_base_url: Some("https://cloud.langfuse.com".into()),
         }
     }
 

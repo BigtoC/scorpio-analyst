@@ -5084,7 +5084,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scorpio-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5120,7 +5120,7 @@ dependencies = [
 
 [[package]]
 name = "scorpio-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5169,7 +5169,7 @@ dependencies = [
 
 [[package]]
 name = "scorpio-reporters"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5186,7 +5186,7 @@ dependencies = [
 
 [[package]]
 name = "scorpio-server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
