@@ -2,6 +2,15 @@
 members = ["crates/*"]
 resolver = "2"
 
+[profile.dev]
+# Reduce debug info from 2 (full) to 1 (line tables only).
+# This dramatically shrinks the size of target/debug.
+debug = 1
+
+# Split debug info into separate files (supported on macOS, Windows, and Linux).
+# This keeps the main build artifacts much smaller.
+split-debuginfo = "unpacked"
+
 [workspace.package]
 version = "0.7.1"
 edition = "2024"
