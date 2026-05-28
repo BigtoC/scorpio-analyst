@@ -32,6 +32,9 @@ const SEC_EDGAR_USER_AGENT: &str = "Scorpio Analyst scorpio@ledgerlylab.com";
 const EDGAR_DATA_BASE_URL: &str = "https://data.sec.gov";
 const EDGAR_WWW_BASE_URL: &str = "https://www.sec.gov";
 const COMPANY_TICKERS_PATH: &str = "/files/company_tickers.json";
+/// Mutual-fund / ETF ticker index. SEC publishes ETFs here (as fund series),
+/// **not** in `company_tickers.json` — that file is operating companies only.
+const COMPANY_TICKERS_MF_PATH: &str = "/files/company_tickers_mf.json";
 const SUBMISSIONS_PATH_PREFIX: &str = "/submissions/CIK";
 
 /// Number of consecutive HTTP/transport failures before the circuit opens.
@@ -133,6 +136,23 @@ struct CompanyTickerRecord {
     ticker: String,
 }
 
+/// Shape of `https://www.sec.gov/files/company_tickers_mf.json`.
+///
+/// SEC returns a column-oriented layout:
+/// ```json
+/// { "fields": ["cik", "seriesId", "classId", "symbol"],
+///   "data":   [[1100663, "S000004354", "C000012084", "SOXX"], ...] }
+/// ```
+/// We deserialize each row as a fixed-arity tuple and rely on the documented
+/// column order. If SEC ever reorders the columns, parsing succeeds but the
+/// resulting CIKs will be wrong — guarded against in [`parse_company_tickers_mf`]
+/// by checking the `fields` header.
+#[derive(Deserialize)]
+struct MfTickersResponse {
+    fields: Vec<String>,
+    data: Vec<(u32, String, String, String)>,
+}
+
 /// Shape of `https://data.sec.gov/submissions/CIK<10-digit>.json`.
 #[derive(Deserialize)]
 struct EdgarSubmissionsResponse {
@@ -165,6 +185,29 @@ fn parse_company_tickers(body: &str) -> Result<HashMap<String, u32>, String> {
     Ok(raw
         .into_values()
         .map(|r| (r.ticker.to_uppercase(), r.cik_str))
+        .collect())
+}
+
+/// Parse the MF/ETF tickers JSON into a `ticker → CIK` map.
+///
+/// Defends against silent column reordering by checking the `fields` header
+/// — the parser requires `cik` to be the first column and `symbol` to be the
+/// fourth. If SEC ever changes the schema, we fail loudly rather than emit
+/// wrong CIKs.
+fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, u32>, String> {
+    let raw: MfTickersResponse = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    if raw.fields.first().map(String::as_str) != Some("cik")
+        || raw.fields.get(3).map(String::as_str) != Some("symbol")
+    {
+        return Err(format!(
+            "unexpected company_tickers_mf.json schema: {:?}",
+            raw.fields
+        ));
+    }
+    Ok(raw
+        .data
+        .into_iter()
+        .map(|(cik, _series_id, _class_id, symbol)| (symbol.to_uppercase(), cik))
         .collect())
 }
 
@@ -229,8 +272,13 @@ fn parse_submissions(
 pub struct SecEdgarClient {
     http: Arc<dyn EdgarHttp>,
     limiter: SharedRateLimiter,
-    /// Lazy-loaded ticker→CIK map from `company_tickers.json`.
+    /// Lazy-loaded ticker→CIK map from `company_tickers.json` (operating
+    /// companies only — equities filing 10-K/10-Q).
     cik_cache: Arc<RwLock<Option<HashMap<String, u32>>>>,
+    /// Lazy-loaded ticker→CIK map from `company_tickers_mf.json` (ETFs and
+    /// mutual fund series). Populated only on first ETF miss in
+    /// [`Self::resolve_fund_cik`].
+    cik_mf_cache: Arc<RwLock<Option<HashMap<String, u32>>>>,
     breaker: Arc<Mutex<CircuitBreakerState>>,
 }
 
@@ -261,6 +309,7 @@ impl SecEdgarClient {
             http: Arc::new(ReqwestEdgarHttp { client }),
             limiter,
             cik_cache: Arc::new(RwLock::new(None)),
+            cik_mf_cache: Arc::new(RwLock::new(None)),
             breaker: Arc::new(Mutex::new(CircuitBreakerState::new())),
         })
     }
@@ -271,6 +320,7 @@ impl SecEdgarClient {
             http,
             limiter,
             cik_cache: Arc::new(RwLock::new(None)),
+            cik_mf_cache: Arc::new(RwLock::new(None)),
             breaker: Arc::new(Mutex::new(CircuitBreakerState::new())),
         }
     }
@@ -285,6 +335,22 @@ impl SecEdgarClient {
             http,
             limiter,
             cik_cache: Arc::new(RwLock::new(Some(cache))),
+            cik_mf_cache: Arc::new(RwLock::new(None)),
+            breaker: Arc::new(Mutex::new(CircuitBreakerState::new())),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_preloaded_mf_cache(
+        http: Arc<dyn EdgarHttp>,
+        limiter: SharedRateLimiter,
+        mf_cache: HashMap<String, u32>,
+    ) -> Self {
+        Self {
+            http,
+            limiter,
+            cik_cache: Arc::new(RwLock::new(None)),
+            cik_mf_cache: Arc::new(RwLock::new(Some(mf_cache))),
             breaker: Arc::new(Mutex::new(CircuitBreakerState::new())),
         }
     }
@@ -453,15 +519,100 @@ impl SecEdgarClient {
         }
     }
 
+    /// Look up the CIK for a ticker in EDGAR's MF/ETF ticker index.
+    ///
+    /// Used by [`Self::resolve_fund_cik`] as a fallback when the operating-
+    /// company map ([`Self::lookup_cik`]) misses. Same fail-soft contract:
+    /// `Ok(None)` on transport error, non-200 status, or unknown ticker.
+    pub async fn lookup_cik_mf(&self, ticker: &str) -> Result<Option<u32>, TradingError> {
+        let ticker_upper = ticker.to_uppercase();
+
+        {
+            let guard = self.cik_mf_cache.read().await;
+            if let Some(cache) = guard.as_ref() {
+                return Ok(cache.get(&ticker_upper).copied());
+            }
+        }
+
+        {
+            let breaker = self.breaker.lock().await;
+            if breaker.is_open() {
+                tracing::debug!(
+                    ticker,
+                    "SEC EDGAR circuit breaker open; skipping MF CIK lookup"
+                );
+                return Ok(None);
+            }
+        }
+
+        let url = format!("{EDGAR_WWW_BASE_URL}{COMPANY_TICKERS_MF_PATH}");
+        self.limiter.acquire().await;
+        let result = self.http.get(&url).await;
+
+        match result {
+            Err(transport_err) => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar_cik_mf_lookup",
+                    ticker,
+                    error = %transport_err,
+                    "SEC EDGAR company_tickers_mf.json fetch failed"
+                );
+                Ok(None)
+            }
+            Ok((status, _)) if status != 200 => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar_cik_mf_lookup",
+                    ticker,
+                    http_status = status,
+                    "SEC EDGAR company_tickers_mf.json returned non-200"
+                );
+                Ok(None)
+            }
+            Ok((_, body)) => match parse_company_tickers_mf(&body) {
+                Err(parse_err) => {
+                    self.breaker.lock().await.record_failure();
+                    tracing::warn!(
+                        kind = "catalyst_fetch_failed",
+                        source = "sec_edgar_cik_mf_lookup",
+                        ticker,
+                        error = %parse_err,
+                        "SEC EDGAR company_tickers_mf.json parse failed"
+                    );
+                    Ok(None)
+                }
+                Ok(map) => {
+                    self.breaker.lock().await.record_success();
+                    let cik = map.get(&ticker_upper).copied();
+                    *self.cik_mf_cache.write().await = Some(map);
+                    Ok(cik)
+                }
+            },
+        }
+    }
+
     /// Resolve a fund ticker to a zero-padded 10-digit CIK string.
     ///
-    /// Fail-soft: returns `None` when the underlying [`lookup_cik`] call
-    /// fails or the ticker is not in the EDGAR `company_tickers.json` map.
+    /// Fail-soft. Lookup order:
+    ///
+    /// 1. `company_tickers.json` (operating companies) via [`Self::lookup_cik`]
+    /// 2. `company_tickers_mf.json` (ETF / mutual fund series) via
+    ///    [`Self::lookup_cik_mf`]
+    ///
+    /// ETFs like SPY/QQQ/SOXX live exclusively in (2) — they don't file
+    /// 10-K/10-Q so they're not in (1). The fallback ensures the N-PORT-P
+    /// holdings fetch finds a CIK for them.
     pub async fn resolve_fund_cik(&self, ticker: &str) -> Option<String> {
-        match self.lookup_cik(ticker).await {
-            Ok(Some(cik)) => Some(format!("{cik:010}")),
-            _ => None,
+        if let Ok(Some(cik)) = self.lookup_cik(ticker).await {
+            return Some(format!("{cik:010}"));
         }
+        if let Ok(Some(cik)) = self.lookup_cik_mf(ticker).await {
+            return Some(format!("{cik:010}"));
+        }
+        None
     }
 
     /// Fetch the most recent N-PORT-P filing for a fund CIK and parse it.
@@ -587,6 +738,162 @@ mod tests {
     fn parse_company_tickers_rejects_malformed_json() {
         let result = parse_company_tickers("{not-json");
         assert!(result.is_err());
+    }
+
+    // ── company_tickers_mf.json parsing ──────────────────────────────────────
+
+    #[test]
+    fn parse_company_tickers_mf_extracts_etf_to_cik_map() {
+        let json = r#"{
+            "fields": ["cik", "seriesId", "classId", "symbol"],
+            "data": [
+                [1100663, "S000004354", "C000012084", "SOXX"],
+                [884394,  "S000003474", "C000009779", "SPY"]
+            ]
+        }"#;
+        let map = parse_company_tickers_mf(json).expect("parse should succeed");
+        assert_eq!(map.get("SOXX"), Some(&1100663u32));
+        assert_eq!(map.get("SPY"), Some(&884394u32));
+    }
+
+    #[test]
+    fn parse_company_tickers_mf_normalizes_ticker_to_uppercase() {
+        let json = r#"{
+            "fields": ["cik", "seriesId", "classId", "symbol"],
+            "data": [[1100663, "S000004354", "C000012084", "soxx"]]
+        }"#;
+        let map = parse_company_tickers_mf(json).expect("parse should succeed");
+        assert_eq!(map.get("SOXX"), Some(&1100663u32));
+        assert_eq!(map.get("soxx"), None);
+    }
+
+    #[test]
+    fn parse_company_tickers_mf_rejects_unexpected_schema() {
+        // fields[3] is `classId` instead of `symbol`. Tuple types still
+        // deserialize successfully (all positions still u32/str/str/str),
+        // but the `fields` header check must reject — otherwise we'd
+        // silently map ClassID strings to CIKs.
+        let json = r#"{
+            "fields": ["cik", "seriesId", "symbol", "classId"],
+            "data": [[1100663, "S000004354", "SOXX", "C000012084"]]
+        }"#;
+        let err = parse_company_tickers_mf(json).expect_err("schema check must fire");
+        assert!(err.contains("schema"), "unexpected error message: {err}");
+    }
+
+    #[test]
+    fn parse_company_tickers_mf_rejects_when_cik_column_moved() {
+        // Same defensive case: cik no longer at position 0.
+        let json = r#"{
+            "fields": ["seriesId", "cik", "classId", "symbol"],
+            "data": [["S000004354", 1100663, "C000012084", "SOXX"]]
+        }"#;
+        // Serde fails first here (str can't deserialize as u32 at position 0).
+        // Either error source is acceptable — both prevent silent corruption.
+        assert!(parse_company_tickers_mf(json).is_err());
+    }
+
+    #[test]
+    fn parse_company_tickers_mf_rejects_malformed_json() {
+        assert!(parse_company_tickers_mf("not json").is_err());
+        assert!(parse_company_tickers_mf("").is_err());
+    }
+
+    // ── resolve_fund_cik MF fallback ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resolve_fund_cik_falls_back_to_mf_when_equity_map_misses() {
+        // First call (equity map) misses; second call (MF map) hits SOXX.
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_PATH))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{"0":{"cik_str":320193,"ticker":"AAPL","title":"Apple Inc."}}"#.to_owned(),
+                ))
+            });
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_MF_PATH))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{
+                        "fields": ["cik", "seriesId", "classId", "symbol"],
+                        "data": [[1100663, "S000004354", "C000012084", "SOXX"]]
+                    }"#
+                    .to_owned(),
+                ))
+            });
+
+        let client = SecEdgarClient::with_http(
+            Arc::new(mock),
+            SharedRateLimiter::new("test_sec_edgar", 100),
+        );
+        let cik = client.resolve_fund_cik("SOXX").await;
+        assert_eq!(cik, Some("0001100663".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn resolve_fund_cik_prefers_equity_map_when_both_have_ticker() {
+        // Some symbols (e.g. ETFs that also operate as companies) could
+        // theoretically appear in both. The equity map wins to preserve
+        // existing behavior for non-ETF tickers.
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_PATH))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{"0":{"cik_str":42,"ticker":"FOO","title":"Foo"}}"#.to_owned(),
+                ))
+            });
+        // No expectation for the MF endpoint — it should never be queried.
+
+        let client = SecEdgarClient::with_http(
+            Arc::new(mock),
+            SharedRateLimiter::new("test_sec_edgar", 100),
+        );
+        let cik = client.resolve_fund_cik("FOO").await;
+        assert_eq!(cik, Some("0000000042".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn resolve_fund_cik_returns_none_when_both_maps_miss() {
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_PATH))
+            .returning(|_| Ok((200, "{}".to_owned())));
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with(COMPANY_TICKERS_MF_PATH))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{"fields":["cik","seriesId","classId","symbol"],"data":[]}"#.to_owned(),
+                ))
+            });
+
+        let client = SecEdgarClient::with_http(
+            Arc::new(mock),
+            SharedRateLimiter::new("test_sec_edgar", 100),
+        );
+        let cik = client.resolve_fund_cik("UNKNOWN").await;
+        assert_eq!(cik, None);
+    }
+
+    #[tokio::test]
+    async fn lookup_cik_mf_returns_from_cache_without_hitting_http() {
+        // Preloaded MF cache → no HTTP call should be made.
+        let mock = MockEdgarHttp::new();
+        let mut preload = HashMap::new();
+        preload.insert("SOXX".to_owned(), 1100663);
+        let client = SecEdgarClient::with_preloaded_mf_cache(
+            Arc::new(mock),
+            SharedRateLimiter::new("test_sec_edgar", 100),
+            preload,
+        );
+        let cik = client.lookup_cik_mf("SOXX").await.expect("ok");
+        assert_eq!(cik, Some(1100663));
     }
 
     // ── submissions JSON parsing ──────────────────────────────────────────────
