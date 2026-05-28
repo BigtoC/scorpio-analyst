@@ -1,9 +1,13 @@
+use opentelemetry::KeyValue;
 use opentelemetry::global;
 // `TracerProvider` is the trait that provides the `.tracer(name)` method
 // on `SdkTracerProvider`. Must be in scope at the call site.
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_langfuse::ExporterBuilder;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing based on the `SCORPIO_LOG_FORMAT` environment variable.
@@ -107,8 +111,20 @@ fn init_langfuse_tracer() -> (Option<opentelemetry_sdk::trace::Tracer>, Langfuse
         }
     };
 
+    // Batch processor backed by the tokio runtime — required for async apps.
+    // `SimpleSpanProcessor` blocks the reactor on each export and routinely
+    // drops spans during process teardown; `BatchSpanProcessor` buffers and
+    // flushes on `shutdown` / `Drop` so spans actually reach Langfuse.
+    //
+    // `service.name` on the Resource is what Langfuse uses to identify the
+    // app; without it traces may be filtered out at ingestion.
     let provider = SdkTracerProvider::builder()
-        .with_simple_exporter(exporter)
+        .with_span_processor(BatchSpanProcessor::builder(exporter, Tokio).build())
+        .with_resource(
+            Resource::builder()
+                .with_attributes(vec![KeyValue::new("service.name", "scorpio-analyst")])
+                .build(),
+        )
         .build();
 
     let tracer = provider.tracer("scorpio-analyst");
