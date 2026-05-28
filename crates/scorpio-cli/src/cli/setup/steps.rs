@@ -296,6 +296,54 @@ pub(crate) fn step4_provider_routing(
     super::model_selection::prompt_provider_routing(partial, eligible, config_path, &defaults)
 }
 
+// ── Step 4b: Langfuse observability (optional) ───────────────────────────────
+
+/// Prompt for the three optional Langfuse credentials used for OTel tracing.
+///
+/// All three values are optional: leaving any prompt blank preserves the
+/// previously-saved value (or `None` if nothing was set). Langfuse export only
+/// activates when public key, secret key, and base URL are all present.
+pub fn step_langfuse_observability(
+    partial: &mut PartialConfig,
+) -> Result<(), inquire::InquireError> {
+    println!(
+        "Langfuse provides OpenTelemetry tracing for LLM calls (optional).\n\
+         Sign up at: https://cloud.langfuse.com (or use a self-hosted base URL).\n\
+         Leave any prompt blank to skip / keep the existing value."
+    );
+
+    let existing_public = partial.langfuse_public_key.clone();
+    let mut public_prompt = inquire::Password::new("Langfuse public key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation();
+    if existing_public.is_some() {
+        public_prompt = public_prompt.with_help_message("[already set — press Enter to keep]");
+    }
+    let public_input = public_prompt.prompt()?;
+    partial.langfuse_public_key = apply_optional_secret(&public_input, existing_public);
+
+    let existing_secret = partial.langfuse_secret_key.clone();
+    let mut secret_prompt = inquire::Password::new("Langfuse secret key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation();
+    if existing_secret.is_some() {
+        secret_prompt = secret_prompt.with_help_message("[already set — press Enter to keep]");
+    }
+    let secret_input = secret_prompt.prompt()?;
+    partial.langfuse_secret_key = apply_optional_secret(&secret_input, existing_secret);
+
+    let existing_url = partial.langfuse_base_url.clone();
+    let url_prompt = inquire::Text::new("Langfuse base URL:");
+    let url_prompt = match existing_url.as_deref() {
+        Some(value) => url_prompt.with_initial_value(value),
+        None => url_prompt.with_placeholder("https://cloud.langfuse.com"),
+    };
+    let url_input = url_prompt.prompt()?;
+    partial.langfuse_base_url = apply_optional_secret(url_input.trim(), existing_url);
+
+    Ok(())
+}
+
 // ── Step 5: LLM health check ──────────────────────────────────────────────────
 
 /// Run a single `"Hello"` prompt through the configured deep-thinking provider.
