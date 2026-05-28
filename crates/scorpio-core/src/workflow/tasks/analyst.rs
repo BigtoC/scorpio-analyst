@@ -853,11 +853,7 @@ async fn fetch_valuation_inputs(
     let mut etf_distribution_yield_ttm_pct = None;
 
     if pack_id == PackId::EtfBaseline {
-        let is_historical_target_date = target_date
-            != chrono::Utc::now()
-                .date_naive()
-                .format("%Y-%m-%d")
-                .to_string();
+        let is_historical_target_date = !crate::market_time::target_is_market_local_date(target_date);
 
         if is_historical_target_date {
             return ValuationInputs {

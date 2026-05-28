@@ -12,8 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::TimeZone as _;
-use chrono_tz::US::Eastern;
 use futures::StreamExt as _;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -96,8 +94,7 @@ impl YFinanceOptionsProvider {
         }
 
         // ── Check market-local date ──────────────────────────────────────
-        let market_today = market_local_today_eastern();
-        if target_date != market_today {
+        if !crate::market_time::target_is_market_local_date(target_date) {
             return Ok(OptionsOutcome::HistoricalRun);
         }
 
@@ -234,12 +231,6 @@ impl OptionsProvider for YFinanceOptionsProvider {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Return current US/Eastern calendar date as `"YYYY-MM-DD"`.
-fn market_local_today_eastern() -> String {
-    let eastern_now = Eastern.from_utc_datetime(&chrono::Utc::now().naive_utc());
-    eastern_now.date_naive().to_string()
-}
 
 /// Map a `YfError` to the nearest `TradingError` variant.
 fn map_yf_options_err(e: YfError) -> TradingError {
@@ -575,8 +566,7 @@ async fn fetch_from_stub(
     target_date: &str,
 ) -> Result<OptionsOutcome, TradingError> {
     // Check market-local date.
-    let market_today = market_local_today_eastern();
-    if target_date != market_today {
+    if !crate::market_time::target_is_market_local_date(target_date) {
         return Ok(OptionsOutcome::HistoricalRun);
     }
 
@@ -980,7 +970,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use chrono::NaiveDate;
-    use chrono::TimeZone as _;
     use yfinance_rs::ticker::{OptionChain, OptionContract};
 
     use super::*;
@@ -990,13 +979,11 @@ mod tests {
     // ── Test helpers ──────────────────────────────────────────────────────
 
     fn today_eastern() -> String {
-        let eastern_now = Eastern.from_utc_datetime(&chrono::Utc::now().naive_utc());
-        eastern_now.date_naive().to_string()
+        crate::market_time::market_local_date_eastern().to_string()
     }
 
     fn yesterday_eastern() -> String {
-        let eastern_now = Eastern.from_utc_datetime(&chrono::Utc::now().naive_utc());
-        (eastern_now.date_naive() - chrono::Duration::days(1)).to_string()
+        (crate::market_time::market_local_date_eastern() - chrono::Duration::days(1)).to_string()
     }
 
     fn aapl() -> Symbol {
