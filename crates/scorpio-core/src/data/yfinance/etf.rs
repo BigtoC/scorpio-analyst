@@ -11,6 +11,12 @@
 //! degrade gracefully or backfill via a different provider (e.g. SEC EDGAR
 //! N-PORT for holdings / total assets in Task 9).
 //!
+//! [`EtfQuote::nav`], [`EtfQuote::bid`], and [`EtfQuote::ask`] are
+//! backfilled via a direct call to Yahoo's `quoteSummary` endpoint (see
+//! [`super::summary`]). Stated benchmark resolution falls back to a
+//! static ETF→index lookup (see `crate::data::etf_benchmarks`) when
+//! upstream metadata is silent.
+//!
 //! When upstream begins exposing these fields, populate them here without
 //! changing the public shape of [`EtfQuote`] / [`FundInfo`].
 
@@ -135,8 +141,11 @@ impl YFinanceClient {
     /// # Coverage caveats
     ///
     /// `yfinance-rs` 0.7 does not expose bid/ask or NAV via its `Quote` /
-    /// `Info` types, so [`EtfQuote::bid`], [`EtfQuote::ask`], and
-    /// [`EtfQuote::nav`] are always populated as `None` by this method.
+    /// `Info` types. This method backfills [`EtfQuote::nav`],
+    /// [`EtfQuote::bid`], and [`EtfQuote::ask`] via a direct call to
+    /// Yahoo's `quoteSummary` endpoint
+    /// ([`super::summary::SummaryHttp`]); those fields remain `None` when
+    /// the secondary fetch fails or the symbol is not an ETF.
     /// [`EtfQuote::market_cap`] is sourced from `Ticker::info()` and is
     /// `None` when that secondary call fails.
     pub async fn get_quote(&self, symbol: &str) -> Option<EtfQuote> {
@@ -160,6 +169,16 @@ impl YFinanceClient {
             }
         };
 
+        // Best-effort NAV/bid/ask enrichment via the v10/quoteSummary
+        // endpoint. Any failure leaves the corresponding `EtfQuote` field
+        // as `None`; the valuator's `EtfDataAvailability` flags will then
+        // surface that the trust signal couldn't be evaluated.
+        let summary = self
+            .session
+            .with_rate_limit(self.session.summary().fetch(symbol))
+            .await
+            .unwrap_or_default();
+
         let regular_market_price = quote.price.as_ref().map(money_to_f64)?;
         let currency = quote
             .price
@@ -176,9 +195,9 @@ impl YFinanceClient {
             symbol: quote.symbol.to_string(),
             regular_market_price,
             previous_close: quote.previous_close.as_ref().map(money_to_f64),
-            nav: None,
-            bid: None,
-            ask: None,
+            nav: summary.nav,
+            bid: summary.bid,
+            ask: summary.ask,
             market_cap: info
                 .as_ref()
                 .and_then(|i| i.market_cap.as_ref().map(money_to_f64)),

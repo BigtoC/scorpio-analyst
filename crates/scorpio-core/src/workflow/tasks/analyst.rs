@@ -930,7 +930,8 @@ async fn fetch_valuation_inputs(
         // Benchmark OHLCV depends on the stated benchmark symbol pulled from
         // fund_info — kept sequential to avoid issuing a phantom fetch when
         // the benchmark is unknown.
-        if let Some(bench) = resolve_benchmark_symbol(etf_fund_info.as_ref(), etf_holdings.as_ref())
+        if let Some(bench) =
+            resolve_benchmark_symbol(symbol, etf_fund_info.as_ref(), etf_holdings.as_ref())
         {
             etf_benchmark_ohlcv = fetch_with_timeout(
                 symbol,
@@ -959,6 +960,7 @@ async fn fetch_valuation_inputs(
 }
 
 fn resolve_benchmark_symbol(
+    etf_symbol: &str,
     fund_info: Option<&FundInfo>,
     nport: Option<&NPortHoldings>,
 ) -> Option<String> {
@@ -970,6 +972,7 @@ fn resolve_benchmark_symbol(
                 .and_then(|holdings| holdings.stated_benchmark.as_deref())
                 .and_then(normalize_benchmark_symbol)
         })
+        .or_else(|| crate::data::etf_benchmarks::resolve(etf_symbol).map(str::to_owned))
 }
 
 async fn fetch_with_timeout<T, F>(
@@ -1112,7 +1115,14 @@ fn derive_runtime_valuation(
     current_price: Option<f64>,
 ) -> DerivedValuation {
     let mut etf_fund_info = valuation_inputs.etf_fund_info.clone();
+    let state_symbol = state
+        .symbol
+        .as_ref()
+        .and_then(crate::domain::Symbol::as_equity)
+        .map(|t| t.as_str())
+        .unwrap_or("");
     if let Some(benchmark_symbol) = resolve_benchmark_symbol(
+        state_symbol,
         valuation_inputs.etf_fund_info.as_ref(),
         valuation_inputs.etf_holdings.as_ref(),
     ) && let Some(info) = etf_fund_info.as_mut()
@@ -1651,7 +1661,7 @@ mod tests {
         };
 
         assert_eq!(
-            super::resolve_benchmark_symbol(Some(&fund_info), Some(&nport)),
+            super::resolve_benchmark_symbol("SPY", Some(&fund_info), Some(&nport)),
             Some("^GSPC".to_owned())
         );
     }
@@ -1676,8 +1686,44 @@ mod tests {
         };
 
         assert_eq!(
-            super::resolve_benchmark_symbol(Some(&fund_info), Some(&nport)),
+            super::resolve_benchmark_symbol("SPY", Some(&fund_info), Some(&nport)),
             Some("^NDX".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_symbol_falls_back_to_static_lookup_when_upstream_silent() {
+        // Both fund_info and nport lack a stated_benchmark: the static
+        // lookup keyed by the ETF symbol should resolve it.
+        let fund_info = FundInfo {
+            symbol: "QQQ".into(),
+            category: None,
+            fund_family: None,
+            expense_ratio: None,
+            total_assets: None,
+            leverage_factor: Some(1.0),
+            fund_kind: Some("etf".into()),
+            stated_benchmark: None,
+        };
+        let nport = NPortHoldings {
+            filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            holdings: vec![],
+            sector_breakdown: vec![],
+            stated_benchmark: None,
+        };
+
+        assert_eq!(
+            super::resolve_benchmark_symbol("QQQ", Some(&fund_info), Some(&nport)),
+            Some("^NDX".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_symbol_static_lookup_yields_none_for_unmapped_symbol() {
+        // Upstream silent + symbol not in the static map → None.
+        assert_eq!(
+            super::resolve_benchmark_symbol("EXOTIC_ETF_XYZ", None, None),
+            None
         );
     }
 
