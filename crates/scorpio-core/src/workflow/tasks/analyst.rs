@@ -1169,6 +1169,7 @@ fn derive_runtime_valuation(
             etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
             etf_options: etf_options_from_state(state),
             etf_risk_free_rate: etf_risk_free_rate_from_state(state),
+            etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
             as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
                 .unwrap_or_else(|_| chrono::Utc::now().date_naive()),
         },

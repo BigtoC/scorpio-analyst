@@ -110,6 +110,10 @@ pub struct ValuationInputs<'a> {
     /// `None`; no hardcoded risk-free-rate fallback is allowed.
     pub etf_risk_free_rate: Option<f64>,
 
+    /// Phase 2 — trailing distribution yield in decimal units (e.g. 0.015 for
+    /// 1.5%), used as continuous dividend yield `q` in ETF options Greeks.
+    pub etf_distribution_yield_ttm: Option<f64>,
+
     /// Phase 2 — Reference date for time-to-expiration math, sourced from
     /// `state.target_date`. Defaulted to `chrono::Utc::now().date_naive()` by
     /// the equity path which does not read it.

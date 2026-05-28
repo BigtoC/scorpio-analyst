@@ -66,11 +66,9 @@ impl Valuator for EtfPremiumDiscountValuator {
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
         let leverage_factor = inputs.etf_fund_info.and_then(|f| f.leverage_factor);
 
-        let q = composition
-            .as_ref()
-            .and_then(|c| c.distribution_yield_ttm_pct)
+        let q = inputs
+            .etf_distribution_yield_ttm
             .filter(|y| *y > 0.0)
-            .map(|y_pct| y_pct / 100.0)
             .unwrap_or(0.0);
         flags.options_chain_present = inputs.etf_options.is_some();
         let options_gex = match (inputs.etf_options, inputs.etf_risk_free_rate) {
@@ -453,6 +451,7 @@ mod tests {
             etf_benchmark_ohlcv: None,
             etf_options: None,
             etf_risk_free_rate: None,
+            etf_distribution_yield_ttm: None,
             as_of: chrono::Utc::now().date_naive(),
         }
     }
@@ -486,6 +485,45 @@ mod tests {
         assert_eq!(
             etf.premium.category_band,
             crate::state::PremiumBand::Unknown
+        );
+    }
+
+    #[test]
+    fn assess_uses_distribution_yield_as_gex_dividend_yield() {
+        let quote = quote_with(100.0, Some(100.0));
+        let info = fund_info_with(Some("Large Blend"), Some(1.0));
+        let options = sample_options_snapshot();
+
+        let mut zero_yield_inputs = empty_inputs();
+        zero_yield_inputs.etf_quote = Some(&quote);
+        zero_yield_inputs.etf_fund_info = Some(&info);
+        zero_yield_inputs.etf_options = Some(&options);
+        zero_yield_inputs.etf_risk_free_rate = Some(0.045);
+        zero_yield_inputs.as_of = chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap();
+
+        let mut yield_inputs = empty_inputs();
+        yield_inputs.etf_quote = Some(&quote);
+        yield_inputs.etf_fund_info = Some(&info);
+        yield_inputs.etf_options = Some(&options);
+        yield_inputs.etf_risk_free_rate = Some(0.045);
+        yield_inputs.as_of = chrono::NaiveDate::from_ymd_opt(2026, 5, 27).unwrap();
+        yield_inputs.etf_distribution_yield_ttm = Some(0.03);
+
+        let zero_yield = EtfPremiumDiscountValuator.assess(zero_yield_inputs, &AssetShape::Fund);
+        let with_yield = EtfPremiumDiscountValuator.assess(yield_inputs, &AssetShape::Fund);
+
+        let zero_gex = match zero_yield.scenario {
+            ScenarioValuation::Etf(etf) => etf.options_gex.expect("zero-yield gex"),
+            other => panic!("expected ETF valuation, got {other:?}"),
+        };
+        let yield_gex = match with_yield.scenario {
+            ScenarioValuation::Etf(etf) => etf.options_gex.expect("yield-adjusted gex"),
+            other => panic!("expected ETF valuation, got {other:?}"),
+        };
+
+        assert_ne!(
+            zero_gex.net_gex_usd_per_1pct_move, yield_gex.net_gex_usd_per_1pct_move,
+            "distribution yield must influence BSM q used by options_gex"
         );
     }
 
