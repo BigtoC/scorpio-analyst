@@ -341,7 +341,77 @@ pub fn step_langfuse_observability(
     let url_input = url_prompt.prompt()?;
     partial.langfuse_base_url = apply_optional_secret(url_input.trim(), existing_url);
 
+    report_langfuse_health_check(partial);
+
     Ok(())
+}
+
+/// Probe Langfuse with the just-entered credentials and print the outcome.
+///
+/// Runs only when public key, secret key, and base URL are all set — the
+/// three values are required together to enable OTel export. Failures are
+/// reported but never propagated: Langfuse is optional and a probe failure
+/// must not block the wizard from completing.
+fn report_langfuse_health_check(partial: &PartialConfig) {
+    match (
+        partial.langfuse_public_key.as_deref(),
+        partial.langfuse_secret_key.as_deref(),
+        partial.langfuse_base_url.as_deref(),
+    ) {
+        (Some(public_key), Some(secret_key), Some(base_url)) => {
+            println!("Checking Langfuse connectivity...");
+            match run_langfuse_health_check(public_key, secret_key, base_url) {
+                Ok(()) => println!("✓ Langfuse health check passed."),
+                Err(e) => eprintln!("✗ Langfuse health check failed: {e:#}"),
+            }
+        }
+        (None, None, None) => {}
+        _ => {
+            println!(
+                "Note: Langfuse export needs all three of public key, secret key, and base URL — health check skipped."
+            );
+        }
+    }
+}
+
+/// Issue an authenticated `GET <base_url>/api/public/projects` to verify the
+/// credentials. A 200 response confirms both connectivity and that the
+/// public/secret pair belong to a real Langfuse project.
+fn run_langfuse_health_check(
+    public_key: &str,
+    secret_key: &str,
+    base_url: &str,
+) -> anyhow::Result<()> {
+    let base = base_url.trim_end_matches('/');
+    let url = format!("{base}/api/public/projects");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build runtime for Langfuse health check")?;
+
+    runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS))
+            .build()
+            .context("failed to build HTTP client")?;
+
+        let response = client
+            .get(&url)
+            .basic_auth(public_key, Some(secret_key))
+            .send()
+            .await
+            .with_context(|| format!("could not reach Langfuse at {base}"))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            anyhow::bail!("Langfuse rejected credentials (HTTP {status})");
+        }
+        anyhow::bail!("Langfuse returned HTTP {status}")
+    })
 }
 
 // ── Step 5: LLM health check ──────────────────────────────────────────────────
