@@ -135,10 +135,10 @@ impl YFinanceOptionsProvider {
 
         // ── Front-month expiration date string ───────────────────────────
         let near_term_expiration = front_chain
-            .calls
-            .first()
-            .or_else(|| front_chain.puts.first())
-            .map(|c| c.expiration_date.to_string())
+            .calls()
+            .next()
+            .or_else(|| front_chain.puts().next())
+            .map(|c| c.key.expiration_date.to_string())
             .unwrap_or_else(|| timestamp_to_date_str(front_month_ts));
 
         // ── Max pain from front-month ────────────────────────────────────
@@ -189,10 +189,10 @@ impl YFinanceOptionsProvider {
             .filter_map(|(ts, chain)| {
                 let rows = build_ntm_slice(chain, spot)?;
                 let expiration = chain
-                    .calls
-                    .first()
-                    .or_else(|| chain.puts.first())
-                    .map(|c| c.expiration_date.to_string())
+                    .calls()
+                    .next()
+                    .or_else(|| chain.puts().next())
+                    .map(|c| c.key.expiration_date.to_string())
                     .unwrap_or_else(|| timestamp_to_date_str(*ts));
                 Some(crate::data::traits::options::ExpirationStrikes {
                     expiration,
@@ -250,34 +250,40 @@ fn timestamp_to_date_str(ts: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Convert paft 0.8's `Decimal` implied volatility into the `f64` the snapshot
+/// math operates in. Returns `None` for "no IV reported" or an unrepresentable
+/// value (overflow), preserving the prior `Option<f64>` contract.
+fn iv_to_f64(iv: Option<rust_decimal::Decimal>) -> Option<f64> {
+    use rust_decimal::prelude::ToPrimitive;
+    iv.and_then(|d| d.to_f64())
+}
+
 /// Compute the ATM implied volatility from an option chain given the spot price.
 ///
 /// Finds the call and put whose strike is closest to `spot` and averages their
 /// `implied_volatility`. Returns `0.0` if no IV data is available.
 fn compute_atm_iv(chain: &OptionChain, spot: f64) -> f64 {
     let closest_call = chain
-        .calls
-        .iter()
+        .calls()
         .filter(|c| c.implied_volatility.is_some())
         .min_by(|a, b| {
-            let da = (money_to_f64(&a.strike) - spot).abs();
-            let db = (money_to_f64(&b.strike) - spot).abs();
+            let da = (money_to_f64(&a.key.strike) - spot).abs();
+            let db = (money_to_f64(&b.key.strike) - spot).abs();
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
 
     let closest_put = chain
-        .puts
-        .iter()
+        .puts()
         .filter(|c| c.implied_volatility.is_some())
         .min_by(|a, b| {
-            let da = (money_to_f64(&a.strike) - spot).abs();
-            let db = (money_to_f64(&b.strike) - spot).abs();
+            let da = (money_to_f64(&a.key.strike) - spot).abs();
+            let db = (money_to_f64(&b.key.strike) - spot).abs();
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
 
     match (
-        closest_call.and_then(|c| c.implied_volatility),
-        closest_put.and_then(|c| c.implied_volatility),
+        closest_call.and_then(|c| iv_to_f64(c.implied_volatility)),
+        closest_put.and_then(|c| iv_to_f64(c.implied_volatility)),
     ) {
         (Some(c_iv), Some(p_iv)) => (c_iv + p_iv) / 2.0,
         (Some(iv), None) | (None, Some(iv)) => iv,
@@ -299,13 +305,13 @@ fn compute_max_pain(chain: &OptionChain, spot: f64) -> f64 {
     let mut call_oi: BTreeMap<u64, u64> = BTreeMap::new(); // strike_bits -> OI
     let mut put_oi: BTreeMap<u64, u64> = BTreeMap::new();
 
-    for c in &chain.calls {
-        let k = money_to_f64(&c.strike);
+    for c in chain.calls() {
+        let k = money_to_f64(&c.key.strike);
         let oi = c.open_interest.unwrap_or(0);
         *call_oi.entry(k.to_bits()).or_insert(0) += oi;
     }
-    for p in &chain.puts {
-        let k = money_to_f64(&p.strike);
+    for p in chain.puts() {
+        let k = money_to_f64(&p.key.strike);
         let oi = p.open_interest.unwrap_or(0);
         *put_oi.entry(k.to_bits()).or_insert(0) += oi;
     }
@@ -376,18 +382,22 @@ fn build_ntm_slice(chain: &OptionChain, spot: f64) -> Option<Vec<NearTermStrike>
     // Collect all unique strikes across calls and puts.
     // call_data[strike_bits] = (iv, volume, oi)
     let mut call_data: StrikeData = StrikeData::new();
-    for c in &chain.calls {
-        let k = money_to_f64(&c.strike);
-        call_data
-            .entry(k.to_bits())
-            .or_insert((c.implied_volatility, c.volume, c.open_interest));
+    for c in chain.calls() {
+        let k = money_to_f64(&c.key.strike);
+        call_data.entry(k.to_bits()).or_insert((
+            iv_to_f64(c.implied_volatility),
+            c.volume,
+            c.open_interest,
+        ));
     }
     let mut put_data: StrikeData = StrikeData::new();
-    for p in &chain.puts {
-        let k = money_to_f64(&p.strike);
-        put_data
-            .entry(k.to_bits())
-            .or_insert((p.implied_volatility, p.volume, p.open_interest));
+    for p in chain.puts() {
+        let k = money_to_f64(&p.key.strike);
+        put_data.entry(k.to_bits()).or_insert((
+            iv_to_f64(p.implied_volatility),
+            p.volume,
+            p.open_interest,
+        ));
     }
 
     let all_strikes_bits: std::collections::BTreeSet<u64> =
@@ -505,11 +515,11 @@ fn compute_pc_ratios(chains: &[(i64, OptionChain)]) -> (f64, f64) {
     let mut total_put_oi = 0u64;
 
     for (_, chain) in chains {
-        for c in &chain.calls {
+        for c in chain.calls() {
             total_call_vol += c.volume.unwrap_or(0);
             total_call_oi += c.open_interest.unwrap_or(0);
         }
-        for p in &chain.puts {
+        for p in chain.puts() {
             total_put_vol += p.volume.unwrap_or(0);
             total_put_oi += p.open_interest.unwrap_or(0);
         }
@@ -538,16 +548,16 @@ fn build_term_structure(chains: &[(i64, OptionChain)], spot: f64) -> Vec<IvTermP
             let iv = compute_atm_iv(chain, spot);
             // Only include if we got actual IV data.
             if iv == 0.0
-                && chain.calls.iter().all(|c| c.implied_volatility.is_none())
-                && chain.puts.iter().all(|p| p.implied_volatility.is_none())
+                && chain.calls().all(|c| c.implied_volatility.is_none())
+                && chain.puts().all(|p| p.implied_volatility.is_none())
             {
                 return None;
             }
             let expiration = chain
-                .calls
-                .first()
-                .or_else(|| chain.puts.first())
-                .map(|c| c.expiration_date.to_string())
+                .calls()
+                .next()
+                .or_else(|| chain.puts().next())
+                .map(|c| c.key.expiration_date.to_string())
                 .unwrap_or_else(|| timestamp_to_date_str(*ts));
             Some(IvTermPoint {
                 expiration,
@@ -617,8 +627,8 @@ async fn fetch_from_stub(
         None => {
             // Synthesize empty chain if no stub provided.
             OptionChain {
-                calls: vec![],
-                puts: vec![],
+                contracts: vec![],
+                provider: (),
             }
         }
     };
@@ -631,10 +641,10 @@ async fn fetch_from_stub(
     let atm_iv = compute_atm_iv(&front_chain, spot);
 
     let near_term_expiration = front_chain
-        .calls
-        .first()
-        .or_else(|| front_chain.puts.first())
-        .map(|c| c.expiration_date.to_string())
+        .calls()
+        .next()
+        .or_else(|| front_chain.puts().next())
+        .map(|c| c.key.expiration_date.to_string())
         .unwrap_or_else(|| timestamp_to_date_str(front_month_ts));
 
     let max_pain_strike = compute_max_pain(&front_chain, spot);
@@ -651,8 +661,8 @@ async fn fetch_from_stub(
         let chain = match stub.option_chains.get(&exp_ts) {
             Some(c) => c.clone(),
             None => OptionChain {
-                calls: vec![],
-                puts: vec![],
+                contracts: vec![],
+                provider: (),
             },
         };
         all_chains.push((exp_ts, chain));
@@ -668,10 +678,10 @@ async fn fetch_from_stub(
         .filter_map(|(ts, chain)| {
             let rows = build_ntm_slice(chain, spot)?;
             let expiration = chain
-                .calls
-                .first()
-                .or_else(|| chain.puts.first())
-                .map(|c| c.expiration_date.to_string())
+                .calls()
+                .next()
+                .or_else(|| chain.puts().next())
+                .map(|c| c.key.expiration_date.to_string())
                 .unwrap_or_else(|| timestamp_to_date_str(*ts));
             Some(crate::data::traits::options::ExpirationStrikes {
                 expiration,
@@ -1001,7 +1011,9 @@ mod tests {
         }
     }
 
-    /// Build a minimal `OptionContract` with just the fields used by the provider.
+    /// Build a minimal `OptionContract` with just the fields used by the
+    /// provider. Side defaults to `Call`; [`chain_from`] re-stamps the correct
+    /// side when assembling a chain.
     fn make_contract(
         strike: f64,
         iv: Option<f64>,
@@ -1009,28 +1021,44 @@ mod tests {
         oi: Option<u64>,
         expiry: &str,
     ) -> OptionContract {
-        use paft_money::{Currency, IsoCurrency, Money};
+        use paft_domain::{AssetKind, Instrument};
+        use paft_market::{OptionContractKey, OptionSide};
+        use paft_money::{Currency, IsoCurrency, Price};
         use rust_decimal::Decimal;
 
-        let d = Decimal::try_from(strike).unwrap();
-        let money = Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap();
-
+        let strike_price = Price::new(
+            Decimal::try_from(strike).unwrap(),
+            Currency::Iso(IsoCurrency::USD),
+        );
         let exp_date = NaiveDate::parse_from_str(expiry, "%Y-%m-%d").unwrap();
+        let underlying = Instrument::from_symbol("AAPL", AssetKind::Equity).unwrap();
+        let key = OptionContractKey::new(underlying, OptionSide::Call, strike_price, exp_date);
 
-        OptionContract {
-            contract_symbol: paft_domain::Symbol::new("AAPL240101C00100000").unwrap(),
-            strike: money,
-            price: None,
-            bid: None,
-            ask: None,
-            volume,
-            open_interest: oi,
-            implied_volatility: iv,
-            in_the_money: false,
-            expiration_date: exp_date,
-            expiration_at: None,
-            last_trade_at: None,
-            greeks: None,
+        let mut c = OptionContract::new(key);
+        c.volume = volume;
+        c.open_interest = oi;
+        c.implied_volatility = iv.map(|v| Decimal::try_from(v).unwrap());
+        c.in_the_money = Some(false);
+        c
+    }
+
+    /// Assemble an [`OptionChain`] from separate call/put lists. paft 0.8 stores
+    /// all contracts together in `contracts`, distinguished by `key.side`, so we
+    /// stamp the side into each contract before merging.
+    fn chain_from(calls: Vec<OptionContract>, puts: Vec<OptionContract>) -> OptionChain {
+        use paft_market::OptionSide;
+        let mut contracts = Vec::with_capacity(calls.len() + puts.len());
+        for mut c in calls {
+            c.key.side = OptionSide::Call;
+            contracts.push(c);
+        }
+        for mut p in puts {
+            p.key.side = OptionSide::Put;
+            contracts.push(p);
+        }
+        OptionChain {
+            contracts,
+            provider: (),
         }
     }
 
@@ -1197,22 +1225,22 @@ mod tests {
         let mut chains = BTreeMap::new();
         chains.insert(
             ts,
-            OptionChain {
-                calls: vec![
+            chain_from(
+                vec![
                     make_contract(145.0, Some(0.32), Some(60), Some(300), expiry),
                     make_contract(147.5, Some(0.31), Some(80), Some(400), expiry),
                     make_contract(150.0, Some(call_iv), Some(100), Some(500), expiry),
                     make_contract(152.5, Some(0.29), Some(80), Some(400), expiry),
                     make_contract(155.0, Some(0.28), Some(60), Some(300), expiry),
                 ],
-                puts: vec![
+                vec![
                     make_contract(145.0, Some(0.32), Some(60), Some(300), expiry),
                     make_contract(147.5, Some(0.31), Some(80), Some(400), expiry),
                     make_contract(150.0, Some(put_iv), Some(80), Some(400), expiry),
                     make_contract(152.5, Some(0.27), Some(80), Some(400), expiry),
                     make_contract(155.0, Some(0.26), Some(60), Some(300), expiry),
                 ],
-            },
+            ),
         );
 
         let provider = provider_with_stub(StubbedFinancialResponses {
@@ -1253,37 +1281,37 @@ mod tests {
         // NTM band: ≥2 below (95, 100 ≤ spot=100) and ≥2 above (105, 110 > spot=100)
         // both within ±5% initial band gives 95..105; expand to ±20% cap (80..120)
         // picks up 110 as a second strike above.
-        let chain1 = OptionChain {
-            calls: vec![
+        let chain1 = chain_from(
+            vec![
                 make_contract(95.0, Some(0.27), Some(0), Some(0), expiry1),
                 make_contract(100.0, Some(0.25), Some(200), Some(1000), expiry1),
                 make_contract(105.0, Some(0.23), Some(0), Some(0), expiry1),
                 make_contract(110.0, Some(0.22), Some(0), Some(0), expiry1),
             ],
-            puts: vec![
+            vec![
                 make_contract(95.0, Some(0.27), Some(0), Some(0), expiry1),
                 make_contract(100.0, Some(0.25), Some(300), Some(2000), expiry1),
                 make_contract(105.0, Some(0.23), Some(0), Some(0), expiry1),
                 make_contract(110.0, Some(0.22), Some(0), Some(0), expiry1),
             ],
-        };
+        );
         // Chain 2: 400 call vol, 100 put vol; 500 call OI, 250 put OI
-        let chain2 = OptionChain {
-            calls: vec![make_contract(
+        let chain2 = chain_from(
+            vec![make_contract(
                 100.0,
                 Some(0.30),
                 Some(400),
                 Some(500),
                 expiry2,
             )],
-            puts: vec![make_contract(
+            vec![make_contract(
                 100.0,
                 Some(0.30),
                 Some(100),
                 Some(250),
                 expiry2,
             )],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts1, chain1);
@@ -1333,34 +1361,34 @@ mod tests {
 
         // Front-month: strikes 140, 145, 150, 155, 160
         // Design so that max pain is at 150: heavy put OI at 140, 145, 150; heavy call OI at 150, 155, 160
-        let front_chain = OptionChain {
-            calls: vec![
+        let front_chain = chain_from(
+            vec![
                 make_contract(140.0, Some(0.20), Some(10), Some(100), expiry1),
                 make_contract(145.0, Some(0.22), Some(20), Some(200), expiry1),
                 make_contract(150.0, Some(0.25), Some(50), Some(1000), expiry1),
                 make_contract(155.0, Some(0.28), Some(30), Some(500), expiry1),
                 make_contract(160.0, Some(0.30), Some(10), Some(100), expiry1),
             ],
-            puts: vec![
+            vec![
                 make_contract(140.0, Some(0.20), Some(10), Some(100), expiry1),
                 make_contract(145.0, Some(0.22), Some(20), Some(200), expiry1),
                 make_contract(150.0, Some(0.25), Some(50), Some(1000), expiry1),
                 make_contract(155.0, Some(0.28), Some(30), Some(100), expiry1),
                 make_contract(160.0, Some(0.30), Some(10), Some(50), expiry1),
             ],
-        };
+        );
 
         // Second month: structure that would put max pain at 130 (very different).
-        let second_chain = OptionChain {
-            calls: vec![
+        let second_chain = chain_from(
+            vec![
                 make_contract(130.0, Some(0.40), Some(10), Some(5000), expiry2),
                 make_contract(140.0, Some(0.38), Some(10), Some(100), expiry2),
             ],
-            puts: vec![
+            vec![
                 make_contract(130.0, Some(0.40), Some(10), Some(100), expiry2),
                 make_contract(140.0, Some(0.38), Some(10), Some(100), expiry2),
             ],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts1, front_chain.clone());
@@ -1401,20 +1429,20 @@ mod tests {
         let ts = expiry_ts();
         let expiry = "2030-01-18";
 
-        let chain = OptionChain {
-            calls: vec![
+        let chain = chain_from(
+            vec![
                 make_contract(90.0, Some(0.30), Some(50), Some(200), expiry),
                 make_contract(95.0, Some(0.27), Some(80), Some(300), expiry),
                 make_contract(105.0, Some(0.23), Some(80), Some(300), expiry),
                 make_contract(110.0, Some(0.25), Some(50), Some(200), expiry),
             ],
-            puts: vec![
+            vec![
                 make_contract(90.0, Some(0.30), Some(50), Some(200), expiry),
                 make_contract(95.0, Some(0.27), Some(80), Some(300), expiry),
                 make_contract(105.0, Some(0.23), Some(80), Some(300), expiry),
                 make_contract(110.0, Some(0.25), Some(50), Some(200), expiry),
             ],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts, chain);
@@ -1475,16 +1503,16 @@ mod tests {
         let ts = expiry_ts();
         let expiry = "2030-01-18";
 
-        let chain = OptionChain {
-            calls: vec![
+        let chain = chain_from(
+            vec![
                 make_contract(50.0, Some(0.60), Some(10), Some(100), expiry),
                 make_contract(150.0, Some(0.55), Some(10), Some(100), expiry),
             ],
-            puts: vec![
+            vec![
                 make_contract(50.0, Some(0.60), Some(10), Some(100), expiry),
                 make_contract(150.0, Some(0.55), Some(10), Some(100), expiry),
             ],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts, chain);
@@ -1514,18 +1542,18 @@ mod tests {
         let ts = expiry_ts();
         let expiry = "2030-01-18";
 
-        let chain = OptionChain {
-            calls: vec![
+        let chain = chain_from(
+            vec![
                 make_contract(0.50, Some(0.80), Some(10), Some(100), expiry),
                 make_contract(1.00, Some(0.70), Some(10), Some(100), expiry),
                 make_contract(5.00, Some(0.50), Some(10), Some(100), expiry),
             ],
-            puts: vec![
+            vec![
                 make_contract(0.50, Some(0.80), Some(10), Some(100), expiry),
                 make_contract(1.00, Some(0.70), Some(10), Some(100), expiry),
                 make_contract(5.00, Some(0.50), Some(10), Some(100), expiry),
             ],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts, chain);
@@ -1628,23 +1656,23 @@ mod tests {
         let ts = expiry_ts();
         let expiry = "2030-01-18";
 
-        let chain = OptionChain {
-            calls: vec![
+        let chain = chain_from(
+            vec![
                 make_contract(95.0, Some(0.25), Some(100), Some(500), expiry),
                 make_contract(98.0, Some(0.24), Some(150), Some(700), expiry),
                 make_contract(102.0, Some(0.23), Some(200), Some(1000), expiry),
                 make_contract(105.0, Some(0.22), Some(100), Some(500), expiry),
             ],
-            puts: vec![
+            vec![
                 make_contract(95.0, Some(0.26), Some(80), Some(400), expiry),
                 make_contract(98.0, Some(0.25), Some(120), Some(600), expiry),
                 make_contract(102.0, Some(0.24), Some(150), Some(800), expiry),
                 make_contract(105.0, Some(0.23), Some(80), Some(400), expiry),
             ],
-        };
+        );
 
         // Verify all greeks are None (as created by make_contract).
-        for c in chain.calls.iter().chain(chain.puts.iter()) {
+        for c in chain.calls().chain(chain.puts()) {
             assert!(
                 c.greeks.is_none(),
                 "greeks should be None in test contracts"
@@ -1687,18 +1715,18 @@ mod tests {
         let ts = expiry_ts();
         let expiry = "2030-01-18";
 
-        let chain = OptionChain {
-            calls: vec![
+        let chain = chain_from(
+            vec![
                 make_contract(95.0, Some(0.25), Some(100), Some(500), expiry),
                 make_contract(100.0, Some(0.23), Some(200), Some(1000), expiry),
                 make_contract(105.0, Some(0.22), Some(100), Some(500), expiry),
             ],
-            puts: vec![
+            vec![
                 make_contract(95.0, Some(0.26), Some(80), Some(400), expiry),
                 make_contract(100.0, Some(0.24), Some(150), Some(800), expiry),
                 make_contract(105.0, Some(0.23), Some(80), Some(400), expiry),
             ],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts, chain);
@@ -1747,40 +1775,40 @@ mod tests {
         let expiry2 = "2030-02-15";
 
         // Front-month: 5 strikes around spot so NTM slice passes.
-        let chain1 = OptionChain {
-            calls: vec![
+        let chain1 = chain_from(
+            vec![
                 make_contract(142.5, Some(0.33), Some(50), Some(300), expiry1),
                 make_contract(145.0, Some(0.32), Some(60), Some(350), expiry1),
                 make_contract(150.0, Some(0.30), Some(100), Some(500), expiry1),
                 make_contract(155.0, Some(0.28), Some(80), Some(400), expiry1),
                 make_contract(157.5, Some(0.27), Some(60), Some(300), expiry1),
             ],
-            puts: vec![
+            vec![
                 make_contract(142.5, Some(0.33), Some(50), Some(300), expiry1),
                 make_contract(145.0, Some(0.32), Some(60), Some(350), expiry1),
                 make_contract(150.0, Some(0.29), Some(80), Some(400), expiry1),
                 make_contract(155.0, Some(0.27), Some(80), Some(400), expiry1),
                 make_contract(157.5, Some(0.26), Some(60), Some(300), expiry1),
             ],
-        };
+        );
 
         // Second month: enough strikes for NTM slice.
-        let chain2 = OptionChain {
-            calls: vec![
+        let chain2 = chain_from(
+            vec![
                 make_contract(142.5, Some(0.35), Some(40), Some(200), expiry2),
                 make_contract(145.0, Some(0.34), Some(50), Some(250), expiry2),
                 make_contract(150.0, Some(0.32), Some(90), Some(450), expiry2),
                 make_contract(155.0, Some(0.30), Some(70), Some(350), expiry2),
                 make_contract(157.5, Some(0.29), Some(50), Some(250), expiry2),
             ],
-            puts: vec![
+            vec![
                 make_contract(142.5, Some(0.35), Some(40), Some(200), expiry2),
                 make_contract(145.0, Some(0.34), Some(50), Some(250), expiry2),
                 make_contract(150.0, Some(0.31), Some(70), Some(400), expiry2),
                 make_contract(155.0, Some(0.29), Some(70), Some(350), expiry2),
                 make_contract(157.5, Some(0.28), Some(50), Some(250), expiry2),
             ],
-        };
+        );
 
         let mut chains = BTreeMap::new();
         chains.insert(ts1, chain1);

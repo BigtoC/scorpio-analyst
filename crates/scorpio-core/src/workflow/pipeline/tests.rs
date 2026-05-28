@@ -633,10 +633,12 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
         Some(28),
     )];
 
+    // paft 0.8 price-target fields are `Price`; the shared `to_money_usd`
+    // helper yields `Money`, so convert via the provided `Into<Price>`.
     let price_target = PriceTarget {
-        mean: Some(to_money_usd(215.0)),
-        high: Some(to_money_usd(265.0)),
-        low: Some(to_money_usd(170.0)),
+        mean: Some(to_money_usd(215.0).into()),
+        high: Some(to_money_usd(265.0).into()),
+        low: Some(to_money_usd(170.0).into()),
         number_of_analysts: Some(42),
     };
 

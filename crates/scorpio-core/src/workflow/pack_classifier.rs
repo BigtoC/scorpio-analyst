@@ -66,6 +66,11 @@ pub fn classify_runtime_pack(
             },
         },
         Some(Profile::Company(_)) => RuntimePackSelection::BaselineMatched,
+        // `Profile` is `#[non_exhaustive]` in paft 0.8. An unrecognized profile
+        // shape can't be routed to the ETF pack, so fall back to the baseline.
+        Some(_) => RuntimePackSelection::BaselineFallback {
+            reason: "unsupported_profile_shape",
+        },
         None => RuntimePackSelection::BaselineFallback {
             reason: "profile_lookup_unavailable",
         },

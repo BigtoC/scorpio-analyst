@@ -583,15 +583,16 @@ mod tests {
     use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
 
     fn priced_target() -> PriceTarget {
-        use paft_money::{Currency, IsoCurrency, Money};
-        let to_money = |v: f64| {
+        use paft_money::{Currency, IsoCurrency, Price};
+        // paft 0.8 analyst price-target fields are `Price` (per-unit), not `Money`.
+        let to_price = |v: f64| {
             let d = rust_decimal::Decimal::try_from(v).unwrap();
-            Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
+            Price::new(d, Currency::Iso(IsoCurrency::USD))
         };
         PriceTarget {
-            mean: Some(to_money(220.0)),
-            high: Some(to_money(260.0)),
-            low: Some(to_money(180.0)),
+            mean: Some(to_price(220.0)),
+            high: Some(to_price(260.0)),
+            low: Some(to_price(180.0)),
             number_of_analysts: Some(28),
         }
     }

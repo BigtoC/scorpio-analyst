@@ -114,6 +114,9 @@ pub(crate) fn fund_info_from_profile(symbol: &str, profile: &Profile) -> Option<
             })
         }
         Profile::Company(_) => None,
+        // `Profile` is `#[non_exhaustive]` in paft 0.8; any future variant is
+        // not a recognized fund shape, so it carries no ETF fund info.
+        _ => None,
     }
 }
 
@@ -192,15 +195,17 @@ impl YFinanceClient {
             });
 
         Some(EtfQuote {
-            symbol: quote.symbol.to_string(),
+            symbol: quote.instrument.symbol.as_str().to_owned(),
             regular_market_price,
             previous_close: quote.previous_close.as_ref().map(money_to_f64),
             nav: summary.nav,
             bid: summary.bid,
             ask: summary.ask,
+            // `market_cap` moved from the flat `Info` struct onto its nested
+            // `key_statistics` (paft 0.8 KeyStatistics); it remains `Money`.
             market_cap: info
                 .as_ref()
-                .and_then(|i| i.market_cap.as_ref().map(money_to_f64)),
+                .and_then(|i| i.key_statistics.market_cap.as_ref().map(money_to_f64)),
             day_volume: quote.day_volume,
             currency,
             as_of: Utc::now(),

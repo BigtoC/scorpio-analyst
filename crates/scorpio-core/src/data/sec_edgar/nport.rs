@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesRef, Event};
 use quick_xml::reader::Reader;
 
 use crate::data::sec_edgar_nport::{NPortHoldingRow, NPortHoldings, NPortSectorRow};
@@ -21,8 +21,12 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
     if xml.trim().is_empty() {
         return None;
     }
+    // Note: text is NOT trimmed at the reader level. quick-xml 0.38+ splits
+    // entity references (e.g. `&amp;`) out of text nodes into separate
+    // `GeneralRef` events, so an element's text can span multiple events that
+    // we accumulate; reader-level trimming would clip whitespace adjacent to an
+    // entity (e.g. "Procter & Gamble"). Every field read trims instead.
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut holdings: Vec<NPortHoldingRow> = Vec::new();
     let mut sector_totals: HashMap<String, f64> = HashMap::new();
@@ -36,19 +40,32 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
             Err(_) => return None,
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => {
+                // Reset the per-element text buffer. Because entity references
+                // now arrive as separate `GeneralRef` events, an element's text
+                // is accumulated across events from this Start to its End.
+                current_text.clear();
                 let name = e.name().as_ref().to_vec();
                 if name == b"invstOrSec" {
                     current = Some(PartialHolding::default());
                 }
             }
             Ok(Event::Text(t)) => {
-                // unescape() resolves XML entities (e.g. `&amp;` → `&`). Fall
-                // back to the raw bytes on failure so partial data still
-                // contributes (typically the entity won't appear in numeric
-                // fields like pctVal/valUSD anyway).
-                match t.unescape() {
-                    Ok(decoded) => current_text = decoded.as_bytes().to_vec(),
-                    Err(_) => current_text = t.into_inner().to_vec(),
+                // `decode()` replaces `unescape()` (removed in quick-xml 0.38);
+                // it only performs charset decoding. XML entities are delivered
+                // separately as `GeneralRef` events (handled below). Append so
+                // text split across events reassembles. Fall back to raw bytes
+                // on a charset-decode error.
+                match t.decode() {
+                    Ok(decoded) => current_text.extend_from_slice(decoded.as_bytes()),
+                    Err(_) => current_text.extend_from_slice(t.into_inner().as_ref()),
+                }
+            }
+            Ok(Event::GeneralRef(r)) => {
+                // Splice resolved entity/character references (e.g. `&amp;` in
+                // "S&P 500 Index") back into the current element's text.
+                if let Some(ch) = resolve_general_ref(&r) {
+                    let mut buf = [0u8; 4];
+                    current_text.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                 }
             }
             Ok(Event::End(e)) => {
@@ -121,6 +138,24 @@ impl PartialHolding {
             weight_pct: self.weight_pct,
             value_usd: self.value_usd,
         })
+    }
+}
+
+/// Resolve a quick-xml [`GeneralRef`](Event::GeneralRef) to its replacement
+/// character. Handles numeric character references (`&#38;`, `&#x26;`) and the
+/// five XML predefined entities. Unknown entities yield `None` and are dropped,
+/// matching the prior fail-soft behavior.
+pub(super) fn resolve_general_ref(r: &BytesRef) -> Option<char> {
+    if let Ok(Some(ch)) = r.resolve_char_ref() {
+        return Some(ch);
+    }
+    match r.decode().ok()?.as_ref() {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => None,
     }
 }
 

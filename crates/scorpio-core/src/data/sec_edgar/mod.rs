@@ -291,10 +291,19 @@ fn parse_browse_edgar_atom(
                 }
             }
             Ok(quick_xml::events::Event::Text(t)) => {
+                // `decode()` replaces `unescape()` (removed in quick-xml 0.38);
+                // entity references now arrive as separate `GeneralRef` events.
                 if current_field.is_some()
-                    && let Ok(s) = t.unescape()
+                    && let Ok(s) = t.decode()
                 {
                     current_text.push_str(&s);
+                }
+            }
+            Ok(quick_xml::events::Event::GeneralRef(r)) => {
+                if current_field.is_some()
+                    && let Some(ch) = nport::resolve_general_ref(&r)
+                {
+                    current_text.push(ch);
                 }
             }
             Ok(quick_xml::events::Event::End(e)) => {

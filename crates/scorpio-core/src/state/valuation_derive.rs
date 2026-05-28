@@ -74,7 +74,9 @@ pub fn derive_valuation(
     let asset_shape = match &profile {
         Some(Profile::Company(_)) => AssetShape::CorporateEquity,
         Some(Profile::Fund(_)) => AssetShape::Fund,
-        None => {
+        // `None`, or a `#[non_exhaustive]` paft 0.8 profile variant we don't
+        // model: fall back to data-shape detection.
+        _ => {
             // Data-shape detection: any corporate-equity statement data present
             // is sufficient to assume a corporate equity instrument.
             if has_non_empty_rows(cashflow_rows)
@@ -292,9 +294,11 @@ fn compute_peg(
         .earnings_estimate
         .growth
         .or(forward_row.growth)
-        .filter(|&g| g > 0.0)?;
+        .filter(|&g| g > rust_decimal::Decimal::ZERO)?;
 
-    let growth_pct = growth_decimal * 100.0;
+    // paft 0.8 reports analyst growth as `Decimal`; convert to f64 for the
+    // PEG math (forward P/E is already f64). `None` on overflow → no PEG.
+    let growth_pct = rust_decimal::prelude::ToPrimitive::to_f64(&growth_decimal)? * 100.0;
     let peg_ratio = pe.forward_pe / growth_pct;
 
     Some(PegValuation { peg_ratio })

@@ -1626,6 +1626,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "etcetera"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de48cc4d1c1d97a20fd819def54b890cadde72ed3ad0c614822a0a433361be96"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "event-listener"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1726,6 +1736,17 @@ name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin",
+]
+
+[[package]]
+name = "flume"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -2086,7 +2107,7 @@ dependencies = [
  "rig-core 0.35.0",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.8.6",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2165,6 +2186,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashlink"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
+dependencies = [
+ "hashbrown 0.16.1",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2195,6 +2225,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
 dependencies = [
  "hmac 0.12.1",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac 0.13.0",
 ]
 
 [[package]]
@@ -3112,6 +3151,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.2",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3473,7 +3522,7 @@ dependencies = [
  "http",
  "http-body",
  "log",
- "md-5",
+ "md-5 0.10.6",
  "percent-encoding",
  "quick-xml 0.38.4",
  "reqwest 0.12.28",
@@ -3647,13 +3696,14 @@ dependencies = [
 
 [[package]]
 name = "paft"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7c8f13ab3152b3fc1d596fdc6881ab5f0499647e8f1620b393dd04df3d8abcd"
+checksum = "1a3995b75c63ac2c9291e97b958ef52e42af3b0a48589b8139d8176535cb17b8"
 dependencies = [
  "iso_currency",
  "paft-aggregates",
  "paft-core",
+ "paft-decimal",
  "paft-domain",
  "paft-fundamentals",
  "paft-market",
@@ -3664,71 +3714,77 @@ dependencies = [
 
 [[package]]
 name = "paft-aggregates"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b122c5099ea444a5d3bdc70963311b22d14ee372ef407c60a84b1b1e446074e7"
+checksum = "e56199dd75535a86e54086d9cebc96573ce089f3200509195b5d1baa59746103"
 dependencies = [
  "chrono",
  "paft-domain",
- "paft-fundamentals",
- "paft-market",
  "paft-money",
  "serde",
 ]
 
 [[package]]
 name = "paft-core"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40251d2efd21aa5615927400858c5fa000db5ae6de4cd58320e57b0d2d52336"
+checksum = "bec022386ad00b0934e1de3d0658ad77ad88da78e25a8c1504a7d469e890958b"
 dependencies = [
  "chrono",
+ "paft-utils",
  "serde",
  "thiserror 2.0.18",
 ]
 
 [[package]]
-name = "paft-domain"
-version = "0.7.1"
+name = "paft-decimal"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b7f9a2d69d11e1324d6b3a7dc1ad62f7f909442531406b8b3052d8eea69546e"
+checksum = "0b83a121e6f3c0c041b833fb448e7d31c5edecb6d2758cea2246e88c9f3cba42"
+dependencies = [
+ "rust_decimal",
+]
+
+[[package]]
+name = "paft-domain"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "020e7c645f64a8eaf5553443030577c40bf75c4d36be57a991a806c92baa4ea8"
 dependencies = [
  "chrono",
  "isin",
  "paft-core",
  "paft-utils",
- "regex",
  "serde",
+ "smol_str",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "paft-fundamentals"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d591b958232362a8121e27dc5ef570007f7e64788238b2b1b280701536cf336"
+checksum = "5562b5687159518fa7066c00faaf805d160e65a6c0189367844bb020d527cd0f"
 dependencies = [
  "chrono",
- "iso_currency",
  "paft-core",
+ "paft-decimal",
  "paft-domain",
  "paft-money",
  "paft-utils",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "paft-market"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4708f3a8b55a06c277b4830fae834c03d3cd75f3407be27d0dc7f6b17863700"
+checksum = "95acda9df87959a08dbce715ada0008adb80dd9e8d28b8b27f7b48efd6381b44"
 dependencies = [
  "bitflags",
  "chrono",
  "chrono-tz 0.10.4",
- "iso_currency",
- "paft-core",
+ "paft-decimal",
  "paft-domain",
  "paft-money",
  "paft-utils",
@@ -3738,23 +3794,24 @@ dependencies = [
 
 [[package]]
 name = "paft-money"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "078c12dfca26fe2db783d2940b1a01bcf44832ad46006fdfb54b9eee6727e13d"
+checksum = "e0b5b85391fd26062d6d27f7d12911dbfc74c17ff7e99a95fd87aad81230f582"
 dependencies = [
  "iso_currency",
+ "paft-decimal",
  "paft-utils",
- "rust_decimal",
  "serde",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "paft-utils"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f154451a10bb55eb00f81dfdc6410237ef348ead5b096ae3f186b232a240b3d6"
+checksum = "8dcdd035fcd9e6a264fd37b128010e783bfd33531580a0a3fe6d66d16570033e"
 dependencies = [
+ "smol_str",
  "thiserror 2.0.18",
 ]
 
@@ -4284,21 +4341,21 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.38.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
  "serde",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.40.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2474bd2e5029e7ccb6abb2ba48cf2383a333851dedf495901544281590c7da7f"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -4870,9 +4927,9 @@ dependencies = [
 
 [[package]]
 name = "rust_decimal"
-version = "1.41.0"
+version = "1.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ce901f9a19d251159075a4c37af514c3b8ef99c22e02dd8c19161cf397ee94a"
+checksum = "0c5108e3d4d903e21aac27f12ba5377b6b34f9f44b325e4894c7924169d06995"
 dependencies = [
  "arrayvec",
  "borsh",
@@ -5141,10 +5198,11 @@ dependencies = [
  "opentelemetry-langfuse",
  "opentelemetry_sdk",
  "paft-domain",
+ "paft-market",
  "paft-money",
  "pretty_assertions",
  "proptest",
- "quick-xml 0.36.2",
+ "quick-xml 0.40.1",
  "reqwest 0.13.3",
  "rig-core 0.36.0",
  "rust_decimal",
@@ -5152,7 +5210,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sqlx",
+ "sqlx 0.9.0",
  "statrs",
  "tempfile",
  "thiserror 2.0.18",
@@ -5704,6 +5762,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smol_str"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa7368fcf4852a4c2dd92df0cace6a71f2091ca0a23391ce7f3a31833f1523"
+dependencies = [
+ "borsh",
+ "serde_core",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5758,11 +5826,24 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fefb893899429669dcdd979aff487bd78f4064e5e7907e4269081e0ef7d97dc"
 dependencies = [
- "sqlx-core",
- "sqlx-macros",
- "sqlx-mysql",
- "sqlx-postgres",
- "sqlx-sqlite",
+ "sqlx-core 0.8.6",
+ "sqlx-macros 0.8.6",
+ "sqlx-mysql 0.8.6",
+ "sqlx-postgres 0.8.6",
+ "sqlx-sqlite 0.8.6",
+]
+
+[[package]]
+name = "sqlx"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "378620ccc25c62c89d8be1c819e76a88d59bdcc3304733330788948e619bfd71"
+dependencies = [
+ "sqlx-core 0.9.0",
+ "sqlx-macros 0.9.0",
+ "sqlx-mysql 0.9.0",
+ "sqlx-postgres 0.9.0",
+ "sqlx-sqlite 0.9.0",
 ]
 
 [[package]]
@@ -5782,7 +5863,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hashbrown 0.15.5",
- "hashlink",
+ "hashlink 0.10.0",
  "indexmap",
  "log",
  "memchr",
@@ -5803,6 +5884,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlx-core"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05b44e85bf579a8eeb4ceaa77a3a523baf2bf0e9bac7e40f405d537b5d2d5ccb"
+dependencies = [
+ "base64",
+ "bytes",
+ "cfg-if",
+ "crc",
+ "crossbeam-queue",
+ "either",
+ "event-listener",
+ "futures-core",
+ "futures-intrusive",
+ "futures-io",
+ "futures-util",
+ "hashbrown 0.16.1",
+ "hashlink 0.11.0",
+ "indexmap",
+ "log",
+ "memchr",
+ "percent-encoding",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smallvec",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "url",
+ "webpki-roots 1.0.7",
+]
+
+[[package]]
 name = "sqlx-macros"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5810,8 +5927,21 @@ checksum = "a2d452988ccaacfbf5e0bdbc348fb91d7c8af5bee192173ac3636b5fb6e6715d"
 dependencies = [
  "proc-macro2",
  "quote",
- "sqlx-core",
- "sqlx-macros-core",
+ "sqlx-core 0.8.6",
+ "sqlx-macros-core 0.8.6",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "sqlx-macros"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd2b84f2bc39a5705ef27ec785a11c934a41bbd4a24941e257927cddc26b60bf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "sqlx-core 0.9.0",
+ "sqlx-macros-core 0.9.0",
  "syn 2.0.117",
 ]
 
@@ -5831,11 +5961,35 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx-core",
- "sqlx-mysql",
- "sqlx-postgres",
- "sqlx-sqlite",
+ "sqlx-core 0.8.6",
+ "sqlx-mysql 0.8.6",
+ "sqlx-postgres 0.8.6",
+ "sqlx-sqlite 0.8.6",
  "syn 2.0.117",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "sqlx-macros-core"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb8d96de5fdc85a5c4ec813432b523ec637e80ba98f046555f75f7908ddac7c3"
+dependencies = [
+ "cfg-if",
+ "dotenvy",
+ "either",
+ "heck 0.5.0",
+ "hex",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx-core 0.9.0",
+ "sqlx-sqlite 0.9.0",
+ "syn 2.0.117",
+ "thiserror 2.0.18",
  "tokio",
  "url",
 ]
@@ -5861,11 +6015,11 @@ dependencies = [
  "futures-util",
  "generic-array",
  "hex",
- "hkdf",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "itoa",
  "log",
- "md-5",
+ "md-5 0.10.6",
  "memchr",
  "once_cell",
  "percent-encoding",
@@ -5875,12 +6029,38 @@ dependencies = [
  "sha1 0.10.6",
  "sha2 0.10.9",
  "smallvec",
- "sqlx-core",
+ "sqlx-core 0.8.6",
  "stringprep",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
- "whoami",
+ "whoami 1.6.1",
+]
+
+[[package]]
+name = "sqlx-mysql"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "bytes",
+ "crc",
+ "digest 0.11.2",
+ "dotenvy",
+ "either",
+ "futures-core",
+ "futures-util",
+ "generic-array",
+ "log",
+ "percent-encoding",
+ "serde",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "sqlx-core 0.9.0",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -5895,17 +6075,17 @@ dependencies = [
  "byteorder",
  "crc",
  "dotenvy",
- "etcetera",
+ "etcetera 0.8.0",
  "futures-channel",
  "futures-core",
  "futures-util",
  "hex",
- "hkdf",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "home",
  "itoa",
  "log",
- "md-5",
+ "md-5 0.10.6",
  "memchr",
  "once_cell",
  "rand 0.8.6",
@@ -5913,12 +6093,47 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smallvec",
- "sqlx-core",
+ "sqlx-core 0.8.6",
  "stringprep",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
- "whoami",
+ "whoami 1.6.1",
+]
+
+[[package]]
+name = "sqlx-postgres"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e"
+dependencies = [
+ "atoi",
+ "base64",
+ "bitflags",
+ "byteorder",
+ "crc",
+ "dotenvy",
+ "etcetera 0.11.0",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "hkdf 0.13.0",
+ "hmac 0.13.0",
+ "itoa",
+ "log",
+ "md-5 0.11.0",
+ "memchr",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "smallvec",
+ "sqlx-core 0.9.0",
+ "stringprep",
+ "thiserror 2.0.18",
+ "tracing",
+ "whoami 2.1.2",
 ]
 
 [[package]]
@@ -5928,7 +6143,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
 dependencies = [
  "atoi",
- "flume",
+ "flume 0.11.1",
  "futures-channel",
  "futures-core",
  "futures-executor",
@@ -5939,11 +6154,35 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_urlencoded",
- "sqlx-core",
+ "sqlx-core 0.8.6",
  "thiserror 2.0.18",
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "sqlx-sqlite"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488e99c397a62007e4229aec669a179816339afc6d2620ca6fa420dbee2e982c"
+dependencies = [
+ "atoi",
+ "flume 0.12.0",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-intrusive",
+ "futures-util",
+ "libsqlite3-sys",
+ "log",
+ "percent-encoding",
+ "serde",
+ "sqlx-core 0.9.0",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -7277,6 +7516,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "whoami"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "998767ef88740d1f5b0682a9c53c24431453923962269c2db68ee43788c5a40d"
+
+[[package]]
 name = "wide"
 version = "0.7.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7777,7 +8022,7 @@ checksum = "2462ea039c445496d8793d052e13787f2b90e750b833afee748e601c17621ed9"
 dependencies = [
  "arraydeque",
  "encoding_rs",
- "hashlink",
+ "hashlink 0.10.0",
 ]
 
 [[package]]
@@ -7788,9 +8033,9 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yfinance-rs"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3617180fa13fc4c7a5702df69c202ba4566831b83ec212b85918b76872991b"
+checksum = "4b05cd5818c3ad752ac05c351e46d209e2ee6bc9a47605c2a74c4b52c1051727"
 dependencies = [
  "base64",
  "chrono",

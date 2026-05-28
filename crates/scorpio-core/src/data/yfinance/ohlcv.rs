@@ -53,11 +53,13 @@ pub struct Candle {
 }
 
 impl Candle {
-    /// Convert from a `yfinance_rs::Candle` (which uses `paft_money::Money`
-    /// for prices) into our plain-`f64` representation.
+    /// Convert from a `yfinance_rs::Candle` (whose OHLC fields are
+    /// `paft_money::Price` as of paft 0.8) into our plain-`f64` representation.
     fn from_yf(c: yfinance_rs::Candle) -> Self {
         Self {
             date: c.ts.format("%Y-%m-%d").to_string(),
+            // `money_to_f64` accepts `&impl CurrencyValue`; `Price` implements
+            // it, so these call sites are unchanged despite the Money→Price move.
             open: money_to_f64(&c.open),
             high: money_to_f64(&c.high),
             low: money_to_f64(&c.low),
@@ -635,12 +637,13 @@ mod tests {
     #[test]
     fn candle_from_yf_converts_fields() {
         use chrono::DateTime;
-        use paft_money::{Currency, IsoCurrency};
+        use paft_money::{Currency, IsoCurrency, Price};
         use rust_decimal::Decimal;
 
-        fn make_money(val: f64) -> paft_money::Money {
+        // paft 0.8 candle OHLC fields are `Price` (full-precision per-unit value).
+        fn make_price(val: f64) -> Price {
             let d = Decimal::from_str_exact(&format!("{val:.4}")).unwrap();
-            paft_money::Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap()
+            Price::new(d, Currency::Iso(IsoCurrency::USD))
         }
 
         let ts = DateTime::parse_from_rfc3339("2024-01-15T00:00:00Z")
@@ -649,12 +652,13 @@ mod tests {
 
         let raw = yfinance_rs::Candle {
             ts,
-            open: make_money(100.0),
-            high: make_money(105.0),
-            low: make_money(98.0),
-            close: make_money(103.0),
+            open: make_price(100.0),
+            high: make_price(105.0),
+            low: make_price(98.0),
+            close: make_price(103.0),
             close_unadj: None,
             volume: Some(1_000_000),
+            provider: (),
         };
 
         let candle = Candle::from_yf(raw);
