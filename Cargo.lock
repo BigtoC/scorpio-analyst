@@ -5197,6 +5197,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-langfuse",
  "opentelemetry_sdk",
+ "paft-aggregates",
  "paft-domain",
  "paft-market",
  "paft-money",

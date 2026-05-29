@@ -84,6 +84,7 @@ pretty_assertions.workspace = true
 paft-money.workspace = true
 paft-domain.workspace = true
 paft-market.workspace = true
+paft-aggregates.workspace = true
 rust_decimal.workspace = true
 wiremock.workspace = true
 
