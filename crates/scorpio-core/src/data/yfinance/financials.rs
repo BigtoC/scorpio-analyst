@@ -24,6 +24,7 @@ use yfinance_rs::{
     analysis::{AnalysisBuilder, EarningsTrendRow, PriceTarget, RecommendationSummary},
     fundamentals::{BalanceSheetRow, Calendar, CashflowRow, IncomeStatementRow, ShareCount},
     profile::{self, Profile},
+    ticker::{Info, Ticker},
 };
 
 /// Thin domain wrapper over the upstream yfinance `Calendar` type.
@@ -321,6 +322,77 @@ impl YFinanceClient {
             }
         }
     }
+
+    // ── Shared Info snapshot ─────────────────────────────────────────────
+
+    /// Fetch the composed yfinance [`Info`] once via a single
+    /// `Ticker::info()` call (which itself fans out to the underlying
+    /// endpoints concurrently).
+    ///
+    /// Stored once per cycle on `TradingState::yfinance_info` and read by pack
+    /// classification (`profile`), valuation + the ETF path (`profile`,
+    /// `key_statistics.market_cap`), the catalyst adapter (`calendar`), and the
+    /// consensus provider (`price_target`, `recommendation_summary`). Sharing
+    /// the single `Info` eliminates the duplicate profile fetches and the
+    /// separate price-target / recommendation / calendar calls.
+    ///
+    /// Fail-soft: returns `None` when the core profile fetch errors (the only
+    /// hard-error path in `Ticker::info()`); individual sub-fields already
+    /// degrade to `None` inside `info()`.
+    pub async fn get_info(&self, symbol: &str) -> Option<Info> {
+        #[cfg(test)]
+        // TODO: Bad pattern
+        if let Some(stubbed) = &self.stubbed_financials {
+            return Some(synthesize_stub_info(stubbed));
+        }
+
+        let ticker = Ticker::new(self.session.client(), symbol);
+        match self.session.with_rate_limit(ticker.info()).await {
+            Ok(info) => Some(info),
+            Err(e) => {
+                warn!(error = %e, symbol, "failed to fetch yfinance Info");
+                None
+            }
+        }
+    }
+}
+
+/// Assemble an [`Info`] from stubbed per-category responses so existing
+/// stub-driven tests exercise the shared-`Info` path without constructing a
+/// full upstream payload. Snapshot/key-statistics are defaulted because no
+/// consumer reads them; `calendar` is lifted back to the upstream `Calendar`
+/// shape from the domain [`TickerCalendar`] stub.
+#[cfg(test)]
+fn synthesize_stub_info(stubbed: &super::ohlcv::StubbedFinancialResponses) -> Info {
+    use paft_aggregates::Snapshot;
+    use yfinance_rs::{AssetKind, Instrument, KeyStatistics};
+
+    // The snapshot is never read by any consumer; build a throwaway instrument
+    // so `Info` is constructible offline.
+    let instrument =
+        Instrument::from_symbol("AAPL", AssetKind::default()).expect("valid stub instrument");
+    Info {
+        snapshot: Snapshot::new(instrument),
+        key_statistics: KeyStatistics::default(),
+        profile: stubbed.profile.clone(),
+        calendar: stubbed.calendar.clone().map(ticker_calendar_to_upstream),
+        price_target: stubbed.price_target.clone(),
+        recommendation_summary: stubbed.recommendation_summary.clone(),
+        esg_scores: None,
+    }
+}
+
+/// Reverse of [`TickerCalendar::from`] for test synthesis: lift date-only
+/// fields back to midnight-UTC `DateTime`s on the upstream `Calendar`.
+#[cfg(test)]
+fn ticker_calendar_to_upstream(cal: TickerCalendar) -> Calendar {
+    use chrono::{TimeZone, Utc};
+    let to_dt = |d: NaiveDate| Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
+    Calendar {
+        earnings_dates: cal.earnings_dates.into_iter().map(to_dt).collect(),
+        ex_dividend_date: cal.ex_dividend_date.map(to_dt),
+        dividend_payment_date: cal.dividend_payment_date.map(to_dt),
+    }
 }
 
 /// Collapse a fully-empty Yahoo `PriceTarget` payload into `None`.
@@ -558,5 +630,51 @@ mod tests {
         let calendar = client.fetch_calendar("AAPL").await;
 
         assert_eq!(calendar, Some(stubbed_calendar));
+    }
+
+    // ── get_info shared snapshot ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_info_synthesizes_shared_snapshot_from_stubs() {
+        use paft_money::{Currency, IsoCurrency, Price};
+        use yfinance_rs::core::conversions::money_to_f64;
+        let to_price = |v: f64| {
+            let d = rust_decimal::Decimal::try_from(v).unwrap();
+            Price::new(d, Currency::Iso(IsoCurrency::USD))
+        };
+        let price_target = PriceTarget {
+            mean: Some(to_price(220.0)),
+            high: Some(to_price(260.0)),
+            low: Some(to_price(180.0)),
+            number_of_analysts: Some(28),
+        };
+        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            price_target: Some(price_target),
+            recommendation_summary: Some(RecommendationSummary {
+                strong_buy: Some(8),
+                ..RecommendationSummary::default()
+            }),
+            calendar: Some(TickerCalendar {
+                earnings_dates: vec![chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()],
+                ex_dividend_date: None,
+                dividend_payment_date: None,
+            }),
+            ..StubbedFinancialResponses::default()
+        });
+
+        let info = client.get_info("AAPL").await.expect("stubbed info");
+
+        let mean = info
+            .price_target
+            .and_then(|pt| pt.mean)
+            .map(|p| money_to_f64(&p))
+            .expect("price target mean");
+        assert!((mean - 220.0).abs() < 0.01);
+        assert_eq!(
+            info.recommendation_summary.and_then(|r| r.strong_buy),
+            Some(8)
+        );
+        let cal = info.calendar.expect("calendar synthesized");
+        assert_eq!(cal.earnings_dates.len(), 1);
     }
 }
