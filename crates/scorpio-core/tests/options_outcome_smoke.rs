@@ -83,28 +83,45 @@ fn make_contract(
     oi: Option<u64>,
     expiry: &str,
 ) -> OptionContract {
-    use paft_money::{Currency, IsoCurrency, Money};
+    use paft_domain::{AssetKind, Instrument};
+    use paft_market::{OptionContractKey, OptionSide};
+    use paft_money::{Currency, IsoCurrency, Price};
     use rust_decimal::Decimal;
 
-    let d = Decimal::try_from(strike).unwrap();
-    let money = Money::new(d, Currency::Iso(IsoCurrency::USD)).unwrap();
+    let strike_price = Price::new(
+        Decimal::try_from(strike).unwrap(),
+        Currency::Iso(IsoCurrency::USD),
+    );
     let exp_date =
         chrono::NaiveDate::parse_from_str(expiry, "%Y-%m-%d").expect("valid expiry date");
+    let underlying = Instrument::from_symbol("AAPL", AssetKind::Equity).unwrap();
+    let key = OptionContractKey::new(underlying, OptionSide::Call, strike_price, exp_date);
 
-    OptionContract {
-        contract_symbol: paft_domain::Symbol::new("SMOKE240101C00000000").unwrap(),
-        strike: money,
-        price: None,
-        bid: None,
-        ask: None,
-        volume,
-        open_interest: oi,
-        implied_volatility: iv,
-        in_the_money: false,
-        expiration_date: exp_date,
-        expiration_at: None,
-        last_trade_at: None,
-        greeks: None,
+    let mut c = OptionContract::new(key);
+    c.volume = volume;
+    c.open_interest = oi;
+    c.implied_volatility = iv.map(|v| Decimal::try_from(v).unwrap());
+    c.in_the_money = Some(false);
+    c
+}
+
+/// Assemble an [`OptionChain`] from separate call/put lists. paft 0.8 stores all
+/// contracts together in `contracts`, distinguished by `key.side`, so we stamp
+/// the side into each contract before merging.
+fn chain_from(calls: Vec<OptionContract>, puts: Vec<OptionContract>) -> OptionChain {
+    use paft_market::OptionSide;
+    let mut contracts = Vec::with_capacity(calls.len() + puts.len());
+    for mut c in calls {
+        c.key.side = OptionSide::Call;
+        contracts.push(c);
+    }
+    for mut p in puts {
+        p.key.side = OptionSide::Put;
+        contracts.push(p);
+    }
+    OptionChain {
+        contracts,
+        provider: (),
     }
 }
 
@@ -165,8 +182,8 @@ fn snapshot_stub(fixture: &OutcomeFixture) -> StubbedFinancialResponses {
     let mut chains = BTreeMap::new();
     chains.insert(
         ts,
-        OptionChain {
-            calls: strikes
+        chain_from(
+            strikes
                 .iter()
                 .enumerate()
                 .map(|(idx, strike)| {
@@ -180,7 +197,7 @@ fn snapshot_stub(fixture: &OutcomeFixture) -> StubbedFinancialResponses {
                     )
                 })
                 .collect(),
-            puts: strikes
+            strikes
                 .iter()
                 .enumerate()
                 .map(|(idx, strike)| {
@@ -194,7 +211,7 @@ fn snapshot_stub(fixture: &OutcomeFixture) -> StubbedFinancialResponses {
                     )
                 })
                 .collect(),
-        },
+        ),
     );
 
     StubbedFinancialResponses {
@@ -219,20 +236,20 @@ fn sparse_chain_stub(fixture: &OutcomeFixture) -> StubbedFinancialResponses {
     let mut chains = BTreeMap::new();
     chains.insert(
         ts,
-        OptionChain {
-            calls: fixture
+        chain_from(
+            fixture
                 .setup
                 .strikes
                 .iter()
                 .map(|strike| make_contract(*strike, Some(0.60), Some(10), Some(50), &expiry))
                 .collect(),
-            puts: fixture
+            fixture
                 .setup
                 .strikes
                 .iter()
                 .map(|strike| make_contract(*strike, Some(0.60), Some(10), Some(50), &expiry))
                 .collect(),
-        },
+        ),
     );
 
     StubbedFinancialResponses {

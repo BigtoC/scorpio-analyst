@@ -12,6 +12,7 @@ use scorpio_core::{
 };
 use tempfile::tempdir;
 
+#[allow(dead_code)]
 pub async fn make_pipeline(
     db_name: &str,
     limiter_name: &str,

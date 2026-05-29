@@ -415,7 +415,6 @@ mod tests {
             nav,
             bid: Some(market_price - 0.01),
             ask: Some(market_price + 0.01),
-            market_cap: None,
             day_volume: None,
             currency: Some("USD".into()),
             as_of: Utc::now(),

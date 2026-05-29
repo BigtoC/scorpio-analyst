@@ -137,6 +137,8 @@ mod tests {
             publisher: publisher.map(str::to_owned),
             link: link.map(str::to_owned),
             published_at,
+            // paft 0.8 generic provider marker; unit for the default alias.
+            provider: (),
         }
     }
 

@@ -50,6 +50,9 @@ const CONSENSUS_MEMORY_MAX_AGE_DAYS: i64 = 30;
 
 use super::{MAX_PIPELINE_STEPS, TradingPipeline, constants::TASKS, errors};
 
+use crate::data::yfinance::financials::TickerCalendar;
+use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
+
 pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, TradingError> {
     Ok(crate::data::resolve_symbol(symbol)?.symbol)
 }
@@ -57,15 +60,9 @@ pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, Tradin
 pub(crate) fn build_catalyst_provider(
     finnhub: &FinnhubClient,
     fred: &FredClient,
-    yfinance: &YFinanceClient,
     source_timeout: std::time::Duration,
 ) -> Arc<dyn CatalystCalendarProvider> {
-    let tier1 = Tier1CatalystProvider::with_timeout(
-        finnhub.clone(),
-        fred.clone(),
-        yfinance.clone(),
-        source_timeout,
-    );
+    let tier1 = Tier1CatalystProvider::with_timeout(finnhub.clone(), fred.clone(), source_timeout);
 
     match SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10)) {
         Ok(edgar_client) => {
@@ -168,6 +165,7 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.enrichment_event_news = EnrichmentState::default();
     state.enrichment_consensus = EnrichmentState::default();
     state.enrichment_catalysts = EnrichmentState::default();
+    state.yfinance_info = None;
     state.data_coverage = None;
     state.provenance_summary = None;
     state.debate_history.clear();
@@ -341,11 +339,20 @@ pub async fn run_analysis_cycle(
         .await
         .map_err(TradingError::Config)?;
 
+    // Fetch the shared yfinance `Info` snapshot once. Pack classification,
+    // valuation, the ETF path, catalysts, and the consensus provider all read
+    // from this single fetch instead of issuing their own profile / price
+    // target / recommendation / calendar / market-cap calls.
+    let yfinance_info = pipeline
+        .yfinance
+        .get_info(&initial_state.asset_symbol)
+        .await;
+
     let (runtime_policy, routing_fallback_reason) = match pipeline.runtime_policy.clone() {
         Some(policy) => (policy, None),
         None => {
             let symbol = &initial_state.asset_symbol;
-            let profile = pipeline.yfinance.get_profile(symbol).await;
+            let profile = yfinance_info.as_ref().and_then(|info| info.profile.clone());
             let fund_info = profile.as_ref().and_then(|profile| {
                 crate::data::yfinance::etf::fund_info_from_profile(symbol, profile)
             });
@@ -427,8 +434,6 @@ pub async fn run_analysis_cycle(
             reddit_subreddits_for_cycle(&pipeline.config, &runtime_policy),
         );
 
-        let fetch_timeout =
-            std::time::Duration::from_secs(pipeline.config.enrichment.fetch_timeout_secs);
         tokio::join!(
             async {
                 if need_price {
@@ -454,7 +459,10 @@ pub async fn run_analysis_cycle(
                 pipeline.catalyst_provider.as_ref(),
                 &symbol,
                 &date,
-                fetch_timeout
+                yfinance_info
+                    .as_ref()
+                    .and_then(|info| info.calendar.clone())
+                    .map(TickerCalendar::from),
             ),
         )
     };
@@ -498,6 +506,12 @@ pub async fn run_analysis_cycle(
             &date,
             fetch_timeout,
             prior_consensus_payload.as_ref(),
+            yfinance_info
+                .as_ref()
+                .and_then(|info| info.price_target.clone()),
+            yfinance_info
+                .as_ref()
+                .and_then(|info| info.recommendation_summary.clone()),
         )
         .await
     } else {
@@ -534,6 +548,9 @@ pub async fn run_analysis_cycle(
     };
     initial_state.enrichment_consensus = consensus_enrichment_state;
     initial_state.enrichment_catalysts = catalysts_result;
+    // Persist the shared Info snapshot so in-graph tasks (valuation, ETF path)
+    // read it from state instead of re-fetching.
+    initial_state.yfinance_info = yfinance_info;
 
     let vetted_news_json = news_result
         .vetted
@@ -686,11 +703,11 @@ async fn hydrate_catalysts(
     provider: &dyn CatalystCalendarProvider,
     symbol: &str,
     as_of_date: &str,
-    _timeout: std::time::Duration,
+    calendar: Option<TickerCalendar>,
 ) -> EnrichmentState<Vec<CatalystEvent>> {
     const HORIZON_DAYS: u32 = 30;
     match provider
-        .fetch_catalysts(symbol, as_of_date, HORIZON_DAYS)
+        .fetch_catalysts(symbol, as_of_date, HORIZON_DAYS, calendar)
         .await
     {
         Ok(events) if events.is_empty() => {
@@ -775,6 +792,8 @@ async fn hydrate_consensus(
     target_date: &str,
     timeout: std::time::Duration,
     prior_payload: Option<&ConsensusEvidence>,
+    price_target: Option<PriceTarget>,
+    recommendations: Option<RecommendationSummary>,
 ) -> EnrichmentState<ConsensusEvidence> {
     if target_date
         != chrono::Utc::now()
@@ -792,7 +811,14 @@ async fn hydrate_consensus(
         };
     }
 
-    let provider = YFinanceEstimatesProvider::new(yfinance.clone());
+    // Price target / recommendations are lifted from the shared `Info`
+    // snapshot; only the earnings-trend branch is fetched live inside the
+    // provider.
+    let provider = YFinanceEstimatesProvider::with_consensus_inputs(
+        yfinance.clone(),
+        price_target,
+        recommendations,
+    );
     let primary = single_consensus_fetch(&provider, symbol, target_date, timeout).await;
 
     // ProviderDegraded retry: if the first attempt classifies as degraded,
@@ -1484,6 +1510,7 @@ mod catalyst_hydration_tests {
             _symbol: &str,
             _as_of_date: &str,
             _horizon_days: u32,
+            _calendar: Option<TickerCalendar>,
         ) -> Result<Vec<CatalystEvent>, TradingError> {
             Ok(self.result.as_ref().clone())
         }
@@ -1495,13 +1522,7 @@ mod catalyst_hydration_tests {
             result: Arc::new(vec![]),
         };
 
-        let state = hydrate_catalysts(
-            &provider,
-            "AAPL",
-            "2026-01-15",
-            std::time::Duration::from_secs(1),
-        )
-        .await;
+        let state = hydrate_catalysts(&provider, "AAPL", "2026-01-15", None).await;
 
         assert_eq!(state.status, EnrichmentStatus::Available);
         assert_eq!(state.payload, Some(vec![]));

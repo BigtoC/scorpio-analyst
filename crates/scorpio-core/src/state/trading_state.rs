@@ -2,6 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use yfinance_rs::ticker::Info;
 
 use crate::analysis_packs::RuntimePolicy;
 use crate::data::adapters::{
@@ -145,6 +146,17 @@ pub struct TradingState {
     #[serde(default)]
     pub enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
 
+    /// Shared per-cycle yfinance `Info` snapshot, fetched once via
+    /// `YFinanceClient::get_info` at the start of `run_analysis_cycle`. Read by
+    /// pack classification (`profile`), valuation + the ETF path (`profile`,
+    /// `key_statistics.market_cap`), the catalyst adapter (`calendar`), and the
+    /// consensus provider (`price_target`, `recommendation_summary`) so none of
+    /// those categories is fetched more than once. `None` when the single
+    /// `info()` fetch failed. Additive snapshot-safe field — older snapshots
+    /// default to `None`.
+    #[serde(default)]
+    pub yfinance_info: Option<Info>,
+
     /// Run-level coverage and provenance reporting — shared reporting
     /// concerns independent of asset class.
     pub data_coverage: Option<DataCoverageReport>,
@@ -246,6 +258,8 @@ struct TradingStateWire {
     enrichment_consensus: EnrichmentState<ConsensusEvidence>,
     #[serde(default)]
     enrichment_catalysts: EnrichmentState<Vec<CatalystEvent>>,
+    #[serde(default)]
+    yfinance_info: Option<Info>,
     data_coverage: Option<DataCoverageReport>,
     provenance_summary: Option<ProvenanceSummary>,
     debate_history: Vec<DebateMessage>,
@@ -303,6 +317,7 @@ impl From<TradingStateWire> for TradingState {
             enrichment_event_news: wire.enrichment_event_news,
             enrichment_consensus: wire.enrichment_consensus,
             enrichment_catalysts: wire.enrichment_catalysts,
+            yfinance_info: wire.yfinance_info,
             data_coverage: wire.data_coverage,
             provenance_summary: wire.provenance_summary,
             debate_history: wire.debate_history,
@@ -409,6 +424,7 @@ impl TradingState {
             enrichment_event_news: EnrichmentState::default(),
             enrichment_consensus: EnrichmentState::default(),
             enrichment_catalysts: EnrichmentState::default(),
+            yfinance_info: None,
             data_coverage: None,
             provenance_summary: None,
             debate_history: Vec::new(),

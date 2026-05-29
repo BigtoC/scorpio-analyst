@@ -84,18 +84,18 @@ reqwest = { version = "0.13", features = ["json", "query"] }
 url = "2"
 libc = "0.2"
 finnhub = "0.2.2"
-yfinance-rs = "0.7.2"
+yfinance-rs = "0.8.0"
 kand = "0.2.2"
 num-traits = "0.2"
 statrs = "0.18"
-quick-xml = "0.36"
+quick-xml = "0.40"
 
 # Graph orchestration
 graph-flow = { version = "0.5.1", features = ["rig"] }
 async-trait = "0.1"
 
 # Phase snapshot persistence
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "sqlite", "macros", "migrate"] }
 
 # Self-update and release verification
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate", "rustls"] }
@@ -107,8 +107,10 @@ hex = "0.4"
 proptest = "1"
 mockall = "0.13"
 pretty_assertions = "1"
-paft-money = "0.7"
-paft-domain = "0.7"
+paft-money = "0.8"
+paft-domain = "0.8"
+paft-market = "0.8"
+paft-aggregates = "0.8"
 rust_decimal = "1"
 flate2 = "1.1"
 tar = "0.4"

@@ -135,7 +135,7 @@ async fn observe_runtime_surfaces_at(
         }))
         .expect("probe replacement must succeed");
 
-    run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20"))
+    run_analysis_cycle(pipeline, TradingState::new("AAPL", "2026-03-20"))
         .await
         .expect("probe run should succeed");
 

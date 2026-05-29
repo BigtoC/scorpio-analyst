@@ -633,10 +633,12 @@ async fn run_analysis_cycle_hydrates_extended_consensus_enrichment() {
         Some(28),
     )];
 
+    // paft 0.8 price-target fields are `Price`; the shared `to_money_usd`
+    // helper yields `Money`, so convert via the provided `Into<Price>`.
     let price_target = PriceTarget {
-        mean: Some(to_money_usd(215.0)),
-        high: Some(to_money_usd(265.0)),
-        low: Some(to_money_usd(170.0)),
+        mean: Some(to_money_usd(215.0).into()),
+        high: Some(to_money_usd(265.0).into()),
+        low: Some(to_money_usd(170.0).into()),
         number_of_analysts: Some(42),
     };
 
@@ -773,9 +775,12 @@ async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_sto
 
     let yfinance =
         crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            // Earnings trend is the sole live, error-bearing consensus branch now
+            // (price target / recommendations come from the shared Info snapshot
+            // and carry no error provenance). A live trend failure with no cached
+            // consensus drives the ProviderDegraded half-life path.
             trend: None,
-            price_target_error: Some("price target down".to_owned()),
-            recommendation_summary: None,
+            trend_error: Some("earnings trend down".to_owned()),
             ..StubbedFinancialResponses::default()
         });
 
@@ -877,9 +882,12 @@ async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbol
 
     let yfinance =
         crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            // Earnings trend is the sole live, error-bearing consensus branch now
+            // (price target / recommendations come from the shared Info snapshot
+            // and carry no error provenance). A live trend failure with no cached
+            // consensus drives the ProviderDegraded half-life path.
             trend: None,
-            price_target_error: Some("price target down".to_owned()),
-            recommendation_summary: None,
+            trend_error: Some("earnings trend down".to_owned()),
             ..StubbedFinancialResponses::default()
         });
 
@@ -1413,6 +1421,7 @@ impl crate::data::adapters::catalysts::CatalystCalendarProvider for CountingCata
         _symbol: &str,
         _as_of_date: &str,
         _horizon_days: u32,
+        _calendar: Option<crate::data::yfinance::financials::TickerCalendar>,
     ) -> Result<Vec<crate::data::adapters::catalysts::CatalystEvent>, TradingError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.events.as_ref().clone())

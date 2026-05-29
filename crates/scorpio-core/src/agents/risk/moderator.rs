@@ -277,6 +277,7 @@ mod tests {
             enrichment_event_news: Default::default(),
             enrichment_consensus: Default::default(),
             enrichment_catalysts: Default::default(),
+            yfinance_info: None,
             data_coverage: None,
             provenance_summary: None,
             prior_thesis: None,

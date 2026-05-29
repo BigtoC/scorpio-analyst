@@ -39,7 +39,6 @@ pub struct EtfQuote {
     pub nav: Option<f64>,
     pub bid: Option<f64>,
     pub ask: Option<f64>,
-    pub market_cap: Option<f64>,
     pub day_volume: Option<u64>,
     pub currency: Option<String>,
     pub as_of: DateTime<Utc>,
@@ -114,6 +113,9 @@ pub(crate) fn fund_info_from_profile(symbol: &str, profile: &Profile) -> Option<
             })
         }
         Profile::Company(_) => None,
+        // `Profile` is `#[non_exhaustive]` in paft 0.8; any future variant is
+        // not a recognized fund shape, so it carries no ETF fund info.
+        _ => None,
     }
 }
 
@@ -146,8 +148,11 @@ impl YFinanceClient {
     /// Yahoo's `quoteSummary` endpoint
     /// ([`super::summary::SummaryHttp`]); those fields remain `None` when
     /// the secondary fetch fails or the symbol is not an ETF.
-    /// [`EtfQuote::market_cap`] is sourced from `Ticker::info()` and is
-    /// `None` when that secondary call fails.
+    ///
+    /// Market cap is **not** carried on this quote: it lives on the shared
+    /// `Info` snapshot (`key_statistics.market_cap`) fetched once per cycle.
+    /// Read it from there rather than re-adding a per-quote field that would
+    /// require a second `Ticker::info()` fan-out.
     pub async fn get_quote(&self, symbol: &str) -> Option<EtfQuote> {
         let ticker = Ticker::new(self.session.client(), symbol);
 
@@ -156,16 +161,6 @@ impl YFinanceClient {
             Err(e) => {
                 warn!(error = %e, symbol, "failed to fetch yfinance ETF quote");
                 return None;
-            }
-        };
-
-        // Market cap lives on `Info`, not `Quote`. Best-effort: log + carry
-        // on if the secondary fetch fails so we still return the price snapshot.
-        let info = match self.session.with_rate_limit(ticker.info()).await {
-            Ok(i) => Some(i),
-            Err(e) => {
-                warn!(error = %e, symbol, "failed to fetch yfinance ETF info for market_cap");
-                None
             }
         };
 
@@ -192,15 +187,12 @@ impl YFinanceClient {
             });
 
         Some(EtfQuote {
-            symbol: quote.symbol.to_string(),
+            symbol: quote.instrument.symbol.as_str().to_owned(),
             regular_market_price,
             previous_close: quote.previous_close.as_ref().map(money_to_f64),
             nav: summary.nav,
             bid: summary.bid,
             ask: summary.ask,
-            market_cap: info
-                .as_ref()
-                .and_then(|i| i.market_cap.as_ref().map(money_to_f64)),
             day_volume: quote.day_volume,
             currency,
             as_of: Utc::now(),

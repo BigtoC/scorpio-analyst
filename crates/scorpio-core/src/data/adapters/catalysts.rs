@@ -12,7 +12,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 
-use crate::data::yfinance::ohlcv::YFinanceClient;
 use crate::data::{
     FinnhubClient, FredClient,
     fred::release_id,
@@ -56,11 +55,17 @@ pub trait CatalystCalendarProvider: Send + Sync {
     /// `[as_of_date, as_of_date + horizon_days)`. Returns an empty `Vec`
     /// rather than `Err` for "no events" so the analyst-context renderer
     /// treats absence as a domain-valid signal rather than a fetch failure.
+    ///
+    /// `calendar` is the per-cycle corporate calendar lifted from the shared
+    /// yfinance `Info` snapshot (earnings + ex-dividend dates). Providers that
+    /// don't use it (e.g. SEC EDGAR) ignore it; `Tier1` maps it into earnings /
+    /// ex-dividend events instead of issuing its own calendar fetch.
     async fn fetch_catalysts(
         &self,
         symbol: &str,
         as_of_date: &str,
         horizon_days: u32,
+        calendar: Option<TickerCalendar>,
     ) -> Result<Vec<CatalystEvent>, TradingError>;
 }
 
@@ -71,25 +76,22 @@ pub trait CatalystCalendarProvider: Send + Sync {
 pub struct Tier1CatalystProvider {
     pub(crate) finnhub: FinnhubClient,
     pub(crate) fred: FredClient,
-    pub(crate) yfinance: YFinanceClient,
     pub(crate) source_timeout: std::time::Duration,
 }
 
 impl Tier1CatalystProvider {
-    pub fn new(finnhub: FinnhubClient, fred: FredClient, yfinance: YFinanceClient) -> Self {
-        Self::with_timeout(finnhub, fred, yfinance, std::time::Duration::from_secs(120))
+    pub fn new(finnhub: FinnhubClient, fred: FredClient) -> Self {
+        Self::with_timeout(finnhub, fred, std::time::Duration::from_secs(120))
     }
 
     pub fn with_timeout(
         finnhub: FinnhubClient,
         fred: FredClient,
-        yfinance: YFinanceClient,
         source_timeout: std::time::Duration,
     ) -> Self {
         Self {
             finnhub,
             fred,
-            yfinance,
             source_timeout,
         }
     }
@@ -187,29 +189,23 @@ impl Tier1CatalystProvider {
         events
     }
 
-    /// Soft-fail: yfinance per-ticker ex-dividend date.
-    async fn try_yfinance_calendar(
-        &self,
+    /// Map the shared-`Info` corporate calendar into earnings / ex-dividend
+    /// catalyst events. The calendar is fetched once per cycle via
+    /// `YFinanceClient::get_info` and threaded in, so this issues no fetch.
+    fn calendar_catalysts(
+        calendar: Option<&TickerCalendar>,
         symbol: &str,
-        as_of_date: &str,
+        as_of: NaiveDate,
         horizon_end: NaiveDate,
     ) -> Vec<CatalystEvent> {
-        let as_of = match NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d") {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!(error = %e, "invalid as_of_date for yfinance calendar");
-                return Vec::new();
-            }
-        };
-
-        let cal: TickerCalendar = match self.yfinance.fetch_calendar(symbol).await {
+        let cal = match calendar {
             Some(c) => c,
             None => {
                 tracing::warn!(
                     kind = "catalyst_fetch_failed",
                     source = "yfinance_calendar",
                     symbol,
-                    "yfinance calendar unavailable; continuing with empty contribution"
+                    "shared Info calendar unavailable; continuing with empty contribution"
                 );
                 return Vec::new();
             }
@@ -280,6 +276,7 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
         symbol: &str,
         as_of_date: &str,
         horizon_days: u32,
+        calendar: Option<TickerCalendar>,
     ) -> Result<Vec<CatalystEvent>, TradingError> {
         let as_of = NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d").map_err(|e| {
             TradingError::SchemaViolation {
@@ -291,7 +288,7 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
         let to_str = to.format("%Y-%m-%d").to_string();
         let source_timeout = self.source_timeout;
 
-        let (earnings, ipos, macros, dividends) = tokio::join!(
+        let (earnings, ipos, macros) = tokio::join!(
             timeout_catalyst_source(
                 "finnhub_earnings",
                 symbol,
@@ -310,13 +307,11 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
                 source_timeout,
                 self.try_fred_releases(&from_str, &to_str),
             ),
-            timeout_catalyst_source(
-                "yfinance_calendar",
-                symbol,
-                source_timeout,
-                self.try_yfinance_calendar(symbol, as_of_date, to),
-            ),
         );
+
+        // The corporate calendar is supplied from the shared Info snapshot, so
+        // this is a pure in-memory mapping — no fetch, no timeout needed.
+        let dividends = Self::calendar_catalysts(calendar.as_ref(), symbol, as_of, to);
 
         let total = earnings.len() + ipos.len() + macros.len() + dividends.len();
         let mut all = Vec::with_capacity(total);
@@ -477,6 +472,7 @@ impl CatalystCalendarProvider for SecEdgar8kProvider {
         symbol: &str,
         as_of_date: &str,
         horizon_days: u32,
+        _calendar: Option<TickerCalendar>,
     ) -> Result<Vec<CatalystEvent>, TradingError> {
         let as_of = NaiveDate::parse_from_str(as_of_date, "%Y-%m-%d").map_err(|e| {
             TradingError::SchemaViolation {
@@ -513,12 +509,14 @@ impl CatalystCalendarProvider for Tier2CatalystProvider {
         symbol: &str,
         as_of_date: &str,
         horizon_days: u32,
+        calendar: Option<TickerCalendar>,
     ) -> Result<Vec<CatalystEvent>, TradingError> {
         let (tier1_result, edgar_result) = tokio::join!(
-            self.tier1.fetch_catalysts(symbol, as_of_date, horizon_days),
+            self.tier1
+                .fetch_catalysts(symbol, as_of_date, horizon_days, calendar),
             timeout_catalyst_source("sec_edgar", symbol, self.source_timeout, async {
                 self.sec_edgar
-                    .fetch_catalysts(symbol, as_of_date, horizon_days)
+                    .fetch_catalysts(symbol, as_of_date, horizon_days, None)
                     .await
                     .unwrap_or_default()
             },),
@@ -907,12 +905,11 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_catalysts_returns_schema_error_for_invalid_date() {
-        let provider = Tier1CatalystProvider::new(
-            FinnhubClient::for_test(),
-            FredClient::for_test(),
-            YFinanceClient::new(crate::rate_limit::SharedRateLimiter::new("test-yf", 30)),
-        );
-        let result = provider.fetch_catalysts("AAPL", "not-a-date", 30).await;
+        let provider =
+            Tier1CatalystProvider::new(FinnhubClient::for_test(), FredClient::for_test());
+        let result = provider
+            .fetch_catalysts("AAPL", "not-a-date", 30, None)
+            .await;
         assert!(
             matches!(result, Err(TradingError::SchemaViolation { .. })),
             "invalid date must produce SchemaViolation, got {result:?}"
@@ -986,30 +983,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn try_yfinance_calendar_excludes_events_beyond_horizon_end() {
-        use crate::data::StubbedFinancialResponses;
+    async fn calendar_catalysts_exclude_events_beyond_horizon_end() {
         use crate::data::yfinance::financials::TickerCalendar;
 
-        let provider = Tier1CatalystProvider::new(
-            FinnhubClient::for_test(),
-            FredClient::for_test(),
-            YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-                calendar: Some(TickerCalendar {
-                    earnings_dates: vec![
-                        chrono::NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
-                        chrono::NaiveDate::from_ymd_opt(2026, 2, 20).unwrap(),
-                    ],
-                    ex_dividend_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 25).unwrap()),
-                    dividend_payment_date: None,
-                }),
-                ..StubbedFinancialResponses::default()
-            }),
-        );
+        let provider =
+            Tier1CatalystProvider::new(FinnhubClient::for_test(), FredClient::for_test());
+
+        let calendar = TickerCalendar {
+            earnings_dates: vec![
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 2, 20).unwrap(),
+            ],
+            ex_dividend_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 25).unwrap()),
+            dividend_payment_date: None,
+        };
 
         let events = provider
-            .fetch_catalysts("AAPL", "2026-01-15", 30)
+            .fetch_catalysts("AAPL", "2026-01-15", 30, Some(calendar))
             .await
-            .expect("stubbed calendar fetch must succeed");
+            .expect("calendar mapping must succeed");
 
         assert!(
             events.iter().any(|event| event.event_date == "2026-01-20"),

@@ -64,6 +64,10 @@ kand.workspace = true
 num-traits.workspace = true
 quick-xml.workspace = true
 statrs.workspace = true
+# paft 0.8 exposes per-unit values as `Price`/`Decimal` (e.g. option implied
+# volatility); rust_decimal is paft's underlying Decimal impl and provides the
+# `ToPrimitive` conversion to f64 used at the data-adapter boundary.
+rust_decimal.workspace = true
 
 # Graph orchestration
 graph-flow.workspace = true
@@ -79,6 +83,8 @@ mockall.workspace = true
 pretty_assertions.workspace = true
 paft-money.workspace = true
 paft-domain.workspace = true
+paft-market.workspace = true
+paft-aggregates.workspace = true
 rust_decimal.workspace = true
 wiremock.workspace = true
 

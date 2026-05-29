@@ -103,6 +103,7 @@ impl CompletionModelHandle {
     /// This lets tests exercise provider-specific dispatch paths (e.g. `Copilot`, `XiaomiMimo`)
     /// without going through the full configuration pipeline.
     #[cfg(any(test, feature = "test-helpers"))]
+    #[cfg_attr(not(test), allow(dead_code))]
     #[doc(hidden)]
     pub(crate) fn for_test_with_client(
         provider: ProviderId,

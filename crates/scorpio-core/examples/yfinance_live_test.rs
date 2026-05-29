@@ -20,6 +20,9 @@
 //! - `YFinanceClient::get_earnings_trend`
 //! - `YFinanceClient::get_profile`
 //! - `YFinanceClient::fetch_calendar`
+//! - `YFinanceClient::get_info` (shared composed `Info` snapshot, fetched once
+//!   per cycle and threaded to classification / valuation / catalysts /
+//!   consensus)
 //!
 //! Also exercises the ETF degradation path via `SPY` to confirm that
 //! financial statement fetchers return `None`/empty gracefully and that
@@ -445,7 +448,19 @@ async fn main() {
         &format!("YFinanceEstimatesProvider::fetch_consensus ({EQUITY_SYMBOL})"),
     );
 
-    let estimates_provider = YFinanceEstimatesProvider::new(client.clone());
+    // Production wiring: price target + recommendations are lifted from the
+    // shared `Info` snapshot (fetched once via `get_info`); only earnings_trend
+    // is fetched live inside `fetch_consensus`.
+    let consensus_info = client.get_info(EQUITY_SYMBOL).await;
+    let estimates_provider = YFinanceEstimatesProvider::with_consensus_inputs(
+        client.clone(),
+        consensus_info
+            .as_ref()
+            .and_then(|info| info.price_target.clone()),
+        consensus_info
+            .as_ref()
+            .and_then(|info| info.recommendation_summary.clone()),
+    );
     match estimates_provider
         .fetch_consensus(EQUITY_SYMBOL, &end)
         .await
@@ -590,7 +605,16 @@ async fn main() {
     }
 
     // Consensus: SPY may legitimately return NoCoverage or Data with sparse fields.
-    let spy_estimates = YFinanceEstimatesProvider::new(client.clone());
+    // Seed the price target / recommendations from the shared `Info` snapshot,
+    // mirroring the production wiring.
+    let spy_info = client.get_info(ETF_SYMBOL).await;
+    let spy_estimates = YFinanceEstimatesProvider::with_consensus_inputs(
+        client.clone(),
+        spy_info.as_ref().and_then(|info| info.price_target.clone()),
+        spy_info
+            .as_ref()
+            .and_then(|info| info.recommendation_summary.clone()),
+    );
     match spy_estimates.fetch_consensus(ETF_SYMBOL, &end).await {
         Err(e) => {
             eprintln!("  FAIL  fetch_consensus(SPY) returned error: {e}");
@@ -654,6 +678,75 @@ async fn main() {
         }
     }
     r.check("fetch_calendar(SPY) completes without panic", true);
+    println!();
+
+    // ── 12. Shared Info snapshot via YFinanceClient::get_info (GLW) ───────────
+
+    section(12, &format!("YFinanceClient::get_info ({EQUITY_SYMBOL})"));
+
+    // `get_info` is the single shared fetch the pipeline performs once per cycle
+    // (one `Ticker::info()` fan-out) and threads to pack classification,
+    // valuation, the ETF path, catalysts, and the consensus provider.
+    match client.get_info(EQUITY_SYMBOL).await {
+        None => {
+            eprintln!("  FAIL  get_info() returned None");
+            r.fail += 1;
+        }
+        Some(instrument_info) => {
+            r.check("get_info() returns Some(Info)", true);
+
+            info(&format!(
+                "profile={}, calendar={}, price_target={}, recommendation_summary={}, esg_scores={}",
+                if instrument_info.profile.is_some() {
+                    "present"
+                } else {
+                    "None"
+                },
+                if instrument_info.calendar.is_some() {
+                    "present"
+                } else {
+                    "None"
+                },
+                if instrument_info.price_target.is_some() {
+                    "present"
+                } else {
+                    "None"
+                },
+                if instrument_info.recommendation_summary.is_some() {
+                    "present"
+                } else {
+                    "None"
+                },
+                if instrument_info.esg_scores.is_some() {
+                    "present"
+                } else {
+                    "None"
+                },
+            ));
+
+            if let Some(pt) = &instrument_info.price_target {
+                info(&format!(
+                    "price_target: mean={:?}, analysts={:?}",
+                    pt.mean, pt.number_of_analysts
+                ));
+            }
+
+            if let Some(recs) = &instrument_info.recommendation_summary {
+                info(&format!(
+                    "recommendation_summary: strong_buy={:?}, buy={:?}, hold={:?}, sell={:?}, strong_sell={:?}, mean_rating={:?}",
+                    recs.strong_buy,
+                    recs.buy,
+                    recs.hold,
+                    recs.sell,
+                    recs.strong_sell,
+                    recs.mean_rating_text,
+                ));
+            }
+
+            // Full composed payload for manual inspection.
+            println!("{instrument_info:#?}");
+        }
+    }
     println!();
 
     // ── Summary ───────────────────────────────────────────────────────────────
