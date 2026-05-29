@@ -129,12 +129,40 @@ use crate::data::YFinanceClient;
 #[derive(Debug)]
 pub struct YFinanceEstimatesProvider {
     client: YFinanceClient,
+    /// Analyst price target lifted from the shared `Info` snapshot. The
+    /// earnings-trend branch is still fetched live (it is not part of `Info`),
+    /// but price target / recommendations are read from here so they are not
+    /// fetched a second time.
+    price_target: Option<UpstreamPriceTarget>,
+    /// Analyst recommendation summary lifted from the shared `Info` snapshot.
+    recommendations: Option<UpstreamRecommendationSummary>,
 }
 
 impl YFinanceEstimatesProvider {
-    /// Construct a new provider backed by the given Yahoo Finance client.
+    /// Construct a provider with no pre-fetched consensus inputs. The
+    /// earnings-trend branch is fetched live; price target / recommendations
+    /// are treated as absent.
     pub fn new(client: YFinanceClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            price_target: None,
+            recommendations: None,
+        }
+    }
+
+    /// Construct a provider seeded with the price target / recommendation
+    /// summary already fetched once via `YFinanceClient::get_info`, so
+    /// `fetch_consensus` only issues the live earnings-trend call.
+    pub fn with_consensus_inputs(
+        client: YFinanceClient,
+        price_target: Option<UpstreamPriceTarget>,
+        recommendations: Option<UpstreamRecommendationSummary>,
+    ) -> Self {
+        Self {
+            client,
+            price_target,
+            recommendations,
+        }
     }
 }
 
@@ -145,55 +173,44 @@ impl EstimatesProvider for YFinanceEstimatesProvider {
         symbol: &str,
         as_of_date: &str,
     ) -> Result<ConsensusOutcome, TradingError> {
-        // Fetch the three branches concurrently. Each branch is independent
-        // and we want partial-fail-open semantics — a single transient
-        // failure must not prevent the remaining branches from contributing.
-        let (trend_res, price_target_res, recs_res) = tokio::join!(
-            self.client.get_earnings_trend_result(symbol),
-            self.client.get_analyst_price_target_result(symbol),
-            self.client.get_recommendations_summary_result(symbol),
-        );
-
+        // Only the earnings-trend branch is fetched live — price target and
+        // recommendations are lifted from the shared `Info` snapshot fetched
+        // once per cycle. The trend branch therefore carries the sole error
+        // provenance; price target / recommendations are present-or-absent
+        // (an empty upstream payload is collapsed to absent below).
+        let trend_res = self.client.get_earnings_trend_result(symbol).await;
         let trend_branch = classify_branch(trend_res, |rows| {
             rows.as_ref().is_some_and(|r| !r.is_empty())
         });
-        let price_target_branch = classify_branch(price_target_res, Option::is_some);
-        let recs_branch = classify_branch(recs_res, Option::is_some);
 
-        let any_error =
-            trend_branch.is_error() || price_target_branch.is_error() || recs_branch.is_error();
+        let price_target = self
+            .price_target
+            .as_ref()
+            .filter(|pt| !price_target_is_empty(pt));
+        let recommendations = self
+            .recommendations
+            .as_ref()
+            .filter(|rs| !recommendations_is_empty(rs));
 
+        let any_error = trend_branch.is_error();
         let any_data =
-            trend_branch.is_data() || price_target_branch.is_data() || recs_branch.is_data();
-
-        let all_errors =
-            trend_branch.is_error() && price_target_branch.is_error() && recs_branch.is_error();
-
-        if all_errors {
-            emit_branch_warns(&trend_branch, &price_target_branch, &recs_branch);
-            let err = trend_branch
-                .into_error()
-                .or_else(|| price_target_branch.into_error())
-                .or_else(|| recs_branch.into_error())
-                .expect("at least one error must be present when all_errors is true");
-            return Err(err);
-        }
+            trend_branch.is_data() || price_target.is_some() || recommendations.is_some();
 
         if !any_data {
-            // No branch produced usable data. Distinguish "all empty" from
-            // "≥1 error and the rest empty".
+            // No branch produced usable data. A live trend error with empty
+            // cached consensus is "provider degraded"; otherwise no coverage.
             return if any_error {
-                emit_branch_warns(&trend_branch, &price_target_branch, &recs_branch);
+                emit_trend_warn(&trend_branch);
                 Ok(ConsensusOutcome::ProviderDegraded)
             } else {
                 Ok(ConsensusOutcome::NoCoverage)
             };
         }
 
-        // At least one branch has data. If others errored, log them and
-        // still return Data with the partial fields filled in.
+        // At least one branch has data. If the trend branch errored, log it and
+        // still return Data with the cached consensus fields filled in.
         if any_error {
-            emit_branch_warns(&trend_branch, &price_target_branch, &recs_branch);
+            emit_trend_warn(&trend_branch);
         }
 
         let mut evidence = if let BranchOutcome::Data(Some(trend)) = &trend_branch {
@@ -201,7 +218,7 @@ impl EstimatesProvider for YFinanceEstimatesProvider {
         } else {
             // Trend branch did not produce data. Build a stub with only the
             // identity fields set; price_target/recommendations are filled
-            // below when the corresponding branches produced data.
+            // below from the shared `Info` snapshot.
             ConsensusEvidence {
                 symbol: symbol.to_ascii_uppercase(),
                 eps_estimate: None,
@@ -214,15 +231,30 @@ impl EstimatesProvider for YFinanceEstimatesProvider {
             }
         };
 
-        if let BranchOutcome::Data(Some(pt)) = price_target_branch {
-            evidence.price_target = Some(price_target_summary_from_upstream(&pt));
+        if let Some(pt) = price_target {
+            evidence.price_target = Some(price_target_summary_from_upstream(pt));
         }
-        if let BranchOutcome::Data(Some(rs)) = recs_branch {
-            evidence.recommendations = Some(recommendations_summary_from_upstream(&rs));
+        if let Some(rs) = recommendations {
+            evidence.recommendations = Some(recommendations_summary_from_upstream(rs));
         }
 
         Ok(ConsensusOutcome::Data(evidence))
     }
+}
+
+/// `true` when every aggregate field of the upstream price target is `None`
+/// (an "empty" 200-OK payload), which `Info` does not collapse on its own.
+fn price_target_is_empty(pt: &UpstreamPriceTarget) -> bool {
+    pt.mean.is_none() && pt.high.is_none() && pt.low.is_none() && pt.number_of_analysts.is_none()
+}
+
+/// `true` when every recommendation bucket is `None`.
+fn recommendations_is_empty(rs: &UpstreamRecommendationSummary) -> bool {
+    rs.strong_buy.is_none()
+        && rs.buy.is_none()
+        && rs.hold.is_none()
+        && rs.sell.is_none()
+        && rs.strong_sell.is_none()
 }
 
 /// Classifies a branch result as "data" / "empty" / "error" for partial
@@ -244,13 +276,6 @@ impl<T> BranchOutcome<T> {
     fn is_error(&self) -> bool {
         matches!(self, Self::Error(_))
     }
-
-    fn into_error(self) -> Option<TradingError> {
-        match self {
-            Self::Error(e) => Some(e),
-            _ => None,
-        }
-    }
 }
 
 fn classify_branch<T, F>(res: Result<T, TradingError>, has_data: F) -> BranchOutcome<T>
@@ -269,19 +294,9 @@ where
     }
 }
 
-fn emit_branch_warns<T1, T2, T3>(
-    trend: &BranchOutcome<T1>,
-    price_target: &BranchOutcome<T2>,
-    recs: &BranchOutcome<T3>,
-) {
+fn emit_trend_warn<T>(trend: &BranchOutcome<T>) {
     if let BranchOutcome::Error(e) = trend {
         warn!(provider = "yfinance", endpoint = "earnings_trend", reason = %e, "consensus branch failed");
-    }
-    if let BranchOutcome::Error(e) = price_target {
-        warn!(provider = "yfinance", endpoint = "analyst_price_target", reason = %e, "consensus branch failed");
-    }
-    if let BranchOutcome::Error(e) = recs {
-        warn!(provider = "yfinance", endpoint = "recommendations_summary", reason = %e, "consensus branch failed");
     }
 }
 
@@ -610,14 +625,18 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_consensus_populates_price_target_and_recommendations() {
+        // Trend is fetched live (stubbed on the client); price target and
+        // recommendations are supplied from the shared `Info` snapshot.
         let trend_rows = vec![make_trend_row(Some(2.50), Some(95_000_000_000.0), Some(35))];
         let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
             trend: Some(trend_rows),
-            price_target: Some(priced_target()),
-            recommendation_summary: Some(populated_recommendations()),
             ..StubbedFinancialResponses::default()
         });
-        let provider = YFinanceEstimatesProvider::new(client);
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(
+            client,
+            Some(priced_target()),
+            Some(populated_recommendations()),
+        );
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")
@@ -658,15 +677,18 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_consensus_classifies_partial_data_with_one_branch_error_as_data_with_warn() {
-        // Earnings trend errors but price_target + recommendations succeed.
+        // Earnings trend errors (live) but price_target + recommendations are
+        // present from the shared `Info` snapshot.
         let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
             trend: None,
             trend_error: Some("trend rate-limited".to_owned()),
-            price_target: Some(priced_target()),
-            recommendation_summary: Some(populated_recommendations()),
             ..StubbedFinancialResponses::default()
         });
-        let provider = YFinanceEstimatesProvider::new(client);
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(
+            client,
+            Some(priced_target()),
+            Some(populated_recommendations()),
+        );
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")
@@ -689,19 +711,22 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_consensus_returns_no_coverage_when_all_endpoints_return_no_data() {
-        // All three branches succeed, all empty.
+        // Trend succeeds empty; the shared-Info price target / recommendations
+        // are all-empty payloads, which collapse to absent → no coverage.
         let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
             trend: Some(Vec::new()),
-            price_target: Some(PriceTarget {
+            ..StubbedFinancialResponses::default()
+        });
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(
+            client,
+            Some(PriceTarget {
                 mean: None,
                 high: None,
                 low: None,
                 number_of_analysts: None,
             }),
-            recommendation_summary: Some(RecommendationSummary::default()),
-            ..StubbedFinancialResponses::default()
-        });
-        let provider = YFinanceEstimatesProvider::new(client);
+            Some(RecommendationSummary::default()),
+        );
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")
@@ -712,39 +737,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_consensus_returns_provider_degraded_when_price_target_errors_and_others_empty() {
+    async fn fetch_consensus_absent_consensus_inputs_with_empty_trend_is_no_coverage() {
+        // With the shared-Info model, price target / recommendations carry no
+        // error provenance — an unavailable endpoint surfaces as absent. With
+        // an empty (non-error) trend and no cached consensus, the outcome is
+        // NoCoverage (previously a price-target *error* yielded ProviderDegraded;
+        // that distinction now lives only on the live trend branch).
         let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
             trend: Some(Vec::new()),
-            price_target: None,
-            price_target_error: Some("price target down".to_owned()),
-            recommendation_summary: Some(RecommendationSummary::default()),
             ..StubbedFinancialResponses::default()
         });
-        let provider = YFinanceEstimatesProvider::new(client);
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(client, None, None);
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")
             .await
-            .expect("partial-error should still resolve to Ok with degraded variant");
+            .expect("absent consensus inputs with empty trend resolves to Ok");
 
-        assert_eq!(outcome, ConsensusOutcome::ProviderDegraded);
+        assert_eq!(outcome, ConsensusOutcome::NoCoverage);
     }
 
     #[tokio::test]
-    async fn fetch_consensus_returns_err_when_all_three_endpoints_fail() {
+    async fn fetch_consensus_trend_error_with_no_cached_consensus_is_provider_degraded() {
+        // The earnings-trend branch is the sole error-bearing branch now. A
+        // live trend failure with no cached price target / recommendations
+        // resolves to ProviderDegraded (fed to the half-life policy), not Err.
         let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
             trend: None,
             trend_error: Some("trend down".to_owned()),
-            price_target_error: Some("price target down".to_owned()),
-            recommendation_summary_error: Some("recs down".to_owned()),
             ..StubbedFinancialResponses::default()
         });
-        let provider = YFinanceEstimatesProvider::new(client);
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(client, None, None);
 
-        let result = provider.fetch_consensus("AAPL", "2025-04-01").await;
-        assert!(
-            result.is_err(),
-            "expected Err when all three branches fail, got {result:?}"
-        );
+        let outcome = provider
+            .fetch_consensus("AAPL", "2025-04-01")
+            .await
+            .expect("trend failure with no cached consensus resolves to Ok(ProviderDegraded)");
+
+        assert_eq!(outcome, ConsensusOutcome::ProviderDegraded);
     }
 }
