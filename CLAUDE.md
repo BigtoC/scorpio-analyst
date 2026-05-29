@@ -74,6 +74,8 @@ The project is in early development — see PRD.md for the full specification.
 
 ## Build Commands
 
+**Prerequisite:** the Protobuf compiler (`protoc`) is required by transitive dependencies. macOS: `brew install protobuf`. CI: `apt-get install protobuf-compiler`.
+
 ```bash
 cargo build                                                           # Build the project
 cargo run -p scorpio-cli -- --help                                    # Run the CLI binary
@@ -82,7 +84,15 @@ cargo clippy --workspace --all-targets -- -D warnings                 # Lint (wa
 cargo fmt -- --check                                                  # Check formatting
 ```
 
-CI uses **nextest**, not `cargo test`. Requires **Rust 1.93+** (edition 2024). See [`docs/architecture/dev-tasks.md`](docs/architecture/dev-tasks.md) for run/debug commands and the `test-helpers` feature flag.
+CI (`.github/workflows/tests.yml`) runs three gates **in order — fmt → clippy → nextest**; run all three before claiming work is done. CI uses **nextest**, not `cargo test`. Requires **Rust 1.93+** (edition 2024). See [`docs/architecture/dev-tasks.md`](docs/architecture/dev-tasks.md) for run/debug commands and the `test-helpers` feature flag.
+
+Focused loops:
+
+```bash
+SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze AAPL  # Fast smoke run (1 debate round)
+cargo run -p scorpio-cli -- report list                                    # List saved reports
+cargo run -p scorpio-server -- start                                       # Run the HTTP/OpenAPI server
+```
 
 ## Architecture (Summary)
 
@@ -143,6 +153,13 @@ When to invoke `/ce-compound`:
 - After a tricky bug is fixed (especially build/CI failures, async issues, borrow-checker patterns)
 - After establishing a new architectural pattern or workflow convention
 - After integrating a new dependency or provider that required non-obvious configuration
+
+## Related Files
+
+- `AGENTS.md` — sibling instruction file (same behavioral guidelines, same `docs/architecture/` references).
+- `.github/instructions/rust.instructions.md` — Rust coding conventions, auto-applied to `**/*.rs`.
+- `crates/scorpio-server/README.md` — server build/run/config, OpenAPI conventions, canonical endpoint wiring.
+- `README.md` — current execution graph, CLI usage, known limitations.
 
 ## Rust Guidelines
 
