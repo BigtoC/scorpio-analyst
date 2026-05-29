@@ -95,18 +95,17 @@ pub enum WorkflowTestSeamError {
 
 /// Construct the default `Arc<SecEdgarClient>` used by [`AnalystSyncTask`].
 ///
-/// Mirrors the rate-limit policy already used by `build_catalyst_provider`
-/// (10 rps under the `"sec-edgar"` label). `SecEdgarClient::new` only fails
-/// when `reqwest::Client::builder()` fails — virtually impossible in practice,
-/// so we `.expect(...)` rather than thread an additional `Result` through
-/// every pipeline-construction call site. The downstream consumer is
-/// `Option<Arc<SecEdgarClient>>` on `AnalystSyncTask` so the field can still
+/// Reads the SEC EDGAR rate limit from `RateLimitConfig` (`sec_edgar_rps`,
+/// default 10; `0` disables) — the same source `build_catalyst_provider` uses,
+/// so both EDGAR clients honor one configured policy. The downstream consumer
+/// is `Option<Arc<SecEdgarClient>>` on `AnalystSyncTask` so the field can still
 /// be elided in narrow test paths via `AnalystSyncTask::with_yfinance`.
-fn build_default_sec_edgar_client() -> Arc<SecEdgarClient> {
-    Arc::new(
-        SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10))
-            .expect("SecEdgarClient construction must succeed (reqwest builder)"),
-    )
+fn build_default_sec_edgar_client(
+    rate_limits: &crate::config::RateLimitConfig,
+) -> Arc<SecEdgarClient> {
+    let limiter = SharedRateLimiter::sec_edgar_from_config(rate_limits)
+        .unwrap_or_else(|| SharedRateLimiter::disabled("sec-edgar"));
+    Arc::new(SecEdgarClient::new(limiter))
 }
 
 /// Orchestrates the full five-phase trading analysis pipeline.
@@ -187,8 +186,9 @@ impl TradingPipeline {
             &finnhub,
             &fred,
             std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
+            &config.rate_limits,
         );
-        let sec_edgar = build_default_sec_edgar_client();
+        let sec_edgar = build_default_sec_edgar_client(&config.rate_limits);
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
@@ -255,8 +255,9 @@ impl TradingPipeline {
             &finnhub,
             &fred,
             std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
+            &config.rate_limits,
         );
-        let sec_edgar = build_default_sec_edgar_client();
+        let sec_edgar = build_default_sec_edgar_client(&config.rate_limits);
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
@@ -325,7 +326,7 @@ impl TradingPipeline {
             &self.finnhub,
             &self.fred,
             &self.yfinance,
-            build_default_sec_edgar_client(),
+            build_default_sec_edgar_client(&self.config.rate_limits),
             Arc::clone(&self.snapshot_store),
             &self.quick_handle,
             &self.deep_handle,
