@@ -1,9 +1,9 @@
 //! Catalyst calendar evidence contract and provider trait.
 //!
 //! Declares the [`CatalystEvent`] payload struct and the
-//! [`CatalystCalendarProvider`] trait seam. The [`Tier1CatalystProvider`]
-//! concrete implementation fans out to Finnhub, FRED, and yfinance with
-//! fail-soft semantics: one source erroring zeros out only that source's
+//! [`CatalystCalendarProvider`] trait seam. The [`CatalystProvider`]
+//! concrete implementation fans out to Finnhub, FRED, yfinance, and SEC EDGAR
+//! with fail-soft semantics: one source erroring zeros out only that source's
 //! contribution; the others still flow through.
 
 use async_trait::async_trait;
@@ -58,8 +58,8 @@ pub trait CatalystCalendarProvider: Send + Sync {
     ///
     /// `calendar` is the per-cycle corporate calendar lifted from the shared
     /// yfinance `Info` snapshot (earnings + ex-dividend dates). Providers that
-    /// don't use it (e.g. SEC EDGAR) ignore it; `Tier1` maps it into earnings /
-    /// ex-dividend events instead of issuing its own calendar fetch.
+    /// don't use it (e.g. SEC EDGAR) ignore it; `CatalystProvider` maps it into
+    /// earnings / ex-dividend events instead of issuing its own calendar fetch.
     async fn fetch_catalysts(
         &self,
         symbol: &str,
@@ -69,29 +69,42 @@ pub trait CatalystCalendarProvider: Send + Sync {
     ) -> Result<Vec<CatalystEvent>, TradingError>;
 }
 
-// ─── Tier 1 provider ────────────────────────────────────────────────────────
+// ─── Provider ───────────────────────────────────────────────────────────────
 
-/// Composes Finnhub earnings/IPO, FRED macro releases, and yfinance
-/// ex-dividend calendars into a single fail-soft catalyst stream.
-pub struct Tier1CatalystProvider {
-    pub(crate) finnhub: FinnhubClient,
-    pub(crate) fred: FredClient,
-    pub(crate) source_timeout: std::time::Duration,
+/// Composes Finnhub earnings/IPO, FRED macro releases, yfinance ex-dividend
+/// calendars, and SEC EDGAR 8-K / 13D/G filings into a single fail-soft
+/// catalyst stream.
+///
+/// Each source is timeout-bounded independently via [`timeout_catalyst_source`],
+/// so one source erroring or timing out zeros out only that source's
+/// contribution; the others still flow through.
+pub struct CatalystProvider {
+    finnhub: FinnhubClient,
+    fred: FredClient,
+    sec_edgar: SecEdgar8kProvider,
+    source_timeout: std::time::Duration,
 }
 
-impl Tier1CatalystProvider {
-    pub fn new(finnhub: FinnhubClient, fred: FredClient) -> Self {
-        Self::with_timeout(finnhub, fred, std::time::Duration::from_secs(120))
+impl CatalystProvider {
+    pub fn new(finnhub: FinnhubClient, fred: FredClient, sec_edgar: SecEdgar8kProvider) -> Self {
+        Self::with_timeout(
+            finnhub,
+            fred,
+            sec_edgar,
+            std::time::Duration::from_secs(120),
+        )
     }
 
     pub fn with_timeout(
         finnhub: FinnhubClient,
         fred: FredClient,
+        sec_edgar: SecEdgar8kProvider,
         source_timeout: std::time::Duration,
     ) -> Self {
         Self {
             finnhub,
             fred,
+            sec_edgar,
             source_timeout,
         }
     }
@@ -270,7 +283,7 @@ where
 }
 
 #[async_trait]
-impl CatalystCalendarProvider for Tier1CatalystProvider {
+impl CatalystCalendarProvider for CatalystProvider {
     async fn fetch_catalysts(
         &self,
         symbol: &str,
@@ -288,7 +301,7 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
         let to_str = to.format("%Y-%m-%d").to_string();
         let source_timeout = self.source_timeout;
 
-        let (earnings, ipos, macros) = tokio::join!(
+        let (earnings, ipos, macros, edgar) = tokio::join!(
             timeout_catalyst_source(
                 "finnhub_earnings",
                 symbol,
@@ -307,18 +320,27 @@ impl CatalystCalendarProvider for Tier1CatalystProvider {
                 source_timeout,
                 self.try_fred_releases(&from_str, &to_str),
             ),
+            // SEC EDGAR `fetch_catalysts` errors are absorbed (date arithmetic
+            // only) so an EDGAR outage never aborts the other sources.
+            timeout_catalyst_source("sec_edgar", symbol, source_timeout, async {
+                self.sec_edgar
+                    .fetch_catalysts(symbol, as_of_date, horizon_days, None)
+                    .await
+                    .unwrap_or_default()
+            }),
         );
 
         // The corporate calendar is supplied from the shared Info snapshot, so
         // this is a pure in-memory mapping — no fetch, no timeout needed.
         let dividends = Self::calendar_catalysts(calendar.as_ref(), symbol, as_of, to);
 
-        let total = earnings.len() + ipos.len() + macros.len() + dividends.len();
+        let total = earnings.len() + ipos.len() + macros.len() + dividends.len() + edgar.len();
         let mut all = Vec::with_capacity(total);
         all.extend(earnings);
         all.extend(ipos);
         all.extend(macros);
         all.extend(dividends);
+        all.extend(edgar);
 
         Ok(sort_and_dedup_catalysts(all))
     }
@@ -401,7 +423,7 @@ fn map_finnhub_ipo(r: &finnhub::models::calendar::IPOEvent) -> Option<CatalystEv
     })
 }
 
-// ─── Tier 2 provider ────────────────────────────────────────────────────────
+// ─── SEC EDGAR provider ──────────────────────────────────────────────────────
 
 /// How many calendar days before `as_of_date` to include in the EDGAR window.
 ///
@@ -488,45 +510,6 @@ impl CatalystCalendarProvider for SecEdgar8kProvider {
 
         let events = self.try_fetch_edgar_events(symbol, &from, &to).await;
         Ok(events)
-    }
-}
-
-/// Provider that composes Tier 1 (Finnhub + FRED + yfinance) with SEC EDGAR
-/// 8-K / 13D/G item-coded coverage.
-///
-/// Uses `tokio::join!` (not `try_join!`) so an EDGAR outage zeros out only
-/// the EDGAR contribution while Tier 1 events still flow through.
-pub struct Tier2CatalystProvider {
-    pub(crate) tier1: Tier1CatalystProvider,
-    pub(crate) sec_edgar: SecEdgar8kProvider,
-    pub(crate) source_timeout: std::time::Duration,
-}
-
-#[async_trait]
-impl CatalystCalendarProvider for Tier2CatalystProvider {
-    async fn fetch_catalysts(
-        &self,
-        symbol: &str,
-        as_of_date: &str,
-        horizon_days: u32,
-        calendar: Option<TickerCalendar>,
-    ) -> Result<Vec<CatalystEvent>, TradingError> {
-        let (tier1_result, edgar_result) = tokio::join!(
-            self.tier1
-                .fetch_catalysts(symbol, as_of_date, horizon_days, calendar),
-            timeout_catalyst_source("sec_edgar", symbol, self.source_timeout, async {
-                self.sec_edgar
-                    .fetch_catalysts(symbol, as_of_date, horizon_days, None)
-                    .await
-                    .unwrap_or_default()
-            },),
-        );
-
-        // Tier 1 `Err` is a date arithmetic bug — propagate.
-        let mut all = tier1_result?;
-        all.extend(edgar_result);
-
-        Ok(sort_and_dedup_catalysts(all))
     }
 }
 
@@ -905,8 +888,13 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_catalysts_returns_schema_error_for_invalid_date() {
-        let provider =
-            Tier1CatalystProvider::new(FinnhubClient::for_test(), FredClient::for_test());
+        let provider = CatalystProvider::new(
+            FinnhubClient::for_test(),
+            FredClient::for_test(),
+            SecEdgar8kProvider::new(SecEdgarClient::new(
+                crate::rate_limit::SharedRateLimiter::new("test-edgar", 10),
+            )),
+        );
         let result = provider
             .fetch_catalysts("AAPL", "not-a-date", 30, None)
             .await;
@@ -982,12 +970,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn calendar_catalysts_exclude_events_beyond_horizon_end() {
+    #[test]
+    fn calendar_catalysts_exclude_events_beyond_horizon_end() {
         use crate::data::yfinance::financials::TickerCalendar;
-
-        let provider =
-            Tier1CatalystProvider::new(FinnhubClient::for_test(), FredClient::for_test());
 
         let calendar = TickerCalendar {
             earnings_dates: vec![
@@ -998,10 +983,13 @@ mod tests {
             dividend_payment_date: None,
         };
 
-        let events = provider
-            .fetch_catalysts("AAPL", "2026-01-15", 30, Some(calendar))
-            .await
-            .expect("calendar mapping must succeed");
+        // Test the calendar-mapping unit directly: a full `fetch_catalysts`
+        // call would now also fan out to SEC EDGAR (a network fetch), which has
+        // no place in a unit test about horizon filtering.
+        let as_of = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let horizon_end = as_of + chrono::Duration::days(30);
+        let events =
+            CatalystProvider::calendar_catalysts(Some(&calendar), "AAPL", as_of, horizon_end);
 
         assert!(
             events.iter().any(|event| event.event_date == "2026-01-20"),
