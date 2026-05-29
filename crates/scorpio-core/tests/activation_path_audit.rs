@@ -67,10 +67,10 @@ fn dummy_yfinance() -> YFinanceClient {
 }
 
 fn dummy_sec_edgar() -> Arc<SecEdgarClient> {
-    Arc::new(
-        SecEdgarClient::new(SharedRateLimiter::new("activation-audit-sec-edgar", 10))
-            .expect("SecEdgarClient construction must succeed"),
-    )
+    Arc::new(SecEdgarClient::new(SharedRateLimiter::new(
+        "activation-audit-sec-edgar",
+        10,
+    )))
 }
 
 #[tokio::test]

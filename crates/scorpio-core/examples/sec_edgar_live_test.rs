@@ -67,8 +67,7 @@ async fn main() {
     println!();
 
     // 5 req/sec: well within SEC EDGAR's 10 req/sec fair-use ceiling.
-    let client = SecEdgarClient::new(SharedRateLimiter::new("sec-edgar-test", 5))
-        .expect("hardcoded User-Agent should always construct successfully");
+    let client = SecEdgarClient::new(SharedRateLimiter::new("sec-edgar-test", 5));
 
     let mut r = Results::new();
 

@@ -434,25 +434,26 @@ impl std::fmt::Debug for SecEdgarClient {
 impl SecEdgarClient {
     /// Construct a client using the hardcoded Scorpio User-Agent.
     ///
-    /// Returns `Err` only when `reqwest::Client` fails to build (virtually
-    /// impossible in practice, but surfaced so callers can fall back to
-    /// `Tier1CatalystProvider` without aborting the pipeline).
-    pub fn new(limiter: SharedRateLimiter) -> Result<Self, TradingError> {
+    /// Infallible: `reqwest::Client::builder().build()` can only fail when the
+    /// system TLS backend cannot be initialized — virtually impossible in
+    /// practice and equally fatal to every other HTTP client in the process —
+    /// so the rare failure degrades to `reqwest::Client::new()` (the same
+    /// default builder, which itself panics on a broken TLS stack). Callers no
+    /// longer thread a `Result` through pipeline construction.
+    pub fn new(limiter: SharedRateLimiter) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .user_agent(SEC_EDGAR_USER_AGENT)
             .build()
-            .map_err(|e| {
-                TradingError::Config(anyhow::anyhow!("SEC EDGAR reqwest client build: {e}"))
-            })?;
+            .unwrap_or_else(|_| reqwest::Client::new());
 
-        Ok(Self {
+        Self {
             http: Arc::new(ReqwestEdgarHttp { client }),
             limiter,
             cik_cache: Arc::new(RwLock::new(None)),
             cik_mf_cache: Arc::new(RwLock::new(None)),
             breaker: Arc::new(Mutex::new(CircuitBreakerState::new())),
-        })
+        }
     }
 
     #[cfg(test)]
@@ -1805,24 +1806,12 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    // ── new() construction ────────────────────────────────────────────────────
-
-    #[test]
-    fn new_constructs_successfully_with_valid_limiter() {
-        let limiter = SharedRateLimiter::new("test-edgar", 10);
-        let result = SecEdgarClient::new(limiter);
-        assert!(
-            result.is_ok(),
-            "hardcoded UA should always produce a valid client"
-        );
-    }
-
     // ── Live tests (require internet, not run in CI) ──────────────────────────
 
     #[tokio::test]
     #[ignore = "requires live SEC EDGAR connection — run manually"]
     async fn live_lookup_cik_aapl_returns_known_cik() {
-        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
+        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5));
         let cik = client.lookup_cik("AAPL").await.expect("lookup");
         assert_eq!(cik, Some(320193));
     }
@@ -1830,7 +1819,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live SEC EDGAR connection — run manually"]
     async fn live_fetch_recent_8k_filings_for_aapl_returns_nonempty() {
-        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
+        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5));
         let filings = client
             .fetch_recent_filings(320193, &["8-K"], "2025-01-01", "2026-12-31")
             .await
@@ -1844,7 +1833,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live SEC EDGAR connection — run manually"]
     async fn live_fetch_bogus_cik_returns_ok_empty() {
-        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5)).expect("client");
+        let client = SecEdgarClient::new(SharedRateLimiter::new("edgar-live", 5));
         let filings = client
             .fetch_recent_filings(99_999_999, &["8-K"], "2025-01-01", "2026-12-31")
             .await

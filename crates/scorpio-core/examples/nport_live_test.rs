@@ -27,10 +27,7 @@ async fn main() {
         .init();
 
     // Mirrors `build_default_sec_edgar_client` in `workflow/pipeline/mod.rs`.
-    let edgar = Arc::new(
-        SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10))
-            .expect("SecEdgarClient construction must succeed (reqwest builder)"),
-    );
+    let edgar = Arc::new(SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10)));
 
     for symbol in ["SPY", "QQQ", "BOGUS_FUND"] {
         let cik = edgar.resolve_fund_cik(symbol).await;

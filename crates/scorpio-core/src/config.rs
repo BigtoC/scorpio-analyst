@@ -332,6 +332,10 @@ pub struct RateLimitConfig {
     /// switch.
     #[serde(default = "default_reddit_rpm")]
     pub reddit_rpm: u32,
+    /// SEC EDGAR requests per second (0 = disabled). SEC's fair-use guidance
+    /// caps automated clients at ~10 rps, which is the default.
+    #[serde(default = "default_sec_edgar_rps")]
+    pub sec_edgar_rps: u32,
 }
 
 fn default_finnhub_rps() -> u32 {
@@ -349,6 +353,9 @@ fn default_alpha_vantage_rps() -> u32 {
 fn default_reddit_rpm() -> u32 {
     10
 }
+fn default_sec_edgar_rps() -> u32 {
+    10
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -358,6 +365,7 @@ impl Default for RateLimitConfig {
             yahoo_finance_rps: default_yahoo_finance_rps(),
             alpha_vantage_rps: default_alpha_vantage_rps(),
             reddit_rpm: default_reddit_rpm(),
+            sec_edgar_rps: default_sec_edgar_rps(),
         }
     }
 }
