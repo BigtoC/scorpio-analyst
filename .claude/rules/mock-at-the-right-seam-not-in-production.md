@@ -45,25 +45,31 @@ is a trap:
    without a network seam), `apply_consensus_half_life_policy` and
    `classify_runtime_pack` (workflow).
 
-2. **Library-backed I/O → mock at the function boundary with a trait.** When the
-   code wraps a client library (`yfinance-rs`, `finnhub`, …), the right seam is
-   *what the wrapper returns*, not the HTTP underneath the library. Define a
-   `#[cfg_attr(test, mockall::automock)]` trait over the consumer-facing fetch
-   methods, implement it for the concrete client, and have *data-only* consumers
-   depend on `Arc<dyn Trait>`. Tests set per-method responses on the generated
-   `Mock…`.
+2. **A wrapped fetch → mock at the function boundary with a trait.** When the
+   unit under test *calls* a fetch method, the right seam is *what the call
+   returns*, not the HTTP beneath it. Define a `#[cfg_attr(test, mockall::automock)]`
+   trait over the consumer-facing methods, implement it for the concrete client,
+   and have *data-only* consumers depend on `Arc<dyn Trait>`. Tests set per-method
+   responses on the generated `Mock…`. This is the seam for **library-backed**
+   clients (don't fake the library's wire format) **and** for hand-rolled clients
+   whose tests only need the return value substituted.
    *Examples in this repo:* `YFinanceData` (+ `MockYFinanceData`) consumed by
    `YFinanceEstimatesProvider`, `AnalystSyncTask`, `fetch_valuation_inputs`, and
-   `hydrate_consensus`; `EdgarHttp` (+ `MockEdgarHttp`) in `sec_edgar`. A `mockall`
+   `hydrate_consensus`; `EdgarHttp` (+ `MockEdgarHttp`) in `sec_edgar` — a
+   *hand-rolled* `reqwest` client that mocks at a trait seam returning
+   `(status, body)`, explicitly "without wiremock" (its source comment). A `mockall`
    expectation with `.times(0)` (or simply no expectation) also *verifies a call
    never happens* — e.g. "the ETF path does not fetch equity statements".
 
-3. **Hand-rolled HTTP (no client library) → mock the HTTP with `wiremock`.** Only
-   when the code issues `reqwest` calls itself does HTTP-level mocking earn its
-   keep. Make the base URL injectable and point a `wiremock::MockServer` at it.
-   *Examples in this repo:* the Reddit client (`with_base_url` + `MockServer`),
-   SEC EDGAR; `summary::SummaryHttp` is a candidate if its fetch path ever needs
-   coverage (its parsing is already a pure-function test).
+3. **Real request construction → mock the HTTP with `wiremock`.** Reach for
+   HTTP-level mocking only when the behavior under test *is* the request building
+   (paths, headers, query params, status handling) of a hand-rolled `reqwest`
+   client. Make the base URL injectable and point a `wiremock::MockServer` at it.
+   *Examples in this repo:* the Reddit client (`with_base_url` + `MockServer`) and
+   Alpha Vantage. Note "hand-rolled" does **not** force wiremock — `sec_edgar` is
+   hand-rolled `reqwest` yet chooses the trait seam (option 2); `summary::SummaryHttp`
+   is a candidate if its fetch path ever needs coverage (its parsing is already a
+   pure-function test).
 
 **Never** add a `#[cfg(test)]` (or `feature = "test-helpers"`) branch to a
 production method that returns canned domain objects, and never add a stub field
@@ -123,4 +129,4 @@ CLAUDE.md §2 "Simplicity First" / §3 "Surgical Changes", the sibling rules
 [[infallible-constructor-for-process-fatal-failures]] and
 [[no-write-only-placeholder-fields]] (this deletes redundant *test-seam* slots;
 those delete redundant *error-handling* and *data* slots), and
-`docs/solutions/testing-patterns/mock-at-the-right-seam-not-in-production.md`.
+`docs/solutions/design-patterns/mock-at-the-right-seam-not-in-production.md`.
