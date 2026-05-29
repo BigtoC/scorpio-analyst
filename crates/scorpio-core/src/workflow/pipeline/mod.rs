@@ -186,7 +186,6 @@ impl TradingPipeline {
         let catalyst_provider = runtime::build_catalyst_provider(
             &finnhub,
             &fred,
-            &yfinance,
             std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
         );
         let sec_edgar = build_default_sec_edgar_client();
@@ -255,7 +254,6 @@ impl TradingPipeline {
         let catalyst_provider = runtime::build_catalyst_provider(
             &finnhub,
             &fred,
-            &yfinance,
             std::time::Duration::from_secs(config.enrichment.fetch_timeout_secs),
         );
         let sec_edgar = build_default_sec_edgar_client();
