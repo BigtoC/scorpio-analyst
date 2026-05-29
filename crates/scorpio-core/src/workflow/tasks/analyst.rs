@@ -12,6 +12,7 @@ use yfinance_rs::{
     analysis::EarningsTrendRow,
     fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
     profile::Profile,
+    ticker::Info,
 };
 
 use crate::{
@@ -800,14 +801,11 @@ async fn fetch_valuation_inputs(
     symbol: &str,
     target_date: &str,
     fetch_timeout: Duration,
+    info: Option<&Info>,
 ) -> ValuationInputs {
-    let profile = fetch_with_timeout(
-        symbol,
-        "profile",
-        fetch_timeout,
-        yfinance.get_profile(symbol),
-    )
-    .await;
+    // Profile is lifted from the shared `Info` snapshot fetched once per cycle,
+    // not re-fetched here.
+    let profile = info.and_then(|info| info.profile.clone());
     let (cashflow, balance, income, shares, trend) = if pack_id == PackId::EtfBaseline {
         (None, None, None, None, None)
     } else {
@@ -873,22 +871,18 @@ async fn fetch_valuation_inputs(
             };
         }
 
-        // Parallel ETF fetches that don't depend on each other.
-        let fund_info_from_profile = profile
+        // Parallel ETF fetches that don't depend on each other. Fund info is
+        // derived from the shared `Info` profile rather than a second
+        // `get_fund_info()` (which would re-fetch the same profile).
+        let fund_info = profile
             .as_ref()
             .and_then(|profile| fund_info_from_profile(symbol, profile));
-        let (quote_opt, info_opt, yld_opt, etf_ohlcv_opt) = tokio::join!(
+        let (quote_opt, yld_opt, etf_ohlcv_opt) = tokio::join!(
             fetch_with_timeout(
                 symbol,
                 "etf_quote",
                 fetch_timeout,
                 yfinance.get_quote(symbol)
-            ),
-            fetch_with_timeout(
-                symbol,
-                "etf_fund_info",
-                fetch_timeout,
-                yfinance.get_fund_info(symbol),
             ),
             fetch_with_timeout(
                 symbol,
@@ -904,7 +898,7 @@ async fn fetch_valuation_inputs(
             ),
         );
         etf_quote = quote_opt;
-        etf_fund_info = info_opt.or(fund_info_from_profile);
+        etf_fund_info = fund_info;
         etf_distribution_yield_ttm_pct = yld_opt;
         etf_ohlcv = etf_ohlcv_opt;
 
@@ -1406,6 +1400,7 @@ impl Task for AnalystSyncTask {
             &symbol,
             &state.target_date,
             self.valuation_fetch_timeout,
+            state.yfinance_info.as_ref(),
         )
         .await;
         let current_price = state.current_price;
@@ -1569,6 +1564,7 @@ mod tests {
             .format("%Y-%m-%d")
             .to_string();
 
+        let info = yfinance.get_info("SPY").await;
         let inputs = fetch_valuation_inputs(
             &yfinance,
             None,
@@ -1576,12 +1572,13 @@ mod tests {
             "SPY",
             &today,
             Duration::from_secs(1),
+            info.as_ref(),
         )
         .await;
 
         assert!(
             inputs.profile.is_some(),
-            "asset-shape detection should still fetch profile"
+            "asset-shape detection should still read profile from the shared Info"
         );
         assert!(
             inputs.cashflow.is_none(),
@@ -1617,6 +1614,7 @@ mod tests {
             ..StubbedFinancialResponses::default()
         });
 
+        let info = yfinance.get_info("SPY").await;
         let inputs = fetch_valuation_inputs(
             &yfinance,
             None,
@@ -1624,12 +1622,13 @@ mod tests {
             "SPY",
             "2024-01-15",
             Duration::from_secs(1),
+            info.as_ref(),
         )
         .await;
 
         assert!(
             inputs.profile.is_some(),
-            "asset-shape detection should still fetch profile"
+            "asset-shape detection should still read profile from the shared Info"
         );
         assert!(inputs.etf_quote.is_none());
         assert!(inputs.etf_fund_info.is_none());
