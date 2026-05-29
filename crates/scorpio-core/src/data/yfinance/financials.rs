@@ -65,11 +65,6 @@ impl YFinanceClient {
     /// Returns `None` on network or parsing failures so the caller can degrade
     /// gracefully without aborting the pipeline.
     pub async fn get_quarterly_cashflow(&self, symbol: &str) -> Option<Vec<CashflowRow>> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.cashflow.clone();
-        }
-
         match self
             .session
             .with_rate_limit(
@@ -89,11 +84,6 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_balance_sheet(&self, symbol: &str) -> Option<Vec<BalanceSheetRow>> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.balance.clone();
-        }
-
         match self
             .session
             .with_rate_limit(
@@ -113,11 +103,6 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_income_stmt(&self, symbol: &str) -> Option<Vec<IncomeStatementRow>> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.income.clone();
-        }
-
         match self
             .session
             .with_rate_limit(
@@ -138,11 +123,6 @@ impl YFinanceClient {
     ///
     /// Returns `None` on network or parsing failures.
     pub async fn get_quarterly_shares(&self, symbol: &str) -> Option<Vec<ShareCount>> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.shares.clone();
-        }
-
         match self
             .session
             .with_rate_limit(FundamentalsBuilder::new(self.session.client(), symbol).shares(true))
@@ -170,16 +150,6 @@ impl YFinanceClient {
         &self,
         symbol: &str,
     ) -> Result<Option<Vec<EarningsTrendRow>>, crate::error::TradingError> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            if let Some(message) = &stubbed.trend_error {
-                return Err(crate::error::TradingError::SchemaViolation {
-                    message: message.clone(),
-                });
-            }
-            return Ok(stubbed.trend.clone());
-        }
-
         match self
             .session
             .with_rate_limit(
@@ -205,19 +175,6 @@ impl YFinanceClient {
         &self,
         symbol: &str,
     ) -> Result<Option<PriceTarget>, crate::error::TradingError> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            if let Some(message) = &stubbed.price_target_error {
-                return Err(crate::error::TradingError::SchemaViolation {
-                    message: message.clone(),
-                });
-            }
-            return Ok(stubbed
-                .price_target
-                .clone()
-                .and_then(empty_price_target_to_none));
-        }
-
         match self
             .session
             .with_rate_limit(
@@ -239,19 +196,6 @@ impl YFinanceClient {
         &self,
         symbol: &str,
     ) -> Result<Option<RecommendationSummary>, crate::error::TradingError> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            if let Some(message) = &stubbed.recommendation_summary_error {
-                return Err(crate::error::TradingError::SchemaViolation {
-                    message: message.clone(),
-                });
-            }
-            return Ok(stubbed
-                .recommendation_summary
-                .clone()
-                .and_then(empty_recommendation_summary_to_none));
-        }
-
         match self
             .session
             .with_rate_limit(
@@ -278,11 +222,6 @@ impl YFinanceClient {
     /// as proof that the symbol is an equity — absent profile data is not a
     /// discriminating signal for asset shape.
     pub async fn get_profile(&self, symbol: &str) -> Option<Profile> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.profile.clone();
-        }
-
         match self
             .session
             .with_rate_limit(profile::load_profile(self.session.client(), symbol))
@@ -305,11 +244,6 @@ impl YFinanceClient {
     /// gracefully. The upstream type is converted to a thin [`TickerCalendar`]
     /// domain wrapper so callers don't depend on the `yfinance_rs` type directly.
     pub async fn fetch_calendar(&self, symbol: &str) -> Option<TickerCalendar> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.stubbed_financials {
-            return stubbed.calendar.clone();
-        }
-
         match self
             .session
             .with_rate_limit(FundamentalsBuilder::new(self.session.client(), symbol).calendar())
@@ -340,12 +274,6 @@ impl YFinanceClient {
     /// hard-error path in `Ticker::info()`); individual sub-fields already
     /// degrade to `None` inside `info()`.
     pub async fn get_info(&self, symbol: &str) -> Option<Info> {
-        #[cfg(test)]
-        // TODO: Bad pattern
-        if let Some(stubbed) = &self.stubbed_financials {
-            return Some(synthesize_stub_info(stubbed));
-        }
-
         let ticker = Ticker::new(self.session.client(), symbol);
         match self.session.with_rate_limit(ticker.info()).await {
             Ok(info) => Some(info),
@@ -354,44 +282,6 @@ impl YFinanceClient {
                 None
             }
         }
-    }
-}
-
-/// Assemble an [`Info`] from stubbed per-category responses so existing
-/// stub-driven tests exercise the shared-`Info` path without constructing a
-/// full upstream payload. Snapshot/key-statistics are defaulted because no
-/// consumer reads them; `calendar` is lifted back to the upstream `Calendar`
-/// shape from the domain [`TickerCalendar`] stub.
-#[cfg(test)]
-fn synthesize_stub_info(stubbed: &super::ohlcv::StubbedFinancialResponses) -> Info {
-    use paft_aggregates::Snapshot;
-    use yfinance_rs::{AssetKind, Instrument, KeyStatistics};
-
-    // The snapshot is never read by any consumer; build a throwaway instrument
-    // so `Info` is constructible offline.
-    let instrument =
-        Instrument::from_symbol("AAPL", AssetKind::default()).expect("valid stub instrument");
-    Info {
-        snapshot: Snapshot::new(instrument),
-        key_statistics: KeyStatistics::default(),
-        profile: stubbed.profile.clone(),
-        calendar: stubbed.calendar.clone().map(ticker_calendar_to_upstream),
-        price_target: stubbed.price_target.clone(),
-        recommendation_summary: stubbed.recommendation_summary.clone(),
-        esg_scores: None,
-    }
-}
-
-/// Reverse of [`TickerCalendar::from`] for test synthesis: lift date-only
-/// fields back to midnight-UTC `DateTime`s on the upstream `Calendar`.
-#[cfg(test)]
-fn ticker_calendar_to_upstream(cal: TickerCalendar) -> Calendar {
-    use chrono::{TimeZone, Utc};
-    let to_dt = |d: NaiveDate| Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
-    Calendar {
-        earnings_dates: cal.earnings_dates.into_iter().map(to_dt).collect(),
-        ex_dividend_date: cal.ex_dividend_date.map(to_dt),
-        dividend_payment_date: cal.dividend_payment_date.map(to_dt),
     }
 }
 
@@ -476,96 +366,30 @@ mod tests {
         // avoided here; the presence of the method signatures above is sufficient.
     }
 
-    // ── Result-preserving Yahoo wrappers (Task 2) ────────────────────────
+    // ── Empty-payload collapse helpers ───────────────────────────────────
 
-    use crate::data::StubbedFinancialResponses;
-    use crate::error::TradingError;
     use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
 
-    #[tokio::test]
-    async fn get_analyst_price_target_result_preserves_yahoo_failure_reason() {
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            price_target_error: Some("rate limit reason X".to_owned()),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let err = client
-            .get_analyst_price_target_result("AAPL")
-            .await
-            .expect_err("stubbed Yahoo failure should surface as Err");
-
-        match err {
-            TradingError::SchemaViolation { message } => {
-                assert!(
-                    message.contains("reason X"),
-                    "expected error message to include upstream reason, got: {message}"
-                );
-            }
-            other => panic!("expected SchemaViolation, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn get_recommendations_summary_result_preserves_yahoo_failure_reason() {
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            recommendation_summary_error: Some("rate limit reason X".to_owned()),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let err = client
-            .get_recommendations_summary_result("AAPL")
-            .await
-            .expect_err("stubbed Yahoo failure should surface as Err");
-
-        match err {
-            TradingError::SchemaViolation { message } => {
-                assert!(
-                    message.contains("reason X"),
-                    "expected error message to include upstream reason, got: {message}"
-                );
-            }
-            other => panic!("expected SchemaViolation, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn empty_price_target_payload_returns_none() {
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            price_target: Some(PriceTarget {
-                mean: None,
-                high: None,
-                low: None,
-                number_of_analysts: None,
-            }),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let result = client
-            .get_analyst_price_target_result("AAPL")
-            .await
-            .expect("empty upstream payload should not be an error");
+    #[test]
+    fn empty_price_target_payload_returns_none() {
+        let pt = PriceTarget {
+            mean: None,
+            high: None,
+            low: None,
+            number_of_analysts: None,
+        };
 
         assert!(
-            result.is_none(),
-            "expected Ok(None) for all-empty PriceTarget upstream payload, got {result:?}"
+            empty_price_target_to_none(pt).is_none(),
+            "expected None for all-empty PriceTarget payload"
         );
     }
 
-    #[tokio::test]
-    async fn empty_recommendations_summary_payload_returns_none() {
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            recommendation_summary: Some(RecommendationSummary::default()),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let result = client
-            .get_recommendations_summary_result("AAPL")
-            .await
-            .expect("empty upstream payload should not be an error");
-
+    #[test]
+    fn empty_recommendations_summary_payload_returns_none() {
         assert!(
-            result.is_none(),
-            "expected Ok(None) for all-empty RecommendationSummary upstream payload, got {result:?}"
+            empty_recommendation_summary_to_none(RecommendationSummary::default()).is_none(),
+            "expected None for all-empty RecommendationSummary payload"
         );
     }
 
@@ -613,68 +437,5 @@ mod tests {
         assert!(cal.earnings_dates.is_empty());
         assert!(cal.ex_dividend_date.is_none());
         assert!(cal.dividend_payment_date.is_none());
-    }
-
-    #[tokio::test]
-    async fn fetch_calendar_returns_stubbed_calendar() {
-        let stubbed_calendar = TickerCalendar {
-            earnings_dates: vec![chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()],
-            ex_dividend_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
-            dividend_payment_date: None,
-        };
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            calendar: Some(stubbed_calendar.clone()),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let calendar = client.fetch_calendar("AAPL").await;
-
-        assert_eq!(calendar, Some(stubbed_calendar));
-    }
-
-    // ── get_info shared snapshot ─────────────────────────────────────────
-
-    #[tokio::test]
-    async fn get_info_synthesizes_shared_snapshot_from_stubs() {
-        use paft_money::{Currency, IsoCurrency, Price};
-        use yfinance_rs::core::conversions::money_to_f64;
-        let to_price = |v: f64| {
-            let d = rust_decimal::Decimal::try_from(v).unwrap();
-            Price::new(d, Currency::Iso(IsoCurrency::USD))
-        };
-        let price_target = PriceTarget {
-            mean: Some(to_price(220.0)),
-            high: Some(to_price(260.0)),
-            low: Some(to_price(180.0)),
-            number_of_analysts: Some(28),
-        };
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            price_target: Some(price_target),
-            recommendation_summary: Some(RecommendationSummary {
-                strong_buy: Some(8),
-                ..RecommendationSummary::default()
-            }),
-            calendar: Some(TickerCalendar {
-                earnings_dates: vec![chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()],
-                ex_dividend_date: None,
-                dividend_payment_date: None,
-            }),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let info = client.get_info("AAPL").await.expect("stubbed info");
-
-        let mean = info
-            .price_target
-            .and_then(|pt| pt.mean)
-            .map(|p| money_to_f64(&p))
-            .expect("price target mean");
-        assert!((mean - 220.0).abs() < 0.01);
-        assert_eq!(
-            info.recommendation_summary.and_then(|r| r.strong_buy),
-            Some(8)
-        );
-        let cal = info.calendar.expect("calendar synthesized");
-        assert_eq!(cal.earnings_dates.len(), 1);
     }
 }

@@ -57,18 +57,6 @@ impl YFinanceNewsProvider {
     /// `TradingError::SchemaViolation` on parse failures — matching the
     /// error taxonomy used by [`super::ohlcv::map_yf_err`].
     pub async fn get_company_news(&self, symbol: &str) -> Result<NewsData, TradingError> {
-        #[cfg(test)]
-        if let Some(stubbed) = &self.client.stubbed_financials {
-            if let Some(ref err_msg) = stubbed.news_error {
-                return Err(TradingError::NetworkTimeout {
-                    elapsed: std::time::Duration::ZERO,
-                    message: err_msg.clone(),
-                });
-            }
-            let articles = stubbed.news.clone().unwrap_or_default();
-            return Ok(build_yahoo_news_data(symbol, articles));
-        }
-
         self.client.session.limiter().acquire().await;
 
         let raw_articles = NewsBuilder::new(self.client.session.client(), symbol)
@@ -122,7 +110,6 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::data::yfinance::ohlcv::{StubbedFinancialResponses, YFinanceClient};
 
     fn make_article(
         uuid: &str,
@@ -142,28 +129,18 @@ mod tests {
         }
     }
 
-    fn provider_with_stub(stub: StubbedFinancialResponses) -> YFinanceNewsProvider {
-        let client = YFinanceClient::with_stubbed_financials(stub);
-        YFinanceNewsProvider::new(&client)
-    }
-
-    #[tokio::test]
-    async fn fetches_and_normalizes_articles() {
-        let now = Utc::now();
+    #[test]
+    fn fetches_and_normalizes_articles() {
+        let published_at = Utc::now() - chrono::Duration::hours(2);
         let articles = vec![make_article(
             "uuid-1",
             "AAPL Surges on Strong Earnings",
             Some("Reuters"),
             Some("https://example.com/aapl-news"),
-            now,
+            published_at,
         )];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            news: Some(articles),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let result = provider.get_company_news("AAPL").await.unwrap();
+        let result = build_yahoo_news_data("AAPL", articles);
 
         assert_eq!(result.articles.len(), 1, "should return 1 article");
 
@@ -190,14 +167,9 @@ mod tests {
         assert_eq!(article.source, "Reuters");
     }
 
-    #[tokio::test]
-    async fn empty_feed_returns_empty_news_data() {
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            news: Some(vec![]),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let result = provider.get_company_news("AAPL").await.unwrap();
+    #[test]
+    fn empty_feed_returns_empty_news_data() {
+        let result = build_yahoo_news_data("AAPL", vec![]);
 
         assert!(result.articles.is_empty(), "articles must be empty");
         assert!(result.macro_events.is_empty(), "macro_events must be empty");
@@ -208,20 +180,17 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn articles_outside_analysis_window_are_filtered_out() {
+    #[test]
+    fn articles_outside_analysis_window_are_filtered_out() {
         let old_date = Utc::now() - chrono::Duration::days(60);
         let recent_date = Utc::now() - chrono::Duration::days(5);
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            news: Some(vec![
-                make_article("old", "Old News", None, None, old_date),
-                make_article("recent", "Recent News", None, None, recent_date),
-            ]),
-            ..StubbedFinancialResponses::default()
-        });
+        let articles = vec![
+            make_article("old", "Old News", None, None, old_date),
+            make_article("recent", "Recent News", None, None, recent_date),
+        ];
 
-        let result = provider.get_company_news("AAPL").await.unwrap();
+        let result = build_yahoo_news_data("AAPL", articles);
 
         assert_eq!(
             result.articles.len(),

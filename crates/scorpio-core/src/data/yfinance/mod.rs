@@ -10,6 +10,7 @@
 //! | [`financials`]| Quarterly financial statement, earnings trend, and profile fetchers |
 
 mod client;
+pub mod data_source;
 pub mod etf;
 pub mod financials;
 pub mod news;
@@ -18,10 +19,11 @@ pub mod options;
 pub mod price;
 pub mod summary;
 
+#[cfg(test)]
+pub use data_source::MockYFinanceData;
+pub use data_source::YFinanceData;
 pub use etf::{EtfQuote, FundInfo, is_supported_etf_kind};
 pub use news::YFinanceNewsProvider;
-#[cfg(any(test, feature = "test-helpers"))]
-pub use ohlcv::StubbedFinancialResponses;
 pub use ohlcv::{Candle, GetOhlcv, OhlcvArgs, OhlcvToolContext, YFinanceClient};
 pub use options::{GetOptionsSnapshot, YFinanceOptionsProvider};
 pub use price::{fetch_vix_data, get_latest_close};

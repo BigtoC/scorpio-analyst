@@ -22,7 +22,7 @@ use crate::{
     analysis_packs::PackId,
     config::LlmConfig,
     data::{
-        FinnhubClient, FredClient, SecEdgarClient, YFinanceClient,
+        FinnhubClient, FredClient, SecEdgarClient, YFinanceClient, YFinanceData,
         adapters::transcripts::TranscriptFetch,
         sec_edgar_nport::NPortHoldings,
         yfinance::{
@@ -689,7 +689,7 @@ impl Task for TechnicalAnalystTask {
 /// and returns [`NextAction::Continue`] or [`NextAction::End`] accordingly.
 pub struct AnalystSyncTask {
     snapshot_store: Arc<SnapshotStore>,
-    yfinance: YFinanceClient,
+    yfinance: Arc<dyn YFinanceData>,
     /// Optional SEC EDGAR client. Consumed by the ETF input hydration path
     /// (Task 13) to fetch N-PORT-P holdings when the active pack is
     /// `EtfBaseline`. Left `None` for the equity baseline and for tests that
@@ -705,7 +705,7 @@ impl AnalystSyncTask {
     pub fn new(snapshot_store: Arc<SnapshotStore>) -> Arc<Self> {
         Self::with_yfinance(
             snapshot_store,
-            YFinanceClient::default(),
+            Arc::new(YFinanceClient::default()),
             Duration::from_secs(30),
         )
     }
@@ -719,7 +719,7 @@ impl AnalystSyncTask {
     #[must_use]
     pub fn with_yfinance(
         snapshot_store: Arc<SnapshotStore>,
-        yfinance: YFinanceClient,
+        yfinance: Arc<dyn YFinanceData>,
         valuation_fetch_timeout: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -741,7 +741,7 @@ impl AnalystSyncTask {
     #[must_use]
     pub fn with_yfinance_and_edgar(
         snapshot_store: Arc<SnapshotStore>,
-        yfinance: YFinanceClient,
+        yfinance: Arc<dyn YFinanceData>,
         sec_edgar: Arc<SecEdgarClient>,
         valuation_fetch_timeout: Duration,
     ) -> Arc<Self> {
@@ -785,7 +785,7 @@ const ETF_OHLCV_WINDOW_DAYS: i64 = 365;
 /// `Option`-returning future so it can flow through [`fetch_with_timeout`]
 /// alongside the other fail-soft ETF fetches. Date-range failures or
 /// transport errors degrade to `None` rather than propagating.
-async fn fetch_ohlcv_1y(yfinance: &YFinanceClient, symbol: &str) -> Option<Vec<Candle>> {
+async fn fetch_ohlcv_1y(yfinance: &dyn YFinanceData, symbol: &str) -> Option<Vec<Candle>> {
     let today = chrono::Utc::now().date_naive();
     let start = today - chrono::Duration::days(ETF_OHLCV_WINDOW_DAYS);
     yfinance
@@ -795,7 +795,7 @@ async fn fetch_ohlcv_1y(yfinance: &YFinanceClient, symbol: &str) -> Option<Vec<C
 }
 
 async fn fetch_valuation_inputs(
-    yfinance: &YFinanceClient,
+    yfinance: &dyn YFinanceData,
     sec_edgar: Option<&Arc<SecEdgarClient>>,
     pack_id: PackId,
     symbol: &str,
@@ -1394,7 +1394,7 @@ impl Task for AnalystSyncTask {
             .as_ref()
             .map_or(PackId::Baseline, |p| p.pack_id);
         let valuation_inputs = fetch_valuation_inputs(
-            &self.yfinance,
+            self.yfinance.as_ref(),
             self.sec_edgar.as_ref(),
             pack_id,
             &symbol,
@@ -1504,8 +1504,35 @@ mod tests {
     use super::{ValuationInputs, fetch_valuation_inputs, fetch_with_timeout};
     use crate::analysis_packs::PackId;
     use crate::data::yfinance::{Candle, etf::FundInfo};
-    use crate::data::{StubbedFinancialResponses, YFinanceClient, sec_edgar_nport::NPortHoldings};
+    use crate::data::{MockYFinanceData, sec_edgar_nport::NPortHoldings};
     use crate::valuation::{ValuatorId, ValuatorRegistry};
+
+    /// Build a shared `Info` snapshot carrying a Fund profile, so
+    /// `fetch_valuation_inputs` reads the asset shape from it the same way the
+    /// production cycle does (the profile is injected via the `info` arg, not
+    /// re-fetched). Only `info.profile` is read by the ETF path under test.
+    fn etf_fund_info_snapshot() -> yfinance_rs::ticker::Info {
+        use paft_aggregates::Snapshot;
+        use yfinance_rs::ticker::Info;
+        use yfinance_rs::{AssetKind, Instrument, KeyStatistics};
+
+        let instrument =
+            Instrument::from_symbol("SPY", AssetKind::default()).expect("valid stub instrument");
+        Info {
+            snapshot: Snapshot::new(instrument),
+            key_statistics: KeyStatistics::default(),
+            profile: Some(Profile::Fund(Fund {
+                name: "SPDR S&P 500 ETF Trust".to_owned(),
+                family: Some("State Street".to_owned()),
+                kind: Default::default(),
+                isin: None,
+            })),
+            calendar: None,
+            price_target: None,
+            recommendation_summary: None,
+            esg_scores: None,
+        }
+    }
 
     #[tokio::test]
     async fn fetch_with_timeout_preserves_fast_result_when_parallel_peer_times_out() {
@@ -1550,29 +1577,34 @@ mod tests {
 
     #[tokio::test]
     async fn etf_baseline_fetch_skips_equity_statement_fanout() {
-        let yfinance = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            profile: Some(Profile::Fund(Fund {
-                name: "SPDR S&P 500 ETF Trust".to_owned(),
-                family: Some("State Street".to_owned()),
-                kind: Default::default(),
-                isin: None,
-            })),
-            ..StubbedFinancialResponses::default()
+        // ETF pack on today's date still runs the live ETF fetches; mock them to
+        // degrade to absent. The equity-statement methods are intentionally NOT
+        // given expectations — if the ETF branch were to call any of them,
+        // mockall would panic, which is exactly the "no equity fan-out"
+        // assertion expressed at the call boundary.
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_quote().returning(|_| None);
+        mock.expect_get_distribution_yield_ttm().returning(|_| None);
+        mock.expect_get_ohlcv().returning(|_, _, _| {
+            Err(crate::error::TradingError::NetworkTimeout {
+                elapsed: Duration::ZERO,
+                message: "no ohlcv in test".to_owned(),
+            })
         });
+        let info = etf_fund_info_snapshot();
         let today = chrono::Utc::now()
             .date_naive()
             .format("%Y-%m-%d")
             .to_string();
 
-        let info = yfinance.get_info("SPY").await;
         let inputs = fetch_valuation_inputs(
-            &yfinance,
+            &mock,
             None,
             PackId::EtfBaseline,
             "SPY",
             &today,
             Duration::from_secs(1),
-            info.as_ref(),
+            Some(&info),
         )
         .await;
 
@@ -1604,25 +1636,19 @@ mod tests {
 
     #[tokio::test]
     async fn etf_baseline_historical_target_date_skips_live_etf_fetches() {
-        let yfinance = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            profile: Some(Profile::Fund(Fund {
-                name: "SPDR S&P 500 ETF Trust".to_owned(),
-                family: Some("State Street".to_owned()),
-                kind: Default::default(),
-                isin: None,
-            })),
-            ..StubbedFinancialResponses::default()
-        });
+        // A historical target date short-circuits the ETF path before any fetch,
+        // so the mock is given NO expectations — any client call would panic.
+        let mock = MockYFinanceData::new();
+        let info = etf_fund_info_snapshot();
 
-        let info = yfinance.get_info("SPY").await;
         let inputs = fetch_valuation_inputs(
-            &yfinance,
+            &mock,
             None,
             PackId::EtfBaseline,
             "SPY",
             "2024-01-15",
             Duration::from_secs(1),
-            info.as_ref(),
+            Some(&info),
         )
         .await;
 

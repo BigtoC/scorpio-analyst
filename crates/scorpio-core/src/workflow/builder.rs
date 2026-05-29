@@ -96,7 +96,7 @@ pub fn build_graph_from_pack(
 
     let analyst_sync = AnalystSyncTask::with_yfinance_and_edgar(
         Arc::clone(&snapshot_store),
-        yfinance.clone(),
+        Arc::new(yfinance.clone()),
         sec_edgar,
         Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
     );
