@@ -775,9 +775,12 @@ async fn run_analysis_cycle_rehydrates_prior_consensus_counter_from_snapshot_sto
 
     let yfinance =
         crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            // Earnings trend is the sole live, error-bearing consensus branch now
+            // (price target / recommendations come from the shared Info snapshot
+            // and carry no error provenance). A live trend failure with no cached
+            // consensus drives the ProviderDegraded half-life path.
             trend: None,
-            price_target_error: Some("price target down".to_owned()),
-            recommendation_summary: None,
+            trend_error: Some("earnings trend down".to_owned()),
             ..StubbedFinancialResponses::default()
         });
 
@@ -879,9 +882,12 @@ async fn run_analysis_cycle_does_not_reuse_prior_consensus_payload_across_symbol
 
     let yfinance =
         crate::data::YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
+            // Earnings trend is the sole live, error-bearing consensus branch now
+            // (price target / recommendations come from the shared Info snapshot
+            // and carry no error provenance). A live trend failure with no cached
+            // consensus drives the ProviderDegraded half-life path.
             trend: None,
-            price_target_error: Some("price target down".to_owned()),
-            recommendation_summary: None,
+            trend_error: Some("earnings trend down".to_owned()),
             ..StubbedFinancialResponses::default()
         });
 
@@ -1415,6 +1421,7 @@ impl crate::data::adapters::catalysts::CatalystCalendarProvider for CountingCata
         _symbol: &str,
         _as_of_date: &str,
         _horizon_days: u32,
+        _calendar: Option<crate::data::yfinance::financials::TickerCalendar>,
     ) -> Result<Vec<crate::data::adapters::catalysts::CatalystEvent>, TradingError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.events.as_ref().clone())

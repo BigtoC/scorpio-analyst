@@ -759,6 +759,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     enrichment_event_news,
                     enrichment_consensus,
                     enrichment_catalysts: Default::default(),
+                    yfinance_info: None,
                     data_coverage,
                     provenance_summary,
                     debate_history,
@@ -1409,6 +1410,27 @@ fn trading_state_etf_risk_free_rate_fields_roundtrip_with_serde_default() {
         back.etf_risk_free_rate_source,
         Some(EtfRiskFreeRateSource::FredDgs3Mo)
     );
+}
+
+#[test]
+fn legacy_trading_state_without_yfinance_info_field_deserializes() {
+    // `yfinance_info` was added with `#[serde(default)]`; snapshots predating
+    // the shared-Info change must still deserialize, defaulting it to `None`.
+    let state = TradingState::new("AAPL", "2026-05-29");
+    let mut value: serde_json::Value =
+        serde_json::to_value(&state).expect("serialize current state");
+    let removed = value
+        .as_object_mut()
+        .expect("json is object")
+        .remove("yfinance_info");
+    assert!(
+        removed.is_some(),
+        "yfinance_info must be present in current snapshots; did the field get renamed?"
+    );
+    let back: TradingState =
+        serde_json::from_value(value).expect("legacy snapshot must deserialize");
+    assert!(back.yfinance_info.is_none());
+    assert_eq!(back.asset_symbol, "AAPL");
 }
 
 #[test]
