@@ -14,6 +14,7 @@ symptoms:
 root_cause: logic_error
 resolution_type: code_fix
 severity: high
+last_updated: 2026-05-29
 related_components:
   - testing_framework
   - tooling
@@ -27,6 +28,16 @@ tags:
 ---
 
 # Fix deterministic valuation follow-up regressions
+
+> **Superseded (testing approach only), 2026-05-29.** The deterministic-coverage
+> technique this doc recommends — adding `YFinanceClient::with_stubbed_financials`
+> + a `#[cfg(test)] stubbed_financials` short-circuit inside the production
+> fetchers — has been removed as a test anti-pattern. Use the function-boundary
+> trait mock instead: see
+> [`docs/solutions/design-patterns/mock-at-the-right-seam-not-in-production.md`](../design-patterns/mock-at-the-right-seam-not-in-production.md)
+> and `.claude/rules/mock-at-the-right-seam-not-in-production.md`. The valuation
+> *correctness* findings below remain valid; only the stub-seam testing mechanism
+> is obsolete.
 
 ## Problem
 Chunk 3's deterministic valuation runtime still had follow-up review defects after the main implementation landed. The runtime timeout path was not fully config-backed, valuation math still depended on provider row ordering in some cases, and PEG derivation could combine EPS and growth from different earnings-trend rows.
