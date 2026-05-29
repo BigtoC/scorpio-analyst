@@ -122,6 +122,17 @@ impl SharedRateLimiter {
         Some(Self::from_quota("reddit", quota))
     }
 
+    /// Create a SEC EDGAR rate limiter from `RateLimitConfig`.
+    ///
+    /// Returns `None` when `cfg.sec_edgar_rps == 0` (disabled). SEC's fair-use
+    /// guidance caps automated clients at ~10 rps, which is the default.
+    pub fn sec_edgar_from_config(cfg: &RateLimitConfig) -> Option<Self> {
+        if cfg.sec_edgar_rps == 0 {
+            return None;
+        }
+        Some(Self::new("sec-edgar", cfg.sec_edgar_rps))
+    }
+
     /// Wait until a single permit becomes available. This is cancel-safe.
     pub async fn acquire(&self) {
         if let Some(inner) = &self.inner {
@@ -340,6 +351,7 @@ mod tests {
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
             reddit_rpm: 0,
+            sec_edgar_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_some());
@@ -354,6 +366,7 @@ mod tests {
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
             reddit_rpm: 0,
+            sec_edgar_rps: 0,
         };
         let limiter = SharedRateLimiter::finnhub_from_config(&cfg);
         assert!(limiter.is_none());
@@ -387,6 +400,7 @@ mod tests {
             yahoo_finance_rps: 5,
             alpha_vantage_rps: 0,
             reddit_rpm: 0,
+            sec_edgar_rps: 0,
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
         assert!(limiter.is_some(), "non-zero rps should produce a limiter");
@@ -405,6 +419,7 @@ mod tests {
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
             reddit_rpm: 0,
+            sec_edgar_rps: 0,
         };
         let limiter = SharedRateLimiter::yahoo_finance_from_config(&cfg);
         assert!(limiter.is_none(), "rps=0 should disable the limiter");
@@ -418,6 +433,7 @@ mod tests {
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 1,
             reddit_rpm: 0,
+            sec_edgar_rps: 0,
         };
         let limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg);
         assert!(limiter.is_some(), "non-zero rps should produce a limiter");
@@ -432,6 +448,7 @@ mod tests {
             yahoo_finance_rps: 0,
             alpha_vantage_rps: 0,
             reddit_rpm: 0,
+            sec_edgar_rps: 0,
         };
         let limiter = SharedRateLimiter::alpha_vantage_from_config(&cfg);
         assert!(limiter.is_none(), "rps=0 should disable the limiter");
@@ -457,6 +474,29 @@ mod tests {
             ..Default::default()
         };
         assert!(SharedRateLimiter::reddit_from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn sec_edgar_from_config_returns_some_when_rps_nonzero() {
+        let cfg = RateLimitConfig {
+            sec_edgar_rps: 10,
+            ..Default::default()
+        };
+        let limiter = SharedRateLimiter::sec_edgar_from_config(&cfg);
+        assert!(limiter.is_some());
+        assert_eq!(
+            limiter.map(|l| l.label().to_owned()),
+            Some("sec-edgar".to_owned())
+        );
+    }
+
+    #[test]
+    fn sec_edgar_from_config_returns_none_when_rps_zero() {
+        let cfg = RateLimitConfig {
+            sec_edgar_rps: 0,
+            ..Default::default()
+        };
+        assert!(SharedRateLimiter::sec_edgar_from_config(&cfg).is_none());
     }
 
     // ── DeepSeek rate limiter tests ──────────────────────────────────────────

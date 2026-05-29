@@ -66,6 +66,7 @@ rpm = 20  # Free-tier limit; paid accounts can increase this
 finnhub_rps = 30
 fred_rps = 2
 yahoo_finance_rps = 30  # set to 0 to disable
+sec_edgar_rps = 10      # SEC fair-use ceiling; set to 0 to disable
 
 [storage]
 # Path to the SQLite snapshot database. Supports ~ and $HOME expansion.
