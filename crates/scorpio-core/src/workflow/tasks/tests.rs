@@ -2255,15 +2255,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
     use yfinance_rs::{
         analysis::EarningsTrendRow,
         fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
-        profile::Profile,
     };
-
-    fn company_profile() -> Profile {
-        serde_json::from_str(
-            r#"{"Company":{"name":"Test Corp","sector":null,"industry":null,"website":null,"address":null,"summary":null,"isin":null}}"#,
-        )
-        .unwrap()
-    }
 
     fn trailing_cashflow_rows_with_fcf() -> Vec<CashflowRow> {
         serde_json::from_str(
@@ -2407,19 +2399,27 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
     .await
     .unwrap();
 
-    let yfinance = crate::data::YFinanceClient::with_stubbed_financials(
-        crate::data::StubbedFinancialResponses {
-            profile: Some(company_profile()),
-            cashflow: Some(trailing_cashflow_rows_with_fcf()),
-            balance: Some(balance_sheet_rows_with_shares()),
-            income: Some(trailing_income_statement_rows()),
-            shares: Some(quarterly_shares()),
-            trend: Some(earnings_trend_rows_with_forward_eps()),
-            trend_error: None,
-            ..crate::data::StubbedFinancialResponses::default()
-        },
+    let mut yfinance = crate::data::MockYFinanceData::new();
+    yfinance
+        .expect_get_quarterly_cashflow()
+        .returning(|_| Some(trailing_cashflow_rows_with_fcf()));
+    yfinance
+        .expect_get_quarterly_balance_sheet()
+        .returning(|_| Some(balance_sheet_rows_with_shares()));
+    yfinance
+        .expect_get_quarterly_income_stmt()
+        .returning(|_| Some(trailing_income_statement_rows()));
+    yfinance
+        .expect_get_quarterly_shares()
+        .returning(|_| Some(quarterly_shares()));
+    yfinance
+        .expect_get_earnings_trend()
+        .returning(|_| Some(earnings_trend_rows_with_forward_eps()));
+    let task = AnalystSyncTask::with_yfinance(
+        store,
+        std::sync::Arc::new(yfinance),
+        Duration::from_millis(50),
     );
-    let task = AnalystSyncTask::with_yfinance(store, yfinance, Duration::from_millis(50));
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);
@@ -2461,15 +2461,7 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
     use yfinance_rs::{
         analysis::EarningsTrendRow,
         fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
-        profile::Profile,
     };
-
-    fn company_profile() -> Profile {
-        serde_json::from_str(
-            r#"{"Company":{"name":"Test Corp","sector":null,"industry":null,"website":null,"address":null,"summary":null,"isin":null}}"#,
-        )
-        .unwrap()
-    }
 
     fn trailing_cashflow_rows_with_fcf() -> Vec<CashflowRow> {
         serde_json::from_str(
@@ -2618,19 +2610,27 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
     .await
     .unwrap();
 
-    let yfinance = crate::data::YFinanceClient::with_stubbed_financials(
-        crate::data::StubbedFinancialResponses {
-            profile: Some(company_profile()),
-            cashflow: Some(trailing_cashflow_rows_with_fcf()),
-            balance: Some(balance_sheet_rows_with_shares()),
-            income: Some(trailing_income_statement_rows()),
-            shares: Some(quarterly_shares()),
-            trend: Some(earnings_trend_rows_with_forward_eps()),
-            trend_error: None,
-            ..crate::data::StubbedFinancialResponses::default()
-        },
+    let mut yfinance = crate::data::MockYFinanceData::new();
+    yfinance
+        .expect_get_quarterly_cashflow()
+        .returning(|_| Some(trailing_cashflow_rows_with_fcf()));
+    yfinance
+        .expect_get_quarterly_balance_sheet()
+        .returning(|_| Some(balance_sheet_rows_with_shares()));
+    yfinance
+        .expect_get_quarterly_income_stmt()
+        .returning(|_| Some(trailing_income_statement_rows()));
+    yfinance
+        .expect_get_quarterly_shares()
+        .returning(|_| Some(quarterly_shares()));
+    yfinance
+        .expect_get_earnings_trend()
+        .returning(|_| Some(earnings_trend_rows_with_forward_eps()));
+    let task = AnalystSyncTask::with_yfinance(
+        store,
+        std::sync::Arc::new(yfinance),
+        Duration::from_millis(50),
     );
-    let task = AnalystSyncTask::with_yfinance(store, yfinance, Duration::from_millis(50));
     let result = task.run(ctx.clone()).await.expect("task should succeed");
 
     assert_eq!(result.next_action, NextAction::Continue);

@@ -20,7 +20,7 @@ use crate::{
         },
         events::{EventNewsEvidence, EventNewsProvider, FinnhubEventNewsProvider},
     },
-    data::{FinnhubClient, FredClient, SecEdgarClient, YFinanceClient},
+    data::{FinnhubClient, FredClient, SecEdgarClient, YFinanceClient, YFinanceData},
     domain::Symbol,
     error::TradingError,
     providers::factory::CompletionModelHandle,
@@ -507,7 +507,7 @@ pub async fn run_analysis_cycle(
 
     let consensus_enrichment_state = if enrichment_intent.consensus_estimates {
         hydrate_consensus(
-            &pipeline.yfinance,
+            Arc::new(pipeline.yfinance.clone()),
             &symbol,
             &date,
             fetch_timeout,
@@ -792,8 +792,8 @@ pub(super) enum HydratedConsensusFetch {
 /// Fetch consensus-estimates enrichment with a timeout boundary, applying
 /// the half-life + retry policy described in the implementation plan
 /// (see `docs/superpowers/plans/2026-04-26-yfinance-news-options-consensus-implementation.md`).
-async fn hydrate_consensus(
-    yfinance: &YFinanceClient,
+pub(super) async fn hydrate_consensus(
+    yfinance: Arc<dyn YFinanceData>,
     symbol: &str,
     target_date: &str,
     timeout: std::time::Duration,
@@ -820,11 +820,8 @@ async fn hydrate_consensus(
     // Price target / recommendations are lifted from the shared `Info`
     // snapshot; only the earnings-trend branch is fetched live inside the
     // provider.
-    let provider = YFinanceEstimatesProvider::with_consensus_inputs(
-        yfinance.clone(),
-        price_target,
-        recommendations,
-    );
+    let provider =
+        YFinanceEstimatesProvider::with_consensus_inputs(yfinance, price_target, recommendations);
     let primary = single_consensus_fetch(&provider, symbol, target_date, timeout).await;
 
     // ProviderDegraded retry: if the first attempt classifies as degraded,

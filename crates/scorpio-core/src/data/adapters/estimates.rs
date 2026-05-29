@@ -116,19 +116,24 @@ pub trait EstimatesProvider: Send + Sync {
 use yfinance_rs::analysis::EarningsTrendRow;
 use yfinance_rs::core::conversions::money_to_f64;
 
-use crate::data::YFinanceClient;
+use std::sync::Arc;
+
+use crate::data::YFinanceData;
 
 /// Normalizes yfinance-rs [`EarningsTrendRow`] data into [`ConsensusEvidence`].
 ///
 /// This provider:
-/// - Fetches earnings trend data via `YFinanceClient::get_earnings_trend`.
+/// - Fetches earnings trend data via [`YFinanceData::get_earnings_trend_result`].
 /// - Takes the first (nearest-quarter) row from the trend data.
 /// - Extracts `earnings_estimate.avg` as EPS and `revenue_estimate.avg` as
 ///   revenue (converted from raw to millions).
 /// - Uses the `num_analysts` count from the earnings estimate.
-#[derive(Debug)]
+///
+/// The data source is held behind the [`YFinanceData`] trait so tests can
+/// inject a `MockYFinanceData` and set the earnings-trend response directly,
+/// rather than mocking the HTTP layer beneath the `yfinance-rs` library.
 pub struct YFinanceEstimatesProvider {
-    client: YFinanceClient,
+    client: Arc<dyn YFinanceData>,
     /// Analyst price target lifted from the shared `Info` snapshot. The
     /// earnings-trend branch is still fetched live (it is not part of `Info`),
     /// but price target / recommendations are read from here so they are not
@@ -138,11 +143,20 @@ pub struct YFinanceEstimatesProvider {
     recommendations: Option<UpstreamRecommendationSummary>,
 }
 
+impl std::fmt::Debug for YFinanceEstimatesProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YFinanceEstimatesProvider")
+            .field("price_target", &self.price_target)
+            .field("recommendations", &self.recommendations)
+            .finish_non_exhaustive()
+    }
+}
+
 impl YFinanceEstimatesProvider {
     /// Construct a provider with no pre-fetched consensus inputs. The
     /// earnings-trend branch is fetched live; price target / recommendations
     /// are treated as absent.
-    pub fn new(client: YFinanceClient) -> Self {
+    pub fn new(client: Arc<dyn YFinanceData>) -> Self {
         Self {
             client,
             price_target: None,
@@ -154,7 +168,7 @@ impl YFinanceEstimatesProvider {
     /// summary already fetched once via `YFinanceClient::get_info`, so
     /// `fetch_consensus` only issues the live earnings-trend call.
     pub fn with_consensus_inputs(
-        client: YFinanceClient,
+        client: Arc<dyn YFinanceData>,
         price_target: Option<UpstreamPriceTarget>,
         recommendations: Option<UpstreamRecommendationSummary>,
     ) -> Self {
@@ -375,7 +389,8 @@ fn select_next_quarter_row(trend: &[EarningsTrendRow]) -> Option<&EarningsTrendR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::StubbedFinancialResponses;
+    use crate::data::MockYFinanceData;
+    use std::sync::Arc;
 
     #[test]
     fn consensus_evidence_serializes_and_deserializes() {
@@ -578,12 +593,13 @@ mod tests {
         // (here: earnings_trend) with the other branches returning empty
         // payloads resolves to `Ok(ProviderDegraded)` rather than `Err`.
         // Failure reasons are surfaced via `tracing::warn!` per branch.
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            trend: None,
-            trend_error: Some("Yahoo Finance response could not be parsed".to_owned()),
-            ..StubbedFinancialResponses::default()
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_earnings_trend_result().returning(|_| {
+            Err(TradingError::SchemaViolation {
+                message: "Yahoo Finance response could not be parsed".to_owned(),
+            })
         });
-        let provider = YFinanceEstimatesProvider::new(client);
+        let provider = YFinanceEstimatesProvider::new(Arc::new(mock));
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")
@@ -627,13 +643,16 @@ mod tests {
     async fn fetch_consensus_populates_price_target_and_recommendations() {
         // Trend is fetched live (stubbed on the client); price target and
         // recommendations are supplied from the shared `Info` snapshot.
-        let trend_rows = vec![make_trend_row(Some(2.50), Some(95_000_000_000.0), Some(35))];
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            trend: Some(trend_rows),
-            ..StubbedFinancialResponses::default()
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_earnings_trend_result().returning(|_| {
+            Ok(Some(vec![make_trend_row(
+                Some(2.50),
+                Some(95_000_000_000.0),
+                Some(35),
+            )]))
         });
         let provider = YFinanceEstimatesProvider::with_consensus_inputs(
-            client,
+            Arc::new(mock),
             Some(priced_target()),
             Some(populated_recommendations()),
         );
@@ -679,13 +698,14 @@ mod tests {
     async fn fetch_consensus_classifies_partial_data_with_one_branch_error_as_data_with_warn() {
         // Earnings trend errors (live) but price_target + recommendations are
         // present from the shared `Info` snapshot.
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            trend: None,
-            trend_error: Some("trend rate-limited".to_owned()),
-            ..StubbedFinancialResponses::default()
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_earnings_trend_result().returning(|_| {
+            Err(TradingError::SchemaViolation {
+                message: "trend rate-limited".to_owned(),
+            })
         });
         let provider = YFinanceEstimatesProvider::with_consensus_inputs(
-            client,
+            Arc::new(mock),
             Some(priced_target()),
             Some(populated_recommendations()),
         );
@@ -713,12 +733,11 @@ mod tests {
     async fn fetch_consensus_returns_no_coverage_when_all_endpoints_return_no_data() {
         // Trend succeeds empty; the shared-Info price target / recommendations
         // are all-empty payloads, which collapse to absent → no coverage.
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            trend: Some(Vec::new()),
-            ..StubbedFinancialResponses::default()
-        });
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_earnings_trend_result()
+            .returning(|_| Ok(Some(Vec::new())));
         let provider = YFinanceEstimatesProvider::with_consensus_inputs(
-            client,
+            Arc::new(mock),
             Some(PriceTarget {
                 mean: None,
                 high: None,
@@ -743,11 +762,10 @@ mod tests {
         // an empty (non-error) trend and no cached consensus, the outcome is
         // NoCoverage (previously a price-target *error* yielded ProviderDegraded;
         // that distinction now lives only on the live trend branch).
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            trend: Some(Vec::new()),
-            ..StubbedFinancialResponses::default()
-        });
-        let provider = YFinanceEstimatesProvider::with_consensus_inputs(client, None, None);
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_earnings_trend_result()
+            .returning(|_| Ok(Some(Vec::new())));
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(Arc::new(mock), None, None);
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")
@@ -762,12 +780,13 @@ mod tests {
         // The earnings-trend branch is the sole error-bearing branch now. A
         // live trend failure with no cached price target / recommendations
         // resolves to ProviderDegraded (fed to the half-life policy), not Err.
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            trend: None,
-            trend_error: Some("trend down".to_owned()),
-            ..StubbedFinancialResponses::default()
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_earnings_trend_result().returning(|_| {
+            Err(TradingError::SchemaViolation {
+                message: "trend down".to_owned(),
+            })
         });
-        let provider = YFinanceEstimatesProvider::with_consensus_inputs(client, None, None);
+        let provider = YFinanceEstimatesProvider::with_consensus_inputs(Arc::new(mock), None, None);
 
         let outcome = provider
             .fetch_consensus("AAPL", "2025-04-01")

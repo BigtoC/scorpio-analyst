@@ -453,7 +453,7 @@ async fn main() {
     // is fetched live inside `fetch_consensus`.
     let consensus_info = client.get_info(EQUITY_SYMBOL).await;
     let estimates_provider = YFinanceEstimatesProvider::with_consensus_inputs(
-        client.clone(),
+        std::sync::Arc::new(client.clone()),
         consensus_info
             .as_ref()
             .and_then(|info| info.price_target.clone()),
@@ -609,7 +609,7 @@ async fn main() {
     // mirroring the production wiring.
     let spy_info = client.get_info(ETF_SYMBOL).await;
     let spy_estimates = YFinanceEstimatesProvider::with_consensus_inputs(
-        client.clone(),
+        std::sync::Arc::new(client.clone()),
         spy_info.as_ref().and_then(|info| info.price_target.clone()),
         spy_info
             .as_ref()

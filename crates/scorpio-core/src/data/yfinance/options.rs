@@ -87,12 +87,6 @@ impl YFinanceOptionsProvider {
     ) -> Result<OptionsOutcome, TradingError> {
         let ticker = require_equity_ticker(symbol)?;
 
-        // ── Stub guard (test + test-helpers) ────────────────────────────
-        #[cfg(any(test, feature = "test-helpers"))]
-        if let Some(ref stub) = self.client.stubbed_financials {
-            return fetch_from_stub(stub, &ticker, target_date).await;
-        }
-
         // ── Check market-local date ──────────────────────────────────────
         if !crate::market_time::target_is_market_local_date(target_date) {
             return Ok(OptionsOutcome::HistoricalRun);
@@ -125,24 +119,12 @@ impl YFinanceOptionsProvider {
         )
         .await?;
 
-        // ── NTM slice ────────────────────────────────────────────────────
-        let Some(near_term_strikes) = build_ntm_slice(&front_chain, spot) else {
+        // ── Front-month sparse early-out ──────────────────────────────────
+        // If the front-month chain is too sparse to form an NTM slice, return
+        // before fanning out the (now-pointless) per-expiration fetches.
+        if build_ntm_slice(&front_chain, spot).is_none() {
             return Ok(OptionsOutcome::SparseChain);
-        };
-
-        // ── ATM IV from front-month ──────────────────────────────────────
-        let atm_iv = compute_atm_iv(&front_chain, spot);
-
-        // ── Front-month expiration date string ───────────────────────────
-        let near_term_expiration = front_chain
-            .calls()
-            .next()
-            .or_else(|| front_chain.puts().next())
-            .map(|c| c.key.expiration_date.to_string())
-            .unwrap_or_else(|| timestamp_to_date_str(front_month_ts));
-
-        // ── Max pain from front-month ────────────────────────────────────
-        let max_pain_strike = compute_max_pain(&front_chain, spot);
+        }
 
         // ── All-expiration chains for ratios + term structure ────────────
         // Per-expiration fetches are independent; fan out via buffer_unordered
@@ -175,44 +157,81 @@ impl YFinanceOptionsProvider {
         // so iv_term_structure stays deterministic across runs.
         all_chains.sort_unstable_by_key(|(ts, _)| *ts);
 
-        // ── Put/call ratios over all chains ──────────────────────────────
-        let (put_call_volume_ratio, put_call_oi_ratio) = compute_pc_ratios(&all_chains);
-
-        // ── IV term structure ────────────────────────────────────────────
-        let iv_term_structure = build_term_structure(&all_chains, spot);
-
-        // Collect NTM rows for non-front-month expirations (front-month is index 0
-        // after sort_unstable_by_key above).
-        let all_expirations: Vec<crate::data::traits::options::ExpirationStrikes> = all_chains
-            .iter()
-            .skip(1)
-            .filter_map(|(ts, chain)| {
-                let rows = build_ntm_slice(chain, spot)?;
-                let expiration = chain
-                    .calls()
-                    .next()
-                    .or_else(|| chain.puts().next())
-                    .map(|c| c.key.expiration_date.to_string())
-                    .unwrap_or_else(|| timestamp_to_date_str(*ts));
-                Some(crate::data::traits::options::ExpirationStrikes {
-                    expiration,
-                    strikes: rows,
-                })
-            })
-            .collect();
-
-        Ok(OptionsOutcome::Snapshot(OptionsSnapshot {
-            spot_price: spot,
-            atm_iv,
-            iv_term_structure,
-            put_call_volume_ratio,
-            put_call_oi_ratio,
-            max_pain_strike,
-            near_term_expiration,
-            near_term_strikes,
-            all_expirations,
-        }))
+        // ── Pure assembly (spot + chains → outcome) ──────────────────────
+        Ok(assemble_snapshot(spot, all_chains))
     }
+}
+
+/// Assemble an [`OptionsOutcome`] from a spot price and the per-expiration option
+/// chains (front month first), sorted ascending by expiration timestamp.
+///
+/// This is the **pure** core of [`YFinanceOptionsProvider::fetch_snapshot_impl`]:
+/// all the NTM-slice / ATM-IV / max-pain / put-call-ratio / term-structure math,
+/// with no network or clock dependency. Keeping it separate lets tests verify the
+/// assembly directly from constructed chains instead of stubbing a client — the
+/// I/O wrapper only fetches `spot`, the expiration list, and each chain.
+///
+/// Returns [`OptionsOutcome::SparseChain`] when the front-month chain cannot form
+/// an NTM slice, and [`OptionsOutcome::NoListedInstrument`] if `all_chains` is
+/// empty (callers normally guarantee it is non-empty).
+fn assemble_snapshot(spot: f64, all_chains: Vec<(i64, OptionChain)>) -> OptionsOutcome {
+    let Some((front_month_ts, front_chain)) = all_chains.first().map(|(ts, c)| (*ts, c)) else {
+        return OptionsOutcome::NoListedInstrument;
+    };
+
+    // ── NTM slice (front-month) ──────────────────────────────────────────
+    let Some(near_term_strikes) = build_ntm_slice(front_chain, spot) else {
+        return OptionsOutcome::SparseChain;
+    };
+
+    // ── ATM IV from front-month ──────────────────────────────────────────
+    let atm_iv = compute_atm_iv(front_chain, spot);
+
+    // ── Front-month expiration date string ───────────────────────────────
+    let near_term_expiration = front_chain
+        .calls()
+        .next()
+        .or_else(|| front_chain.puts().next())
+        .map(|c| c.key.expiration_date.to_string())
+        .unwrap_or_else(|| timestamp_to_date_str(front_month_ts));
+
+    // ── Max pain from front-month ────────────────────────────────────────
+    let max_pain_strike = compute_max_pain(front_chain, spot);
+
+    // ── Put/call ratios + IV term structure over all chains ──────────────
+    let (put_call_volume_ratio, put_call_oi_ratio) = compute_pc_ratios(&all_chains);
+    let iv_term_structure = build_term_structure(&all_chains, spot);
+
+    // Collect NTM rows for non-front-month expirations (front-month is index 0).
+    let all_expirations: Vec<crate::data::traits::options::ExpirationStrikes> = all_chains
+        .iter()
+        .skip(1)
+        .filter_map(|(ts, chain)| {
+            let rows = build_ntm_slice(chain, spot)?;
+            let expiration = chain
+                .calls()
+                .next()
+                .or_else(|| chain.puts().next())
+                .map(|c| c.key.expiration_date.to_string())
+                .unwrap_or_else(|| timestamp_to_date_str(*ts));
+            Some(crate::data::traits::options::ExpirationStrikes {
+                expiration,
+                strikes: rows,
+            })
+        })
+        .collect();
+
+    OptionsOutcome::Snapshot(OptionsSnapshot {
+        spot_price: spot,
+        atm_iv,
+        iv_term_structure,
+        put_call_volume_ratio,
+        put_call_oi_ratio,
+        max_pain_strike,
+        near_term_expiration,
+        near_term_strikes,
+        all_expirations,
+    })
 }
 
 #[async_trait]
@@ -567,142 +586,6 @@ fn build_term_structure(chains: &[(i64, OptionChain)], spot: f64) -> Vec<IvTermP
         .collect()
 }
 
-// ─── Stub helper (test + test-helpers) ───────────────────────────────────────
-
-#[cfg(any(test, feature = "test-helpers"))]
-async fn fetch_from_stub(
-    stub: &super::ohlcv::StubbedFinancialResponses,
-    _ticker: &str,
-    target_date: &str,
-) -> Result<OptionsOutcome, TradingError> {
-    // Check market-local date.
-    if !crate::market_time::target_is_market_local_date(target_date) {
-        return Ok(OptionsOutcome::HistoricalRun);
-    }
-
-    // Spot price from stub ohlcv.
-    let spot = if let Some(ref ohlcv) = stub.ohlcv {
-        if let Some(last) = ohlcv.last() {
-            last.close
-        } else {
-            return Ok(OptionsOutcome::MissingSpot);
-        }
-    } else {
-        // No ohlcv stub — try the cache via a real lookup. But in tests, if
-        // there's no ohlcv stub and no cached data this will return None.
-        // Return MissingSpot to keep tests deterministic.
-        return Ok(OptionsOutcome::MissingSpot);
-    };
-
-    // Expiration dates.
-    if let Some(ref err_msg) = stub.option_expirations_error {
-        return Err(TradingError::NetworkTimeout {
-            elapsed: std::time::Duration::ZERO,
-            message: err_msg.clone(),
-        });
-    }
-
-    let mut expirations = match &stub.option_expirations {
-        Some(v) => v.clone(),
-        None => return Ok(OptionsOutcome::NoListedInstrument),
-    };
-
-    if expirations.is_empty() {
-        return Ok(OptionsOutcome::NoListedInstrument);
-    }
-
-    expirations.sort_unstable();
-    let front_month_ts = expirations[0];
-
-    // Front-month chain.
-    if let Some(err_msg) = stub.option_chain_errors.get(&front_month_ts) {
-        return Err(TradingError::NetworkTimeout {
-            elapsed: std::time::Duration::ZERO,
-            message: err_msg.clone(),
-        });
-    }
-
-    let front_chain = match stub.option_chains.get(&front_month_ts) {
-        Some(c) => c.clone(),
-        None => {
-            // Synthesize empty chain if no stub provided.
-            OptionChain {
-                contracts: vec![],
-                provider: (),
-            }
-        }
-    };
-
-    // NTM slice.
-    let Some(near_term_strikes) = build_ntm_slice(&front_chain, spot) else {
-        return Ok(OptionsOutcome::SparseChain);
-    };
-
-    let atm_iv = compute_atm_iv(&front_chain, spot);
-
-    let near_term_expiration = front_chain
-        .calls()
-        .next()
-        .or_else(|| front_chain.puts().next())
-        .map(|c| c.key.expiration_date.to_string())
-        .unwrap_or_else(|| timestamp_to_date_str(front_month_ts));
-
-    let max_pain_strike = compute_max_pain(&front_chain, spot);
-
-    // Fetch all chains from stub.
-    let mut all_chains: Vec<(i64, OptionChain)> = Vec::with_capacity(expirations.len());
-    all_chains.push((front_month_ts, front_chain));
-
-    for &exp_ts in &expirations[1..] {
-        if stub.option_chain_errors.contains_key(&exp_ts) {
-            // Skip errored chains (don't propagate for non-front-month expirations).
-            continue;
-        }
-        let chain = match stub.option_chains.get(&exp_ts) {
-            Some(c) => c.clone(),
-            None => OptionChain {
-                contracts: vec![],
-                provider: (),
-            },
-        };
-        all_chains.push((exp_ts, chain));
-    }
-
-    let (put_call_volume_ratio, put_call_oi_ratio) = compute_pc_ratios(&all_chains);
-    let iv_term_structure = build_term_structure(&all_chains, spot);
-
-    // Collect NTM rows for non-front-month expirations (front-month is index 0).
-    let all_expirations: Vec<crate::data::traits::options::ExpirationStrikes> = all_chains
-        .iter()
-        .skip(1)
-        .filter_map(|(ts, chain)| {
-            let rows = build_ntm_slice(chain, spot)?;
-            let expiration = chain
-                .calls()
-                .next()
-                .or_else(|| chain.puts().next())
-                .map(|c| c.key.expiration_date.to_string())
-                .unwrap_or_else(|| timestamp_to_date_str(*ts));
-            Some(crate::data::traits::options::ExpirationStrikes {
-                expiration,
-                strikes: rows,
-            })
-        })
-        .collect();
-
-    Ok(OptionsOutcome::Snapshot(OptionsSnapshot {
-        spot_price: spot,
-        atm_iv,
-        iv_term_structure,
-        put_call_volume_ratio,
-        put_call_oi_ratio,
-        max_pain_strike,
-        near_term_expiration,
-        near_term_strikes,
-        all_expirations,
-    }))
-}
-
 // ─── OptionsToolContext ───────────────────────────────────────────────────────
 
 /// Write-once analysis-scoped cache for a prefetched [`OptionsOutcome`].
@@ -977,14 +860,10 @@ impl Tool for GetOptionsSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use chrono::NaiveDate;
     use yfinance_rs::ticker::{OptionChain, OptionContract};
 
     use super::*;
-    use crate::data::yfinance::ohlcv::{Candle, StubbedFinancialResponses, YFinanceClient};
-    use crate::domain::{Symbol, Ticker};
 
     // ── Test helpers ──────────────────────────────────────────────────────
 
@@ -994,21 +873,6 @@ mod tests {
 
     fn yesterday_eastern() -> String {
         (crate::market_time::market_local_date_eastern() - chrono::Duration::days(1)).to_string()
-    }
-
-    fn aapl() -> Symbol {
-        Symbol::Equity(Ticker::parse("AAPL").unwrap())
-    }
-
-    fn make_candle(close: f64) -> Candle {
-        Candle {
-            date: today_eastern(),
-            open: close,
-            high: close + 1.0,
-            low: close - 1.0,
-            close,
-            volume: Some(1_000_000),
-        }
     }
 
     /// Build a minimal `OptionContract` with just the fields used by the
@@ -1080,11 +944,6 @@ mod tests {
             .unwrap()
             .and_utc()
             .timestamp()
-    }
-
-    fn provider_with_stub(stub: StubbedFinancialResponses) -> YFinanceOptionsProvider {
-        let client = YFinanceClient::with_stubbed_financials(stub);
-        YFinanceOptionsProvider::new(client)
     }
 
     fn sample_snapshot() -> OptionsOutcome {
@@ -1222,38 +1081,26 @@ mod tests {
         let expiry = "2030-01-18";
         let ts = expiry_ts();
 
-        let mut chains = BTreeMap::new();
-        chains.insert(
-            ts,
-            chain_from(
-                vec![
-                    make_contract(145.0, Some(0.32), Some(60), Some(300), expiry),
-                    make_contract(147.5, Some(0.31), Some(80), Some(400), expiry),
-                    make_contract(150.0, Some(call_iv), Some(100), Some(500), expiry),
-                    make_contract(152.5, Some(0.29), Some(80), Some(400), expiry),
-                    make_contract(155.0, Some(0.28), Some(60), Some(300), expiry),
-                ],
-                vec![
-                    make_contract(145.0, Some(0.32), Some(60), Some(300), expiry),
-                    make_contract(147.5, Some(0.31), Some(80), Some(400), expiry),
-                    make_contract(150.0, Some(put_iv), Some(80), Some(400), expiry),
-                    make_contract(152.5, Some(0.27), Some(80), Some(400), expiry),
-                    make_contract(155.0, Some(0.26), Some(60), Some(300), expiry),
-                ],
-            ),
+        let chain = chain_from(
+            vec![
+                make_contract(145.0, Some(0.32), Some(60), Some(300), expiry),
+                make_contract(147.5, Some(0.31), Some(80), Some(400), expiry),
+                make_contract(150.0, Some(call_iv), Some(100), Some(500), expiry),
+                make_contract(152.5, Some(0.29), Some(80), Some(400), expiry),
+                make_contract(155.0, Some(0.28), Some(60), Some(300), expiry),
+            ],
+            vec![
+                make_contract(145.0, Some(0.32), Some(60), Some(300), expiry),
+                make_contract(147.5, Some(0.31), Some(80), Some(400), expiry),
+                make_contract(150.0, Some(put_iv), Some(80), Some(400), expiry),
+                make_contract(152.5, Some(0.27), Some(80), Some(400), expiry),
+                make_contract(155.0, Some(0.26), Some(60), Some(300), expiry),
+            ],
         );
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
+        let all_chains = vec![(ts, chain)];
 
-        let result = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await;
-        let outcome = result.expect("should succeed");
+        let outcome = assemble_snapshot(spot, all_chains);
 
         if let OptionsOutcome::Snapshot(s) = outcome {
             let expected_iv = (call_iv + put_iv) / 2.0;
@@ -1313,21 +1160,9 @@ mod tests {
             )],
         );
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts1, chain1);
-        chains.insert(ts2, chain2);
+        let all_chains = vec![(ts1, chain1), (ts2, chain2)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts1, ts2]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should succeed");
+        let outcome = assemble_snapshot(spot, all_chains);
 
         if let OptionsOutcome::Snapshot(s) = outcome {
             // Total call vol = 600, total put vol = 400 → P/C vol ratio = 400/600 ≈ 0.667
@@ -1390,21 +1225,9 @@ mod tests {
             ],
         );
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts1, front_chain.clone());
-        chains.insert(ts2, second_chain);
+        let all_chains = vec![(ts1, front_chain.clone()), (ts2, second_chain)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts1, ts2]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should succeed");
+        let outcome = assemble_snapshot(spot, all_chains);
 
         if let OptionsOutcome::Snapshot(s) = outcome {
             // max pain from front-month should be the strike with minimum total pain.
@@ -1444,20 +1267,9 @@ mod tests {
             ],
         );
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts, chain);
+        let all_chains = vec![(ts, chain)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should succeed");
+        let outcome = assemble_snapshot(spot, all_chains);
 
         if let OptionsOutcome::Snapshot(s) = outcome {
             // Should include at least 4 strikes (90, 95, 105, 110) after expansion.
@@ -1483,16 +1295,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_no_listed_instrument_when_expirations_empty() {
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(150.0)]),
-            option_expirations: Some(vec![]),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should not error");
+        let outcome = assemble_snapshot(150.0, vec![]);
         assert_eq!(outcome, OptionsOutcome::NoListedInstrument);
     }
 
@@ -1514,20 +1317,9 @@ mod tests {
             ],
         );
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts, chain);
+        let all_chains = vec![(ts, chain)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should not error");
+        let outcome = assemble_snapshot(spot, all_chains);
         assert_eq!(outcome, OptionsOutcome::SparseChain);
     }
 
@@ -1555,95 +1347,10 @@ mod tests {
             ],
         );
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts, chain);
+        let all_chains = vec![(ts, chain)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should not error");
+        let outcome = assemble_snapshot(spot, all_chains);
         assert_eq!(outcome, OptionsOutcome::SparseChain);
-    }
-
-    #[tokio::test]
-    async fn returns_historical_run_when_target_date_is_not_market_local_today() {
-        // A clearly past date — should always return HistoricalRun.
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(150.0)]),
-            option_expirations: Some(vec![expiry_ts()]),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), "2020-01-01")
-            .await
-            .expect("should not error");
-        assert_eq!(outcome, OptionsOutcome::HistoricalRun);
-    }
-
-    #[tokio::test]
-    async fn returns_missing_spot_when_get_latest_close_is_none() {
-        // Empty ohlcv → no spot price available.
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![]), // empty → MissingSpot
-            option_expirations: Some(vec![expiry_ts()]),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should not error");
-        assert_eq!(outcome, OptionsOutcome::MissingSpot);
-    }
-
-    #[tokio::test]
-    async fn returns_err_when_expiration_lookup_fails() {
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(150.0)]),
-            option_expirations_error: Some("network failure".to_owned()),
-            ..StubbedFinancialResponses::default()
-        });
-
-        let result = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await;
-        assert!(result.is_err());
-        assert!(
-            matches!(result.unwrap_err(), TradingError::NetworkTimeout { .. }),
-            "should be NetworkTimeout"
-        );
-    }
-
-    #[tokio::test]
-    async fn returns_err_when_option_chain_fetch_fails() {
-        let ts = expiry_ts();
-
-        let mut chain_errors = BTreeMap::new();
-        chain_errors.insert(ts, "chain error".to_owned());
-
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(150.0)]),
-            option_expirations: Some(vec![ts]),
-            option_chain_errors: chain_errors,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let result = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await;
-        assert!(result.is_err());
-        assert!(
-            matches!(result.unwrap_err(), TradingError::NetworkTimeout { .. }),
-            "should be NetworkTimeout"
-        );
     }
 
     #[tokio::test]
@@ -1679,20 +1386,9 @@ mod tests {
             );
         }
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts, chain);
+        let all_chains = vec![(ts, chain)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should succeed even with no greeks");
+        let outcome = assemble_snapshot(spot, all_chains);
 
         assert!(
             matches!(outcome, OptionsOutcome::Snapshot(_)),
@@ -1705,59 +1401,6 @@ mod tests {
         assert!(
             !val_str.contains("skew_25d"),
             "serialized snapshot must not contain skew_25d field"
-        );
-    }
-
-    #[tokio::test]
-    async fn target_date_uses_market_local_us_eastern_not_utc() {
-        // Pass today's US/Eastern date → should NOT return HistoricalRun.
-        // Pass yesterday's US/Eastern date → should return HistoricalRun.
-        let ts = expiry_ts();
-        let expiry = "2030-01-18";
-
-        let chain = chain_from(
-            vec![
-                make_contract(95.0, Some(0.25), Some(100), Some(500), expiry),
-                make_contract(100.0, Some(0.23), Some(200), Some(1000), expiry),
-                make_contract(105.0, Some(0.22), Some(100), Some(500), expiry),
-            ],
-            vec![
-                make_contract(95.0, Some(0.26), Some(80), Some(400), expiry),
-                make_contract(100.0, Some(0.24), Some(150), Some(800), expiry),
-                make_contract(105.0, Some(0.23), Some(80), Some(400), expiry),
-            ],
-        );
-
-        let mut chains = BTreeMap::new();
-        chains.insert(ts, chain);
-
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(100.0)]),
-            option_expirations: Some(vec![ts]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        // Today's Eastern date → should not be HistoricalRun.
-        let outcome_today = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should not error");
-        assert_ne!(
-            outcome_today,
-            OptionsOutcome::HistoricalRun,
-            "today's US/Eastern date should not return HistoricalRun, got {outcome_today:?}"
-        );
-
-        // Yesterday's Eastern date → should be HistoricalRun.
-        let outcome_yesterday = provider
-            .fetch_snapshot_impl(&aapl(), &yesterday_eastern())
-            .await
-            .expect("should not error");
-        assert_eq!(
-            outcome_yesterday,
-            OptionsOutcome::HistoricalRun,
-            "yesterday's US/Eastern date should return HistoricalRun"
         );
     }
 
@@ -1810,21 +1453,9 @@ mod tests {
             ],
         );
 
-        let mut chains = BTreeMap::new();
-        chains.insert(ts1, chain1);
-        chains.insert(ts2, chain2);
+        let all_chains = vec![(ts1, chain1), (ts2, chain2)];
 
-        let provider = provider_with_stub(StubbedFinancialResponses {
-            ohlcv: Some(vec![make_candle(spot)]),
-            option_expirations: Some(vec![ts1, ts2]),
-            option_chains: chains,
-            ..StubbedFinancialResponses::default()
-        });
-
-        let outcome = provider
-            .fetch_snapshot_impl(&aapl(), &today_eastern())
-            .await
-            .expect("should succeed");
+        let outcome = assemble_snapshot(spot, all_chains);
 
         if let OptionsOutcome::Snapshot(snap) = outcome {
             assert!(

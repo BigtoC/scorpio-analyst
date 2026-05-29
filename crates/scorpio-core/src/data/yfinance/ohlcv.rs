@@ -20,12 +20,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{HistoryBuilder, Interval, YfError};
-#[cfg(any(test, feature = "test-helpers"))]
-use yfinance_rs::{
-    analysis::{EarningsTrendRow, PriceTarget, RecommendationSummary},
-    fundamentals::{BalanceSheetRow, CashflowRow, IncomeStatementRow, ShareCount},
-    profile::Profile,
-};
 
 use super::client::YfSession;
 
@@ -74,30 +68,6 @@ impl Candle {
 /// Cache key: normalized (uppercase) symbol + start date + end date.
 type OhlcvCacheKey = (String, String, String);
 
-#[cfg(any(test, feature = "test-helpers"))]
-#[derive(Debug, Clone, Default)]
-pub struct StubbedFinancialResponses {
-    pub profile: Option<Profile>,
-    pub calendar: Option<super::financials::TickerCalendar>,
-    pub cashflow: Option<Vec<CashflowRow>>,
-    pub balance: Option<Vec<BalanceSheetRow>>,
-    pub income: Option<Vec<IncomeStatementRow>>,
-    pub shares: Option<Vec<ShareCount>>,
-    pub trend: Option<Vec<EarningsTrendRow>>,
-    pub trend_error: Option<String>,
-    pub price_target: Option<PriceTarget>,
-    pub price_target_error: Option<String>,
-    pub recommendation_summary: Option<RecommendationSummary>,
-    pub recommendation_summary_error: Option<String>,
-    pub news: Option<Vec<yfinance_rs::news::NewsArticle>>,
-    pub news_error: Option<String>,
-    pub ohlcv: Option<Vec<Candle>>,
-    pub option_expirations: Option<Vec<i64>>,
-    pub option_expirations_error: Option<String>,
-    pub option_chains: std::collections::BTreeMap<i64, yfinance_rs::ticker::OptionChain>,
-    pub option_chain_errors: std::collections::BTreeMap<i64, String>,
-}
-
 /// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
 ///
 /// Results of [`get_ohlcv`](YFinanceClient::get_ohlcv) are cached in memory by
@@ -112,8 +82,6 @@ pub struct YFinanceClient {
     /// Shared across all `Clone`s of this client; keyed by the normalized
     /// (uppercase) symbol + ISO-8601 start/end dates.
     cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub(super) stubbed_financials: Option<Arc<StubbedFinancialResponses>>,
 }
 
 impl std::fmt::Debug for YFinanceClient {
@@ -135,8 +103,6 @@ impl YFinanceClient {
         Self {
             session: YfSession::new(limiter),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(any(test, feature = "test-helpers"))]
-            stubbed_financials: None,
         }
     }
 
@@ -150,18 +116,6 @@ impl YFinanceClient {
         Self {
             session: YfSession::from_config(cfg),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(any(test, feature = "test-helpers"))]
-            stubbed_financials: None,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-helpers"))]
-    #[must_use]
-    pub fn with_stubbed_financials(responses: StubbedFinancialResponses) -> Self {
-        Self {
-            session: YfSession::default(),
-            cache: Arc::new(RwLock::new(HashMap::new())),
-            stubbed_financials: Some(Arc::new(responses)),
         }
     }
 

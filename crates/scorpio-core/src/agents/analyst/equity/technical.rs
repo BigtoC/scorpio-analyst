@@ -1030,16 +1030,11 @@ mod tests {
     #[tokio::test]
     async fn technical_tool_renders_options_outcome_variant_with_reason() {
         use crate::data::yfinance::options::OptionsSnapshotArgs;
-        use crate::data::{
-            GetOptionsSnapshot, StubbedFinancialResponses, YFinanceClient, YFinanceOptionsProvider,
-        };
+        use crate::data::{GetOptionsSnapshot, YFinanceClient, YFinanceOptionsProvider};
 
-        // Stub with a past date so HistoricalRun is returned.
-        let client = YFinanceClient::with_stubbed_financials(StubbedFinancialResponses {
-            ohlcv: Some(vec![]),
-            option_expirations: Some(vec![1_000_000]),
-            ..StubbedFinancialResponses::default()
-        });
+        // A past target_date short-circuits to HistoricalRun via the date gate
+        // before any network/stub call, so no stub is needed.
+        let client = YFinanceClient::default();
         let provider = YFinanceOptionsProvider::new(client);
         let tool = GetOptionsSnapshot::scoped(provider, "AAPL", "2020-01-01");
 
