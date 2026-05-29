@@ -55,9 +55,11 @@ pub use fred::{FredClient, GetEconomicIndicators};
 pub use reddit::{RedditClient, RedditNewsProvider};
 pub use sec_edgar::{FilingHeader, SecEdgarClient};
 pub use sec_edgar_nport::{NPortHoldingRow, NPortHoldings, NPortSectorRow};
+#[cfg(test)]
+pub use yfinance::MockYFinanceData;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use yfinance::StubbedFinancialResponses;
 pub use yfinance::{
     Candle, GetOhlcv, GetOptionsSnapshot, OhlcvArgs, OhlcvToolContext, YFinanceClient,
-    YFinanceNewsProvider, YFinanceOptionsProvider, fetch_vix_data, get_latest_close,
+    YFinanceData, YFinanceNewsProvider, YFinanceOptionsProvider, fetch_vix_data, get_latest_close,
 };
