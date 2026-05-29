@@ -43,8 +43,7 @@ pub mod transcript_cache;
 pub mod yfinance;
 
 pub use adapters::catalysts::{
-    CatalystCalendarProvider, CatalystEvent, SecEdgar8kProvider, Tier1CatalystProvider,
-    Tier2CatalystProvider,
+    CatalystCalendarProvider, CatalystEvent, CatalystProvider, SecEdgar8kProvider,
 };
 pub use alpha_vantage::AlphaVantageClient;
 pub use entity::{ResolvedInstrument, resolve_symbol};

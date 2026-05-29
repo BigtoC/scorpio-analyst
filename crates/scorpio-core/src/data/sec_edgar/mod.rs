@@ -435,8 +435,9 @@ impl SecEdgarClient {
     /// Construct a client using the hardcoded Scorpio User-Agent.
     ///
     /// Returns `Err` only when `reqwest::Client` fails to build (virtually
-    /// impossible in practice, but surfaced so callers can fall back to
-    /// `Tier1CatalystProvider` without aborting the pipeline).
+    /// impossible in practice, but surfaced so callers can fall back to a
+    /// `CatalystProvider` without SEC EDGAR coverage rather than aborting the
+    /// pipeline).
     pub fn new(limiter: SharedRateLimiter) -> Result<Self, TradingError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
