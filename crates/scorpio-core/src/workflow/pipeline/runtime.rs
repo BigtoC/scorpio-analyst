@@ -13,8 +13,7 @@ use crate::{
     data::adapters::{
         EnrichmentResult, EnrichmentStatus,
         catalysts::{
-            CatalystCalendarProvider, CatalystEvent, SecEdgar8kProvider, Tier1CatalystProvider,
-            Tier2CatalystProvider,
+            CatalystCalendarProvider, CatalystEvent, CatalystProvider, SecEdgar8kProvider,
         },
         estimates::{
             ConsensusEvidence, ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
@@ -61,23 +60,18 @@ pub(crate) fn build_catalyst_provider(
     finnhub: &FinnhubClient,
     fred: &FredClient,
     source_timeout: std::time::Duration,
+    rate_limits: &crate::config::RateLimitConfig,
 ) -> Arc<dyn CatalystCalendarProvider> {
-    let tier1 = Tier1CatalystProvider::with_timeout(finnhub.clone(), fred.clone(), source_timeout);
-
-    match SecEdgarClient::new(SharedRateLimiter::new("sec-edgar", 10)) {
-        Ok(edgar_client) => {
-            info!("catalyst provider: Tier 2 (Finnhub + FRED + yfinance + SEC EDGAR)");
-            Arc::new(Tier2CatalystProvider {
-                tier1,
-                sec_edgar: SecEdgar8kProvider::new(edgar_client),
-                source_timeout,
-            })
-        }
-        Err(reason) => {
-            info!(reason = %reason, "falling back to Tier 1 catalyst provider");
-            Arc::new(tier1)
-        }
-    }
+    let sec_edgar_limiter = SharedRateLimiter::sec_edgar_from_config(rate_limits)
+        .unwrap_or_else(|| SharedRateLimiter::disabled("sec-edgar"));
+    let sec_edgar = SecEdgar8kProvider::new(SecEdgarClient::new(sec_edgar_limiter));
+    info!("catalyst provider: Finnhub + FRED + yfinance + SEC EDGAR");
+    Arc::new(CatalystProvider::with_timeout(
+        finnhub.clone(),
+        fred.clone(),
+        sec_edgar,
+        source_timeout,
+    ))
 }
 
 /// Construct the ordered list of analyst fan-out tasks for `required_inputs`.
@@ -697,7 +691,7 @@ async fn load_prior_consensus_payload(
 /// - `payload: None` only when this function is never called (skipped in
 ///   the join! block), which is not the case in the current wiring.
 ///
-/// All per-source failures are absorbed by `Tier1CatalystProvider`'s
+/// All per-source failures are absorbed by `CatalystProvider`'s
 /// fail-soft `try_*` helpers and emitted as `tracing::warn!`.
 async fn hydrate_catalysts(
     provider: &dyn CatalystCalendarProvider,
