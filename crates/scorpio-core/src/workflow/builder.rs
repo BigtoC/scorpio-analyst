@@ -266,7 +266,7 @@ impl TradingPipeline {
             &finnhub,
             &fred,
             Duration::from_secs(config.enrichment.fetch_timeout_secs),
-            &config.rate_limits,
+            crate::workflow::pipeline::runtime::build_sec_edgar_limiter(&config.rate_limits),
         );
         Self::__from_parts(
             config,

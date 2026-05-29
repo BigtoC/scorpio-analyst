@@ -56,14 +56,26 @@ pub(super) fn canonicalize_runtime_symbol(symbol: &str) -> Result<Symbol, Tradin
     Ok(crate::data::resolve_symbol(symbol)?.symbol)
 }
 
+/// Build the SEC EDGAR rate limiter from `RateLimitConfig` (`sec_edgar_rps`,
+/// default 10; `0` disables).
+///
+/// A single instance is shared — cloned, since the limiter is `Arc`-backed —
+/// between the catalyst provider's EDGAR client and the in-graph
+/// `AnalystSyncTask` client, so both honor one rate budget against SEC's
+/// per-client fair-use ceiling rather than each running an independent quota.
+pub(crate) fn build_sec_edgar_limiter(
+    rate_limits: &crate::config::RateLimitConfig,
+) -> SharedRateLimiter {
+    SharedRateLimiter::sec_edgar_from_config(rate_limits)
+        .unwrap_or_else(|| SharedRateLimiter::disabled("sec-edgar"))
+}
+
 pub(crate) fn build_catalyst_provider(
     finnhub: &FinnhubClient,
     fred: &FredClient,
     source_timeout: std::time::Duration,
-    rate_limits: &crate::config::RateLimitConfig,
+    sec_edgar_limiter: SharedRateLimiter,
 ) -> Arc<dyn CatalystCalendarProvider> {
-    let sec_edgar_limiter = SharedRateLimiter::sec_edgar_from_config(rate_limits)
-        .unwrap_or_else(|| SharedRateLimiter::disabled("sec-edgar"));
     let sec_edgar = SecEdgar8kProvider::new(SecEdgarClient::new(sec_edgar_limiter));
     info!("catalyst provider: Finnhub + FRED + yfinance + SEC EDGAR");
     Arc::new(CatalystProvider::with_timeout(
