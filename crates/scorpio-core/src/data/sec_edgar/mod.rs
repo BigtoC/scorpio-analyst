@@ -177,6 +177,9 @@ pub struct MfTickerEntry {
     pub cik: u32,
     /// EDGAR series identifier, e.g. `"S000004354"` for SOXX.
     pub series_id: String,
+    /// EDGAR class identifier, e.g. `"C000012084"` for SOXX — load-bearing for
+    /// the SEC risk/return benchmark lookup.
+    pub class_id: String,
 }
 
 /// Shape of `https://data.sec.gov/submissions/CIK<10-digit>.json`.
@@ -224,6 +227,7 @@ fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, MfTickerEntry>
     let raw: MfTickersResponse = serde_json::from_str(body).map_err(|e| e.to_string())?;
     if raw.fields.first().map(String::as_str) != Some("cik")
         || raw.fields.get(1).map(String::as_str) != Some("seriesId")
+        || raw.fields.get(2).map(String::as_str) != Some("classId")
         || raw.fields.get(3).map(String::as_str) != Some("symbol")
     {
         return Err(format!(
@@ -234,8 +238,15 @@ fn parse_company_tickers_mf(body: &str) -> Result<HashMap<String, MfTickerEntry>
     Ok(raw
         .data
         .into_iter()
-        .map(|(cik, series_id, _class_id, symbol)| {
-            (symbol.to_uppercase(), MfTickerEntry { cik, series_id })
+        .map(|(cik, series_id, class_id, symbol)| {
+            (
+                symbol.to_uppercase(),
+                MfTickerEntry {
+                    cik,
+                    series_id,
+                    class_id,
+                },
+            )
         })
         .collect())
 }
@@ -1047,6 +1058,7 @@ mod tests {
             Some(&MfTickerEntry {
                 cik: 1100663,
                 series_id: "S000004354".to_owned(),
+                class_id: "C000012084".to_owned(),
             })
         );
         assert_eq!(
@@ -1054,6 +1066,7 @@ mod tests {
             Some(&MfTickerEntry {
                 cik: 884394,
                 series_id: "S000003474".to_owned(),
+                class_id: "C000009779".to_owned(),
             })
         );
     }
@@ -1208,6 +1221,7 @@ mod tests {
             MfTickerEntry {
                 cik: 1100663,
                 series_id: "S000004354".to_owned(),
+                class_id: "C000012084".to_owned(),
             },
         );
         let client = SecEdgarClient::with_preloaded_mf_cache(

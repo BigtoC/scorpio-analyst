@@ -1,0 +1,4 @@
+adsh	cik	series_id	class_id	filed	period	doc	stmt	line	tag	value
+0001193125-25-162603	1100663	S000004354	C000012084	2025-07-18	2025-06-30	soxx-485bpos.htm	RR	1	StrategyNarrativeTextBlock	The Fund seeks to track the investment results of the NYSE Semiconductor Index, which measures the performance of U.S.-listed semiconductor equities.
+0001193125-25-162603	1100663	S000004354	C000012084	2025-07-18	2025-06-30	soxx-485bpos.htm	RR	2	ObjectivePrimaryTextBlock	The Fund seeks investment results that correspond generally to the price and yield performance of the NYSE Semiconductor Index.
+0001193125-25-162603	1100663	S000004354	C000012084	2025-07-18	2025-06-30	soxx-485bpos.htm	RR	3	AvgAnnlRtrPct	NYSESemiconductorIndex
