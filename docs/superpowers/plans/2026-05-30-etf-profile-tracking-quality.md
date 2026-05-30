@@ -685,7 +685,7 @@ if name == b"benchmarkName" || name == b"indxName" {
 Add this helper near `fill_field`:
 
 ```rust
-fn normalize_optional_benchmark(raw: &str) -> Option<String> {
+pub(crate) fn normalize_optional_benchmark(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
@@ -886,12 +886,15 @@ pub fn parse_risk_return_tsv_for_benchmark(
     }).next()
 }
 
+// Benchmark-name resolution must prefer the structured DERA index dimension as
+// authoritative (the index identity carried on the index-member /
+// `AvgAnnlRtrPct` rows) and use this strategy-text scan only as a best-effort
+// fallback. The scan is fragile — it commits to the first `" index"` occurrence
+// and mis-extracts on common phrasings (e.g. "uses an index sampling strategy to
+// track the CRSP US Total Market Index"). Do NOT special-case any single fund's
+// index name; the SOXX fixture exercises this same generic path ("track the NYSE
+// Semiconductor Index" resolves correctly without a hardcoded marker).
 fn extract_index_name(text: &str) -> Option<String> {
-    let marker = "NYSE Semiconductor Index";
-    if text.contains(marker) {
-        return Some(marker.to_owned());
-    }
-
     let lower = text.to_ascii_lowercase();
     let suffix = " index";
     let end = lower.find(suffix)? + suffix.len();
@@ -907,6 +910,8 @@ fn extract_index_name(text: &str) -> Option<String> {
     }
 }
 ```
+
+Make `parse_risk_return_tsv_for_benchmark` consult the structured index dimension (the index-member / `AvgAnnlRtrPct` rows) as the authoritative name before falling back to `extract_index_name` on the narrative text. Add a non-SOXX fixture (e.g. an `MVIS … Index` strategy row at `tests/fixtures/sec_risk_return/smh_rr.tsv`) and a test pinning the fallback to either the official name or `None` — never a mangled strategy-text fragment — so the generic path's limitation is covered rather than masked by the SOXX-only fixture.
 
 - [ ] **Step 5: Preserve class ID from SEC MF ticker map**
 
@@ -937,6 +942,8 @@ Modify `parse_company_tickers_mf` mapping:
 ```
 
 Update existing tests that construct `MfTickerEntry` so they include `class_id: "C000012084".to_owned()` or the matching fixture value.
+
+In `parse_company_tickers_mf`, extend the existing schema-position guard (which already asserts `fields[0] == "cik"`, `fields[1] == "seriesId"`, and `fields[3] == "symbol"`) to also assert `fields.get(2).map(String::as_str) == Some("classId")`. `class_id` is now load-bearing for the risk/return lookup, so a silent SEC column reorder must fail loudly here rather than mismatching every benchmark downstream.
 
 - [ ] **Step 6: Export the module**
 
@@ -999,43 +1006,13 @@ fn benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup() {
     assert!(super::resolve_official_benchmark_name(None, Some(&nport)).is_none());
     assert!(fund_info.stated_benchmark.is_none());
 }
-
-#[tokio::test]
-async fn etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists() {
-    let mut mock = MockYFinanceData::new();
-    mock.expect_get_quote().returning(|_| None);
-    mock.expect_get_distribution_yield_ttm().returning(|_| None);
-    mock.expect_get_ohlcv()
-        .times(1)
-        .returning(|symbol, _, _| {
-            assert_eq!(symbol, "SOXX", "only ETF OHLCV should be fetched");
-            Ok(vec![])
-        });
-
-    let info = etf_fund_info_snapshot();
-    let today = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
-    let inputs = fetch_valuation_inputs(
-        &mock,
-        None,
-        None,
-        None,
-        PackId::EtfBaseline,
-        "SOXX",
-        &today,
-        Duration::from_secs(1),
-        Some(&info),
-    )
-    .await;
-
-    assert!(inputs.etf_benchmark_ohlcv.is_none());
-}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo nextest run -p scorpio-core benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists --no-fail-fast`
+Run: `cargo nextest run -p scorpio-core benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup --no-fail-fast`
 
-Expected: FAIL because static fallback still resolves SOXX to `^SOX`, and benchmark OHLCV can still be fetched.
+Expected: FAIL because static fallback still resolves SOXX to `^SOX`.
 
 - [ ] **Step 3: Remove static module export and file**
 
@@ -1061,16 +1038,10 @@ Modify `crates/scorpio-core/src/data/yfinance/etf.rs` module docs by replacing t
 In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, replace `resolve_benchmark_symbol` with:
 
 ```rust
-fn normalize_benchmark_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    match trimmed.to_ascii_lowercase().as_str() {
-        "n/a" | "na" | "none" | "null" => None,
-        _ => Some(trimmed.to_owned()),
-    }
-}
+// Reuse the shared helper rather than redefining identical logic; Task 3 exposes
+// `normalize_optional_benchmark` as `pub(crate)` in `sec_edgar/nport.rs` (ensure
+// the `nport` module is at least `pub(crate)` so this path resolves).
+use crate::data::sec_edgar::nport::normalize_optional_benchmark;
 
 fn resolve_official_benchmark_name(
     risk_return: Option<&crate::data::sec_risk_return::BenchmarkMetadata>,
@@ -1081,7 +1052,7 @@ fn resolve_official_benchmark_name(
     }
     nport
         .and_then(|holdings| holdings.stated_benchmark.as_deref())
-        .and_then(normalize_benchmark_name)
+        .and_then(normalize_optional_benchmark)
         .map(|name| (name, crate::state::BenchmarkSource::SecNport, None))
 }
 
@@ -1097,19 +1068,17 @@ Remove calls that write fallback symbols into `FundInfo.stated_benchmark` before
 
 - [ ] **Step 5: Stop benchmark OHLCV fetches**
 
-In `fetch_valuation_inputs`, delete the block that calls `fetch_ohlcv_1y(yfinance, &bench)` for `etf_benchmark_ohlcv`.
-
-Keep the field temporarily in the local `ValuationInputs` struct if removing it causes a large cascade in this task, but always leave it as `None`. Remove it from `crate::valuation::ValuationInputs` in Step 6.
+In `fetch_valuation_inputs`, delete the block that calls `fetch_ohlcv_1y(yfinance, &bench)` for `etf_benchmark_ohlcv`, and remove the `etf_benchmark_ohlcv` field from the local `ValuationInputs` struct in this file. Step 6 removes the matching field from the crate-level `crate::valuation::ValuationInputs` and updates its remaining references.
 
 - [ ] **Step 6: Remove benchmark OHLCV from valuation carrier**
 
-Modify `crates/scorpio-core/src/valuation/mod.rs` by deleting:
+Remove `etf_benchmark_ohlcv` from every remaining site. Delete the field from `crate::valuation::ValuationInputs` in `crates/scorpio-core/src/valuation/mod.rs`:
 
 ```rust
 pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 ```
 
-Update the construction in `derive_runtime_valuation` so it no longer supplies `etf_benchmark_ohlcv`.
+Then update the `derive_runtime_valuation` construction so it no longer supplies `etf_benchmark_ohlcv`; delete the now-dead `use super::tracking_error::compute_tracking_error;` import in `premium_discount.rs` once its call site is gone; and drop `etf_benchmark_ohlcv: None` from the `empty_inputs()` test helper in `premium_discount.rs` so the existing valuator tests still compile. Leaving any of these behind trips the repo's `-D warnings` gate (unused field / unused import).
 
 - [ ] **Step 7: Update example**
 
@@ -1117,7 +1086,7 @@ Modify `crates/scorpio-core/examples/etf_live_test.rs` so it no longer imports o
 
 - [ ] **Step 8: Run no-static-fallback tests**
 
-Run: `cargo nextest run -p scorpio-core benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists --no-fail-fast`
+Run: `cargo nextest run -p scorpio-core benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup --no-fail-fast`
 
 Expected: PASS.
 
@@ -1457,6 +1426,16 @@ let graph = runtime::build_graph(
 
 Change `TradingPipeline.alpha_vantage` to store `Option<Arc<crate::data::AlphaVantageClient>>`. Update `AnalysisRuntime::new` to pass the unwrapped client through `try_new`; `try_new` owns the conversion.
 
+Changing the `runtime::build_graph` / `build_graph_from_pack` signatures breaks every call site, so update them all (not just `try_new`):
+
+- `TradingPipeline::new` (`pipeline/mod.rs`) — pass `None`.
+- `build_graph(&self)` (`pipeline/mod.rs`) — pass `self.alpha_vantage.clone()`.
+- `try_new` — pass `alpha_vantage.clone()` (as shown above).
+- `runtime::build_graph` — forward the new `alpha_vantage` argument into `crate::workflow::builder::build_graph_from_pack` (it delegates, so the parameter must be threaded through, not left unused).
+- `builder.rs` — replace the existing `AnalystSyncTask::with_yfinance_and_edgar(...)` construction with `with_yfinance_edgar_and_alpha_vantage(...)`, threading `alpha_vantage` in.
+
+Every site must compile after the signature change; do not leave the new parameter unused in `runtime::build_graph` or any caller passing the old arity.
+
 - [ ] **Step 8: Fetch ETF profile and official benchmark in valuation inputs**
 
 Extend the local `ValuationInputs` struct in `workflow/tasks/analyst.rs`:
@@ -1493,6 +1472,46 @@ if let Some(av) = alpha_vantage {
 
 After N-PORT fetch and SEC risk/return lookup exist, set `etf_official_benchmark` by preferring SEC risk/return metadata over N-PORT textual benchmark. If SEC dataset fetch is not in this task yet, wire the field from a pure helper and leave the provider call in Task 7.
 
+Adding `alpha_vantage` and `risk_return_lookup` to `fetch_valuation_inputs` breaks its existing 7-arg callers — update them in this step: the two existing `fetch_valuation_inputs(...)` test call sites in `analyst.rs` (near the SPY tests) and the production caller in the live ETF branch must each pass `None, None` (or the real values) for the two new parameters.
+
+Add the benchmark-OHLCV-disable assertion here, moved from Task 5 (it could not compile against the Task 5 7-arg signature). The `etf_benchmark_ohlcv` field is removed in Task 5/6, so this version drops the field-based assertion and relies on the single `get_ohlcv` expectation to prove no benchmark-symbol OHLCV is fetched:
+
+```rust
+#[tokio::test]
+async fn etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists() {
+    let mut mock = MockYFinanceData::new();
+    mock.expect_get_quote().returning(|_| None);
+    mock.expect_get_distribution_yield_ttm().returning(|_| None);
+    mock.expect_get_ohlcv()
+        .times(1)
+        .returning(|symbol, _, _| {
+            assert_eq!(symbol, "SOXX", "only ETF OHLCV should be fetched");
+            Ok(vec![])
+        });
+
+    let info = etf_fund_info_snapshot();
+    let today = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
+    let _inputs = fetch_valuation_inputs(
+        &mock,
+        None,
+        None,
+        None,
+        PackId::EtfBaseline,
+        "SOXX",
+        &today,
+        Duration::from_secs(1),
+        Some(&info),
+    )
+    .await;
+
+    // The single get_ohlcv expectation above (times(1), symbol == "SOXX") proves
+    // no benchmark-symbol OHLCV is fetched; the removed etf_benchmark_ohlcv field
+    // is no longer asserted.
+}
+```
+
+Include `etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists` in the Step 10 run command.
+
 - [ ] **Step 9: Pass new inputs to valuator**
 
 In `derive_runtime_valuation`, pass:
@@ -1507,7 +1526,7 @@ etf_official_benchmark: valuation_inputs
 
 - [ ] **Step 10: Run valuation and wiring tests**
 
-Run: `cargo nextest run -p scorpio-core etf_valuator_prefers_alpha_vantage_profile_composition etf_valuator_renders_benchmark_name_only_status_when_official_name_exists --no-fail-fast`
+Run: `cargo nextest run -p scorpio-core etf_valuator_prefers_alpha_vantage_profile_composition etf_valuator_renders_benchmark_name_only_status_when_official_name_exists etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists --no-fail-fast`
 
 Expected: PASS.
 
@@ -1614,7 +1633,7 @@ pub async fn fetch_risk_return_benchmark_for_ticker(
 }
 ```
 
-This first implementation accepts TSV directly from the HTTP seam for testability. If implementation chooses to download ZIP bytes, it must add the `zip` crate to `crates/scorpio-core/Cargo.toml` from the workspace dependency and keep parser tests pure.
+The live DERA artifact is a ZIP (`{quarter}_rr1.zip`), and the `EdgarHttp::get` seam returns a lossily UTF-8-decoded `String` — passing that to the TSV parser returns `None` for every ticker in production, while the fixture-fed unit tests still pass. The wired path **must** therefore decompress before parsing: add a bytes-returning fetch (the `String`-returning `get` seam cannot carry ZIP bytes), add `zip.workspace = true` to `crates/scorpio-core/Cargo.toml` (the workspace root already pins `zip = "8"`), extract the inner `_rr1` TSV member, and pass that text to `parse_risk_return_tsv_for_benchmark`. Keep the pure TSV-parser tests unchanged. If ZIP decoding is deferred out of this task, do **not** present the risk/return path as functional — mark it inert and rely on the N-PORT textual benchmark fallback until decoding lands.
 
 - [ ] **Step 5: Wire lookup into ETF valuation input fetch**
 
@@ -1626,7 +1645,7 @@ if let Some(edgar) = sec_edgar {
         symbol,
         "sec_risk_return_benchmark",
         fetch_timeout,
-        edgar.fetch_risk_return_benchmark_for_ticker(symbol, "2025q3"),
+        edgar.fetch_risk_return_benchmark_for_ticker(symbol, &risk_return_quarter(target_date)),
     )
     .await
     .map(|metadata| {
@@ -1651,6 +1670,8 @@ if etf_official_benchmark.is_none()
     ));
 }
 ```
+
+Do not hardcode the quarter. Add a `risk_return_quarter(target_date: &str) -> String` helper that maps the run's `target_date` (the `as_of` date) to the most-recently-completed `"YYYYqN"`, with one or two prior-quarter fallbacks when a series/class has no rows in the newest dataset. Keep the literal `"2025q3"` only in the fixture-based unit test (`risk_return_zip_url_uses_official_sec_quarter_path`).
 
 - [ ] **Step 6: Run SEC wiring tests**
 
@@ -2022,7 +2043,7 @@ git commit -m "feat(report): render source-aware ETF benchmark status"
 - Modify: `crates/scorpio-reporters/src/json.rs`
 - Modify: `crates/scorpio-reporters/tests/json.rs`
 
-- [ ] **Step 1: Decide JSON artifact schema version**
+- [ ] **Step 1: Confirm JSON artifact schema version (stays v2)**
 
 If consumers treat additive ETF fields as backward-compatible, keep `JSON_REPORT_SCHEMA_VERSION` at `2` and add this comment in `crates/scorpio-reporters/src/json.rs` below the v2 note:
 
@@ -2032,13 +2053,7 @@ If consumers treat additive ETF fields as backward-compatible, keep `JSON_REPORT
 /// new nested fields.
 ```
 
-If downstream JSON consumers require explicit versioning for any `TradingState` addition, bump:
-
-```rust
-pub const JSON_REPORT_SCHEMA_VERSION: u32 = 3;
-```
-
-Then update `crates/scorpio-reporters/tests/json.rs` to assert `3` instead of `2`.
+Keep `JSON_REPORT_SCHEMA_VERSION` at `2`: these ETF fields are additive and do not change the envelope shape or any existing field meaning, so old consumers ignore the new nested fields — the same additive-is-backward-compatible rule the Scope section applies to `THESIS_MEMORY_SCHEMA_VERSION`. Bump the version only when a future change removes or renames a field. Leave `crates/scorpio-reporters/tests/json.rs` asserting `2`.
 
 - [ ] **Step 2: Update architecture docs**
 
@@ -2052,7 +2067,7 @@ In `docs/architecture/config-and-errors.md`, add the Alpha Vantage key note that
 
 Run: `cargo nextest run -p scorpio-reporters json_reporter_writes_valid_file_with_correct_schema_version --no-fail-fast`
 
-Expected: PASS with either the unchanged v2 assertion or the intentionally bumped v3 assertion.
+Expected: PASS with the v2 assertion unchanged.
 
 - [ ] **Step 4: Commit**
 
@@ -2111,4 +2126,4 @@ Skip this commit if verification produced no changes.
 
 **Type consistency:** The same type names are used throughout: `EtfCompositionSource`, `BenchmarkSource`, `TrackingStatus`, `EtfProfileFetch`, `EtfProfileData`, `BenchmarkMetadata`, and `RiskReturnLookup`. New valuation carrier fields are named `etf_profile` and `etf_official_benchmark` consistently from workflow to valuator.
 
-**Execution note:** The plan intentionally keeps SEC risk/return ZIP decoding minimal at first by testing the TSV parser and HTTP seam. If implementation chooses true ZIP decoding immediately, add the workspace `zip` dependency to `scorpio-core` and keep the parser API unchanged.
+**Execution note:** The pure TSV parser and HTTP seam are tested independently of decompression. ZIP decoding is **required** for the wired risk/return path to return any benchmark name in production — the live artifact is `{quarter}_rr1.zip` and the `EdgarHttp::get` seam yields a lossy `String`: add the workspace `zip` dependency to `scorpio-core`, decode the inner `_rr1` TSV member via a bytes-returning fetch, and keep the parser API unchanged. If decoding is deferred, the path is inert and official-name resolution relies on the N-PORT fallback.
