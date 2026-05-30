@@ -1678,6 +1678,7 @@ mod tests {
         };
         let nport = NPortHoldings {
             filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            report_date: None,
             holdings: vec![],
             sector_breakdown: vec![],
             stated_benchmark: Some("S&P 500 Index".into()),
@@ -1703,6 +1704,7 @@ mod tests {
         };
         let nport = NPortHoldings {
             filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            report_date: None,
             holdings: vec![],
             sector_breakdown: vec![],
             stated_benchmark: Some("S&P 500 Index".into()),
@@ -1730,6 +1732,7 @@ mod tests {
         };
         let nport = NPortHoldings {
             filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            report_date: None,
             holdings: vec![],
             sector_breakdown: vec![],
             stated_benchmark: None,
@@ -1783,6 +1786,7 @@ mod tests {
         };
         let nport = NPortHoldings {
             filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            report_date: None,
             holdings: vec![],
             sector_breakdown: vec![],
             stated_benchmark: Some("S&P 500 Index".into()),

@@ -31,6 +31,7 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
     let mut holdings: Vec<NPortHoldingRow> = Vec::new();
     let mut sector_totals: HashMap<String, f64> = HashMap::new();
     let mut stated_benchmark: Option<String> = None;
+    let mut report_date: Option<NaiveDate> = None;
 
     let mut current: Option<PartialHolding> = None;
     let mut current_text: Vec<u8> = Vec::new();
@@ -79,10 +80,16 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
                 {
                     holdings.push(row);
                 }
+                if name == b"repPdDate" || name == b"repPdEnd" {
+                    let txt = String::from_utf8_lossy(&current_text).trim().to_owned();
+                    if let Ok(parsed) = NaiveDate::parse_from_str(&txt, "%Y-%m-%d") {
+                        report_date = Some(parsed);
+                    }
+                }
                 if name == b"benchmarkName" || name == b"indxName" {
                     let txt = String::from_utf8_lossy(&current_text).trim().to_owned();
-                    if !txt.is_empty() {
-                        stated_benchmark = Some(txt);
+                    if let Some(normalized) = normalize_optional_benchmark(&txt) {
+                        stated_benchmark = Some(normalized);
                     }
                 }
             }
@@ -113,10 +120,25 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
 
     Some(NPortHoldings {
         filing_date,
+        report_date,
         holdings,
         sector_breakdown,
         stated_benchmark,
     })
+}
+
+/// Normalize an optional textual benchmark/index name, rejecting the common
+/// "no value" placeholders SEC filings use. Returns `None` for empty or
+/// `n/a`/`na`/`none`/`null` content; otherwise the trimmed name verbatim.
+pub(crate) fn normalize_optional_benchmark(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
+        "n/a" | "na" | "none" | "null" => None,
+        _ => Some(trimmed.to_owned()),
+    }
 }
 
 #[derive(Default)]
@@ -191,6 +213,37 @@ mod tests {
     fn parse_nport_p_returns_none_for_empty_input() {
         let result = parse_nport_p("", NaiveDate::from_ymd_opt(2026, 4, 30).unwrap());
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_nport_p_extracts_report_date_from_rep_pd_date() {
+        let xml = r#"
+        <edgarSubmission>
+          <formData><genInfo><repPdDate>2026-03-31</repPdDate></genInfo></formData>
+          <invstOrSec><name>Apple Inc</name><pctVal>5.0</pctVal><issuerType>Technology</issuerType></invstOrSec>
+        </edgarSubmission>
+        "#;
+        let result = parse_nport_p(xml, NaiveDate::from_ymd_opt(2026, 5, 28).unwrap())
+            .expect("fixture should parse");
+        assert_eq!(
+            result.report_date,
+            Some(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_nport_p_ignores_na_designated_index_fields() {
+        let xml = r#"
+        <edgarSubmission>
+          <formData><genInfo><repPdEnd>2026-03-31</repPdEnd></genInfo></formData>
+          <nameDesignatedIndex>N/A</nameDesignatedIndex>
+          <indexIdentifier>None</indexIdentifier>
+          <invstOrSec><name>Apple Inc</name><pctVal>5.0</pctVal><issuerType>Technology</issuerType></invstOrSec>
+        </edgarSubmission>
+        "#;
+        let result = parse_nport_p(xml, NaiveDate::from_ymd_opt(2026, 5, 28).unwrap())
+            .expect("fixture should parse");
+        assert!(result.stated_benchmark.is_none());
     }
 
     #[test]

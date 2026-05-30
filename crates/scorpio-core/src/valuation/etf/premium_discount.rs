@@ -144,7 +144,10 @@ fn build_composition(
 ) -> Option<EtfComposition> {
     flags.holdings_present = !nport.holdings.is_empty();
     let today = chrono::Utc::now().date_naive();
-    let age_days = (today - nport.filing_date).num_days().max(0) as u32;
+    // Prefer the N-PORT reporting-period date over the filing date for staleness:
+    // the filing can post weeks after the period the holdings actually describe.
+    let age_anchor = nport.report_date.unwrap_or(nport.filing_date);
+    let age_days = (today - age_anchor).num_days().max(0) as u32;
     flags.holdings_age_band = match age_days {
         0..=45 => HoldingsAgeBand::Fresh,
         46..=90 => HoldingsAgeBand::Aging,
@@ -189,7 +192,7 @@ fn build_composition(
         fund_family: fund_info.and_then(|f| f.fund_family.clone()),
         distribution_yield_ttm_pct: None, // filled by AnalystSyncTask (Task 13)
         holdings_filing_date: nport.filing_date,
-        holdings_report_date: None,
+        holdings_report_date: nport.report_date,
         holdings_age_days: age_days,
         portfolio_turnover_pct: None,
         inception_date: None,
@@ -293,6 +296,30 @@ mod tests {
     use super::*;
     use crate::data::traits::options::{IvTermPoint, NearTermStrike, OptionsSnapshot};
     use chrono::Utc;
+
+    #[test]
+    fn build_composition_uses_report_date_for_age_when_present() {
+        let mut flags = EtfDataAvailability::default();
+        let today = chrono::Utc::now().date_naive();
+        let nport = NPortHoldings {
+            filing_date: today,
+            report_date: Some(today - chrono::Duration::days(70)),
+            holdings: vec![crate::data::sec_edgar_nport::NPortHoldingRow {
+                cusip: None,
+                ticker: Some("AAPL".to_owned()),
+                name: "Apple Inc".to_owned(),
+                weight_pct: 5.0,
+                value_usd: None,
+            }],
+            sector_breakdown: vec![],
+            stated_benchmark: None,
+        };
+
+        let comp = build_composition(&nport, None, &mut flags).expect("composition");
+        assert_eq!(comp.holdings_report_date, nport.report_date);
+        assert!(comp.holdings_age_days >= 70);
+        assert_eq!(flags.holdings_age_band, HoldingsAgeBand::Aging);
+    }
 
     fn sample_options_snapshot() -> OptionsSnapshot {
         OptionsSnapshot {
