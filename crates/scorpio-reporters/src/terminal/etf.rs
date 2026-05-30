@@ -478,6 +478,10 @@ mod tests {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: Some("Large Blend".into()),
             leverage_factor: Some(1.0),
@@ -555,6 +559,7 @@ mod tests {
     fn narrow_policy_separates_holdings_with_newlines() {
         let mut etf = minimal_etf();
         etf.composition = Some(EtfComposition {
+            source: scorpio_core::state::EtfCompositionSource::SecNport,
             top_holdings: vec![
                 scorpio_core::state::HoldingWeight {
                     cusip: None,
@@ -578,7 +583,10 @@ mod tests {
             fund_family: None,
             distribution_yield_ttm_pct: None,
             holdings_filing_date: NaiveDate::from_ymd_opt(2026, 4, 30).unwrap(),
+            holdings_report_date: None,
             holdings_age_days: 21,
+            portfolio_turnover_pct: None,
+            inception_date: None,
         });
         let state = etf_state_with(etf);
         let mut out = String::new();

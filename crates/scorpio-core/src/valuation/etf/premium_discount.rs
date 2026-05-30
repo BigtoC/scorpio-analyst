@@ -89,6 +89,10 @@ impl Valuator for EtfPremiumDiscountValuator {
                 premium: snapshot,
                 composition,
                 tracking,
+                tracking_status: crate::state::TrackingStatus::NotResolved,
+                official_benchmark_name: None,
+                official_benchmark_source: None,
+                official_benchmark_metadata_age_days: None,
                 options_gex,
                 category,
                 leverage_factor,
@@ -176,6 +180,7 @@ fn build_composition(
         })
         .collect();
     Some(EtfComposition {
+        source: crate::state::EtfCompositionSource::SecNport,
         top_holdings: top10,
         top10_concentration_pct,
         sector_weights,
@@ -184,7 +189,10 @@ fn build_composition(
         fund_family: fund_info.and_then(|f| f.fund_family.clone()),
         distribution_yield_ttm_pct: None, // filled by AnalystSyncTask (Task 13)
         holdings_filing_date: nport.filing_date,
+        holdings_report_date: None,
         holdings_age_days: age_days,
+        portfolio_turnover_pct: None,
+        inception_date: None,
     })
 }
 

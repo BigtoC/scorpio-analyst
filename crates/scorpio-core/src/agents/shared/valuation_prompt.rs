@@ -341,6 +341,10 @@ mod tests {
                 },
                 composition: None,
                 tracking: None,
+                tracking_status: crate::state::TrackingStatus::NotResolved,
+                official_benchmark_name: None,
+                official_benchmark_source: None,
+                official_benchmark_metadata_age_days: None,
                 options_gex: Some(GexSummary {
                     net_gex_usd_per_1pct_move: -1_250_000_000.0,
                     gross_gex_usd_per_1pct_move: 3_000_000_000.0,
