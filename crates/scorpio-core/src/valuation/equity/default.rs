@@ -56,7 +56,6 @@ mod tests {
             etf_fund_info: None,
             etf_holdings: None,
             etf_ohlcv: None,
-            etf_benchmark_ohlcv: None,
             etf_options: None,
             etf_risk_free_rate: None,
             etf_distribution_yield_ttm: None,

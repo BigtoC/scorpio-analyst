@@ -96,7 +96,6 @@ pub struct ValuationInputs<'a> {
     pub etf_fund_info: Option<&'a crate::data::yfinance::etf::FundInfo>,
     pub etf_holdings: Option<&'a crate::data::sec_edgar_nport::NPortHoldings>,
     pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
-    pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 
     /// Phase 2 — Live ETF options snapshot threaded through from the persisted
     /// `TechnicalOptionsContext` before valuation runs. `None` when no snapshot

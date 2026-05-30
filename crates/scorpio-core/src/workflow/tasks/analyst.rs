@@ -24,10 +24,11 @@ use crate::{
     data::{
         FinnhubClient, FredClient, SecEdgarClient, YFinanceClient, YFinanceData,
         adapters::transcripts::TranscriptFetch,
+        sec_edgar::nport::normalize_optional_benchmark,
         sec_edgar_nport::NPortHoldings,
         yfinance::{
             Candle,
-            etf::{EtfQuote, FundInfo, fund_info_from_profile, normalize_benchmark_symbol},
+            etf::{EtfQuote, FundInfo, fund_info_from_profile},
         },
     },
     providers::factory::CompletionModelHandle,
@@ -767,7 +768,6 @@ struct ValuationInputs {
     etf_fund_info: Option<FundInfo>,
     etf_holdings: Option<NPortHoldings>,
     etf_ohlcv: Option<Vec<Candle>>,
-    etf_benchmark_ohlcv: Option<Vec<Candle>>,
     /// Cached TTM distribution yield (from yfinance), used to fill
     /// `EtfComposition.distribution_yield_ttm_pct` after the valuator returns.
     etf_distribution_yield_ttm_pct: Option<f64>,
@@ -847,7 +847,6 @@ async fn fetch_valuation_inputs(
     let mut etf_fund_info = None;
     let mut etf_holdings = None;
     let mut etf_ohlcv = None;
-    let mut etf_benchmark_ohlcv = None;
     let mut etf_distribution_yield_ttm_pct = None;
 
     if pack_id == PackId::EtfBaseline {
@@ -866,7 +865,6 @@ async fn fetch_valuation_inputs(
                 etf_fund_info,
                 etf_holdings,
                 etf_ohlcv,
-                etf_benchmark_ohlcv,
                 etf_distribution_yield_ttm_pct,
             };
         }
@@ -918,21 +916,6 @@ async fn fetch_valuation_inputs(
             )
             .await;
         }
-
-        // Benchmark OHLCV depends on the stated benchmark symbol pulled from
-        // fund_info — kept sequential to avoid issuing a phantom fetch when
-        // the benchmark is unknown.
-        if let Some(bench) =
-            resolve_benchmark_symbol(symbol, etf_fund_info.as_ref(), etf_holdings.as_ref())
-        {
-            etf_benchmark_ohlcv = fetch_with_timeout(
-                symbol,
-                "etf_benchmark_ohlcv",
-                fetch_timeout,
-                fetch_ohlcv_1y(yfinance, &bench),
-            )
-            .await;
-        }
     }
 
     ValuationInputs {
@@ -946,25 +929,40 @@ async fn fetch_valuation_inputs(
         etf_fund_info,
         etf_holdings,
         etf_ohlcv,
-        etf_benchmark_ohlcv,
         etf_distribution_yield_ttm_pct,
     }
 }
 
-fn resolve_benchmark_symbol(
-    etf_symbol: &str,
-    fund_info: Option<&FundInfo>,
+/// Resolve the official *textual* benchmark name (display/prompt context only —
+/// never a market-data symbol). Prefers SEC DERA risk/return metadata, falling
+/// back to the N-PORT stated benchmark. There is deliberately no static
+/// ETF→symbol table fallback.
+fn resolve_official_benchmark_name(
+    risk_return: Option<&crate::data::sec_risk_return::BenchmarkMetadata>,
     nport: Option<&NPortHoldings>,
-) -> Option<String> {
-    fund_info
-        .and_then(|info| info.stated_benchmark.as_deref())
-        .and_then(normalize_benchmark_symbol)
-        .or_else(|| {
-            nport
-                .and_then(|holdings| holdings.stated_benchmark.as_deref())
-                .and_then(normalize_benchmark_symbol)
-        })
-        .or_else(|| crate::data::etf_benchmarks::resolve(etf_symbol).map(str::to_owned))
+) -> Option<(String, crate::state::BenchmarkSource, Option<u32>)> {
+    if let Some(metadata) = risk_return {
+        return Some((
+            metadata.name.clone(),
+            metadata.source,
+            benchmark_metadata_age_days(metadata),
+        ));
+    }
+    nport
+        .and_then(|holdings| holdings.stated_benchmark.as_deref())
+        .and_then(normalize_optional_benchmark)
+        .map(|name| (name, crate::state::BenchmarkSource::SecNport, None))
+}
+
+fn benchmark_metadata_age_days(
+    metadata: &crate::data::sec_risk_return::BenchmarkMetadata,
+) -> Option<u32> {
+    let filing_date = metadata.filing_date?;
+    Some(
+        (chrono::Utc::now().date_naive() - filing_date)
+            .num_days()
+            .max(0) as u32,
+    )
 }
 
 async fn fetch_with_timeout<T, F>(
@@ -1106,23 +1104,6 @@ fn derive_runtime_valuation(
     valuation_inputs: &ValuationInputs,
     current_price: Option<f64>,
 ) -> DerivedValuation {
-    let mut etf_fund_info = valuation_inputs.etf_fund_info.clone();
-    let state_symbol = state
-        .symbol
-        .as_ref()
-        .and_then(crate::domain::Symbol::as_equity)
-        .map(|t| t.as_str())
-        .unwrap_or("");
-    if let Some(benchmark_symbol) = resolve_benchmark_symbol(
-        state_symbol,
-        valuation_inputs.etf_fund_info.as_ref(),
-        valuation_inputs.etf_holdings.as_ref(),
-    ) && let Some(info) = etf_fund_info.as_mut()
-        && info.stated_benchmark.is_none()
-    {
-        info.stated_benchmark = Some(benchmark_symbol);
-    }
-
     let provisional = derive_valuation(
         valuation_inputs.profile.clone(),
         valuation_inputs.cashflow.as_deref(),
@@ -1166,10 +1147,9 @@ fn derive_runtime_valuation(
             earnings_trend: valuation_inputs.trend.as_deref(),
             current_price,
             etf_quote: valuation_inputs.etf_quote.as_ref(),
-            etf_fund_info: etf_fund_info.as_ref(),
+            etf_fund_info: valuation_inputs.etf_fund_info.as_ref(),
             etf_holdings: valuation_inputs.etf_holdings.as_ref(),
             etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
-            etf_benchmark_ohlcv: valuation_inputs.etf_benchmark_ohlcv.as_deref(),
             etf_options: etf_options_from_state(state),
             etf_risk_free_rate: etf_risk_free_rate_from_state(state),
             etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
@@ -1497,13 +1477,12 @@ impl Task for AnalystSyncTask {
 mod tests {
     use std::time::Duration;
 
-    use chrono::{NaiveDate, Utc};
     use tokio::time::sleep;
     use yfinance_rs::profile::{Fund, Profile};
 
-    use super::{ValuationInputs, fetch_valuation_inputs, fetch_with_timeout};
+    use super::{fetch_valuation_inputs, fetch_with_timeout};
     use crate::analysis_packs::PackId;
-    use crate::data::yfinance::{Candle, etf::FundInfo};
+    use crate::data::yfinance::etf::FundInfo;
     use crate::data::{MockYFinanceData, sec_edgar_nport::NPortHoldings};
     use crate::valuation::{ValuatorId, ValuatorRegistry};
 
@@ -1660,14 +1639,13 @@ mod tests {
         assert!(inputs.etf_fund_info.is_none());
         assert!(inputs.etf_holdings.is_none());
         assert!(inputs.etf_ohlcv.is_none());
-        assert!(inputs.etf_benchmark_ohlcv.is_none());
         assert!(inputs.etf_distribution_yield_ttm_pct.is_none());
     }
 
     #[test]
-    fn benchmark_symbol_prefers_fund_info_then_nport_fallback() {
+    fn benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup() {
         let fund_info = FundInfo {
-            symbol: "SPY".into(),
+            symbol: "SOXX".into(),
             category: None,
             fund_family: None,
             expense_ratio: None,
@@ -1677,173 +1655,18 @@ mod tests {
             stated_benchmark: None,
         };
         let nport = NPortHoldings {
-            filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
-            report_date: None,
-            holdings: vec![],
-            sector_breakdown: vec![],
-            stated_benchmark: Some("S&P 500 Index".into()),
-        };
-
-        assert_eq!(
-            super::resolve_benchmark_symbol("SPY", Some(&fund_info), Some(&nport)),
-            Some("^GSPC".to_owned())
-        );
-    }
-
-    #[test]
-    fn benchmark_symbol_prefers_fund_info_when_present() {
-        let fund_info = FundInfo {
-            symbol: "SPY".into(),
-            category: None,
-            fund_family: None,
-            expense_ratio: None,
-            total_assets: None,
-            leverage_factor: Some(1.0),
-            fund_kind: Some("etf".into()),
-            stated_benchmark: Some("^NDX".into()),
-        };
-        let nport = NPortHoldings {
-            filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
-            report_date: None,
-            holdings: vec![],
-            sector_breakdown: vec![],
-            stated_benchmark: Some("S&P 500 Index".into()),
-        };
-
-        assert_eq!(
-            super::resolve_benchmark_symbol("SPY", Some(&fund_info), Some(&nport)),
-            Some("^NDX".to_owned())
-        );
-    }
-
-    #[test]
-    fn benchmark_symbol_falls_back_to_static_lookup_when_upstream_silent() {
-        // Both fund_info and nport lack a stated_benchmark: the static
-        // lookup keyed by the ETF symbol should resolve it.
-        let fund_info = FundInfo {
-            symbol: "QQQ".into(),
-            category: None,
-            fund_family: None,
-            expense_ratio: None,
-            total_assets: None,
-            leverage_factor: Some(1.0),
-            fund_kind: Some("etf".into()),
-            stated_benchmark: None,
-        };
-        let nport = NPortHoldings {
-            filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
-            report_date: None,
+            filing_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+            report_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
             holdings: vec![],
             sector_breakdown: vec![],
             stated_benchmark: None,
         };
 
-        assert_eq!(
-            super::resolve_benchmark_symbol("QQQ", Some(&fund_info), Some(&nport)),
-            Some("^NDX".to_owned())
-        );
-    }
-
-    #[test]
-    fn benchmark_symbol_static_lookup_yields_none_for_unmapped_symbol() {
-        // Upstream silent + symbol not in the static map → None.
-        assert_eq!(
-            super::resolve_benchmark_symbol("EXOTIC_ETF_XYZ", None, None),
-            None
-        );
-    }
-
-    #[test]
-    fn derive_runtime_valuation_uses_nport_benchmark_fallback() {
-        let mut state = crate::state::TradingState::new("SPY", "2026-02-01");
-        state.analysis_runtime_policy = Some(
-            crate::analysis_packs::resolve_runtime_policy_for_manifest(
-                &crate::analysis_packs::resolve_pack(crate::analysis_packs::PackId::EtfBaseline),
-            )
-            .expect("etf baseline policy"),
-        );
-
-        let quote = crate::data::yfinance::etf::EtfQuote {
-            symbol: "SPY".into(),
-            regular_market_price: 600.0,
-            previous_close: None,
-            nav: Some(599.5),
-            bid: Some(599.8),
-            ask: Some(600.2),
-            day_volume: None,
-            currency: Some("USD".into()),
-            as_of: Utc::now(),
-        };
-        let fund_info = FundInfo {
-            symbol: "SPY".into(),
-            category: Some("Large Blend".into()),
-            fund_family: None,
-            expense_ratio: Some(0.09),
-            total_assets: None,
-            leverage_factor: Some(1.0),
-            fund_kind: Some("etf".into()),
-            stated_benchmark: None,
-        };
-        let nport = NPortHoldings {
-            filing_date: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
-            report_date: None,
-            holdings: vec![],
-            sector_breakdown: vec![],
-            stated_benchmark: Some("S&P 500 Index".into()),
-        };
-        let etf_ohlcv: Vec<Candle> = (0..35)
-            .map(|i| Candle {
-                date: format!("2026-01-{:02}", i + 1),
-                open: 100.0 + i as f64,
-                high: 100.0 + i as f64,
-                low: 100.0 + i as f64,
-                close: 100.0 + i as f64,
-                volume: None,
-            })
-            .collect();
-        let benchmark_ohlcv: Vec<Candle> = (0..35)
-            .map(|i| Candle {
-                date: format!("2026-01-{:02}", i + 1),
-                open: 200.0 + i as f64,
-                high: 200.0 + i as f64,
-                low: 200.0 + i as f64,
-                close: 200.0 + i as f64,
-                volume: None,
-            })
-            .collect();
-
-        let valuation_inputs = ValuationInputs {
-            profile: Some(Profile::Fund(Fund {
-                name: "SPDR S&P 500 ETF Trust".to_owned(),
-                family: Some("State Street".to_owned()),
-                kind: Default::default(),
-                isin: None,
-            })),
-            cashflow: None,
-            balance: None,
-            income: None,
-            shares: None,
-            trend: None,
-            etf_quote: Some(quote),
-            etf_fund_info: Some(fund_info),
-            etf_holdings: Some(nport),
-            etf_ohlcv: Some(etf_ohlcv),
-            etf_benchmark_ohlcv: Some(benchmark_ohlcv),
-            etf_distribution_yield_ttm_pct: None,
-        };
-
-        let valuation = super::derive_runtime_valuation(&state, &valuation_inputs, Some(600.0));
-
-        let tracking_symbol = match valuation.scenario {
-            crate::state::ScenarioValuation::Etf(etf) => {
-                etf.tracking
-                    .expect("tracking should be computed with fallback benchmark")
-                    .benchmark_symbol
-            }
-            other => panic!("expected ETF valuation, got {other:?}"),
-        };
-
-        assert_eq!(tracking_symbol, "^GSPC");
+        // No SEC risk/return metadata and an empty N-PORT benchmark resolve to
+        // None — there is no static ETF→symbol fallback, and nothing backfills
+        // FundInfo.stated_benchmark.
+        assert!(super::resolve_official_benchmark_name(None, Some(&nport)).is_none());
+        assert!(fund_info.stated_benchmark.is_none());
     }
 
     #[test]

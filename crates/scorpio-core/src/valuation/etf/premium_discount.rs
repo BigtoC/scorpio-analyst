@@ -9,7 +9,6 @@ use crate::state::{
 use crate::valuation::{ValuationInputs, ValuationReport, Valuator, ValuatorId};
 
 use super::category_norms::{band_for_category, classify_band};
-use super::tracking_error::compute_tracking_error;
 
 /// ETF-native valuator — composes premium/discount band, composition snapshot,
 /// and tracking error against a stated benchmark.
@@ -47,21 +46,10 @@ impl Valuator for EtfPremiumDiscountValuator {
             .etf_holdings
             .and_then(|h| build_composition(h, inputs.etf_fund_info, &mut flags));
 
-        let tracking = match (
-            inputs.etf_fund_info,
-            inputs.etf_ohlcv,
-            inputs.etf_benchmark_ohlcv,
-        ) {
-            (Some(info), Some(etf_ohlcv), Some(bench)) if info.stated_benchmark.is_some() => {
-                let symbol = info.stated_benchmark.as_deref().unwrap_or("^GSPC");
-                let te = compute_tracking_error(etf_ohlcv, bench, symbol);
-                if te.is_some() {
-                    flags.benchmark_resolved = true;
-                }
-                te
-            }
-            _ => None,
-        };
+        // Tracking-error computation is disabled in this scope: verified
+        // benchmark daily OHLCV is not resolved. Task 6 derives tracking_status
+        // and the official benchmark name from the merged inputs.
+        let tracking = None;
 
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
         let leverage_factor = inputs.etf_fund_info.and_then(|f| f.leverage_factor);
@@ -482,7 +470,6 @@ mod tests {
             etf_fund_info: None,
             etf_holdings: None,
             etf_ohlcv: None,
-            etf_benchmark_ohlcv: None,
             etf_options: None,
             etf_risk_free_rate: None,
             etf_distribution_yield_ttm: None,
