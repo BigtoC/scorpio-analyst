@@ -886,14 +886,15 @@ pub fn parse_risk_return_tsv_for_benchmark(
     }).next()
 }
 
-// Benchmark-name resolution must prefer the structured DERA index dimension as
-// authoritative (the index identity carried on the index-member /
-// `AvgAnnlRtrPct` rows) and use this strategy-text scan only as a best-effort
-// fallback. The scan is fragile — it commits to the first `" index"` occurrence
-// and mis-extracts on common phrasings (e.g. "uses an index sampling strategy to
-// track the CRSP US Total Market Index"). Do NOT special-case any single fund's
-// index name; the SOXX fixture exercises this same generic path ("track the NYSE
-// Semiconductor Index" resolves correctly without a hardcoded marker).
+// `extract_index_name` over the StrategyNarrativeTextBlock / ObjectivePrimaryTextBlock
+// narrative is the AUTHORITATIVE source of the benchmark's spaced name; the structured
+// `AvgAnnlRtrPct` index-member token only CORROBORATES it (per spec — the structured row
+// carries an unspaced token like `NYSESemiconductorIndex`, not the spaced display name).
+// This scan is best-effort: it commits to the first `" index"` occurrence and can
+// mis-extract on phrasings like "uses an index sampling strategy to track the CRSP US
+// Total Market Index", so treat a low-confidence extraction as `None`. Do NOT special-case
+// any single fund's index name; the SOXX fixture exercises this generic path ("track the
+// NYSE Semiconductor Index" resolves correctly without a hardcoded marker).
 fn extract_index_name(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     let suffix = " index";
@@ -911,7 +912,7 @@ fn extract_index_name(text: &str) -> Option<String> {
 }
 ```
 
-Make `parse_risk_return_tsv_for_benchmark` consult the structured index dimension (the index-member / `AvgAnnlRtrPct` rows) as the authoritative name before falling back to `extract_index_name` on the narrative text. Add a non-SOXX fixture (e.g. an `MVIS … Index` strategy row at `tests/fixtures/sec_risk_return/smh_rr.tsv`) and a test pinning the fallback to either the official name or `None` — never a mangled strategy-text fragment — so the generic path's limitation is covered rather than masked by the SOXX-only fixture.
+`parse_risk_return_tsv_for_benchmark` resolves the benchmark name from `extract_index_name` over the narrative text (the authoritative spaced name) and uses the structured `AvgAnnlRtrPct` index-member token only to corroborate — matching the spec's evidence hierarchy. (The structured token is unspaced, e.g. `NYSESemiconductorIndex`, so it cannot itself satisfy the spaced-name assertion in the Step 2 test.) Add a direct unit test calling `extract_index_name` with non-SOXX inline strategy strings — a well-formed `"...track the <Name> Index..."` case and an ambiguous one — asserting it returns the spaced name or `None`, never a mangled fragment. Inline `&str` inputs need no fixture file.
 
 - [ ] **Step 5: Preserve class ID from SEC MF ticker map**
 
@@ -1078,7 +1079,7 @@ Remove `etf_benchmark_ohlcv` from every remaining site. Delete the field from `c
 pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 ```
 
-Then update the `derive_runtime_valuation` construction so it no longer supplies `etf_benchmark_ohlcv`; delete the now-dead `use super::tracking_error::compute_tracking_error;` import in `premium_discount.rs` once its call site is gone; and drop `etf_benchmark_ohlcv: None` from the `empty_inputs()` test helper in `premium_discount.rs` so the existing valuator tests still compile. Leaving any of these behind trips the repo's `-D warnings` gate (unused field / unused import).
+Then update the `derive_runtime_valuation` construction so it no longer supplies `etf_benchmark_ohlcv`; update the crate-level `ValuationInputs` construction in `crates/scorpio-core/src/valuation/equity/default.rs` (the `etf_benchmark_ohlcv: None` line) so it no longer sets the removed field; delete the now-dead `use super::tracking_error::compute_tracking_error;` import in `premium_discount.rs` once its call site is gone; and drop `etf_benchmark_ohlcv: None` from the `empty_inputs()` test helper in `premium_discount.rs` so the existing valuator tests still compile. Leaving any of these behind trips the repo's `-D warnings` gate (unused import) or fails to compile (`no field named etf_benchmark_ohlcv`).
 
 - [ ] **Step 7: Update example**
 
@@ -1546,6 +1547,8 @@ git commit -m "feat(etf): merge ETF profile and official benchmark metadata"
 - Modify: `crates/scorpio-core/src/data/sec_edgar/mod.rs`
 - Modify: `crates/scorpio-core/src/workflow/tasks/analyst.rs`
 
+> **Scope note (round-2 decision):** The *live* SEC DERA risk/return fetch is deferred to a follow-on plan. This task ships the parser, the `risk_return_zip_path` URL helper, and `fetch_risk_return_benchmark_for_ticker` as pure, unit-tested building blocks, but does **not** wire the live fetch into the valuation path — official benchmark names come from the N-PORT `stated_benchmark` fallback (Step 5). The bytes-returning seam, ZIP decode (member-by-header + size cap), and publication-lag-aware quarter selection are out of scope here.
+
 - [ ] **Step 1: Write failing SEC lookup tests**
 
 Add this test to `crates/scorpio-core/src/data/sec_edgar/mod.rs`:
@@ -1633,30 +1636,16 @@ pub async fn fetch_risk_return_benchmark_for_ticker(
 }
 ```
 
-The live DERA artifact is a ZIP (`{quarter}_rr1.zip`), and the `EdgarHttp::get` seam returns a lossily UTF-8-decoded `String` — passing that to the TSV parser returns `None` for every ticker in production, while the fixture-fed unit tests still pass. The wired path **must** therefore decompress before parsing: add a bytes-returning fetch (the `String`-returning `get` seam cannot carry ZIP bytes), add `zip.workspace = true` to `crates/scorpio-core/Cargo.toml` (the workspace root already pins `zip = "8"`), extract the inner `_rr1` TSV member, and pass that text to `parse_risk_return_tsv_for_benchmark`. Keep the pure TSV-parser tests unchanged. If ZIP decoding is deferred out of this task, do **not** present the risk/return path as functional — mark it inert and rely on the N-PORT textual benchmark fallback until decoding lands.
+**Live fetch deferred to a follow-on plan.** The live SEC DERA risk/return path needs machinery that is out of scope here: a bytes-returning `EdgarHttp` seam (the `String`-returning `get` cannot carry ZIP bytes), ZIP member selection *by header* (the archive is named `{quarter}_rr1.zip` but contains several TSVs, none named `_rr1`), a decompressed-size cap (zip-bomb guard), and publication-lag-aware quarter selection. In this plan, `fetch_risk_return_benchmark_for_ticker` and `risk_return_zip_path` are defined and unit-tested as pure building blocks but are **not** wired into the live valuation path; official benchmark names come solely from the N-PORT `stated_benchmark` fallback (Step 5). A follow-on plan adds the byte-fetch + decode seam and wires it ahead of the N-PORT fallback. Keep the pure TSV-parser tests unchanged.
 
 - [ ] **Step 5: Wire lookup into ETF valuation input fetch**
 
 In `fetch_valuation_inputs`, after N-PORT fetch, add:
 
 ```rust
-if let Some(edgar) = sec_edgar {
-    etf_official_benchmark = fetch_with_timeout(
-        symbol,
-        "sec_risk_return_benchmark",
-        fetch_timeout,
-        edgar.fetch_risk_return_benchmark_for_ticker(symbol, &risk_return_quarter(target_date)),
-    )
-    .await
-    .map(|metadata| {
-        let age = benchmark_metadata_age_days(&metadata);
-        (metadata, age)
-    });
-}
-
-if etf_official_benchmark.is_none()
-    && let Some((name, source, age)) = resolve_official_benchmark_name(None, etf_holdings.as_ref())
-{
+// Live SEC DERA risk/return fetch is deferred to a follow-on plan (see Step 4).
+// Official benchmark names come from the N-PORT stated_benchmark fallback only.
+if let Some((name, source, age)) = resolve_official_benchmark_name(None, etf_holdings.as_ref()) {
     etf_official_benchmark = Some((
         crate::data::sec_risk_return::BenchmarkMetadata {
             name,
@@ -1671,7 +1660,7 @@ if etf_official_benchmark.is_none()
 }
 ```
 
-Do not hardcode the quarter. Add a `risk_return_quarter(target_date: &str) -> String` helper that maps the run's `target_date` (the `as_of` date) to the most-recently-completed `"YYYYqN"`, with one or two prior-quarter fallbacks when a series/class has no rows in the newest dataset. Keep the literal `"2025q3"` only in the fixture-based unit test (`risk_return_zip_url_uses_official_sec_quarter_path`).
+(Live quarter selection — `risk_return_quarter` and the prior-quarter fallback — moves to the follow-on plan with the byte-fetch seam. This plan keeps only the pure `risk_return_zip_path` helper and its `risk_return_zip_url_uses_official_sec_quarter_path` test.)
 
 - [ ] **Step 6: Run SEC wiring tests**
 
@@ -2126,4 +2115,4 @@ Skip this commit if verification produced no changes.
 
 **Type consistency:** The same type names are used throughout: `EtfCompositionSource`, `BenchmarkSource`, `TrackingStatus`, `EtfProfileFetch`, `EtfProfileData`, `BenchmarkMetadata`, and `RiskReturnLookup`. New valuation carrier fields are named `etf_profile` and `etf_official_benchmark` consistently from workflow to valuator.
 
-**Execution note:** The pure TSV parser and HTTP seam are tested independently of decompression. ZIP decoding is **required** for the wired risk/return path to return any benchmark name in production — the live artifact is `{quarter}_rr1.zip` and the `EdgarHttp::get` seam yields a lossy `String`: add the workspace `zip` dependency to `scorpio-core`, decode the inner `_rr1` TSV member via a bytes-returning fetch, and keep the parser API unchanged. If decoding is deferred, the path is inert and official-name resolution relies on the N-PORT fallback.
+**Execution note:** The live SEC DERA risk/return fetch is deferred to a follow-on plan. This plan ships the pure TSV parser (`parse_risk_return_tsv_for_benchmark`), the `risk_return_zip_path` URL helper, and `fetch_risk_return_benchmark_for_ticker` as tested building blocks, but does not wire the live fetch into the valuation path — official benchmark names come from the N-PORT `stated_benchmark` fallback. The follow-on plan adds the bytes-returning seam, ZIP decode (member-by-header + size cap), and publication-lag-aware quarter selection, wiring it ahead of the N-PORT fallback.
