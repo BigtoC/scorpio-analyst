@@ -7,6 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use chrono::NaiveDate;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
@@ -19,6 +20,7 @@ use crate::data::symbol::validate_symbol;
 use crate::data::transcript_cache::TranscriptCacheStore;
 use crate::error::TradingError;
 use crate::rate_limit::SharedRateLimiter;
+use crate::state::{HoldingWeight, SectorWeight};
 
 const BASE_URL: &str = "https://www.alphavantage.co/query";
 
@@ -95,6 +97,65 @@ struct AlphaVantageTranscriptResponse {
     /// Per-request hard error (bad symbol, malformed params).
     #[serde(rename = "Error Message")]
     error_message: Option<String>,
+}
+
+/// Outcome of an Alpha Vantage `ETF_PROFILE` fetch/parse. Mirrors the
+/// transcript provider's fail-soft taxonomy: a present profile, a transient
+/// rate-limit, an endpoint that is gated/unavailable, or no profile data.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EtfProfileFetch {
+    Found(EtfProfileData),
+    Throttled,
+    Unavailable,
+    NotAvailable,
+}
+
+/// Parsed Alpha Vantage `ETF_PROFILE` payload. Weights are expressed as
+/// percentages (e.g. `8.4` for an 0.084 decimal weight); ratios/yields stay in
+/// their upstream decimal form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EtfProfileData {
+    pub holdings: Vec<HoldingWeight>,
+    pub sectors: Vec<SectorWeight>,
+    pub aum_usd: Option<f64>,
+    pub expense_ratio_pct: Option<f64>,
+    pub portfolio_turnover_pct: Option<f64>,
+    pub distribution_yield_pct: Option<f64>,
+    pub inception_date: Option<NaiveDate>,
+    pub leverage_factor: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct AlphaVantageEtfProfileResponse {
+    net_assets: Option<String>,
+    net_expense_ratio: Option<String>,
+    portfolio_turnover: Option<String>,
+    dividend_yield: Option<String>,
+    inception_date: Option<String>,
+    leveraged: Option<String>,
+    #[serde(default)]
+    sectors: Vec<AlphaVantageSectorRow>,
+    #[serde(default)]
+    holdings: Vec<AlphaVantageHoldingRow>,
+    #[serde(rename = "Note")]
+    note: Option<String>,
+    #[serde(rename = "Information")]
+    information: Option<String>,
+    #[serde(rename = "Error Message")]
+    error_message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AlphaVantageSectorRow {
+    sector: Option<String>,
+    weight: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AlphaVantageHoldingRow {
+    symbol: Option<String>,
+    description: Option<String>,
+    weight: Option<String>,
 }
 
 impl AlphaVantageClient {
@@ -375,6 +436,161 @@ impl AlphaVantageClient {
             }
         }
     }
+
+    fn parse_optional_f64(raw: Option<&str>) -> Option<f64> {
+        let value = raw?.trim();
+        if value.is_empty() || value.eq_ignore_ascii_case("n/a") {
+            return None;
+        }
+        value.replace(',', "").parse::<f64>().ok()
+    }
+
+    fn parse_optional_date(raw: Option<&str>) -> Option<NaiveDate> {
+        NaiveDate::parse_from_str(raw?.trim(), "%Y-%m-%d").ok()
+    }
+
+    /// Upstream weights are decimal fractions (`0.084`); render as percent.
+    fn parse_decimal_weight_pct(raw: Option<&str>) -> Option<f64> {
+        Self::parse_optional_f64(raw).map(|value| value * 100.0)
+    }
+
+    /// `ETF_PROFILE.leveraged` is `"NO"`/`"YES"`. Only plain (`"NO"`) funds get a
+    /// known `1.0` factor; a leveraged fund's true factor is not in this payload.
+    fn parse_leverage_factor(raw: Option<&str>) -> Option<f64> {
+        match raw?.trim().to_ascii_uppercase().as_str() {
+            "NO" => Some(1.0),
+            _ => None,
+        }
+    }
+
+    /// Parse a raw `ETF_PROFILE` JSON body into an [`EtfProfileFetch`]. Provider
+    /// diagnostics (`Note`/`Information`) are classified fail-soft; an
+    /// `Error Message` is a schema violation (the only `Err` path).
+    pub(crate) fn parse_etf_profile_response(raw: &str) -> Result<EtfProfileFetch, TradingError> {
+        let resp: AlphaVantageEtfProfileResponse =
+            serde_json::from_str(raw).map_err(|e| TradingError::SchemaViolation {
+                message: format!("Alpha Vantage ETF_PROFILE response deserialization failed: {e}"),
+            })?;
+
+        if let Some(msg) = &resp.error_message {
+            return Err(TradingError::SchemaViolation {
+                message: format!(
+                    "Alpha Vantage ETF_PROFILE error: {}",
+                    Self::truncate_provider_msg(msg)
+                ),
+            });
+        }
+
+        if let Some(body) = resp.note.as_deref().or(resp.information.as_deref()) {
+            // ETF_PROFILE has no "not published this quarter" state; a non-throttle
+            // informational body means the endpoint is gated (premium plan,
+            // region, etc.). `classify_information`'s premium keyword set is
+            // narrower than AV's plan/availability gating language, so refine it.
+            return Ok(match Self::classify_information(body) {
+                TranscriptFetch::Throttled => EtfProfileFetch::Throttled,
+                TranscriptFetch::Unavailable => EtfProfileFetch::Unavailable,
+                TranscriptFetch::NotPublished | TranscriptFetch::Found(_) => {
+                    let lower = body.to_ascii_lowercase();
+                    if lower.contains("plan")
+                        || lower.contains("not available")
+                        || lower.contains("subscribe")
+                    {
+                        EtfProfileFetch::Unavailable
+                    } else {
+                        EtfProfileFetch::NotAvailable
+                    }
+                }
+            });
+        }
+
+        let holdings = resp
+            .holdings
+            .into_iter()
+            .filter_map(|row| {
+                let weight_pct = Self::parse_decimal_weight_pct(row.weight.as_deref())?;
+                let name = row.description.or_else(|| row.symbol.clone())?;
+                Some(HoldingWeight {
+                    cusip: None,
+                    ticker: row.symbol.filter(|s| !s.trim().is_empty()),
+                    name,
+                    weight_pct,
+                    value_usd: None,
+                })
+            })
+            .collect();
+
+        let sectors = resp
+            .sectors
+            .into_iter()
+            .filter_map(|row| {
+                Some(SectorWeight {
+                    sector: row.sector.filter(|s| !s.trim().is_empty())?,
+                    weight_pct: Self::parse_decimal_weight_pct(row.weight.as_deref())?,
+                })
+            })
+            .collect();
+
+        Ok(EtfProfileFetch::Found(EtfProfileData {
+            holdings,
+            sectors,
+            aum_usd: Self::parse_optional_f64(resp.net_assets.as_deref()),
+            expense_ratio_pct: Self::parse_optional_f64(resp.net_expense_ratio.as_deref()),
+            portfolio_turnover_pct: Self::parse_optional_f64(resp.portfolio_turnover.as_deref()),
+            distribution_yield_pct: Self::parse_optional_f64(resp.dividend_yield.as_deref()),
+            inception_date: Self::parse_optional_date(resp.inception_date.as_deref()),
+            leverage_factor: Self::parse_leverage_factor(resp.leveraged.as_deref()),
+        }))
+    }
+
+    fn build_etf_profile_url(&self) -> String {
+        format!("{}?function=ETF_PROFILE", self.base_url)
+    }
+
+    /// Fetch the Alpha Vantage `ETF_PROFILE` for `symbol`, fail-soft: transient
+    /// throttles, auth/region gating, server errors, and connect/timeout faults
+    /// degrade to a non-`Err` outcome so the ETF pipeline keeps running.
+    pub async fn fetch_etf_profile(&self, symbol: &str) -> Result<EtfProfileFetch, TradingError> {
+        validate_symbol(symbol)?;
+        self.rate_limiter.acquire().await;
+
+        let response = self
+            .http
+            .get(self.build_etf_profile_url())
+            .query(&[("symbol", symbol), ("apikey", self.key.expose_secret())])
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                let body = resp.text().await.map_err(|e| {
+                    TradingError::Config(anyhow::anyhow!(
+                        "Alpha Vantage ETF_PROFILE body read error: {e}"
+                    ))
+                })?;
+                Self::parse_etf_profile_response(&body)
+            }
+            Ok(resp) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                Ok(EtfProfileFetch::Throttled)
+            }
+            Ok(resp)
+                if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+                    || resp.status() == reqwest::StatusCode::FORBIDDEN =>
+            {
+                self.escalate_auth_failure(resp.status());
+                Ok(EtfProfileFetch::Unavailable)
+            }
+            Ok(resp) if resp.status().is_server_error() => Ok(EtfProfileFetch::Unavailable),
+            Ok(resp) => Err(TradingError::Config(anyhow::anyhow!(
+                "Alpha Vantage ETF_PROFILE HTTP error: {}",
+                resp.status()
+            ))),
+            Err(e) if e.is_timeout() || e.is_connect() => Ok(EtfProfileFetch::Unavailable),
+            Err(e) => Err(TradingError::Config(anyhow::anyhow!(
+                "Alpha Vantage ETF_PROFILE request error: {}",
+                e.without_url()
+            ))),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -599,6 +815,57 @@ mod tests {
             !msg.contains("Some("),
             "must not Debug-format the Option<SecretString>"
         );
+    }
+
+    // ── ETF profile parsing ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_etf_profile_converts_decimal_weights_and_profile_fields() {
+        let raw = include_str!("../../tests/fixtures/alpha_vantage/soxx_etf_profile.json");
+        let EtfProfileFetch::Found(profile) =
+            AlphaVantageClient::parse_etf_profile_response(raw).expect("parse profile")
+        else {
+            panic!("expected Found profile");
+        };
+
+        assert_eq!(profile.aum_usd, Some(12_300_000_000.0));
+        assert_eq!(profile.expense_ratio_pct, Some(0.0035));
+        assert_eq!(profile.portfolio_turnover_pct, Some(0.24));
+        assert_eq!(profile.distribution_yield_pct, Some(0.0061));
+        assert_eq!(
+            profile.inception_date,
+            Some(chrono::NaiveDate::from_ymd_opt(2001, 7, 10).unwrap())
+        );
+        assert_eq!(profile.leverage_factor, Some(1.0));
+        assert_eq!(profile.holdings[0].ticker.as_deref(), Some("NVDA"));
+        assert!((profile.holdings[0].weight_pct - 8.4).abs() < 1e-9);
+        assert_eq!(profile.holdings.len(), 2, "n/a holding weight is skipped");
+        assert!((profile.sectors[0].weight_pct - 78.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_etf_profile_classifies_provider_diagnostics_without_secret_text() {
+        // `assert_eq!` on the unwrapped `EtfProfileFetch` (not the `Result`)
+        // because `TradingError` is not `PartialEq` (it carries `anyhow::Error`).
+        assert_eq!(
+            AlphaVantageClient::parse_etf_profile_response(
+                r#"{"Note":"Thank you. Standard call frequency is 5 calls per minute."}"#
+            )
+            .expect("note classifies"),
+            EtfProfileFetch::Throttled
+        );
+        assert_eq!(
+            AlphaVantageClient::parse_etf_profile_response(
+                r#"{"Information":"This endpoint is not available under your current plan."}"#
+            )
+            .expect("information classifies"),
+            EtfProfileFetch::Unavailable
+        );
+        let err = AlphaVantageClient::parse_etf_profile_response(
+            r#"{"Error Message":"bad api key\nSECRET"}"#,
+        )
+        .expect_err("error message should be schema violation");
+        assert!(!format!("{err}").contains('\n'));
     }
 
     // ── Input validation ────────────────────────────────────────────────

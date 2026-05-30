@@ -1,0 +1,17 @@
+{
+  "net_assets": "12300000000",
+  "net_expense_ratio": "0.0035",
+  "portfolio_turnover": "0.24",
+  "dividend_yield": "0.0061",
+  "inception_date": "2001-07-10",
+  "leveraged": "NO",
+  "sectors": [
+    { "sector": "Semiconductors", "weight": "0.782" },
+    { "sector": "Technology Hardware", "weight": "0.104" }
+  ],
+  "holdings": [
+    { "symbol": "NVDA", "description": "NVIDIA Corp", "weight": "0.084" },
+    { "symbol": "AVGO", "description": "Broadcom Inc", "weight": "0.077" },
+    { "symbol": "TSM", "description": "Taiwan Semiconductor Manufacturing", "weight": "n/a" }
+  ]
+}
