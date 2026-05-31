@@ -5224,6 +5224,7 @@ dependencies = [
  "uuid",
  "wiremock",
  "yfinance-rs",
+ "zip 8.6.0",
 ]
 
 [[package]]
