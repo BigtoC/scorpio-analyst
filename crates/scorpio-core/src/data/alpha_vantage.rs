@@ -210,7 +210,7 @@ impl AlphaVantageClient {
         )
     }
 
-    fn new_with_base_url(
+    pub(crate) fn new_with_base_url(
         key: SecretString,
         limiter: SharedRateLimiter,
         base_url: String,
@@ -437,12 +437,17 @@ impl AlphaVantageClient {
         }
     }
 
-    fn parse_optional_f64(raw: Option<&str>) -> Option<f64> {
+    fn parse_optional_non_negative_f64(raw: Option<&str>) -> Option<f64> {
         let value = raw?.trim();
         if value.is_empty() || value.eq_ignore_ascii_case("n/a") {
             return None;
         }
-        value.replace(',', "").parse::<f64>().ok()
+        let parsed = value.replace(',', "").parse::<f64>().ok()?;
+        (parsed.is_finite() && parsed >= 0.0).then_some(parsed)
+    }
+
+    fn parse_optional_ratio(raw: Option<&str>) -> Option<f64> {
+        Self::parse_optional_non_negative_f64(raw).filter(|value| *value <= 1.0)
     }
 
     fn parse_optional_date(raw: Option<&str>) -> Option<NaiveDate> {
@@ -451,7 +456,7 @@ impl AlphaVantageClient {
 
     /// Upstream weights are decimal fractions (`0.084`); render as percent.
     fn parse_decimal_weight_pct(raw: Option<&str>) -> Option<f64> {
-        Self::parse_optional_f64(raw).map(|value| value * 100.0)
+        Self::parse_optional_ratio(raw).map(|value| value * 100.0)
     }
 
     /// `ETF_PROFILE.leveraged` is `"NO"`/`"YES"`. Only plain (`"NO"`) funds get a
@@ -533,10 +538,10 @@ impl AlphaVantageClient {
         Ok(EtfProfileFetch::Found(EtfProfileData {
             holdings,
             sectors,
-            aum_usd: Self::parse_optional_f64(resp.net_assets.as_deref()),
-            expense_ratio_pct: Self::parse_optional_f64(resp.net_expense_ratio.as_deref()),
-            portfolio_turnover_pct: Self::parse_optional_f64(resp.portfolio_turnover.as_deref()),
-            distribution_yield_pct: Self::parse_optional_f64(resp.dividend_yield.as_deref()),
+            aum_usd: Self::parse_optional_non_negative_f64(resp.net_assets.as_deref()),
+            expense_ratio_pct: Self::parse_optional_ratio(resp.net_expense_ratio.as_deref()),
+            portfolio_turnover_pct: Self::parse_optional_ratio(resp.portfolio_turnover.as_deref()),
+            distribution_yield_pct: Self::parse_optional_ratio(resp.dividend_yield.as_deref()),
             inception_date: Self::parse_optional_date(resp.inception_date.as_deref()),
             leverage_factor: Self::parse_leverage_factor(resp.leveraged.as_deref()),
         }))
@@ -781,7 +786,7 @@ impl TranscriptProvider for AlphaVantageClient {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // ── Constructor ─────────────────────────────────────────────────────
@@ -866,6 +871,43 @@ mod tests {
         )
         .expect_err("error message should be schema violation");
         assert!(!format!("{err}").contains('\n'));
+    }
+
+    #[test]
+    fn parse_etf_profile_rejects_non_finite_and_invalid_numeric_fields() {
+        let json = r#"{
+            "net_assets": "NaN",
+            "net_expense_ratio": "-0.12",
+            "portfolio_turnover": "1.5",
+            "dividend_yield": "Infinity",
+            "holdings": [
+                {"symbol":"BAD","description":"Bad Weight","weight":"NaN"},
+                {"symbol":"NEG","description":"Negative Weight","weight":"-0.1"},
+                {"symbol":"HUGE","description":"Huge Weight","weight":"3.0"},
+                {"symbol":"OK","description":"Valid Weight","weight":"0.084"}
+            ],
+            "sectors": [
+                {"sector":"Bad","weight":"-0.5"},
+                {"sector":"Semiconductors","weight":"0.782"}
+            ]
+        }"#;
+
+        let EtfProfileFetch::Found(profile) =
+            AlphaVantageClient::parse_etf_profile_response(json).expect("parse profile")
+        else {
+            panic!("expected profile");
+        };
+
+        assert_eq!(profile.holdings.len(), 1);
+        assert_eq!(profile.holdings[0].ticker.as_deref(), Some("OK"));
+        assert_eq!(profile.holdings[0].weight_pct, 8.4);
+        assert_eq!(profile.sectors.len(), 1);
+        assert_eq!(profile.sectors[0].sector, "Semiconductors");
+        assert_eq!(profile.sectors[0].weight_pct, 78.2);
+        assert_eq!(profile.aum_usd, None);
+        assert_eq!(profile.expense_ratio_pct, None);
+        assert_eq!(profile.portfolio_turnover_pct, None);
+        assert_eq!(profile.distribution_yield_pct, None);
     }
 
     // ── Input validation ────────────────────────────────────────────────
@@ -1101,7 +1143,7 @@ mod tests {
         })
     }
 
-    fn spawn_transcript_server(
+    pub(crate) fn spawn_transcript_server(
         status_line: &'static str,
         body: &'static str,
         calls: Arc<AtomicUsize>,
