@@ -34,8 +34,6 @@ fn etf_terminal_renders_dealer_positioning_block_when_gex_present() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -123,8 +121,6 @@ fn etf_terminal_renders_dealer_positioning_absence_when_gex_absent() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -165,8 +161,6 @@ fn etf_terminal_emits_partial_data_note_for_missing_walls() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -221,8 +215,6 @@ fn etf_terminal_renders_degraded_rate_banner_when_rate_unavailable() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -313,8 +305,6 @@ fn etf_terminal_renders_full_dealer_positioning_with_broad_and_secondary() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -378,8 +368,6 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -411,11 +399,11 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
 }
 
 #[test]
-fn etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracking() {
+fn etf_terminal_renders_profile_source_and_official_benchmark() {
     use scorpio_core::state::{
         AssetShape, BenchmarkSource, DerivedValuation, EtfComposition, EtfCompositionSource,
         EtfDataAvailability, EtfValuation, HoldingWeight, PremiumBand, PremiumSnapshot,
-        ScenarioValuation, SectorWeight, TrackingStatus,
+        ScenarioValuation, SectorWeight,
     };
 
     let mut state = TradingState::new("SOXX".to_owned(), "2026-05-30".to_owned());
@@ -456,8 +444,6 @@ fn etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracki
                 portfolio_turnover_pct: Some(0.24),
                 inception_date: Some(chrono::NaiveDate::from_ymd_opt(2001, 7, 10).unwrap()),
             }),
-            tracking: None,
-            tracking_status: TrackingStatus::BenchmarkNameOnly,
             official_benchmark_name: Some("NYSE Semiconductor Index".to_owned()),
             official_benchmark_source: Some(BenchmarkSource::SecRiskReturn),
             official_benchmark_metadata_age_days: Some(316),
@@ -476,15 +462,14 @@ fn etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracki
         rendered.contains("Official benchmark") && rendered.contains("NYSE Semiconductor Index")
     );
     assert!(rendered.contains("SEC DERA Risk/Return Summary"));
-    assert!(rendered.contains("Tracking error") && rendered.contains("unavailable"));
-    assert!(rendered.contains("benchmark daily history not resolved"));
+    assert!(!rendered.contains("Tracking error"));
 }
 
 #[test]
 fn etf_terminal_strips_control_sequences_from_provider_text() {
     use scorpio_core::state::{
         AssetShape, BenchmarkSource, DerivedValuation, EtfDataAvailability, EtfValuation,
-        PremiumBand, PremiumSnapshot, ScenarioValuation, TrackingStatus,
+        PremiumBand, PremiumSnapshot, ScenarioValuation,
     };
 
     let mut state = TradingState::new("SOXX".to_owned(), "2026-05-30".to_owned());
@@ -502,8 +487,6 @@ fn etf_terminal_strips_control_sequences_from_provider_text() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::BenchmarkNameOnly,
             official_benchmark_name: Some(
                 "NYSE\u{001b}[31m Semiconductor\u{0007} Index".to_owned(),
             ),
@@ -527,7 +510,6 @@ fn etf_terminal_renders_sec_nport_composition_source_with_report_and_filing_date
     use scorpio_core::state::{
         AssetShape, DerivedValuation, EtfComposition, EtfCompositionSource, EtfDataAvailability,
         EtfValuation, HoldingWeight, PremiumBand, PremiumSnapshot, ScenarioValuation,
-        TrackingStatus,
     };
 
     let mut state = TradingState::new("SPY".to_owned(), "2026-05-30".to_owned());
@@ -565,8 +547,6 @@ fn etf_terminal_renders_sec_nport_composition_source_with_report_and_filing_date
                 portfolio_turnover_pct: None,
                 inception_date: None,
             }),
-            tracking: None,
-            tracking_status: TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,

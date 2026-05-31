@@ -5,7 +5,6 @@ use crate::data::yfinance::etf::{EtfQuote, FundInfo};
 use crate::state::{
     AssetShape, DerivedValuation, EtfComposition, EtfCompositionSource, EtfDataAvailability,
     EtfValuation, HoldingWeight, HoldingsAgeBand, PremiumSnapshot, ScenarioValuation, SectorWeight,
-    TrackingStatus,
 };
 use crate::valuation::{ValuationInputs, ValuationReport, Valuator, ValuatorId};
 
@@ -63,9 +62,8 @@ impl Valuator for EtfPremiumDiscountValuator {
             flags.expense_ratio_available = true;
         }
 
-        // Tracking-error computation stays disabled (no verified benchmark daily
-        // OHLCV). Surface the official textual benchmark name when present and
-        // reflect it in the tracking status.
+        // Surface the official textual benchmark name when present — display /
+        // prompt context only; no tracking-error computation is performed.
         let (
             official_benchmark_name,
             official_benchmark_source,
@@ -76,12 +74,6 @@ impl Valuator for EtfPremiumDiscountValuator {
                 (Some(metadata.name.clone()), Some(metadata.source), age_days)
             })
             .unwrap_or((None, None, None));
-        let tracking_status = if official_benchmark_name.is_some() {
-            TrackingStatus::BenchmarkNameOnly
-        } else {
-            TrackingStatus::NotResolved
-        };
-        let tracking: Option<crate::state::TrackingError> = None;
 
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
         // Prefer yfinance's leverage factor; fall back to the Alpha Vantage
@@ -113,8 +105,6 @@ impl Valuator for EtfPremiumDiscountValuator {
             scenario: ScenarioValuation::Etf(EtfValuation {
                 premium: snapshot,
                 composition,
-                tracking,
-                tracking_status,
                 official_benchmark_name,
                 official_benchmark_source,
                 official_benchmark_metadata_age_days,
@@ -470,8 +460,7 @@ mod tests {
         assert_eq!(comp.holdings_report_date, None);
         assert_eq!(comp.portfolio_turnover_pct, Some(0.24));
         assert!(etf.flags.expense_ratio_available);
-        assert_eq!(etf.tracking, None);
-        assert_eq!(etf.tracking_status, TrackingStatus::NotResolved);
+        assert!(etf.official_benchmark_name.is_none());
     }
 
     #[test]
@@ -588,8 +577,6 @@ mod tests {
             Some(BenchmarkSource::SecRiskReturn)
         );
         assert_eq!(etf.official_benchmark_metadata_age_days, Some(100));
-        assert_eq!(etf.tracking_status, TrackingStatus::BenchmarkNameOnly);
-        assert!(etf.tracking.is_none());
     }
 
     fn sample_options_snapshot() -> OptionsSnapshot {

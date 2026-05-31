@@ -17,10 +17,6 @@ audit can read it off the structured payload:
 - `stale_holdings` — `flags.holdings_age_band == Stale` AND the proposal
   cites composition specifically.
 
-Tracking error is unavailable in current ETF runs unless verified benchmark
-daily history exists. Do not flag tracking failure from a textual benchmark
-name alone.
-
 If none apply, lead `assessment` with `no_deterministic_flag` and proceed
 to the qualitative assessment. Set `flags_violation = true` whenever a
 non-`no_deterministic_flag` tag fires.

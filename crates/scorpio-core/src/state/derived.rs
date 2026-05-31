@@ -274,16 +274,6 @@ pub enum BenchmarkSource {
     SecNport,
 }
 
-/// Status for ETF tracking-error computation.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TrackingStatus {
-    #[default]
-    NotResolved,
-    BenchmarkNameOnly,
-    Computed,
-}
-
 /// Composition + cost snapshot derived from N-PORT-P + fund metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct EtfComposition {
@@ -308,15 +298,6 @@ pub struct EtfComposition {
     pub portfolio_turnover_pct: Option<f64>,
     #[serde(default)]
     pub inception_date: Option<chrono::NaiveDate>,
-}
-
-/// Tracking error vs a source-provided benchmark.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct TrackingError {
-    pub benchmark_symbol: String,
-    pub te_pct_90d: f64,
-    pub te_pct_1y: f64,
-    pub sample_days: u32,
 }
 
 /// Dealer-positioning summary populated by `compute_gex_summary` from a live
@@ -423,10 +404,6 @@ pub struct EtfValuation {
     pub premium: PremiumSnapshot,
     #[serde(default)]
     pub composition: Option<EtfComposition>,
-    #[serde(default)]
-    pub tracking: Option<TrackingError>,
-    #[serde(default)]
-    pub tracking_status: TrackingStatus,
     #[serde(default)]
     pub official_benchmark_name: Option<String>,
     #[serde(default)]
@@ -698,8 +675,6 @@ mod tests {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -727,8 +702,6 @@ mod tests {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,

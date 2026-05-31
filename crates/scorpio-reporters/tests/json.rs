@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use scorpio_core::state::{
     AssetShape, BenchmarkSource, DerivedValuation, EtfDataAvailability, EtfValuation,
-    FundamentalData, PremiumBand, PremiumSnapshot, ScenarioValuation, TrackingStatus, TradingState,
+    FundamentalData, PremiumBand, PremiumSnapshot, ScenarioValuation, TradingState,
 };
 use scorpio_reporters::json::{JsonReport, JsonReporter};
 use scorpio_reporters::{ReportContext, Reporter};
@@ -183,8 +183,6 @@ async fn json_reporter_keeps_v2_for_additive_etf_profile_fields() {
                 as_of: Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::BenchmarkNameOnly,
             official_benchmark_name: Some("NYSE Semiconductor Index".to_owned()),
             official_benchmark_source: Some(BenchmarkSource::SecRiskReturn),
             official_benchmark_metadata_age_days: Some(316),
@@ -216,7 +214,6 @@ async fn json_reporter_keeps_v2_for_additive_etf_profile_fields() {
 
     assert_eq!(value["schema_version"], 2);
     let etf = &value["trading_state"]["equity"]["derived_valuation"]["scenario"]["etf"];
-    assert_eq!(etf["tracking_status"], "benchmark_name_only");
     assert_eq!(etf["official_benchmark_name"], "NYSE Semiconductor Index");
     assert_eq!(etf["flags"]["benchmark_resolved"], false);
 }

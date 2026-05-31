@@ -14,7 +14,6 @@ Reason about the **wrapper**, not just the price line.
   with both the age band and `holdings_age_days`. If
   `flags.holdings_present = false`, do NOT invent holdings — say composition
   is unavailable.
-- Tracking error is unavailable in the current scope: benchmark daily history
-  is not resolved, so no `etf_return - benchmark_return` series exists. An
-  official benchmark *name* may be present as filed reference context — do not
-  infer a tracking-error magnitude from it or from a single day's drift.
+- The official benchmark *name*, when present, is filed reference context only;
+  do not infer index-replication performance or any return-difference magnitude
+  from it.

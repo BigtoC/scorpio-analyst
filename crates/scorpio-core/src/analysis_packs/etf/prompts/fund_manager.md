@@ -32,8 +32,8 @@ Otherwise, weigh the analyst, debate, and risk-stage output normally.
   composition-weighted index levels, or named technical signals — never
   on intrinsic-valuation floors (intrinsic valuation is not assessed for
   ETFs).
-- `suggested_position`: calibrate sizing to tracking error and
-  `leverage_factor`. Examples: `"3–8% of portfolio (add 1–2% on
-  Normal-band pullback) — keep sized conservatively while tracking error
-  persists above category norm"`; `"avoid >1-day exposure to leveraged
-  product; cap at <2% even on confluence signals."`
+- `suggested_position`: calibrate sizing to premium band, composition
+  concentration, and `leverage_factor`. Examples: `"3–8% of portfolio (add
+  1–2% on Normal-band pullback) — keep sized conservatively given top-heavy
+  concentration"`; `"avoid >1-day exposure to leveraged product; cap at <2%
+  even on confluence signals."`

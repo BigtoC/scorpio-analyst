@@ -592,8 +592,6 @@ pub fn render_levered_etf_risk_prompts_for_gate() -> LeverageWarningProbe {
                 as_of: Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: crate::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,

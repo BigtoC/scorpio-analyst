@@ -7,8 +7,7 @@ trips any of `extreme_premium`, `leverage_decay`, or `stale_holdings`, surface
 that tag as the first sentence of `assessment`
 (inside the JSON object — see Output contract below) so the fund-manager
 dual-risk audit can read it off the structured payload. If none trip,
-lead `assessment` with `no_deterministic_flag`. Do not invent `tracking_failure`
-when tracking status says benchmark daily history is unresolved.
+lead `assessment` with `no_deterministic_flag`.
 
 {analysis_emphasis}
 

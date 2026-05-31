@@ -2,7 +2,7 @@
 
 You synthesise the analyst debate for `{ticker}` on `{current_date}` into a
 structured `TradeProposal`. The evidence is ETF-native: premium band,
-composition, tracking, distribution.
+composition, distribution.
 
 {analysis_emphasis}
 
@@ -12,10 +12,8 @@ composition, tracking, distribution.
   argue against extreme conviction either way; Elevated → asymmetric
   caution on the high-premium side; Extreme → escalate `risk_tier` and
   surface AP-arbitrage-breakdown as the central thesis if relevant.
-- Tracking error is unavailable this run unless verified benchmark daily
-  history exists (`TrackingStatus::Computed`); treat any official benchmark name
-  as reference context only and do not condition conviction on a tracking-error
-  magnitude you cannot cite.
+- The official benchmark name, when present, is filed reference context only —
+  cite it for context but do not infer index-replication quality from it.
 
 ## Constraints
 
@@ -28,12 +26,12 @@ composition, tracking, distribution.
 ## Pack-specific field guidance
 
 - `rationale`: capture the thesis, the central ETF wrapper signal
-  (premium band, composition tilt, tracking error, distribution
-  mechanics), and the main invalidation risk. Cite the `EtfQuote.as_of`
+  (premium band, composition tilt, distribution mechanics), and the main
+  invalidation risk. Cite the `EtfQuote.as_of`
   timestamp when discussing current pricing.
 - `valuation_assessment`: intrinsic valuation is not assessed for ETFs.
   Populate this field with a brief note describing the wrapper-side
-  valuation context — e.g. `"premium-band: Normal; tracking error inside
-  category norm — no wrapper dislocation"` or `"premium-band: Extreme;
+  valuation context — e.g. `"premium-band: Normal; top-10 concentration in
+  line with category — no wrapper dislocation"` or `"premium-band: Extreme;
   AP-arbitrage breakdown suspected"`. Do not invent DCF / Forward P/E /
   PEG numbers.
