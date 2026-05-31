@@ -55,6 +55,13 @@ impl Valuator for EtfPremiumDiscountValuator {
                     .etf_holdings
                     .and_then(|h| build_composition(h, inputs.etf_fund_info, &mut flags))
             });
+        if composition
+            .as_ref()
+            .and_then(|comp| comp.expense_ratio_pct)
+            .is_some()
+        {
+            flags.expense_ratio_available = true;
+        }
 
         // Tracking-error computation stays disabled (no verified benchmark daily
         // OHLCV). Surface the official textual benchmark name when present and
@@ -462,6 +469,7 @@ mod tests {
         );
         assert_eq!(comp.holdings_report_date, None);
         assert_eq!(comp.portfolio_turnover_pct, Some(0.24));
+        assert!(etf.flags.expense_ratio_available);
         assert_eq!(etf.tracking, None);
         assert_eq!(etf.tracking_status, TrackingStatus::NotResolved);
     }
