@@ -939,7 +939,20 @@ async fn fetch_valuation_inputs(
                 symbol,
                 "alpha_vantage_etf_profile",
                 fetch_timeout,
-                async { av.fetch_etf_profile(symbol).await.ok() },
+                async {
+                    match av.fetch_etf_profile(symbol).await {
+                        Ok(fetch) => Some(fetch),
+                        Err(error) => {
+                            warn!(
+                                provider = PROVIDER_ALPHA_VANTAGE,
+                                symbol,
+                                error = %error,
+                                "Alpha Vantage ETF_PROFILE fetch failed; degrading to None"
+                            );
+                            None
+                        }
+                    }
+                },
             )
             .await
             {
@@ -1542,7 +1555,10 @@ mod tests {
     use crate::analysis_packs::PackId;
     use crate::data::yfinance::etf::FundInfo;
     use crate::data::{MockYFinanceData, sec_edgar_nport::NPortHoldings};
+    use crate::rate_limit::SharedRateLimiter;
     use crate::valuation::{ValuatorId, ValuatorRegistry};
+    use secrecy::SecretString;
+    use std::sync::Arc;
 
     /// Build a shared `Info` snapshot carrying a Fund profile, so
     /// `fetch_valuation_inputs` reads the asset shape from it the same way the
@@ -1763,6 +1779,48 @@ mod tests {
             Some(&info),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn etf_baseline_fetch_carries_found_alpha_vantage_profile() {
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_quote().returning(|_| None);
+        mock.expect_get_distribution_yield_ttm().returning(|_| None);
+        mock.expect_get_ohlcv().returning(|_, _, _| Ok(vec![]));
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let base_url = crate::data::alpha_vantage::tests::spawn_transcript_server(
+            "HTTP/1.1 200 OK",
+            include_str!("../../../tests/fixtures/alpha_vantage/soxx_etf_profile.json"),
+            Arc::clone(&calls),
+            1,
+        );
+        let av = Arc::new(crate::data::AlphaVantageClient::new_with_base_url(
+            SecretString::from("test-dummy-key"),
+            SharedRateLimiter::disabled("test"),
+            base_url,
+            None,
+        ));
+
+        let info = etf_fund_info_snapshot();
+        let today = crate::market_time::market_local_date_eastern()
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let inputs = fetch_valuation_inputs(
+            &mock,
+            None,
+            Some(&av),
+            PackId::EtfBaseline,
+            "SOXX",
+            &today,
+            Duration::from_secs(1),
+            Some(&info),
+        )
+        .await;
+
+        assert!(inputs.etf_profile.is_some());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
