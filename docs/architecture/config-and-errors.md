@@ -13,6 +13,8 @@ The project-level `config.toml` at the repo root is **not read at runtime** — 
 
 API keys use a flat `SCORPIO_` prefix (single underscore) — see `.env.example`. The asset symbol is a CLI argument to `scorpio analyze <SYMBOL>`, not a config key.
 
+`SCORPIO_ALPHA_VANTAGE_API_KEY` gates **both** earnings-call transcripts and the ETF `ETF_PROFILE` composition fetch — a single key serves both paths. When the key is absent, throttled, or the endpoint is plan-gated, both fail open: the run continues in degraded mode (no transcripts; ETF composition falls back to SEC N-PORT holdings) rather than aborting.
+
 ### Storage Paths
 
 - `~/.scorpio-analyst/config.toml` — user config (written by `scorpio setup`, `0o600`).

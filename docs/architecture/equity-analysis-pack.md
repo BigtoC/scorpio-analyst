@@ -90,8 +90,8 @@ In `baseline_prompt_bundle()` (baseline.rs line 72):
 | **Finnhub**                              | REST API    | Fundamentals (P/E, EPS, revenue, margins, debt, insider transactions), earnings data, company news, market news, event-news enrichment, earnings/IPO catalysts                          | Fundamental Analyst, Sentiment Analyst, News Analyst, runtime enrichment                                  |
 | **Yahoo Finance**                        | yfinance-rs | Shared `Info` snapshot, OHLCV price history, options chain, financial statements (cashflow, balance sheet, income statement, shares outstanding), earnings trend, quote, consensus data | Runtime pack classifier, Technical Analyst, AnalystSyncTask (valuation), consensus and catalyst hydration |
 | **FRED** (Federal Reserve Economic Data) | REST API    | Economic indicators (GDP, inflation, employment, rates), scheduled macro-release dates                                                                                                  | News Analyst, catalyst calendar                                                                           |
-| **Alpha Vantage**                        | REST API    | Earnings-call transcripts                                                                                                                                                               | Sentiment Analyst, News Analyst (via enrichment layer)                                                    |
-| **SEC EDGAR**                            | REST API    | 8-K and 13D/G filings for catalyst enrichment; N-PORT-P holdings for ETF valuation                                                                                                      | Runtime catalyst provider; ETF valuation path                                                             |
+| **Alpha Vantage**                        | REST API    | Earnings-call transcripts; ETF profile/composition snapshot (`ETF_PROFILE`: holdings, sectors, expense ratio, AUM, turnover, inception) — primary ETF composition source               | Sentiment Analyst, News Analyst (via enrichment layer); ETF valuation path                                |
+| **SEC EDGAR**                            | REST API    | 8-K and 13D/G filings for catalyst enrichment; N-PORT-P holdings (ETF composition fallback + official benchmark name); DERA risk/return-summary benchmark names (parser shipped, live fetch deferred) | Runtime catalyst provider; ETF valuation path                                                             |
 | **Reddit**                               | Reddit API  | Crowd commentary from 5 subreddits                                                                                                                                                      | Sentiment Analyst (via sentiment sidecar)                                                                 |
 
 ### News pre-fetch
@@ -201,6 +201,17 @@ After the analyst fan-out completes, `AnalystSyncTask` (in `workflow/tasks/analy
 - `earnings_trend` — forward EPS estimates, growth rates
 
 All fetches degrade gracefully to `None` on network failure.
+
+For the **ETF baseline pack**, `fetch_valuation_inputs()` instead fetches ETF
+inputs: the live quote, distribution yield, and ETF OHLCV (price/technical
+context only — benchmark OHLCV is intentionally **not** fetched), the Alpha
+Vantage `ETF_PROFILE` (primary composition/profile source), and SEC N-PORT-P
+holdings (regulatory fallback). The official textual benchmark name comes from
+the N-PORT `stated_benchmark` (the SEC DERA risk/return parser is shipped, but
+its live byte-fetch is deferred to a follow-on plan). Tracking error is left
+**unavailable** (`TrackingStatus::NotResolved` / `BenchmarkNameOnly`) until a
+trusted source resolves verified benchmark daily history — there is no static
+ETF→benchmark-symbol table.
 
 ### How metrics are computed
 
