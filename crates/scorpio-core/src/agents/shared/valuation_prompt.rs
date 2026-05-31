@@ -1,4 +1,7 @@
-use crate::state::{GexSummary, PremiumBand, ScenarioValuation, StrikeGex, TradingState};
+use crate::state::{
+    BenchmarkSource, GexSummary, PremiumBand, ScenarioValuation, StrikeGex, TrackingStatus,
+    TradingState,
+};
 
 use super::prompt::sanitize_prompt_context;
 
@@ -85,13 +88,28 @@ fn build_etf_valuation_context(etf: &crate::state::EtfValuation) -> String {
             sanitize_prompt_context(category)
         ));
     }
-    if let Some(tracking) = etf.tracking.as_ref() {
+    if let Some(name) = etf.official_benchmark_name.as_deref() {
         lines.push(format!(
+            "  - official benchmark: {} ({})",
+            sanitize_prompt_context(name),
+            benchmark_source_label(etf.official_benchmark_source),
+        ));
+    }
+    match (etf.tracking.as_ref(), etf.tracking_status) {
+        (Some(tracking), TrackingStatus::Computed) => lines.push(format!(
             "  - tracking error: 90d {:.2}%, 1y {:.2}% vs {}",
             tracking.te_pct_90d,
             tracking.te_pct_1y,
             sanitize_prompt_context(&tracking.benchmark_symbol),
-        ));
+        )),
+        (_, TrackingStatus::BenchmarkNameOnly) => lines.push(
+            "  - tracking error: unavailable; benchmark daily history not resolved; \
+             treat benchmark name as reference context only"
+                .to_owned(),
+        ),
+        _ => lines.push(
+            "  - tracking error: unavailable; benchmark daily history not resolved".to_owned(),
+        ),
     }
     match etf.options_gex.as_ref() {
         Some(gex) => push_options_gex_lines(&mut lines, gex),
@@ -104,6 +122,14 @@ fn build_etf_valuation_context(etf: &crate::state::EtfValuation) -> String {
         "Deterministic scenario valuation (ETF, pre-computed):\n{}",
         lines.join("\n"),
     )
+}
+
+fn benchmark_source_label(source: Option<BenchmarkSource>) -> &'static str {
+    match source {
+        Some(BenchmarkSource::SecRiskReturn) => "SEC DERA Risk/Return Summary",
+        Some(BenchmarkSource::SecNport) => "SEC N-PORT",
+        None => "unknown source",
+    }
 }
 
 fn push_options_gex_lines(lines: &mut Vec<String>, gex: &GexSummary) {
@@ -210,6 +236,57 @@ mod tests {
 
     fn empty_state() -> TradingState {
         TradingState::new("AAPL", "2026-01-15")
+    }
+
+    fn minimal_etf_valuation() -> EtfValuation {
+        EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(100.0),
+                market_price: 100.0,
+                bid: None,
+                ask: None,
+                premium_pct: Some(0.0),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: None,
+                as_of: Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
+            options_gex: None,
+            category: None,
+            leverage_factor: None,
+            flags: EtfDataAvailability::default(),
+        }
+    }
+
+    #[test]
+    fn etf_valuation_context_renders_official_benchmark_and_unavailable_tracking() {
+        let mut etf = minimal_etf_valuation();
+        etf.official_benchmark_name = Some("NYSE Semiconductor Index".to_owned());
+        etf.official_benchmark_source = Some(BenchmarkSource::SecRiskReturn);
+        etf.tracking_status = TrackingStatus::BenchmarkNameOnly;
+
+        let context = build_etf_valuation_context(&etf);
+
+        assert!(context.contains("official benchmark: NYSE Semiconductor Index"));
+        assert!(context.contains("SEC DERA Risk/Return Summary"));
+        assert!(context.contains("tracking error: unavailable"));
+        assert!(context.contains("benchmark daily history not resolved"));
+    }
+
+    #[test]
+    fn etf_valuation_context_renders_unavailable_tracking_without_official_benchmark() {
+        // NotResolved + no official benchmark name: the `_` arm should still
+        // render tracking as unavailable and omit any "official benchmark" line.
+        let etf = minimal_etf_valuation();
+        let context = build_etf_valuation_context(&etf);
+        assert!(context.contains("tracking error: unavailable"));
+        assert!(context.contains("benchmark daily history not resolved"));
+        assert!(!context.contains("official benchmark:"));
     }
 
     #[test]

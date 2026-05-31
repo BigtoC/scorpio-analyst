@@ -12,9 +12,10 @@ composition, tracking, distribution.
   argue against extreme conviction either way; Elevated → asymmetric
   caution on the high-premium side; Extreme → escalate `risk_tier` and
   surface AP-arbitrage-breakdown as the central thesis if relevant.
-- Tracking error >0.20% annualised on a passive product reduces conviction
-  on price-action-driven theses (the wrapper is not a clean expression of
-  the index).
+- Tracking error is unavailable this run unless verified benchmark daily
+  history exists (`TrackingStatus::Computed`); treat any official benchmark name
+  as reference context only and do not condition conviction on a tracking-error
+  magnitude you cannot cite.
 
 ## Constraints
 

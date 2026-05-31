@@ -13,10 +13,13 @@ the corresponding evidence is present, so the fund-manager dual-risk
 audit can read it off the structured payload:
 
 - `extreme_premium` — `premium_band == Extreme`.
-- `tracking_failure` — `te_pct_90d > 1.0` or `te_pct_1y > 0.50` on a passive product.
 - `leverage_decay` — `leverage_factor != 1.0` AND the proposal holds >1 day.
 - `stale_holdings` — `flags.holdings_age_band == Stale` AND the proposal
   cites composition specifically.
+
+Tracking error is unavailable in current ETF runs unless verified benchmark
+daily history exists. Do not flag tracking failure from a textual benchmark
+name alone.
 
 If none apply, lead `assessment` with `no_deterministic_flag` and proceed
 to the qualitative assessment. Set `flags_violation = true` whenever a
