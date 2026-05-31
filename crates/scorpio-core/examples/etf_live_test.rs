@@ -105,10 +105,7 @@ async fn data_gap_smoke(client: &YFinanceClient) {
     ];
 
     println!();
-    println!(
-        "{:<14} {:>10} {:>10} {:>10}",
-        "SYMBOL", "NAV", "BID", "ASK"
-    );
+    println!("{:<14} {:>10} {:>10} {:>10}", "SYMBOL", "NAV", "BID", "ASK");
     println!("{}", "─".repeat(50));
 
     for symbol in SYMBOLS {

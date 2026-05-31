@@ -410,8 +410,6 @@ pub struct EtfDataAvailability {
     #[serde(default)]
     pub holdings_age_band: HoldingsAgeBand,
     #[serde(default)]
-    pub benchmark_resolved: bool,
-    #[serde(default)]
     pub options_chain_present: bool,
     #[serde(default)]
     pub expense_ratio_available: bool,
@@ -755,7 +753,6 @@ mod tests {
         assert!(!flags.bid_ask_available);
         assert!(!flags.holdings_present);
         assert_eq!(flags.holdings_age_band, HoldingsAgeBand::Unknown);
-        assert!(!flags.benchmark_resolved);
         assert!(!flags.options_chain_present);
         assert!(!flags.expense_ratio_available);
     }

@@ -31,7 +31,12 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
     let mut holdings: Vec<NPortHoldingRow> = Vec::new();
     let mut sector_totals: HashMap<String, f64> = HashMap::new();
     let mut stated_benchmark: Option<String> = None;
-    let mut report_date: Option<NaiveDate> = None;
+    // `repPdDate` is the date the holdings are reported as-of (anchors staleness);
+    // `repPdEnd` is the fiscal reporting-period end, which can be a quarter later.
+    // Track them separately and prefer repPdDate so a both-present filing does not
+    // understate holdings age based on document order.
+    let mut rep_pd_date: Option<NaiveDate> = None;
+    let mut rep_pd_end: Option<NaiveDate> = None;
 
     let mut current: Option<PartialHolding> = None;
     let mut current_text: Vec<u8> = Vec::new();
@@ -83,7 +88,11 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
                 if name == b"repPdDate" || name == b"repPdEnd" {
                     let txt = String::from_utf8_lossy(&current_text).trim().to_owned();
                     if let Ok(parsed) = NaiveDate::parse_from_str(&txt, "%Y-%m-%d") {
-                        report_date = Some(parsed);
+                        if name == b"repPdDate" {
+                            rep_pd_date = Some(parsed);
+                        } else {
+                            rep_pd_end = Some(parsed);
+                        }
                     }
                 }
                 if name == b"benchmarkName" || name == b"indxName" {
@@ -120,7 +129,7 @@ pub fn parse_nport_p(xml: &str, filing_date: NaiveDate) -> Option<NPortHoldings>
 
     Some(NPortHoldings {
         filing_date,
-        report_date,
+        report_date: rep_pd_date.or(rep_pd_end),
         holdings,
         sector_breakdown,
         stated_benchmark,
@@ -232,18 +241,60 @@ mod tests {
     }
 
     #[test]
-    fn parse_nport_p_ignores_na_designated_index_fields() {
+    fn parse_nport_p_normalizes_na_benchmark_name_to_none() {
+        // N/A lives in a *read* tag (indxName) so this actually drives
+        // normalize_optional_benchmark's placeholder rejection.
         let xml = r#"
         <edgarSubmission>
           <formData><genInfo><repPdEnd>2026-03-31</repPdEnd></genInfo></formData>
-          <nameDesignatedIndex>N/A</nameDesignatedIndex>
-          <indexIdentifier>None</indexIdentifier>
+          <indxName>N/A</indxName>
           <invstOrSec><name>Apple Inc</name><pctVal>5.0</pctVal><issuerType>Technology</issuerType></invstOrSec>
         </edgarSubmission>
         "#;
         let result = parse_nport_p(xml, NaiveDate::from_ymd_opt(2026, 5, 28).unwrap())
             .expect("fixture should parse");
-        assert!(result.stated_benchmark.is_none());
+        assert!(
+            result.stated_benchmark.is_none(),
+            "an N/A index name must normalize to None"
+        );
+    }
+
+    #[test]
+    fn parse_nport_p_keeps_real_benchmark_name() {
+        let xml = r#"
+        <edgarSubmission>
+          <benchmarkName>NYSE Semiconductor Index</benchmarkName>
+          <invstOrSec><name>Apple Inc</name><pctVal>5.0</pctVal><issuerType>Technology</issuerType></invstOrSec>
+        </edgarSubmission>
+        "#;
+        let result = parse_nport_p(xml, NaiveDate::from_ymd_opt(2026, 5, 28).unwrap())
+            .expect("fixture should parse");
+        assert_eq!(
+            result.stated_benchmark.as_deref(),
+            Some("NYSE Semiconductor Index")
+        );
+    }
+
+    #[test]
+    fn parse_nport_p_prefers_rep_pd_date_over_rep_pd_end() {
+        // Both present, repPdEnd later in document order; repPdDate (the holdings
+        // as-of date) must win so staleness is not understated by ordering.
+        let xml = r#"
+        <edgarSubmission>
+          <formData><genInfo>
+            <repPdDate>2026-03-31</repPdDate>
+            <repPdEnd>2026-06-30</repPdEnd>
+          </genInfo></formData>
+          <invstOrSec><name>Apple Inc</name><pctVal>5.0</pctVal><issuerType>Technology</issuerType></invstOrSec>
+        </edgarSubmission>
+        "#;
+        let result = parse_nport_p(xml, NaiveDate::from_ymd_opt(2026, 8, 1).unwrap())
+            .expect("fixture should parse");
+        assert_eq!(
+            result.report_date,
+            Some(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
+            "repPdDate (holdings as-of) must be preferred over the later repPdEnd"
+        );
     }
 
     #[test]

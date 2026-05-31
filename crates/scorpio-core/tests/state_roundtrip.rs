@@ -1473,6 +1473,28 @@ fn etf_composition_profile_quality_fields_roundtrip() {
 }
 
 #[test]
+fn legacy_etf_composition_without_profile_quality_fields_deserializes_with_defaults() {
+    // A pre-profile-quality EtfComposition object (as found in stored snapshots)
+    // lacks source/holdings_report_date/portfolio_turnover_pct/inception_date;
+    // the #[serde(default)] attributes must fill them. This guards the nested
+    // composition default path that the EtfValuation-level legacy test does not
+    // (it uses "composition": null).
+    let json = r#"{
+        "top_holdings": [],
+        "top10_concentration_pct": 0.0,
+        "sector_weights": [],
+        "holdings_filing_date": "2026-03-31",
+        "holdings_age_days": 12
+    }"#;
+    let comp: EtfComposition = serde_json::from_str(json).expect("legacy composition");
+    assert_eq!(comp.source, EtfCompositionSource::SecNport);
+    assert!(comp.holdings_report_date.is_none());
+    assert!(comp.portfolio_turnover_pct.is_none());
+    assert!(comp.inception_date.is_none());
+    assert!(comp.expense_ratio_pct.is_none());
+}
+
+#[test]
 fn trading_state_etf_risk_free_rate_fields_roundtrip_with_serde_default() {
     use scorpio_core::state::{EtfRiskFreeRateSource, TradingState};
 
