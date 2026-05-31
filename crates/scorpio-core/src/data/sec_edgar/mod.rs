@@ -14,6 +14,7 @@
 //! persistently unavailable.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,6 +79,10 @@ trait EdgarHttp: Send + Sync {
     /// Execute a GET request and return `(status_code, body_text)`.
     /// Transport-level errors (connection refused, timeout) are returned as `Err`.
     async fn get(&self, url: &str) -> Result<(u16, String), String>;
+
+    /// Execute a GET request and return `(status_code, body_bytes)`.
+    /// Transport-level errors (connection refused, timeout) are returned as `Err`.
+    async fn get_bytes(&self, url: &str) -> Result<(u16, Vec<u8>), String>;
 }
 
 struct ReqwestEdgarHttp {
@@ -95,6 +100,18 @@ impl EdgarHttp for ReqwestEdgarHttp {
             .map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
         let body = resp.text().await.map_err(|e| e.to_string())?;
+        Ok((status, body))
+    }
+
+    async fn get_bytes(&self, url: &str) -> Result<(u16, Vec<u8>), String> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
         Ok((status, body))
     }
 }
@@ -754,11 +771,9 @@ impl SecEdgarClient {
     /// risk/return-summary dataset of `dataset_quarter` (e.g. `2025q3`).
     ///
     /// A pure orchestration building block over the existing HTTP seam — it is
-    /// **not** wired into the live valuation path. The live byte-fetch + ZIP
-    /// decode (the archive is a `.zip` of several TSVs, not a raw TSV) and
-    /// publication-lag-aware quarter selection are deferred to a follow-on plan;
-    /// official benchmark names currently come from the N-PORT `stated_benchmark`
-    /// fallback.
+    /// **not** wired into the live valuation path. Publication-lag-aware quarter
+    /// selection is deferred to a follow-on plan; official benchmark names
+    /// currently come from the N-PORT `stated_benchmark` fallback.
     pub async fn fetch_risk_return_benchmark_for_ticker(
         &self,
         ticker: &str,
@@ -767,19 +782,82 @@ impl SecEdgarClient {
         let entry = self.lookup_cik_mf(ticker).await.ok().flatten()?;
         let path = crate::data::sec_risk_return::risk_return_zip_path(dataset_quarter);
         let url = format!("{EDGAR_WWW_BASE_URL}{path}");
+        {
+            let breaker = self.breaker.lock().await;
+            if breaker.is_open() {
+                tracing::debug!(
+                    ticker,
+                    "SEC EDGAR circuit breaker open; skipping risk/return fetch"
+                );
+                return None;
+            }
+        }
         self.limiter.acquire().await;
-        let (status, body) = self.http.get(&url).await.ok()?;
+        let (status, body) = match self.http.get_bytes(&url).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar_risk_return",
+                    ticker,
+                    error = %error,
+                    "SEC risk/return ZIP fetch failed"
+                );
+                return None;
+            }
+        };
         if status != 200 {
+            self.breaker.lock().await.record_failure();
+            tracing::warn!(
+                kind = "catalyst_fetch_failed",
+                source = "sec_edgar_risk_return",
+                ticker,
+                http_status = status,
+                "SEC risk/return ZIP returned non-200"
+            );
             return None;
         }
-        crate::data::sec_risk_return::parse_risk_return_tsv_for_benchmark(
-            &body,
+        let tsv = match Self::decode_risk_return_zip_member(&body) {
+            Some(tsv) => tsv,
+            None => {
+                self.breaker.lock().await.record_failure();
+                tracing::warn!(
+                    kind = "catalyst_fetch_failed",
+                    source = "sec_edgar_risk_return",
+                    ticker,
+                    "SEC risk/return ZIP did not contain a readable TSV"
+                );
+                return None;
+            }
+        };
+        let benchmark = crate::data::sec_risk_return::parse_risk_return_tsv_for_benchmark(
+            &tsv,
             crate::data::sec_risk_return::RiskReturnLookup {
                 series_id: &entry.series_id,
                 class_id: &entry.class_id,
             },
             dataset_quarter,
-        )
+        );
+        self.breaker.lock().await.record_success();
+        benchmark
+    }
+
+    fn decode_risk_return_zip_member(bytes: &[u8]) -> Option<String> {
+        let cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor).ok()?;
+        for index in 0..archive.len() {
+            let mut file = archive.by_index(index).ok()?;
+            if !file.name().ends_with(".tsv") && !file.name().ends_with(".txt") {
+                continue;
+            }
+            let mut body = String::new();
+            file.read_to_string(&mut body).ok()?;
+            if body.contains("series_id") && body.contains("class_id") && body.contains("value") {
+                return Some(body);
+            }
+        }
+        None
     }
 
     /// Resolve a fund ticker to a zero-padded 10-digit CIK string.
@@ -1219,6 +1297,44 @@ mod tests {
             .expect("entry");
         assert_eq!(entry.series_id, "S000004354");
         assert_eq!(entry.class_id, "C000012084");
+    }
+
+    #[tokio::test]
+    async fn fetch_risk_return_benchmark_for_ticker_decodes_zip_member() {
+        let tsv = include_str!("../../../tests/fixtures/sec_risk_return/soxx_rr.tsv");
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("2025q3_rr1.tsv", options)
+            .expect("start file");
+        std::io::Write::write_all(&mut zip, tsv.as_bytes()).expect("write tsv");
+        let body = zip.finish().expect("finish zip").into_inner();
+
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get()
+            .withf(|url: &str| url.ends_with("/files/company_tickers_mf.json"))
+            .returning(|_| {
+                Ok((
+                    200,
+                    r#"{
+                        "fields":["cik","seriesId","classId","symbol"],
+                        "data":[[1100663,"S000004354","C000012084","SOXX"]]
+                    }"#
+                    .to_owned(),
+                ))
+            });
+        mock.expect_get_bytes()
+            .withf(|url: &str| url.ends_with("/2025q3_rr1.zip"))
+            .return_once(move |_| Ok((200, body)));
+
+        let client = SecEdgarClient::with_http(Arc::new(mock), SharedRateLimiter::disabled("test"));
+        let benchmark = client
+            .fetch_risk_return_benchmark_for_ticker("SOXX", "2025q3")
+            .await
+            .expect("benchmark");
+
+        assert_eq!(benchmark.name, "NYSE Semiconductor Index");
     }
 
     #[tokio::test]
