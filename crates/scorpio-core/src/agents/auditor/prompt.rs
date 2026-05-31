@@ -102,8 +102,6 @@ mod tests {
                     as_of: chrono::Utc::now(),
                 },
                 composition: None,
-                tracking: None,
-                tracking_status: crate::state::TrackingStatus::NotResolved,
                 official_benchmark_name: None,
                 official_benchmark_source: None,
                 official_benchmark_metadata_age_days: None,

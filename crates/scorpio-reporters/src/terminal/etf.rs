@@ -4,8 +4,7 @@ use std::fmt::Write;
 
 use scorpio_core::state::{
     BenchmarkSource, EtfComposition, EtfCompositionSource, EtfValuation, GexSummary,
-    HoldingsAgeBand, PremiumBand, ScenarioValuation, StrikeGex, TrackingError, TrackingStatus,
-    TradingState,
+    HoldingsAgeBand, PremiumBand, ScenarioValuation, StrikeGex, TradingState,
 };
 
 /// Render policy. Picks glyphs + layout based on terminal capability.
@@ -87,7 +86,6 @@ pub(crate) fn render_etf_panel_with_policy(
     render_cost_block(out, etf);
     render_sector_summary_block(out, etf.composition.as_ref());
     render_official_benchmark_block(out, etf);
-    render_tracking_status(out, etf, policy);
     render_trust_signals(out, etf, policy);
     if let Some(gex) = etf.options_gex.as_ref() {
         render_dealer_positioning_block(out, gex);
@@ -239,20 +237,6 @@ fn render_composition_block(out: &mut String, comp: &EtfComposition, policy: Ren
     }
 }
 
-fn render_tracking_block(out: &mut String, tr: &TrackingError, policy: RenderPolicy) {
-    let rule = policy.rule_char();
-    let _ = writeln!(
-        out,
-        "{rule}{rule}{rule} TRACKING vs {} {rule}{rule}{rule}{rule}",
-        sanitize_display_text(&tr.benchmark_symbol)
-    );
-    let _ = writeln!(
-        out,
-        "90d TE: {:.2}% annualised   |   1y TE: {:.2}% annualised  (n={} days)",
-        tr.te_pct_90d, tr.te_pct_1y, tr.sample_days
-    );
-}
-
 fn render_official_benchmark_block(out: &mut String, etf: &EtfValuation) {
     if let Some(name) = etf.official_benchmark_name.as_deref() {
         let source = etf
@@ -264,21 +248,6 @@ fn render_official_benchmark_block(out: &mut String, etf: &EtfValuation) {
             "Official benchmark {} ({source})",
             sanitize_display_text(name)
         );
-    }
-}
-
-fn render_tracking_status(out: &mut String, etf: &EtfValuation, policy: RenderPolicy) {
-    match etf.tracking.as_ref() {
-        Some(tr) if etf.tracking_status == TrackingStatus::Computed => {
-            render_tracking_block(out, tr, policy)
-        }
-        _ => {
-            let _ = writeln!(
-                out,
-                "{} Tracking error unavailable - benchmark daily history not resolved",
-                policy.warn()
-            );
-        }
     }
 }
 
@@ -336,12 +305,11 @@ fn render_trust_signals(out: &mut String, etf: &EtfValuation, policy: RenderPoli
     );
     let _ = writeln!(
         out,
-        "NAV: {}  Bid/Ask: {}  Holdings: {}  Official benchmark: {}  Tracking history: {}",
+        "NAV: {}  Bid/Ask: {}  Holdings: {}  Official benchmark: {}",
         policy.check(etf.flags.nav_available),
         policy.check(etf.flags.bid_ask_available),
         policy.check(etf.flags.holdings_present),
         policy.check(etf.official_benchmark_name.is_some()),
-        policy.check(etf.tracking_status == TrackingStatus::Computed),
     );
     let _ = writeln!(
         out,
@@ -545,8 +513,6 @@ mod tests {
                 as_of: Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,

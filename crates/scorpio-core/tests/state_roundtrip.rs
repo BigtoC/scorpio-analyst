@@ -1179,8 +1179,6 @@ fn trading_state_with_etf_variant_roundtrips() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -1287,8 +1285,6 @@ async fn etf_variant_requires_snapshot_schema_version_above_v3() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -1360,8 +1356,6 @@ fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
                 as_of: chrono::Utc::now(),
             },
             composition: None,
-            tracking: None,
-            tracking_status: TrackingStatus::NotResolved,
             official_benchmark_name: None,
             official_benchmark_source: None,
             official_benchmark_metadata_age_days: None,
@@ -1437,7 +1431,6 @@ fn legacy_etf_snapshot_without_profile_quality_fields_deserializes_with_defaults
 
     assert!(etf.official_benchmark_name.is_none());
     assert!(etf.official_benchmark_source.is_none());
-    assert_eq!(etf.tracking_status, TrackingStatus::NotResolved);
 }
 
 #[test]
