@@ -64,6 +64,29 @@ Runtime ETF routing happens later inside `run_analysis_cycle`:
 7. It resolves the selected `PackId` to a full `RuntimePolicy` through `resolve_runtime_policy_for_manifest(resolve_pack(pack_id))`.
 8. It carries an optional routing fallback reason into preflight.
 
+```mermaid
+flowchart TD
+    Start["run_analysis_cycle starts"] --> Info["Fetch one yfinance Info snapshot"]
+    Info --> ExistingPolicy{"Pipeline already has runtime_policy?"}
+    ExistingPolicy -->|Yes| UseExisting["Use existing policy"]
+    ExistingPolicy -->|No| Profile{"Info.profile shape"}
+    Profile -->|Fund| FundInfo["Derive FundInfo from Profile::Fund"]
+    FundInfo --> Kind{"fund_kind supported ETF?"}
+    Kind -->|Yes| Etf["Select PackId::EtfBaseline"]
+    Kind -->|No| Unsupported["Select baseline fallback: unsupported_fund_shape"]
+    Profile -->|Company| Baseline["Select baseline matched"]
+    Profile -->|Unknown variant| UnsupportedProfile["Select baseline fallback: unsupported_profile_shape"]
+    Profile -->|None| MissingProfile["Select baseline fallback: profile_lookup_unavailable"]
+    Etf --> Resolve["Resolve manifest into RuntimePolicy"]
+    Baseline --> Resolve
+    Unsupported --> Resolve
+    UnsupportedProfile --> Resolve
+    MissingProfile --> Resolve
+    UseExisting --> Handoff["Write typed preflight handoff"]
+    Resolve --> Handoff
+    Handoff --> Preflight["Preflight persists policy and fallback reason"]
+```
+
 `classify_runtime_pack` applies a small pure decision table:
 
 - `Profile::Fund(_)` plus supported `fund_kind` routes to `RuntimePackSelection::EtfBaseline`.
@@ -112,6 +135,31 @@ The graph built by `build_graph_from_pack` has this shape:
 6. Risk stage, conditional
 7. Fund manager
 8. Auditor
+
+```mermaid
+flowchart LR
+    Preflight["PreflightTask"] --> FanOut["Analyst fan-out"]
+    FanOut --> Sync["AnalystSyncTask"]
+    Sync --> DebateGate{"skip_debate?"}
+    DebateGate -->|No| Bull["Bullish researcher"]
+    Bull --> Bear["Bearish researcher"]
+    Bear --> DebateMod["Debate moderator"]
+    DebateMod --> DebateLoop{"round < max_debate_rounds?"}
+    DebateLoop -->|Yes| Bull
+    DebateLoop -->|No| Trader["Trader"]
+    DebateGate -->|Yes| Trader
+    Trader --> RiskGate{"skip_risk?"}
+    RiskGate -->|No| Agg["Aggressive risk"]
+    Agg --> Cons["Conservative risk"]
+    Cons --> Neutral["Neutral risk"]
+    Neutral --> RiskMod["Risk moderator"]
+    RiskMod --> RiskLoop{"round < max_risk_rounds?"}
+    RiskLoop -->|Yes| Agg
+    RiskLoop -->|No| Fund["Fund manager"]
+    RiskGate -->|Yes| Fund
+    Fund --> Auditor["AuditorTask"]
+    Auditor --> Done["Run complete"]
+```
 
 The analyst fan-out contains task instances for inputs that map through `analyst_role_for_input`:
 
@@ -269,6 +317,36 @@ For live ETF runs, fetch behavior is:
 4. Fetch SEC N-PORT holdings if an EDGAR client exists.
 5. Fetch Alpha Vantage ETF profile if an Alpha Vantage client exists.
 6. Resolve official textual benchmark metadata from N-PORT stated benchmark.
+
+```mermaid
+flowchart TD
+    Sync["AnalystSyncTask"] --> Pack{"Active pack is EtfBaseline?"}
+    Pack -->|No| Corporate["Fetch corporate statements and trend rows"]
+    Pack -->|Yes| Date{"target_date is today?"}
+    Date -->|No| Historical["Skip live ETF fetches"]
+    Date -->|Yes| SharedProfile["Reuse TradingState.yfinance_info.profile"]
+    SharedProfile --> FundInfo["Derive FundInfo"]
+    SharedProfile --> Parallel["Run independent ETF fetches"]
+    Parallel --> Quote["yfinance ETF quote"]
+    Parallel --> Yield["yfinance TTM distribution yield"]
+    Parallel --> Ohlcv["yfinance 1y ETF OHLCV"]
+    SharedProfile --> Edgar{"SEC EDGAR client exists?"}
+    Edgar -->|Yes| Nport["Fetch latest N-PORT-P holdings"]
+    Edgar -->|No| NoNport["Holdings None"]
+    SharedProfile --> Av{"Alpha Vantage client exists?"}
+    Av -->|Yes| AvProfile["Fetch ETF_PROFILE"]
+    Av -->|No| NoAv["ETF profile None"]
+    Nport --> Benchmark["Resolve textual benchmark from N-PORT"]
+    NoNport --> Benchmark
+    Quote --> Inputs["ValuationInputs"]
+    Yield --> Inputs
+    Ohlcv --> Inputs
+    FundInfo --> Inputs
+    AvProfile --> Inputs
+    NoAv --> Inputs
+    Benchmark --> Inputs
+    Inputs --> Valuator["EtfPremiumDiscountValuator"]
+```
 
 Every ETF valuation fetch is timeout-bounded through `fetch_with_timeout`. A timeout logs a warning and returns `None`. The run continues.
 
@@ -575,6 +653,20 @@ Then runtime policy can override the valuation strategy. For ETF policy:
 3. Because `policy.pack_id == PackId::EtfBaseline`, it uses `ValuatorRegistry::etf_baseline()`.
 4. The ETF registry contains `EquityDefaultValuator` and `EtfPremiumDiscountValuator`.
 5. It calls `EtfPremiumDiscountValuator::assess` with all ETF inputs.
+
+```mermaid
+flowchart TD
+    Provisional["derive_valuation"] --> Shape["AssetShape::Fund with NotAssessed fund_style_asset"]
+    Shape --> Policy["Read state.analysis_runtime_policy"]
+    Policy --> Selection["valuator_selection[AssetShape::Fund]"]
+    Selection --> Id["ValuatorId::EtfPremiumDiscount"]
+    Id --> Registry{"policy.pack_id"}
+    Registry -->|EtfBaseline| EtfRegistry["ValuatorRegistry::etf_baseline"]
+    Registry -->|Other| EquityRegistry["ValuatorRegistry::equity_baseline"]
+    EtfRegistry --> Assess["EtfPremiumDiscountValuator::assess"]
+    EquityRegistry --> Missing["No ETF valuator selected"]
+    Assess --> Scenario["ScenarioValuation::Etf"]
+```
 
 If no valuator is selected:
 
@@ -884,6 +976,27 @@ If options exist but risk-free rate is missing, the valuator logs a warning and 
 - Additional expirations from transient `all_expirations`.
 - ATM IV fallback from options snapshot.
 
+```mermaid
+flowchart TD
+    Tech["TechnicalAnalyst"] --> Prefetch["Prefetch yfinance options snapshot"]
+    Prefetch --> Outcome{"OptionsOutcome"}
+    Outcome -->|Snapshot| Persist["Persist TechnicalOptionsContext::Available"]
+    Outcome -->|Other successful outcome| NonSnapshot["Persist Available with non-snapshot outcome"]
+    Outcome -->|Error| FetchFailed["Persist FetchFailed reason"]
+    Persist --> Extract["etf_options_from_state returns snapshot"]
+    NonSnapshot --> SkipOptions["Dealer positioning skipped"]
+    FetchFailed --> SkipOptions
+    Extract --> Rate{"Risk-free rate present?"}
+    Rate -->|No| SkipRate["Dealer positioning skipped"]
+    Rate -->|Yes| Aggregate["gex::aggregate"]
+    Aggregate --> Near{"Usable near-term aggregate?"}
+    Near -->|No| NoGex["options_gex None"]
+    Near -->|Yes| Summary["Build GexSummary"]
+    Summary --> Walls["Top 3 gamma walls by absolute net GEX"]
+    Summary --> Broad["Optional broad all-expiration GEX"]
+    Summary --> VexCex["Optional VEX and CEX summaries"]
+```
+
 If near-term aggregate is absent, `compute_gex_summary` returns `None`. Broad GEX is not surfaced without usable near-term GEX.
 
 ### BSM Inputs
@@ -1061,6 +1174,23 @@ This context is consumed by trader and fund manager prompts, and it can also flo
 ## Final Terminal Report Generation
 
 The terminal reporter is a pure rendering function over `TradingState`. The CLI calls `AnalysisRuntime`, receives final state, builds a `ReporterChain`, and runs terminal and JSON reporters concurrently when requested.
+
+```mermaid
+flowchart TD
+    Cli["scorpio analyze"] --> Runtime["AnalysisRuntime::run"]
+    Runtime --> State["Final TradingState"]
+    State --> Chain["ReporterChain"]
+    Chain --> Terminal{"TerminalReporter enabled?"}
+    Chain --> Json{"JsonReporter enabled?"}
+    Terminal -->|Yes| Render["render_final_report"]
+    Render --> Header["Header and risk-free-rate banner"]
+    Render --> Valuation["Scenario Valuation section"]
+    Valuation --> EtfPanel{"ScenarioValuation::Etf?"}
+    EtfPanel -->|Yes| Panel["ETF Valuation Snapshot"]
+    EtfPanel -->|No| OtherValuation["Not assessed or corporate metrics"]
+    Json -->|Yes| Artifact["Write JsonReport schema_version 2"]
+    Artifact --> RawState["Raw TradingState values, no terminal formatting"]
+```
 
 The terminal final report section order is:
 
