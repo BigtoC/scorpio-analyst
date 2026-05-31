@@ -76,20 +76,50 @@ async fn main() {
     // Dispatch. Existing synchronous subcommands build their own tokio
     // runtime internally; calling them from async context would panic, so
     // we bridge via `spawn_blocking`. `Upgrade` is natively async.
-    let result: anyhow::Result<()> = match cli.command {
-        Commands::Analyze(args) => {
-            let args = args.clone();
-            tokio::task::spawn_blocking(move || scorpio_cli::cli::analyze::run(&args))
+    let dispatch = async {
+        match cli.command {
+            Commands::Analyze(args) => {
+                let args = args.clone();
+                tokio::task::spawn_blocking(move || scorpio_cli::cli::analyze::run(&args))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("analyze task failed to join: {e}"))
+                    .and_then(|r| r)
+            }
+            Commands::Setup => tokio::task::spawn_blocking(scorpio_cli::cli::setup::run)
                 .await
-                .map_err(|e| anyhow::anyhow!("analyze task failed to join: {e}"))
-                .and_then(|r| r)
+                .map_err(|e| anyhow::anyhow!("setup task failed to join: {e}"))
+                .and_then(|r| r),
+            Commands::Upgrade => run_upgrade().await,
+            Commands::Report(args) => scorpio_cli::cli::report::run(&args).await,
         }
-        Commands::Setup => tokio::task::spawn_blocking(scorpio_cli::cli::setup::run)
-            .await
-            .map_err(|e| anyhow::anyhow!("setup task failed to join: {e}"))
-            .and_then(|r| r),
-        Commands::Upgrade => run_upgrade().await,
-        Commands::Report(args) => scorpio_cli::cli::report::run(&args).await,
+    };
+
+    // Race dispatch against a manual interrupt so a Ctrl-C / SIGTERM still
+    // drains buffered Langfuse spans before the process dies. The normal and
+    // error-return paths flush explicitly below, and a panic unwinds through
+    // `TracingGuard`'s `Drop`, but the OS default signal action would kill us
+    // outright — losing the trailing span batch of an interrupted run.
+    let result: anyhow::Result<()> = tokio::select! {
+        biased;
+        res = dispatch => res,
+        () = shutdown_signal() => {
+            // Re-arm a force-quit before flushing: once tokio installs its
+            // signal handler the OS default (terminate) is replaced for the
+            // rest of the process, so a second Ctrl-C would otherwise be
+            // swallowed while the flush runs. This keeps the "press again to
+            // give up" escape hatch alive if the Langfuse flush stalls on a
+            // slow network. The detached `analyze`/`setup` blocking task dies
+            // with the process; we only drain what is already buffered.
+            eprintln!(
+                "\nInterrupted — flushing telemetry before exit (Ctrl-C again to force quit)…"
+            );
+            tokio::spawn(async {
+                let _ = tokio::signal::ctrl_c().await;
+                std::process::exit(130);
+            });
+            tracing_guard.flush_and_shutdown();
+            std::process::exit(130);
+        }
     };
 
     let exit_code = if let Err(e) = result {
@@ -146,6 +176,33 @@ async fn main() {
 
 fn should_show_analyze_banner(command: &Commands) -> bool {
     matches!(command, Commands::Analyze(args) if !args.no_terminal)
+}
+
+/// Resolves when the process receives a manual interrupt — Ctrl-C / SIGINT on
+/// any platform, or SIGTERM on Unix. Used to race command dispatch so a
+/// user-driven shutdown still flushes Langfuse spans before exit.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        // Installing a signal handler only fails on environment-level
+        // impossibilities that uniformly doom the process, so there is no
+        // per-caller recovery — treat it as fatal rather than threading a
+        // `Result` to no purpose.
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        // `ctrl_c` is the portable interrupt; SIGTERM has no Windows analogue.
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 #[cfg(test)]
