@@ -79,20 +79,30 @@ pub fn parse_risk_return_tsv_for_benchmark(
         .next()
 }
 
+/// Official SEC DERA risk/return-summary dataset ZIP path for a `YYYYqN`
+/// dataset quarter (e.g. `2025q3`). Pure URL helper — the live byte-fetch +
+/// ZIP decode is deferred to a follow-on plan.
+pub fn risk_return_zip_path(quarter: &str) -> String {
+    format!(
+        "/files/dera/data/mutual-fund-prospectus-risk/return-summary-data-sets/{}_rr1.zip",
+        quarter.to_ascii_lowercase()
+    )
+}
+
 // `extract_index_name` over the StrategyNarrativeTextBlock / ObjectivePrimaryTextBlock
 // narrative is the AUTHORITATIVE source of the benchmark's spaced name; the structured
 // `AvgAnnlRtrPct` index-member token only CORROBORATES it (per spec — the structured row
 // carries an unspaced token like `NYSESemiconductorIndex`, not the spaced display name).
-// This scan is best-effort: it commits to the first `" index"` occurrence and can
-// mis-extract on phrasings like "uses an index sampling strategy to track the CRSP US
-// Total Market Index", so treat a low-confidence extraction as `None`. Do NOT special-case
-// any single fund's index name; the SOXX fixture exercises this generic path ("track the
-// NYSE Semiconductor Index" resolves correctly without a hardcoded marker).
+// This scan anchors on the first capitalized `" Index"` occurrence and walks back to the
+// preceding `"the "`, so an incidental lowercased phrase like "uses an index sampling
+// strategy to track the CRSP US Total Market Index" resolves to the real proper-noun name
+// rather than a mangled fragment. A too-short candidate is treated as low-confidence `None`.
+// Do NOT special-case any single fund's index name; the SOXX fixture exercises this generic
+// path ("track the NYSE Semiconductor Index" resolves correctly without a hardcoded marker).
 fn extract_index_name(text: &str) -> Option<String> {
-    let lower = text.to_ascii_lowercase();
-    let suffix = " index";
-    let end = lower.find(suffix)? + suffix.len();
-    let prefix_start = lower[..end]
+    let suffix = " Index";
+    let end = text.find(suffix)? + suffix.len();
+    let prefix_start = text[..end]
         .rfind("the ")
         .map(|pos| pos + "the ".len())
         .unwrap_or(0);
@@ -124,7 +134,10 @@ mod tests {
         .expect("benchmark");
 
         assert_eq!(benchmark.name, "NYSE Semiconductor Index");
-        assert_eq!(benchmark.source, crate::state::BenchmarkSource::SecRiskReturn);
+        assert_eq!(
+            benchmark.source,
+            crate::state::BenchmarkSource::SecRiskReturn
+        );
         assert_eq!(benchmark.dataset_quarter, "2025q3");
         assert_eq!(benchmark.accession.as_deref(), Some("0001193125-25-162603"));
         assert_eq!(
@@ -155,8 +168,27 @@ mod tests {
             Some("MSCI World Index".to_owned())
         );
         // No "... Index" suffix at all → None.
-        assert_eq!(extract_index_name("The Fund invests in semiconductors."), None);
+        assert_eq!(
+            extract_index_name("The Fund invests in semiconductors."),
+            None
+        );
         // Too-short candidate is low-confidence → None (never a mangled fragment).
         assert_eq!(extract_index_name("see the index"), None);
+        // Documented ambiguous phrasing: a lowercased "an index sampling" must NOT
+        // shadow the real proper-noun index — resolve the spaced name, not a fragment.
+        assert_eq!(
+            extract_index_name(
+                "The Fund uses an index sampling strategy to track the CRSP US Total Market Index."
+            ),
+            Some("CRSP US Total Market Index".to_owned())
+        );
+    }
+
+    #[test]
+    fn risk_return_zip_url_uses_official_sec_quarter_path() {
+        assert_eq!(
+            risk_return_zip_path("2025q3"),
+            "/files/dera/data/mutual-fund-prospectus-risk/return-summary-data-sets/2025q3_rr1.zip"
+        );
     }
 }

@@ -750,6 +750,38 @@ impl SecEdgarClient {
         }
     }
 
+    /// Fetch the official benchmark metadata for `ticker` from the SEC DERA
+    /// risk/return-summary dataset of `dataset_quarter` (e.g. `2025q3`).
+    ///
+    /// A pure orchestration building block over the existing HTTP seam — it is
+    /// **not** wired into the live valuation path. The live byte-fetch + ZIP
+    /// decode (the archive is a `.zip` of several TSVs, not a raw TSV) and
+    /// publication-lag-aware quarter selection are deferred to a follow-on plan;
+    /// official benchmark names currently come from the N-PORT `stated_benchmark`
+    /// fallback.
+    pub async fn fetch_risk_return_benchmark_for_ticker(
+        &self,
+        ticker: &str,
+        dataset_quarter: &str,
+    ) -> Option<crate::data::sec_risk_return::BenchmarkMetadata> {
+        let entry = self.lookup_cik_mf(ticker).await.ok().flatten()?;
+        let path = crate::data::sec_risk_return::risk_return_zip_path(dataset_quarter);
+        let url = format!("{EDGAR_WWW_BASE_URL}{path}");
+        self.limiter.acquire().await;
+        let (status, body) = self.http.get(&url).await.ok()?;
+        if status != 200 {
+            return None;
+        }
+        crate::data::sec_risk_return::parse_risk_return_tsv_for_benchmark(
+            &body,
+            crate::data::sec_risk_return::RiskReturnLookup {
+                series_id: &entry.series_id,
+                class_id: &entry.class_id,
+            },
+            dataset_quarter,
+        )
+    }
+
     /// Resolve a fund ticker to a zero-padded 10-digit CIK string.
     ///
     /// Fail-soft. Lookup order:
@@ -1162,6 +1194,31 @@ mod tests {
         );
         let cik = client.resolve_fund_cik("SOXX").await;
         assert_eq!(cik, Some("0001100663".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn lookup_cik_mf_returns_class_id_for_risk_return_lookup() {
+        let mut mock = MockEdgarHttp::new();
+        mock.expect_get().returning(|url| {
+            assert!(url.ends_with("/files/company_tickers_mf.json"));
+            Ok((
+                200,
+                r#"{
+                    "fields":["cik","seriesId","classId","symbol"],
+                    "data":[[1100663,"S000004354","C000012084","SOXX"]]
+                }"#
+                .to_owned(),
+            ))
+        });
+        let client = SecEdgarClient::with_http(Arc::new(mock), SharedRateLimiter::disabled("test"));
+
+        let entry = client
+            .lookup_cik_mf("SOXX")
+            .await
+            .expect("lookup")
+            .expect("entry");
+        assert_eq!(entry.series_id, "S000004354");
+        assert_eq!(entry.class_id, "C000012084");
     }
 
     #[tokio::test]
