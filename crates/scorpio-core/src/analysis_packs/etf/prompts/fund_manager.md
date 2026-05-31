@@ -23,8 +23,8 @@ Otherwise, weigh the analyst, debate, and risk-stage output normally.
 
 - Bias against approving a leveraged/inverse product proposal with a
   stated holding period >1 trading day.
-- If `composition` is `None` AND the proposal's thesis depends on sector
-  exposure, reject and ask for re-analysis when N-PORT data refreshes.
+- If `composition` is `None` AND the proposal's thesis depends on sector exposure, 
+  reject and ask for re-analysis when ETF composition/profile data is available.
 
 ## Pack-specific field guidance
 
