@@ -3,8 +3,9 @@
 use crate::data::sec_edgar_nport::NPortHoldings;
 use crate::data::yfinance::etf::{EtfQuote, FundInfo};
 use crate::state::{
-    AssetShape, DerivedValuation, EtfComposition, EtfDataAvailability, EtfValuation, HoldingWeight,
-    HoldingsAgeBand, PremiumSnapshot, ScenarioValuation, SectorWeight,
+    AssetShape, DerivedValuation, EtfComposition, EtfCompositionSource, EtfDataAvailability,
+    EtfValuation, HoldingWeight, HoldingsAgeBand, PremiumSnapshot, ScenarioValuation, SectorWeight,
+    TrackingStatus,
 };
 use crate::valuation::{ValuationInputs, ValuationReport, Valuator, ValuatorId};
 
@@ -42,17 +43,46 @@ impl Valuator for EtfPremiumDiscountValuator {
             };
         };
 
+        // Alpha Vantage profile is the primary composition source; N-PORT
+        // holdings are the regulatory fallback.
         let composition = inputs
-            .etf_holdings
-            .and_then(|h| build_composition(h, inputs.etf_fund_info, &mut flags));
+            .etf_profile
+            .and_then(|profile| {
+                build_alpha_vantage_composition(profile, inputs.etf_fund_info, &mut flags)
+            })
+            .or_else(|| {
+                inputs
+                    .etf_holdings
+                    .and_then(|h| build_composition(h, inputs.etf_fund_info, &mut flags))
+            });
 
-        // Tracking-error computation is disabled in this scope: verified
-        // benchmark daily OHLCV is not resolved. Task 6 derives tracking_status
-        // and the official benchmark name from the merged inputs.
-        let tracking = None;
+        // Tracking-error computation stays disabled (no verified benchmark daily
+        // OHLCV). Surface the official textual benchmark name when present and
+        // reflect it in the tracking status.
+        let (
+            official_benchmark_name,
+            official_benchmark_source,
+            official_benchmark_metadata_age_days,
+        ) = inputs
+            .etf_official_benchmark
+            .map(|(metadata, age_days)| {
+                (Some(metadata.name.clone()), Some(metadata.source), age_days)
+            })
+            .unwrap_or((None, None, None));
+        let tracking_status = if official_benchmark_name.is_some() {
+            TrackingStatus::BenchmarkNameOnly
+        } else {
+            TrackingStatus::NotResolved
+        };
+        let tracking: Option<crate::state::TrackingError> = None;
 
         let category = inputs.etf_fund_info.and_then(|f| f.category.clone());
-        let leverage_factor = inputs.etf_fund_info.and_then(|f| f.leverage_factor);
+        // Prefer yfinance's leverage factor; fall back to the Alpha Vantage
+        // profile's parsed `leveraged` signal when fund info is absent.
+        let leverage_factor = inputs
+            .etf_fund_info
+            .and_then(|f| f.leverage_factor)
+            .or_else(|| inputs.etf_profile.and_then(|p| p.leverage_factor));
 
         let q = inputs
             .etf_distribution_yield_ttm
@@ -77,10 +107,10 @@ impl Valuator for EtfPremiumDiscountValuator {
                 premium: snapshot,
                 composition,
                 tracking,
-                tracking_status: crate::state::TrackingStatus::NotResolved,
-                official_benchmark_name: None,
-                official_benchmark_source: None,
-                official_benchmark_metadata_age_days: None,
+                tracking_status,
+                official_benchmark_name,
+                official_benchmark_source,
+                official_benchmark_metadata_age_days,
                 options_gex,
                 category,
                 leverage_factor,
@@ -187,6 +217,55 @@ fn build_composition(
     })
 }
 
+/// Build an [`EtfComposition`] from an Alpha Vantage ETF profile — the primary
+/// composition source, preferred over N-PORT. The profile is a provider
+/// "latest available" snapshot, so there is no dated filing/report date and the
+/// holdings-age band is `Unknown`.
+fn build_alpha_vantage_composition(
+    profile: &crate::data::alpha_vantage::EtfProfileData,
+    fund_info: Option<&FundInfo>,
+    flags: &mut EtfDataAvailability,
+) -> Option<EtfComposition> {
+    // Require non-empty holdings before the AV profile wins the composition:
+    // a sectors-only (holdings-empty) profile must fall through to the N-PORT
+    // holdings rather than shadow them with a misleading 0.0% top-10.
+    if profile.holdings.is_empty() {
+        return None;
+    }
+    flags.holdings_present = true;
+    flags.holdings_age_band = HoldingsAgeBand::Unknown;
+
+    let mut top_holdings = profile.holdings.clone();
+    top_holdings.sort_by(|a, b| {
+        b.weight_pct
+            .partial_cmp(&a.weight_pct)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    top_holdings.truncate(10);
+    let top10_concentration_pct = top_holdings.iter().map(|h| h.weight_pct).sum();
+    let today = chrono::Utc::now().date_naive();
+
+    Some(EtfComposition {
+        source: EtfCompositionSource::AlphaVantageEtfProfile,
+        top_holdings,
+        top10_concentration_pct,
+        sector_weights: profile.sectors.clone(),
+        expense_ratio_pct: profile
+            .expense_ratio_pct
+            .or_else(|| fund_info.and_then(|f| f.expense_ratio)),
+        aum_usd: profile
+            .aum_usd
+            .or_else(|| fund_info.and_then(|f| f.total_assets)),
+        fund_family: fund_info.and_then(|f| f.fund_family.clone()),
+        distribution_yield_ttm_pct: profile.distribution_yield_pct,
+        holdings_filing_date: today,
+        holdings_report_date: None,
+        holdings_age_days: 0,
+        portfolio_turnover_pct: profile.portfolio_turnover_pct,
+        inception_date: profile.inception_date,
+    })
+}
+
 use crate::data::traits::options::OptionsSnapshot;
 use crate::indicators::gex::{self, AggregateInputs};
 use crate::state::{GexSummary, StrikeGex};
@@ -283,6 +362,7 @@ pub fn compute_gex_summary(
 mod tests {
     use super::*;
     use crate::data::traits::options::{IvTermPoint, NearTermStrike, OptionsSnapshot};
+    use crate::state::BenchmarkSource;
     use chrono::Utc;
 
     #[test]
@@ -307,6 +387,201 @@ mod tests {
         assert_eq!(comp.holdings_report_date, nport.report_date);
         assert!(comp.holdings_age_days >= 70);
         assert_eq!(flags.holdings_age_band, HoldingsAgeBand::Aging);
+    }
+
+    #[test]
+    fn etf_valuator_prefers_alpha_vantage_profile_composition() {
+        let quote = quote_with(100.0, Some(100.0));
+        let av = crate::data::alpha_vantage::EtfProfileData {
+            holdings: vec![HoldingWeight {
+                cusip: None,
+                ticker: Some("NVDA".to_owned()),
+                name: "NVIDIA Corp".to_owned(),
+                weight_pct: 8.4,
+                value_usd: None,
+            }],
+            sectors: vec![SectorWeight {
+                sector: "Semiconductors".to_owned(),
+                weight_pct: 78.2,
+            }],
+            aum_usd: Some(12_300_000_000.0),
+            expense_ratio_pct: Some(0.0035),
+            portfolio_turnover_pct: Some(0.24),
+            distribution_yield_pct: Some(0.0061),
+            inception_date: Some(chrono::NaiveDate::from_ymd_opt(2001, 7, 10).unwrap()),
+            leverage_factor: Some(1.0),
+        };
+        // Populated N-PORT with a DIFFERENT holding, so the assertions prove AV
+        // wins over a real fallback — not merely "AV is the only source".
+        let nport = NPortHoldings {
+            filing_date: chrono::Utc::now().date_naive(),
+            report_date: None,
+            holdings: vec![crate::data::sec_edgar_nport::NPortHoldingRow {
+                cusip: None,
+                ticker: Some("AAPL".to_owned()),
+                name: "Apple Inc".to_owned(),
+                weight_pct: 5.0,
+                value_usd: None,
+            }],
+            sector_breakdown: vec![],
+            stated_benchmark: None,
+        };
+
+        let report = EtfPremiumDiscountValuator.assess(
+            crate::valuation::ValuationInputs {
+                profile: None,
+                cashflow: None,
+                balance: None,
+                income: None,
+                shares: None,
+                earnings_trend: None,
+                current_price: Some(100.0),
+                etf_quote: Some(&quote),
+                etf_fund_info: None,
+                etf_holdings: Some(&nport),
+                etf_profile: Some(&av),
+                etf_official_benchmark: None,
+                etf_ohlcv: None,
+                etf_options: None,
+                etf_risk_free_rate: None,
+                etf_distribution_yield_ttm: None,
+                as_of: chrono::Utc::now().date_naive(),
+            },
+            &AssetShape::Fund,
+        );
+
+        let ScenarioValuation::Etf(etf) = report.scenario else {
+            panic!("expected ETF valuation");
+        };
+        let comp = etf.composition.expect("composition");
+        assert_eq!(comp.source, EtfCompositionSource::AlphaVantageEtfProfile);
+        assert_eq!(
+            comp.top_holdings[0].ticker.as_deref(),
+            Some("NVDA"),
+            "AV holdings must win over the populated N-PORT fallback"
+        );
+        assert_eq!(comp.holdings_report_date, None);
+        assert_eq!(comp.portfolio_turnover_pct, Some(0.24));
+        assert_eq!(etf.tracking, None);
+        assert_eq!(etf.tracking_status, TrackingStatus::NotResolved);
+    }
+
+    #[test]
+    fn etf_valuator_falls_back_to_nport_when_av_profile_has_no_holdings() {
+        let quote = quote_with(100.0, Some(100.0));
+        // AV profile carries sectors but NO holdings — it must not shadow the
+        // real N-PORT holdings with a misleading empty composition.
+        let av = crate::data::alpha_vantage::EtfProfileData {
+            holdings: vec![],
+            sectors: vec![SectorWeight {
+                sector: "Semiconductors".to_owned(),
+                weight_pct: 78.2,
+            }],
+            aum_usd: None,
+            expense_ratio_pct: None,
+            portfolio_turnover_pct: None,
+            distribution_yield_pct: None,
+            inception_date: None,
+            leverage_factor: None,
+        };
+        let nport = NPortHoldings {
+            filing_date: chrono::Utc::now().date_naive(),
+            report_date: None,
+            holdings: vec![crate::data::sec_edgar_nport::NPortHoldingRow {
+                cusip: None,
+                ticker: Some("AAPL".to_owned()),
+                name: "Apple Inc".to_owned(),
+                weight_pct: 5.0,
+                value_usd: None,
+            }],
+            sector_breakdown: vec![],
+            stated_benchmark: None,
+        };
+
+        let report = EtfPremiumDiscountValuator.assess(
+            crate::valuation::ValuationInputs {
+                profile: None,
+                cashflow: None,
+                balance: None,
+                income: None,
+                shares: None,
+                earnings_trend: None,
+                current_price: Some(100.0),
+                etf_quote: Some(&quote),
+                etf_fund_info: None,
+                etf_holdings: Some(&nport),
+                etf_profile: Some(&av),
+                etf_official_benchmark: None,
+                etf_ohlcv: None,
+                etf_options: None,
+                etf_risk_free_rate: None,
+                etf_distribution_yield_ttm: None,
+                as_of: chrono::Utc::now().date_naive(),
+            },
+            &AssetShape::Fund,
+        );
+
+        let ScenarioValuation::Etf(etf) = report.scenario else {
+            panic!("expected ETF valuation");
+        };
+        let comp = etf.composition.expect("composition");
+        assert_eq!(
+            comp.source,
+            EtfCompositionSource::SecNport,
+            "a holdings-empty AV profile must fall through to N-PORT"
+        );
+        assert_eq!(comp.top_holdings[0].ticker.as_deref(), Some("AAPL"));
+    }
+
+    #[test]
+    fn etf_valuator_renders_benchmark_name_only_status_when_official_name_exists() {
+        let quote = quote_with(100.0, Some(100.0));
+        let benchmark = crate::data::sec_risk_return::BenchmarkMetadata {
+            name: "NYSE Semiconductor Index".to_owned(),
+            source: BenchmarkSource::SecRiskReturn,
+            dataset_quarter: "2025q3".to_owned(),
+            accession: Some("0001193125-25-162603".to_owned()),
+            filing_date: Some(chrono::NaiveDate::from_ymd_opt(2025, 7, 18).unwrap()),
+            source_period: Some(chrono::NaiveDate::from_ymd_opt(2025, 6, 30).unwrap()),
+        };
+
+        let report = EtfPremiumDiscountValuator.assess(
+            crate::valuation::ValuationInputs {
+                profile: None,
+                cashflow: None,
+                balance: None,
+                income: None,
+                shares: None,
+                earnings_trend: None,
+                current_price: Some(100.0),
+                etf_quote: Some(&quote),
+                etf_fund_info: None,
+                etf_holdings: None,
+                etf_profile: None,
+                etf_official_benchmark: Some((&benchmark, Some(100))),
+                etf_ohlcv: None,
+                etf_options: None,
+                etf_risk_free_rate: None,
+                etf_distribution_yield_ttm: None,
+                as_of: chrono::Utc::now().date_naive(),
+            },
+            &AssetShape::Fund,
+        );
+
+        let ScenarioValuation::Etf(etf) = report.scenario else {
+            panic!("expected ETF valuation");
+        };
+        assert_eq!(
+            etf.official_benchmark_name.as_deref(),
+            Some("NYSE Semiconductor Index")
+        );
+        assert_eq!(
+            etf.official_benchmark_source,
+            Some(BenchmarkSource::SecRiskReturn)
+        );
+        assert_eq!(etf.official_benchmark_metadata_age_days, Some(100));
+        assert_eq!(etf.tracking_status, TrackingStatus::BenchmarkNameOnly);
+        assert!(etf.tracking.is_none());
     }
 
     fn sample_options_snapshot() -> OptionsSnapshot {
@@ -469,6 +744,8 @@ mod tests {
             etf_quote: None,
             etf_fund_info: None,
             etf_holdings: None,
+            etf_profile: None,
+            etf_official_benchmark: None,
             etf_ohlcv: None,
             etf_options: None,
             etf_risk_free_rate: None,

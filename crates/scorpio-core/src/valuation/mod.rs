@@ -95,6 +95,15 @@ pub struct ValuationInputs<'a> {
     pub etf_quote: Option<&'a crate::data::yfinance::etf::EtfQuote>,
     pub etf_fund_info: Option<&'a crate::data::yfinance::etf::FundInfo>,
     pub etf_holdings: Option<&'a crate::data::sec_edgar_nport::NPortHoldings>,
+    /// Alpha Vantage ETF profile — primary composition/profile source, preferred
+    /// over N-PORT holdings. `None` when unavailable or pack != `EtfBaseline`.
+    pub etf_profile: Option<&'a crate::data::alpha_vantage::EtfProfileData>,
+    /// Official textual benchmark metadata + its metadata age in days.
+    /// Display/prompt context only; never resolved to a market-data symbol.
+    pub etf_official_benchmark: Option<(
+        &'a crate::data::sec_risk_return::BenchmarkMetadata,
+        Option<u32>,
+    )>,
     pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 
     /// Phase 2 — Live ETF options snapshot threaded through from the persisted

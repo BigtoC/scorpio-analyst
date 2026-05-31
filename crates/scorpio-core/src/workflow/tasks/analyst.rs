@@ -696,6 +696,10 @@ pub struct AnalystSyncTask {
     /// `EtfBaseline`. Left `None` for the equity baseline and for tests that
     /// don't need EDGAR.
     sec_edgar: Option<Arc<SecEdgarClient>>,
+    /// Optional Alpha Vantage client. Used by the ETF pack to fetch the
+    /// `ETF_PROFILE` composition/profile snapshot. `None` for the equity
+    /// baseline and tests that don't need it.
+    alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
     valuation_fetch_timeout: Duration,
 }
 
@@ -727,6 +731,7 @@ impl AnalystSyncTask {
             snapshot_store,
             yfinance,
             sec_edgar: None,
+            alpha_vantage: None,
             valuation_fetch_timeout,
         })
     }
@@ -740,16 +745,18 @@ impl AnalystSyncTask {
     /// it unset via [`AnalystSyncTask::with_yfinance`] without breaking
     /// graceful degradation.
     #[must_use]
-    pub fn with_yfinance_and_edgar(
+    pub fn with_yfinance_edgar_and_alpha_vantage(
         snapshot_store: Arc<SnapshotStore>,
         yfinance: Arc<dyn YFinanceData>,
         sec_edgar: Arc<SecEdgarClient>,
+        alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
         valuation_fetch_timeout: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             snapshot_store,
             yfinance,
             sec_edgar: Some(sec_edgar),
+            alpha_vantage,
             valuation_fetch_timeout,
         })
     }
@@ -767,6 +774,8 @@ struct ValuationInputs {
     etf_quote: Option<EtfQuote>,
     etf_fund_info: Option<FundInfo>,
     etf_holdings: Option<NPortHoldings>,
+    etf_profile: Option<crate::data::alpha_vantage::EtfProfileData>,
+    etf_official_benchmark: Option<(crate::data::sec_risk_return::BenchmarkMetadata, Option<u32>)>,
     etf_ohlcv: Option<Vec<Candle>>,
     /// Cached TTM distribution yield (from yfinance), used to fill
     /// `EtfComposition.distribution_yield_ttm_pct` after the valuator returns.
@@ -794,9 +803,11 @@ async fn fetch_ohlcv_1y(yfinance: &dyn YFinanceData, symbol: &str) -> Option<Vec
         .ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_valuation_inputs(
     yfinance: &dyn YFinanceData,
     sec_edgar: Option<&Arc<SecEdgarClient>>,
+    alpha_vantage: Option<&Arc<crate::data::AlphaVantageClient>>,
     pack_id: PackId,
     symbol: &str,
     target_date: &str,
@@ -846,6 +857,8 @@ async fn fetch_valuation_inputs(
     let mut etf_quote = None;
     let mut etf_fund_info = None;
     let mut etf_holdings = None;
+    let mut etf_profile = None;
+    let mut etf_official_benchmark = None;
     let mut etf_ohlcv = None;
     let mut etf_distribution_yield_ttm_pct = None;
 
@@ -864,6 +877,8 @@ async fn fetch_valuation_inputs(
                 etf_quote,
                 etf_fund_info,
                 etf_holdings,
+                etf_profile,
+                etf_official_benchmark,
                 etf_ohlcv,
                 etf_distribution_yield_ttm_pct,
             };
@@ -916,6 +931,41 @@ async fn fetch_valuation_inputs(
             )
             .await;
         }
+
+        // Alpha Vantage ETF profile — primary composition/profile source.
+        // Fail-soft: throttles, gating, and transport faults degrade to `None`.
+        if let Some(av) = alpha_vantage {
+            etf_profile = match fetch_with_timeout(
+                symbol,
+                "alpha_vantage_etf_profile",
+                fetch_timeout,
+                async { av.fetch_etf_profile(symbol).await.ok() },
+            )
+            .await
+            {
+                Some(crate::data::alpha_vantage::EtfProfileFetch::Found(profile)) => Some(profile),
+                _ => None,
+            };
+        }
+
+        // Live SEC DERA risk/return fetch is deferred to a follow-on plan;
+        // official benchmark names come from the N-PORT stated_benchmark
+        // fallback only (see resolve_official_benchmark_name).
+        if let Some((name, source, age)) =
+            resolve_official_benchmark_name(None, etf_holdings.as_ref())
+        {
+            etf_official_benchmark = Some((
+                crate::data::sec_risk_return::BenchmarkMetadata {
+                    name,
+                    source,
+                    dataset_quarter: String::new(),
+                    accession: None,
+                    filing_date: None,
+                    source_period: None,
+                },
+                age,
+            ));
+        }
     }
 
     ValuationInputs {
@@ -928,6 +978,8 @@ async fn fetch_valuation_inputs(
         etf_quote,
         etf_fund_info,
         etf_holdings,
+        etf_profile,
+        etf_official_benchmark,
         etf_ohlcv,
         etf_distribution_yield_ttm_pct,
     }
@@ -1149,6 +1201,11 @@ fn derive_runtime_valuation(
             etf_quote: valuation_inputs.etf_quote.as_ref(),
             etf_fund_info: valuation_inputs.etf_fund_info.as_ref(),
             etf_holdings: valuation_inputs.etf_holdings.as_ref(),
+            etf_profile: valuation_inputs.etf_profile.as_ref(),
+            etf_official_benchmark: valuation_inputs
+                .etf_official_benchmark
+                .as_ref()
+                .map(|(metadata, age_days)| (metadata, *age_days)),
             etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
             etf_options: etf_options_from_state(state),
             etf_risk_free_rate: etf_risk_free_rate_from_state(state),
@@ -1376,6 +1433,7 @@ impl Task for AnalystSyncTask {
         let valuation_inputs = fetch_valuation_inputs(
             self.yfinance.as_ref(),
             self.sec_edgar.as_ref(),
+            self.alpha_vantage.as_ref(),
             pack_id,
             &symbol,
             &state.target_date,
@@ -1579,6 +1637,7 @@ mod tests {
         let inputs = fetch_valuation_inputs(
             &mock,
             None,
+            None,
             PackId::EtfBaseline,
             "SPY",
             &today,
@@ -1622,6 +1681,7 @@ mod tests {
 
         let inputs = fetch_valuation_inputs(
             &mock,
+            None,
             None,
             PackId::EtfBaseline,
             "SPY",
@@ -1667,6 +1727,36 @@ mod tests {
         // FundInfo.stated_benchmark.
         assert!(super::resolve_official_benchmark_name(None, Some(&nport)).is_none());
         assert!(fund_info.stated_benchmark.is_none());
+    }
+
+    #[tokio::test]
+    async fn etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists() {
+        let mut mock = MockYFinanceData::new();
+        mock.expect_get_quote().returning(|_| None);
+        mock.expect_get_distribution_yield_ttm().returning(|_| None);
+        mock.expect_get_ohlcv().times(1).returning(|symbol, _, _| {
+            assert_eq!(symbol, "SOXX", "only ETF OHLCV should be fetched");
+            Ok(vec![])
+        });
+
+        let info = etf_fund_info_snapshot();
+        let today = chrono::Utc::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        // The single get_ohlcv expectation (times(1), symbol == "SOXX") proves
+        // no benchmark-symbol OHLCV is fetched; benchmark OHLCV was removed.
+        let _inputs = fetch_valuation_inputs(
+            &mock,
+            None,
+            None,
+            PackId::EtfBaseline,
+            "SOXX",
+            &today,
+            Duration::from_secs(1),
+            Some(&info),
+        )
+        .await;
     }
 
     #[test]

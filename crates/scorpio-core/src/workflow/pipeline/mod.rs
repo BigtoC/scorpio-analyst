@@ -117,7 +117,7 @@ pub struct TradingPipeline {
     /// Alpha Vantage transcript provider. `None` when no key is configured
     /// or transcripts are disabled; downstream renders "Unavailable" prompt
     /// language in that case.
-    pub(super) alpha_vantage: Option<crate::data::AlphaVantageClient>,
+    pub(super) alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
     pub(super) catalyst_provider: Arc<dyn CatalystCalendarProvider>,
     pub(super) snapshot_store: Arc<SnapshotStore>,
     /// Handle for quick-thinking agents (Analyst Team - Phase 1).
@@ -192,6 +192,7 @@ impl TradingPipeline {
             &fred,
             &yfinance,
             sec_edgar,
+            None,
             Arc::clone(&snapshot_store),
             &quick_handle,
             &deep_handle,
@@ -256,12 +257,14 @@ impl TradingPipeline {
             sec_edgar_limiter.clone(),
         );
         let sec_edgar = build_default_sec_edgar_client(sec_edgar_limiter);
+        let alpha_vantage = alpha_vantage.map(Arc::new);
         let graph = runtime::build_graph(
             Arc::clone(&config),
             &finnhub,
             &fred,
             &yfinance,
             sec_edgar,
+            alpha_vantage.clone(),
             Arc::clone(&snapshot_store),
             &quick_handle,
             &deep_handle,
@@ -293,7 +296,7 @@ impl TradingPipeline {
         finnhub: FinnhubClient,
         fred: FredClient,
         yfinance: YFinanceClient,
-        alpha_vantage: Option<crate::data::AlphaVantageClient>,
+        alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
         catalyst_provider: Arc<dyn CatalystCalendarProvider>,
         snapshot_store: Arc<SnapshotStore>,
         quick_handle: CompletionModelHandle,
@@ -327,6 +330,7 @@ impl TradingPipeline {
             build_default_sec_edgar_client(runtime::build_sec_edgar_limiter(
                 &self.config.rate_limits,
             )),
+            self.alpha_vantage.clone(),
             Arc::clone(&self.snapshot_store),
             &self.quick_handle,
             &self.deep_handle,
