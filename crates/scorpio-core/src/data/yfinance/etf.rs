@@ -13,9 +13,12 @@
 //!
 //! [`EtfQuote::nav`], [`EtfQuote::bid`], and [`EtfQuote::ask`] are
 //! backfilled via a direct call to Yahoo's `quoteSummary` endpoint (see
-//! [`super::summary`]). Stated benchmark resolution falls back to a
-//! static ETF→index lookup (see `crate::data::etf_benchmarks`) when
-//! upstream metadata is silent.
+//! [`super::summary`]).
+//!
+//! Stated benchmark names are not resolved to market-data symbols in this
+//! module. Official textual benchmark metadata is carried separately by the ETF
+//! valuation path; benchmark OHLCV is intentionally disabled until a trusted
+//! source can resolve daily benchmark history.
 //!
 //! When upstream begins exposing these fields, populate them here without
 //! changing the public shape of [`EtfQuote`] / [`FundInfo`].
@@ -116,19 +119,6 @@ pub(crate) fn fund_info_from_profile(symbol: &str, profile: &Profile) -> Option<
         // `Profile` is `#[non_exhaustive]` in paft 0.8; any future variant is
         // not a recognized fund shape, so it carries no ETF fund info.
         _ => None,
-    }
-}
-
-#[must_use]
-pub(crate) fn normalize_benchmark_symbol(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    match trimmed.to_ascii_lowercase().as_str() {
-        "s&p 500 index" | "s&p500 index" | "sp 500 index" => Some("^GSPC".to_owned()),
-        _ => Some(trimmed.to_owned()),
     }
 }
 
@@ -320,26 +310,5 @@ mod tests {
             derive_leverage_factor(None, &Some("Large Blend".to_owned())),
             Some(1.0)
         );
-    }
-
-    #[test]
-    fn benchmark_name_normalization_maps_sp500_to_gspc() {
-        assert_eq!(
-            normalize_benchmark_symbol("S&P 500 Index"),
-            Some("^GSPC".to_owned())
-        );
-    }
-
-    #[test]
-    fn benchmark_name_normalization_keeps_symbols() {
-        assert_eq!(
-            normalize_benchmark_symbol("^IXIC"),
-            Some("^IXIC".to_owned())
-        );
-    }
-
-    #[test]
-    fn benchmark_name_normalization_rejects_blank_values() {
-        assert_eq!(normalize_benchmark_symbol("   "), None);
     }
 }

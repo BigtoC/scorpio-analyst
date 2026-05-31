@@ -22,7 +22,6 @@
 use chrono::Utc;
 use scorpio_core::config::ApiConfig;
 use scorpio_core::data::YFinanceClient;
-use scorpio_core::data::etf_benchmarks;
 use scorpio_core::data::traits::options::OptionsOutcome;
 use scorpio_core::data::yfinance::YFinanceOptionsProvider;
 use scorpio_core::data::yfinance::etf::is_supported_etf_kind;
@@ -106,32 +105,27 @@ async fn data_gap_smoke(client: &YFinanceClient) {
     ];
 
     println!();
-    println!(
-        "{:<14} {:>10} {:>10} {:>10}   {:<10}",
-        "SYMBOL", "NAV", "BID", "ASK", "BENCHMARK"
-    );
-    println!("{}", "─".repeat(60));
+    println!("{:<14} {:>10} {:>10} {:>10}", "SYMBOL", "NAV", "BID", "ASK");
+    println!("{}", "─".repeat(50));
 
     for symbol in SYMBOLS {
         let quote = client.get_quote(symbol).await;
-        let benchmark = etf_benchmarks::resolve(symbol).unwrap_or("—");
         let (nav, bid, ask) = match &quote {
             Some(q) => (q.nav, q.bid, q.ask),
             None => (None, None, None),
         };
         println!(
-            "{:<14} {:>10} {:>10} {:>10}   {:<10}",
+            "{:<14} {:>10} {:>10} {:>10}",
             symbol,
             fmt_field(nav),
             fmt_field(bid),
             fmt_field(ask),
-            benchmark,
         );
     }
 
     println!();
     println!("Expected:");
-    println!("  • SPY/QQQ/IWM/VTI/SMH/SOXX → NAV + bid + ask + benchmark all populated.");
+    println!("  • SPY/QQQ/IWM/VTI/SMH/SOXX → NAV + bid + ask all populated.");
     println!("  • AAPL                     → bid/ask only.");
     println!("  • XYZ123_BOGUS             → every field `—`; fail-soft path verified.");
 }

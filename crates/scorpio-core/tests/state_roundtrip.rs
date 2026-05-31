@@ -1180,6 +1180,10 @@ fn trading_state_with_etf_variant_roundtrips() {
             },
             composition: None,
             tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: Some("Large Blend".to_owned()),
             leverage_factor: Some(1.0),
@@ -1284,6 +1288,10 @@ async fn etf_variant_requires_snapshot_schema_version_above_v3() {
             },
             composition: None,
             tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: Some("Large Blend".to_owned()),
             leverage_factor: Some(1.0),
@@ -1353,6 +1361,10 @@ fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
             },
             composition: None,
             tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: Some(GexSummary {
                 net_gex_usd_per_1pct_move: 1.2e9,
                 gross_gex_usd_per_1pct_move: 3.4e9,
@@ -1393,6 +1405,93 @@ fn etf_valuation_with_populated_gex_strikes_roundtrips_through_trading_state() {
         }
         other => panic!("expected ETF scenario with gex, got {other:?}"),
     }
+}
+
+#[test]
+fn legacy_etf_snapshot_without_profile_quality_fields_deserializes_with_defaults() {
+    let json = r#"{
+        "etf": {
+            "premium": {
+                "nav": 100.0,
+                "market_price": 100.1,
+                "bid": null,
+                "ask": null,
+                "premium_pct": 0.1,
+                "category_band": "normal",
+                "bid_ask_spread_pct": null,
+                "as_of": "2026-05-28T12:00:00Z"
+            },
+            "composition": null,
+            "tracking": null,
+            "options_gex": null,
+            "category": "Technology",
+            "leverage_factor": 1.0,
+            "flags": {}
+        }
+    }"#;
+
+    let scenario: ScenarioValuation = serde_json::from_str(json).expect("legacy ETF scenario");
+    let ScenarioValuation::Etf(etf) = scenario else {
+        panic!("expected ETF scenario");
+    };
+
+    assert!(etf.official_benchmark_name.is_none());
+    assert!(etf.official_benchmark_source.is_none());
+    assert_eq!(etf.tracking_status, TrackingStatus::NotResolved);
+}
+
+#[test]
+fn etf_composition_profile_quality_fields_roundtrip() {
+    let comp = EtfComposition {
+        source: EtfCompositionSource::AlphaVantageEtfProfile,
+        top_holdings: vec![HoldingWeight {
+            cusip: None,
+            ticker: Some("NVDA".to_owned()),
+            name: "NVIDIA Corp".to_owned(),
+            weight_pct: 8.4,
+            value_usd: None,
+        }],
+        top10_concentration_pct: 8.4,
+        sector_weights: vec![SectorWeight {
+            sector: "Semiconductors".to_owned(),
+            weight_pct: 78.2,
+        }],
+        expense_ratio_pct: Some(0.0035),
+        aum_usd: Some(12_300_000_000.0),
+        fund_family: Some("iShares".to_owned()),
+        distribution_yield_ttm_pct: Some(0.0061),
+        holdings_filing_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+        holdings_report_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 30).unwrap()),
+        holdings_age_days: 0,
+        portfolio_turnover_pct: Some(0.24),
+        inception_date: Some(chrono::NaiveDate::from_ymd_opt(2001, 7, 10).unwrap()),
+    };
+
+    let json = serde_json::to_string(&comp).expect("serialize");
+    let back: EtfComposition = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, comp);
+}
+
+#[test]
+fn legacy_etf_composition_without_profile_quality_fields_deserializes_with_defaults() {
+    // A pre-profile-quality EtfComposition object (as found in stored snapshots)
+    // lacks source/holdings_report_date/portfolio_turnover_pct/inception_date;
+    // the #[serde(default)] attributes must fill them. This guards the nested
+    // composition default path that the EtfValuation-level legacy test does not
+    // (it uses "composition": null).
+    let json = r#"{
+        "top_holdings": [],
+        "top10_concentration_pct": 0.0,
+        "sector_weights": [],
+        "holdings_filing_date": "2026-03-31",
+        "holdings_age_days": 12
+    }"#;
+    let comp: EtfComposition = serde_json::from_str(json).expect("legacy composition");
+    assert_eq!(comp.source, EtfCompositionSource::SecNport);
+    assert!(comp.holdings_report_date.is_none());
+    assert!(comp.portfolio_turnover_pct.is_none());
+    assert!(comp.inception_date.is_none());
+    assert!(comp.expense_ratio_pct.is_none());
 }
 
 #[test]

@@ -20,4 +20,6 @@ solvency, and distribution behaviour.
    claim.
 
 If `composition` is `None`, do NOT invent holdings. State explicitly that
-N-PORT-P data is unavailable and explain what that means for the analysis.
+ETF composition/profile data is unavailable and explain what that means for the
+analysis. When composition is present, respect `EtfComposition.source` when
+describing provenance (Alpha Vantage ETF_PROFILE vs SEC N-PORT fallback).

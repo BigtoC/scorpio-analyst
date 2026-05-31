@@ -24,6 +24,8 @@ pub struct NPortSectorRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NPortHoldings {
     pub filing_date: NaiveDate,
+    #[serde(default)]
+    pub report_date: Option<NaiveDate>,
     pub holdings: Vec<NPortHoldingRow>,
     pub sector_breakdown: Vec<NPortSectorRow>,
     pub stated_benchmark: Option<String>,

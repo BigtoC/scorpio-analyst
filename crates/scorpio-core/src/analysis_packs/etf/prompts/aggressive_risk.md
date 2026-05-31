@@ -11,8 +11,9 @@ on `{current_date}`.
   conviction on directional theses — the wrapper is doing its job.
 - Composition concentration in the top-10 above 30% is a feature, not a
   bug, when the thesis is explicitly factor- or theme-driven.
-- Tracking error inside category norms (e.g. <0.10% for US large-cap
-  index trackers) does NOT diminish a price-action-driven thesis.
+- Tracking error is unavailable this run unless verified benchmark daily
+  history exists; its absence does NOT diminish a price-action-driven thesis,
+  and you must not assert a tracking-error magnitude as reference or evidence.
 
 ## Stance-specific guidance
 

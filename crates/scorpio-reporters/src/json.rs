@@ -18,6 +18,12 @@ use crate::{ReportContext, Reporter};
 /// `TradingState` moved equity-only fields into `state.equity.*`. Consumers
 /// that parsed v1 artifacts via root-level `fundamental_metrics` etc. must
 /// reach through `state.equity` after this bump.
+///
+/// Additive ETF profile/benchmark fields (composition source, official
+/// benchmark name/source, tracking status, holdings report date, etc.) remain
+/// schema v2 because the envelope shape and existing field meanings are
+/// unchanged; old consumers simply ignore the new nested fields. Bump only when
+/// a future change removes or renames a field.
 pub const JSON_REPORT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]

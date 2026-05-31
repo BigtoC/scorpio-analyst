@@ -35,6 +35,10 @@ fn etf_terminal_renders_dealer_positioning_block_when_gex_present() {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: Some(GexSummary {
                 net_gex_usd_per_1pct_move: 2.84e9,
                 gross_gex_usd_per_1pct_move: 7.12e9,
@@ -120,6 +124,10 @@ fn etf_terminal_renders_dealer_positioning_absence_when_gex_absent() {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: None,
             leverage_factor: None,
@@ -158,6 +166,10 @@ fn etf_terminal_emits_partial_data_note_for_missing_walls() {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: Some(GexSummary {
                 net_gex_usd_per_1pct_move: 1.0e9,
                 gross_gex_usd_per_1pct_move: 2.0e9,
@@ -210,6 +222,10 @@ fn etf_terminal_renders_degraded_rate_banner_when_rate_unavailable() {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: None,
             leverage_factor: None,
@@ -298,6 +314,10 @@ fn etf_terminal_renders_full_dealer_positioning_with_broad_and_secondary() {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: Some(GexSummary {
                 net_gex_usd_per_1pct_move: 2.84e9,
                 gross_gex_usd_per_1pct_move: 7.12e9,
@@ -359,6 +379,10 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: Some(GexSummary {
                 net_gex_usd_per_1pct_move: 1.0e9,
                 gross_gex_usd_per_1pct_move: 2.0e9,
@@ -384,4 +408,177 @@ fn etf_terminal_uses_partial_expirations_label_when_not_all_used() {
     let rendered = scorpio_reporters::terminal::render_final_report(&state);
     assert!(rendered.contains("Partial expirations"));
     assert!(rendered.contains("3 used of 5"));
+}
+
+#[test]
+fn etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracking() {
+    use scorpio_core::state::{
+        AssetShape, BenchmarkSource, DerivedValuation, EtfComposition, EtfCompositionSource,
+        EtfDataAvailability, EtfValuation, HoldingWeight, PremiumBand, PremiumSnapshot,
+        ScenarioValuation, SectorWeight, TrackingStatus,
+    };
+
+    let mut state = TradingState::new("SOXX".to_owned(), "2026-05-30".to_owned());
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(240.0),
+                market_price: 241.0,
+                bid: Some(240.9),
+                ask: Some(241.1),
+                premium_pct: Some(0.42),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.08),
+                as_of: chrono::Utc::now(),
+            },
+            composition: Some(EtfComposition {
+                source: EtfCompositionSource::AlphaVantageEtfProfile,
+                top_holdings: vec![HoldingWeight {
+                    cusip: None,
+                    ticker: Some("NVDA".to_owned()),
+                    name: "NVIDIA Corp".to_owned(),
+                    weight_pct: 8.4,
+                    value_usd: None,
+                }],
+                top10_concentration_pct: 8.4,
+                sector_weights: vec![SectorWeight {
+                    sector: "Semiconductors".to_owned(),
+                    weight_pct: 78.2,
+                }],
+                expense_ratio_pct: Some(0.0035),
+                aum_usd: Some(12_300_000_000.0),
+                fund_family: Some("iShares".to_owned()),
+                distribution_yield_ttm_pct: Some(0.0061),
+                holdings_filing_date: chrono::Utc::now().date_naive(),
+                holdings_report_date: None,
+                holdings_age_days: 0,
+                portfolio_turnover_pct: Some(0.24),
+                inception_date: Some(chrono::NaiveDate::from_ymd_opt(2001, 7, 10).unwrap()),
+            }),
+            tracking: None,
+            tracking_status: TrackingStatus::BenchmarkNameOnly,
+            official_benchmark_name: Some("NYSE Semiconductor Index".to_owned()),
+            official_benchmark_source: Some(BenchmarkSource::SecRiskReturn),
+            official_benchmark_metadata_age_days: Some(316),
+            options_gex: None,
+            category: Some("Technology".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let rendered = render_final_report(&state);
+    assert!(
+        rendered.contains("Composition source") && rendered.contains("Alpha Vantage ETF_PROFILE")
+    );
+    assert!(
+        rendered.contains("Official benchmark") && rendered.contains("NYSE Semiconductor Index")
+    );
+    assert!(rendered.contains("SEC DERA Risk/Return Summary"));
+    assert!(rendered.contains("Tracking error") && rendered.contains("unavailable"));
+    assert!(rendered.contains("benchmark daily history not resolved"));
+}
+
+#[test]
+fn etf_terminal_strips_control_sequences_from_provider_text() {
+    use scorpio_core::state::{
+        AssetShape, BenchmarkSource, DerivedValuation, EtfDataAvailability, EtfValuation,
+        PremiumBand, PremiumSnapshot, ScenarioValuation, TrackingStatus,
+    };
+
+    let mut state = TradingState::new("SOXX".to_owned(), "2026-05-30".to_owned());
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(240.0),
+                market_price: 241.0,
+                bid: None,
+                ask: None,
+                premium_pct: Some(0.42),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: None,
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            tracking_status: TrackingStatus::BenchmarkNameOnly,
+            official_benchmark_name: Some(
+                "NYSE\u{001b}[31m Semiconductor\u{0007} Index".to_owned(),
+            ),
+            official_benchmark_source: Some(BenchmarkSource::SecRiskReturn),
+            official_benchmark_metadata_age_days: None,
+            options_gex: None,
+            category: Some("Technology".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let rendered = render_final_report(&state);
+    assert!(!rendered.contains('\u{001b}'));
+    assert!(!rendered.contains('\u{0007}'));
+    assert!(rendered.contains("NYSE[31m Semiconductor Index"));
+}
+
+#[test]
+fn etf_terminal_renders_sec_nport_composition_source_with_report_and_filing_dates() {
+    use scorpio_core::state::{
+        AssetShape, DerivedValuation, EtfComposition, EtfCompositionSource, EtfDataAvailability,
+        EtfValuation, HoldingWeight, PremiumBand, PremiumSnapshot, ScenarioValuation,
+        TrackingStatus,
+    };
+
+    let mut state = TradingState::new("SPY".to_owned(), "2026-05-30".to_owned());
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(620.0),
+                market_price: 620.4,
+                bid: Some(620.3),
+                ask: Some(620.5),
+                premium_pct: Some(0.06),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: Some(0.03),
+                as_of: chrono::Utc::now(),
+            },
+            composition: Some(EtfComposition {
+                source: EtfCompositionSource::SecNport,
+                top_holdings: vec![HoldingWeight {
+                    cusip: None,
+                    ticker: Some("AAPL".to_owned()),
+                    name: "Apple Inc".to_owned(),
+                    weight_pct: 7.1,
+                    value_usd: None,
+                }],
+                top10_concentration_pct: 7.1,
+                sector_weights: vec![],
+                expense_ratio_pct: Some(0.0009),
+                aum_usd: None,
+                fund_family: None,
+                distribution_yield_ttm_pct: None,
+                holdings_filing_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap(),
+                holdings_report_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
+                holdings_age_days: 60,
+                portfolio_turnover_pct: None,
+                inception_date: None,
+            }),
+            tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
+            options_gex: None,
+            category: Some("Large Blend".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let rendered = render_final_report(&state);
+    assert!(rendered.contains("Composition source") && rendered.contains("SEC N-PORT"));
+    assert!(rendered.contains("Report date") && rendered.contains("2026-03-31"));
+    assert!(rendered.contains("Filing date") && rendered.contains("days old"));
 }

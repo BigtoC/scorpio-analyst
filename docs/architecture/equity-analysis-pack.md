@@ -85,18 +85,18 @@ In `baseline_prompt_bundle()` (baseline.rs line 72):
 
 ### External data sources
 
-| Provider                                 | API         | What it provides                                                                                                                                         | Used by                                                         |
-|------------------------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------|
-| **Finnhub**                              | REST API    | Fundamentals (P/E, EPS, revenue, margins, debt, insider transactions), earnings data, company news, market news                                          | Fundamental Analyst, Sentiment Analyst, News Analyst            |
-| **Yahoo Finance**                        | yfinance-rs | OHLCV price history, options chain, financial statements (cashflow, balance sheet, income statement, shares outstanding), earnings trend, profile, quote | Technical Analyst, AnalystSyncTask (valuation), pack classifier |
-| **FRED** (Federal Reserve Economic Data) | REST API    | Economic indicators (GDP, inflation, employment, rates)                                                                                                  | News Analyst                                                    |
-| **Alpha Vantage**                        | REST API    | Earnings-call transcripts                                                                                                                                | Sentiment Analyst, News Analyst (via enrichment layer)          |
-| **SEC EDGAR**                            | REST API    | 8-K filings, N-PORT-P holdings (ETF)                                                                                                                     | AnalystSyncTask (enrichment catalysts)                          |
-| **Reddit**                               | Reddit API  | Crowd commentary from 5 subreddits                                                                                                                       | Sentiment Analyst (via sentiment sidecar)                       |
+| Provider                                 | API         | What it provides                                                                                                                                                                        | Used by                                                                                                   |
+|------------------------------------------|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| **Finnhub**                              | REST API    | Fundamentals (P/E, EPS, revenue, margins, debt, insider transactions), earnings data, company news, market news, event-news enrichment, earnings/IPO catalysts                          | Fundamental Analyst, Sentiment Analyst, News Analyst, runtime enrichment                                  |
+| **Yahoo Finance**                        | yfinance-rs | Shared `Info` snapshot, OHLCV price history, options chain, financial statements (cashflow, balance sheet, income statement, shares outstanding), earnings trend, quote, consensus data | Runtime pack classifier, Technical Analyst, AnalystSyncTask (valuation), consensus and catalyst hydration |
+| **FRED** (Federal Reserve Economic Data) | REST API    | Economic indicators (GDP, inflation, employment, rates), scheduled macro-release dates                                                                                                  | News Analyst, catalyst calendar                                                                           |
+| **Alpha Vantage**                        | REST API    | Earnings-call transcripts; ETF profile/composition snapshot (`ETF_PROFILE`: holdings, sectors, expense ratio, AUM, turnover, inception) — primary ETF composition source               | Sentiment Analyst, News Analyst (via enrichment layer); ETF valuation path                                |
+| **SEC EDGAR**                            | REST API    | 8-K and 13D/G filings for catalyst enrichment; N-PORT-P holdings (ETF composition fallback + official benchmark name); DERA risk/return-summary benchmark names (parser shipped, live fetch deferred) | Runtime catalyst provider; ETF valuation path                                                             |
+| **Reddit**                               | Reddit API  | Crowd commentary from 5 subreddits                                                                                                                                                      | Sentiment Analyst (via sentiment sidecar)                                                                 |
 
 ### News pre-fetch
 
-Before the analyst fan-out starts, `prefetch_analyst_news()` (in `agents/analyst/mod.rs` line 321) runs three providers concurrently:
+Before the graph session starts, `run_analysis_cycle()` builds a per-cycle Reddit provider and calls `prefetch_analyst_news()` (in `agents/analyst/mod.rs`) concurrently with price, VIX, and catalyst hydration:
 
 ```
 Finnhub news + Yahoo news + Reddit news
@@ -120,12 +120,12 @@ Finnhub news + Yahoo news + Reddit news
 
 Each analyst agent is an LLM with tools bound. The LLM decides when to call tools during inference.
 
-| Analyst         | Tools bound                                                                                                                                                                        | Data fetched                                                                                            |
-|-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
-| **Fundamental** | `GetFundamentals`, `GetEarnings` (Finnhub)                                                                                                                                         | P/E, EPS, revenue growth, current ratio, debt-to-equity, gross margin, net income, insider transactions |
-| **Sentiment**   | `GetNews` or `GetCachedNews` (Finnhub)                                                                                                                                             | Company news articles for sentiment inference; also receives transcript context for Theme C             |
-| **News**        | `GetNews` or `GetCachedNews`, `GetMarketNews`, `GetEconomicIndicators` (Finnhub + FRED)                                                                                            | Company news, broader market news, macro economic indicators                                            |
-| **Technical**   | `GetOhlcv`, `CalculateAllIndicators`, `CalculateRsi`, `CalculateMacd`, `CalculateAtr`, `CalculateBollingerBands`, `CalculateIndicatorByName`, `GetOptionsSnapshot` (Yahoo Finance) | OHLCV price history (365 days), technical indicators, options snapshot                                  |
+| Analyst         | Tools bound                                                                                                                                                                        | Data fetched                                                                                                                               |
+|-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| **Fundamental** | `GetFundamentals`, `GetEarnings` (Finnhub)                                                                                                                                         | P/E, EPS, revenue growth, current ratio, debt-to-equity, gross margin, net income, insider transactions                                    |
+| **Sentiment**   | `GetNews` or `GetCachedNews` (Finnhub/cache)                                                                                                                                       | Company news plus Reddit sentiment inputs when cached; transcript status/context is injected into the prompt for Theme C                   |
+| **News**        | `GetNews` or `GetCachedNews`, `GetMarketNews`, `GetEconomicIndicators` (Finnhub + FRED/cache)                                                                                      | Company news, broader market news, macro economic indicators; transcript status and catalyst calendar context are injected into the prompt |
+| **Technical**   | `GetOhlcv`, `CalculateAllIndicators`, `CalculateRsi`, `CalculateMacd`, `CalculateAtr`, `CalculateBollingerBands`, `CalculateIndicatorByName`, `GetOptionsSnapshot` (Yahoo Finance) | OHLCV price history (365 days), technical indicators, options snapshot                                                                     |
 
 When cached news is available (from pre-fetch), `GetCachedNews` is bound instead of `GetNews`, saving one Finnhub API call.
 
@@ -135,7 +135,9 @@ When cached news is available (from pre-fetch), `GetCachedNews` is bound instead
 
 ### Concurrency model
 
-`run_analyst_team()` (in `agents/analyst/mod.rs` line 415) spawns all four analysts concurrently via `tokio::spawn`. Each gets its own `CompletionModelHandle` (quick-thinking tier).
+Production graph execution uses `graph_flow::fanout::FanOutTask` to run the concrete analyst graph tasks concurrently. `build_analyst_tasks()` (in `workflow/pipeline/runtime.rs`) maps the active pack's `required_inputs` through `AnalystRegistry`; for the equity baseline this yields the four quick-thinking tasks: Fundamental, Sentiment, News, and Technical.
+
+`run_analyst_team()` still exists in `agents/analyst/mod.rs` as a direct helper with the same degradation contract, but the normal pipeline path is graph-task fan-out.
 
 ### Per-agent flow
 
@@ -146,7 +148,8 @@ Each analyst follows the same pattern:
 4. **Run inference**: `run_analyst_inference()` with retry policy, timeout, parse hook, validate hook
 5. **Parse output**: deserialize LLM JSON response into typed struct
 6. **Validate**: semantic checks (non-empty summary, score ranges, etc.)
-7. **Return**: `(TypedData, AgentTokenUsage)`
+7. **Write result**: graph task writes typed output, token usage, and success/failure flag into context
+8. **Merge later**: `AnalystSyncTask` reads context results and writes successful outputs into `TradingState`
 
 ### Inference routing
 
@@ -158,9 +161,11 @@ Includes retry with self-correction: if parse fails, the error message is fed ba
 
 ### Degradation policy
 
-- 0 failures: all four fields populated
-- 1 failure: three fields populated, one `None`, continues with partial data
-- 2+ failures: abort with `TradingError::AnalystError`
+- 0 failures: all active analyst outputs populated
+- 1 failure: continues with partial data
+- 2+ failures, or every active analyst failing: aborts in `AnalystSyncTask`
+
+For the equity baseline, "active" means the four analysts declared by `required_inputs`: fundamentals, sentiment, news, technical.
 
 ### Output types
 
@@ -179,14 +184,16 @@ Includes retry with self-correction: if parse fails, the error message is fed ba
 
 After the analyst fan-out completes, `AnalystSyncTask` (in `workflow/tasks/analyst.rs`) runs. It:
 1. Merges analyst results into `TradingState`
-2. Fetches financial statement data from Yahoo Finance
-3. Calls `derive_valuation()` to compute deterministic metrics
-4. Writes `DerivedValuation` to state
+2. Reuses the per-cycle Yahoo Finance `Info` snapshot for profile/classification data
+3. Fetches financial statement data from Yahoo Finance
+4. Calls `derive_valuation()` to compute deterministic metrics
+5. Applies pack-selected valuation through the valuator registry
+6. Writes `DerivedValuation` to state
 
 ### What data is fetched for valuation
 
-`fetch_valuation_inputs()` (analyst.rs line 796) fetches concurrently (with timeout):
-- `profile` — company/fund classification
+`fetch_valuation_inputs()` (analyst.rs line 797) fetches concurrently (with timeout):
+- `profile` — company/fund classification, lifted from the shared `TradingState.yfinance_info` snapshot fetched once at cycle start
 - `quarterly_cashflow` — free cash flow data
 - `quarterly_balance_sheet` — cash, debt, shares outstanding
 - `quarterly_income_stmt` — operating income (EBITDA proxy)
@@ -194,6 +201,17 @@ After the analyst fan-out completes, `AnalystSyncTask` (in `workflow/tasks/analy
 - `earnings_trend` — forward EPS estimates, growth rates
 
 All fetches degrade gracefully to `None` on network failure.
+
+For the **ETF baseline pack**, `fetch_valuation_inputs()` instead fetches ETF
+inputs: the live quote, distribution yield, and ETF OHLCV (price/technical
+context only — benchmark OHLCV is intentionally **not** fetched), the Alpha
+Vantage `ETF_PROFILE` (primary composition/profile source), and SEC N-PORT-P
+holdings (regulatory fallback). The official textual benchmark name comes from
+the N-PORT `stated_benchmark` (the SEC DERA risk/return parser is shipped, but
+its live byte-fetch is deferred to a follow-on plan). Tracking error is left
+**unavailable** (`TrackingStatus::NotResolved` / `BenchmarkNameOnly`) until a
+trusted source resolves verified benchmark daily history — there is no static
+ETF→benchmark-symbol table.
 
 ### How metrics are computed
 
@@ -249,6 +267,8 @@ Shapes not in the map fall through to `NotAssessed { reason: "no_valuator_select
 
 Built by `build_graph_from_pack()` in `workflow/builder.rs`:
 
+Before this graph starts, `run_analysis_cycle()` resets per-cycle state, canonicalizes the symbol, fetches the shared Yahoo Finance `Info` snapshot, resolves the runtime pack, prefetches price/VIX/news/catalysts, and hydrates pack-requested enrichment payloads. Those values are serialized into the initial graph context so `PreflightTask` can preserve them rather than refetching or overwriting them.
+
 ```
 Preflight
     │
@@ -300,12 +320,15 @@ AnalystSync                                  │
 ### Preflight task
 
 `PreflightTask` (in `workflow/tasks/preflight.rs`):
-1. Writes `RuntimePolicy` into graph-flow context (sole writer of `state.analysis_runtime_policy`)
-2. Validates pack completeness (all required prompt slots non-empty)
-3. Sets `RoutingFlags` controlling debate/risk/auditor stage entry
-4. Fetches enrichment data (transcripts, consensus estimates, event news)
-5. Fetches market volatility (VIX)
-6. Fetches current price
+1. Loads `TradingState` from context and canonicalizes the symbol
+2. Loads prior thesis memory from the snapshot store (fail-open when absent)
+3. Derives provider capabilities and writes the resolved instrument to context
+4. Writes `RuntimePolicy` into graph-flow context and `state.analysis_runtime_policy` (sole writer of that state field)
+5. Builds the per-run topology from `required_inputs`, `max_debate_rounds`, `max_risk_rounds`, and `auditor_enabled`
+6. Sets `RoutingFlags` controlling debate/risk/auditor stage entry
+7. Validates active-pack completeness for every prompt slot the topology will exercise
+8. Sanitizes `analysis_emphasis` before prompt substitution
+9. Seeds null placeholders for enrichment cache keys without overwriting hydrated event-news, consensus, or transcript status from `run_analysis_cycle()`
 
 ### Analyst fan-out
 
@@ -319,16 +342,16 @@ Each `AnalystTask` (e.g., `FundamentalAnalystTask`):
 
 ### AnalystSync task
 
-After all four analysts complete:
+After the active analyst fan-out completes:
 1. Reads results from context
 2. Merges into `TradingState` (fundamental_metrics, market_sentiment, macro_news, technical_indicators)
-3. Writes `EvidenceRecord` for each analyst with source attribution
-4. Fetches financial statements from Yahoo Finance
-5. Calls `derive_valuation()` → writes `DerivedValuation` to state
-6. Builds `DataCoverageReport` (required vs missing inputs)
-7. Builds `ProvenanceSummary` (list of data providers used)
-8. Applies degradation policy (2+ failures abort)
-9. Saves snapshot
+3. Writes `EvidenceRecord` for each successful analyst with source attribution, including enrichment-side providers when they contributed
+4. Applies omission-aware degradation policy (2+ failures, or all active analysts failing, aborts)
+5. Builds `DataCoverageReport` from the active runtime policy's required inputs
+6. Builds `ProvenanceSummary` from evidence record providers
+7. Fetches valuation inputs from Yahoo Finance, reusing `state.yfinance_info` for profile data
+8. Calls `derive_runtime_valuation()` → writes `DerivedValuation` to state
+9. Saves the AnalystTeam snapshot
 
 ### Debate stage
 
@@ -355,7 +378,7 @@ When enabled (default for equity):
 
 Each risk agent produces a `RiskReport`: assessment, flags_violation (bool), recommended_adjustments.
 
-**Auto-reject rule**: if both NeutralRisk and ConservativeRisk flag a violation, the proposal is auto-rejected.
+**Dual-risk escalation**: if both NeutralRisk and ConservativeRisk flag a violation, the Fund Manager must explicitly address the escalation in the first line of `rationale`. Rejection uses the prefix `Dual-risk escalation: upheld because`; approval must use `deferred because` for Hold or `overridden because` for a directional action. This is a validation rule on the Fund Manager output, not a deterministic pre-LLM rejection.
 
 ### FundManager stage
 
@@ -378,37 +401,40 @@ When `auditor_enabled = true` (default for equity):
 
 The top-level state container (`crates/scorpio-core/src/state/trading_state.rs`) holds everything:
 
-| Field                      | Type                           | Set by                          |
-|----------------------------|--------------------------------|---------------------------------|
-| `asset_symbol`             | `String`                       | CLI input                       |
-| `target_date`              | `String`                       | CLI input                       |
-| `execution_id`             | `Uuid`                         | Generated at start              |
-| `fundamental_metrics`      | `Option<FundamentalData>`      | FundamentalAnalyst              |
-| `market_sentiment`         | `Option<SentimentData>`        | SentimentAnalyst                |
-| `macro_news`               | `Option<NewsData>`             | NewsAnalyst                     |
-| `technical_indicators`     | `Option<TechnicalData>`        | TechnicalAnalyst                |
-| `derived_valuation`        | `Option<DerivedValuation>`     | AnalystSyncTask                 |
-| `analysis_runtime_policy`  | `Option<RuntimePolicy>`        | PreflightTask                   |
-| `trader_proposal`          | `Option<TradeProposal>`        | TraderTask                      |
-| `aggressive_risk_report`   | `Option<RiskReport>`           | AggressiveRiskTask              |
-| `conservative_risk_report` | `Option<RiskReport>`           | ConservativeRiskTask            |
-| `neutral_risk_report`      | `Option<RiskReport>`           | NeutralRiskTask                 |
-| `final_execution_status`   | `Option<ExecutionStatus>`      | FundManagerTask                 |
-| `audit_status`             | `AuditStatus`                  | AuditorTask                     |
-| `audit_report`             | `Option<AuditorReport>`        | AuditorTask                     |
-| `debate_history`           | `Vec<DebateMessage>`           | Bullish/Bearish/DebateModerator |
-| `consensus_summary`        | `Option<String>`               | DebateModerator                 |
-| `current_price`            | `Option<f64>`                  | PreflightTask                   |
-| `market_volatility`        | `Option<MarketVolatilityData>` | PreflightTask                   |
-| `data_coverage`            | `Option<DataCoverageReport>`   | AnalystSyncTask                 |
-| `provenance_summary`       | `Option<ProvenanceSummary>`    | AnalystSyncTask                 |
-| `token_usage`              | `TokenUsageTracker`            | All tasks                       |
-| `enrichment_*`             | `EnrichmentState<T>`           | PreflightTask                   |
-| `evidence_*`               | `Option<EvidenceRecord<T>>`    | AnalystSyncTask                 |
+| Field                         | Type                                      | Set by                          |
+|-------------------------------|-------------------------------------------|---------------------------------|
+| `asset_symbol`                | `String`                                  | CLI input                       |
+| `symbol`                      | `Option<Symbol>`                          | `TradingState::new` / Preflight |
+| `target_date`                 | `String`                                  | CLI input                       |
+| `execution_id`                | `Uuid`                                    | Generated at start              |
+| `equity`                      | `Option<EquityState>`                     | Equity pipeline tasks           |
+| `crypto`                      | `Option<CryptoState>`                     | Future crypto pipeline          |
+| `analysis_runtime_policy`     | `Option<RuntimePolicy>`                   | PreflightTask                   |
+| `analysis_pack_name`          | `Option<String>`                          | PreflightTask                   |
+| `etf_routing_fallback_reason` | `Option<String>`                          | Runtime pack classifier         |
+| `trader_proposal`             | `Option<TradeProposal>`                   | TraderTask                      |
+| `aggressive_risk_report`      | `Option<RiskReport>`                      | AggressiveRiskTask              |
+| `conservative_risk_report`    | `Option<RiskReport>`                      | ConservativeRiskTask            |
+| `neutral_risk_report`         | `Option<RiskReport>`                      | NeutralRiskTask                 |
+| `final_execution_status`      | `Option<ExecutionStatus>`                 | FundManagerTask                 |
+| `audit_status`                | `AuditStatus`                             | AuditorTask                     |
+| `audit_report`                | `Option<AuditorReport>`                   | AuditorTask                     |
+| `debate_history`              | `Vec<DebateMessage>`                      | Bullish/Bearish/DebateModerator |
+| `consensus_summary`           | `Option<String>`                          | DebateModerator                 |
+| `current_price`               | `Option<f64>`                             | `run_analysis_cycle()`          |
+| `data_coverage`               | `Option<DataCoverageReport>`              | AnalystSyncTask                 |
+| `provenance_summary`          | `Option<ProvenanceSummary>`               | AnalystSyncTask                 |
+| `token_usage`                 | `TokenUsageTracker`                       | All tasks                       |
+| `enrichment_event_news`       | `EnrichmentState<Vec<EventNewsEvidence>>` | `run_analysis_cycle()`          |
+| `enrichment_consensus`        | `EnrichmentState<ConsensusEvidence>`      | `run_analysis_cycle()`          |
+| `enrichment_catalysts`        | `EnrichmentState<Vec<CatalystEvent>>`     | `run_analysis_cycle()`          |
+| `yfinance_info`               | `Option<Info>`                            | `run_analysis_cycle()`          |
+| `prior_thesis`                | `Option<ThesisMemory>`                    | PreflightTask                   |
+| `current_thesis`              | `Option<ThesisMemory>`                    | FundManagerTask                 |
 
 ### EquityState
 
-Ten equity-specific fields stored on `TradingState` (accessed via methods):
+Equity-specific fields are nested under `TradingState.equity` (accessed through `TradingState` methods such as `fundamental_metrics()` and `set_derived_valuation()`):
 - `fundamental_metrics` → `Option<FundamentalData>`
 - `technical_indicators` → `Option<TechnicalData>`
 - `market_sentiment` → `Option<SentimentData>`
@@ -481,6 +507,8 @@ Shows status of:
 - **Event-news**: `EnrichmentStatus` (Available/NotConfigured/Disabled/FetchFailed/NotAvailable) + event count + first 5 events
 - **Consensus estimates**: status + EPS estimate, revenue estimate, analyst count, as-of date
 
+`enrichment_catalysts` is prompt context for News, Trader, Risk, and Fund Manager, but it is not rendered as a separate terminal-report subsection today.
+
 ### Section 6: Scenario Valuation
 
 From `write_scenario_valuation()` in `terminal/valuation.rs`:
@@ -490,7 +518,7 @@ For **CorporateEquity** shape:
 Asset shape: Corporate equity
 Valuation model: Corporate Equity
   DCF intrinsic value: 185.42 (FCF: 1200000000, discount rate: 10.0%)
-  EV/EBITDA: 22.5 (implied: 192.00)
+  EV/EBITDA: 22.5
   Forward P/E: 26.2 (forward EPS: 7.25)
   PEG ratio: 1.80
 ```
@@ -548,7 +576,7 @@ Full assessments printed below the table.
   Auto-reject rule triggered: No
 ```
 
-Auto-reject triggers when both Neutral AND Conservative flag violations.
+The display label remains `Auto-reject rule triggered`, but the current enforcement is the dual-risk escalation contract described above: both Neutral and Conservative violations force a first-line Fund Manager rationale prefix and validation constraints. They do not bypass the Fund Manager LLM.
 
 ### Section 12: Auditor Review
 
@@ -566,7 +594,7 @@ Deep-thinking model: o3
 
 Table with columns: Phase | Prompt | Completion | Total | Duration
 
-Phases include: Analyst Fan-Out, Trader Synthesis, Risk Review, Fund Manager, Auditor Review.
+Phases include: Analyst Fan-Out, Researcher Debate Round N, Researcher Debate Moderation, Trader Synthesis, Risk Discussion Round N, Risk Discussion Moderation, Fund Manager Decision, Auditor Review.
 
 ### Section 14: Disclaimer
 
@@ -579,7 +607,7 @@ Standard disclaimer about AI-generated analysis, not financial advice.
 ### How the pack is selected
 
 `classify_runtime_pack()` in `workflow/pack_classifier.rs`:
-1. Fetches `Profile` from Yahoo Finance for the symbol
+1. Reads `Profile` from the shared Yahoo Finance `Info` snapshot fetched once near the start of `run_analysis_cycle()`
 2. `Profile::Company` → `PackId::Baseline` (equity)
 3. `Profile::Fund` + supported ETF kind → `PackId::EtfBaseline`
 4. `Profile::Fund` + unsupported kind → fallback to `Baseline`
@@ -590,7 +618,7 @@ The fallback reason is stored in `state.etf_routing_fallback_reason` and display
 ### Two paths in `run_analysis_cycle()`
 
 1. **`from_pack` path**: Pipeline was built with a pre-resolved manifest (tests, feature flags). `runtime_policy` is `Some` on the pipeline.
-2. **Production path**: Pipeline was built via `try_new`. Pack is classified at runtime from the symbol's profile. `runtime_policy` is `None`, so it fetches profile, classifies, resolves.
+2. **Production path**: Pipeline was built via `try_new`. Pack is classified at runtime from the symbol's shared `Info.profile`. `runtime_policy` is `None`, so it fetches `Info`, classifies, resolves.
 
 ---
 
@@ -600,6 +628,8 @@ The fallback reason is stored in `state.etf_routing_fallback_reason` and display
 
 The equity baseline pack declares 5 subreddits in `EQUITY_BASELINE_REDDIT_SUBREDDITS` (in `constants.rs`):
 - `stocks`, `investing`, `wallstreetbets`, `StockMarket`, `Daytrading`
+
+Runtime ingestion is additionally gated by `rate_limits.reddit_rpm`: the default is `10`; `0` disables Reddit and passes an empty subreddit list to the Reddit provider for that cycle.
 
 ### Ambiguous symbol denylist
 

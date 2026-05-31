@@ -3,8 +3,9 @@
 use std::fmt::Write;
 
 use scorpio_core::state::{
-    EtfComposition, EtfValuation, GexSummary, HoldingsAgeBand, PremiumBand, ScenarioValuation,
-    StrikeGex, TrackingError, TradingState,
+    BenchmarkSource, EtfComposition, EtfCompositionSource, EtfValuation, GexSummary,
+    HoldingsAgeBand, PremiumBand, ScenarioValuation, StrikeGex, TrackingError, TrackingStatus,
+    TradingState,
 };
 
 /// Render policy. Picks glyphs + layout based on terminal capability.
@@ -85,16 +86,8 @@ pub(crate) fn render_etf_panel_with_policy(
     }
     render_cost_block(out, etf);
     render_sector_summary_block(out, etf.composition.as_ref());
-    match etf.tracking.as_ref() {
-        Some(tr) => render_tracking_block(out, tr, policy),
-        None => {
-            let _ = writeln!(
-                out,
-                "{} Tracking error skipped — benchmark not resolved",
-                policy.warn()
-            );
-        }
-    }
+    render_official_benchmark_block(out, etf);
+    render_tracking_status(out, etf, policy);
     render_trust_signals(out, etf, policy);
     if let Some(gex) = etf.options_gex.as_ref() {
         render_dealer_positioning_block(out, gex);
@@ -116,7 +109,7 @@ fn render_premium_block(
     let _ = writeln!(out, "Analysis Pack    ETF Baseline");
     let _ = writeln!(out, "Symbol           {}", state.asset_symbol);
     if let Some(cat) = etf.category.as_deref() {
-        let _ = writeln!(out, "Category         {cat}");
+        let _ = writeln!(out, "Category         {}", sanitize_display_text(cat));
     }
     let _ = writeln!(out, "Market Price     ${:.2}", etf.premium.market_price);
     match etf.premium.nav {
@@ -174,13 +167,49 @@ fn render_premium_block(
     }
 }
 
+fn composition_source_label(source: EtfCompositionSource) -> &'static str {
+    match source {
+        EtfCompositionSource::AlphaVantageEtfProfile => "Alpha Vantage ETF_PROFILE",
+        EtfCompositionSource::SecNport => "SEC N-PORT",
+    }
+}
+
+fn benchmark_source_label(source: BenchmarkSource) -> &'static str {
+    match source {
+        BenchmarkSource::SecRiskReturn => "SEC DERA Risk/Return Summary",
+        BenchmarkSource::SecNport => "SEC N-PORT",
+    }
+}
+
 fn render_composition_block(out: &mut String, comp: &EtfComposition, policy: RenderPolicy) {
     let rule = policy.rule_char();
     let _ = writeln!(
         out,
-        "{rule}{rule}{rule} COMPOSITION  (filing {}, {} days old) {rule}{rule}{rule}{rule}",
-        comp.holdings_filing_date, comp.holdings_age_days,
+        "{rule}{rule}{rule} COMPOSITION {rule}{rule}{rule}{rule}"
     );
+    let _ = writeln!(
+        out,
+        "Composition source  {}",
+        composition_source_label(comp.source)
+    );
+    match comp.source {
+        EtfCompositionSource::AlphaVantageEtfProfile => {
+            let _ = writeln!(
+                out,
+                "Provider snapshot  Alpha Vantage latest available profile"
+            );
+        }
+        EtfCompositionSource::SecNport => {
+            if let Some(report_date) = comp.holdings_report_date {
+                let _ = writeln!(out, "Report date      {report_date}");
+            }
+            let _ = writeln!(
+                out,
+                "Filing date      {} ({} days old)",
+                comp.holdings_filing_date, comp.holdings_age_days
+            );
+        }
+    }
     let _ = writeln!(out, "Top-10 weight    {:.1}%", comp.top10_concentration_pct);
     if !comp.top_holdings.is_empty() {
         let pieces: Vec<String> = comp
@@ -190,7 +219,12 @@ fn render_composition_block(out: &mut String, comp: &EtfComposition, policy: Ren
             .enumerate()
             .map(|(idx, h)| {
                 let label = h.ticker.as_deref().unwrap_or(&h.name);
-                format!("#{} {label}  {:.1}%", idx + 1, h.weight_pct)
+                format!(
+                    "#{} {}  {:.1}%",
+                    idx + 1,
+                    sanitize_display_text(label),
+                    h.weight_pct
+                )
             })
             .collect();
         let _ = writeln!(out, "{}", pieces.join(policy.holdings_separator()));
@@ -210,13 +244,42 @@ fn render_tracking_block(out: &mut String, tr: &TrackingError, policy: RenderPol
     let _ = writeln!(
         out,
         "{rule}{rule}{rule} TRACKING vs {} {rule}{rule}{rule}{rule}",
-        tr.benchmark_symbol
+        sanitize_display_text(&tr.benchmark_symbol)
     );
     let _ = writeln!(
         out,
         "90d TE: {:.2}% annualised   |   1y TE: {:.2}% annualised  (n={} days)",
         tr.te_pct_90d, tr.te_pct_1y, tr.sample_days
     );
+}
+
+fn render_official_benchmark_block(out: &mut String, etf: &EtfValuation) {
+    if let Some(name) = etf.official_benchmark_name.as_deref() {
+        let source = etf
+            .official_benchmark_source
+            .map(benchmark_source_label)
+            .unwrap_or("unknown source");
+        let _ = writeln!(
+            out,
+            "Official benchmark {} ({source})",
+            sanitize_display_text(name)
+        );
+    }
+}
+
+fn render_tracking_status(out: &mut String, etf: &EtfValuation, policy: RenderPolicy) {
+    match etf.tracking.as_ref() {
+        Some(tr) if etf.tracking_status == TrackingStatus::Computed => {
+            render_tracking_block(out, tr, policy)
+        }
+        _ => {
+            let _ = writeln!(
+                out,
+                "{} Tracking error unavailable - benchmark daily history not resolved",
+                policy.warn()
+            );
+        }
+    }
 }
 
 fn render_cost_block(out: &mut String, etf: &EtfValuation) {
@@ -256,9 +319,13 @@ fn render_sector_summary_block(out: &mut String, comp: Option<&EtfComposition>) 
     let top: Vec<String> = sorted
         .iter()
         .take(2)
-        .map(|s| format!("{}: {:.1}%", s.sector, s.weight_pct))
+        .map(|s| format!("{}: {:.1}%", sanitize_display_text(&s.sector), s.weight_pct))
         .collect();
     let _ = writeln!(out, "Sector tilt      {}", top.join("  |  "));
+}
+
+fn sanitize_display_text(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 fn render_trust_signals(out: &mut String, etf: &EtfValuation, policy: RenderPolicy) {
@@ -269,11 +336,12 @@ fn render_trust_signals(out: &mut String, etf: &EtfValuation, policy: RenderPoli
     );
     let _ = writeln!(
         out,
-        "NAV: {}  Bid/Ask: {}  Holdings: {}  Benchmark: {}",
+        "NAV: {}  Bid/Ask: {}  Holdings: {}  Official benchmark: {}  Tracking history: {}",
         policy.check(etf.flags.nav_available),
         policy.check(etf.flags.bid_ask_available),
         policy.check(etf.flags.holdings_present),
-        policy.check(etf.flags.benchmark_resolved),
+        policy.check(etf.official_benchmark_name.is_some()),
+        policy.check(etf.tracking_status == TrackingStatus::Computed),
     );
     let _ = writeln!(
         out,
@@ -478,6 +546,10 @@ mod tests {
             },
             composition: None,
             tracking: None,
+            tracking_status: scorpio_core::state::TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: Some("Large Blend".into()),
             leverage_factor: Some(1.0),
@@ -555,6 +627,7 @@ mod tests {
     fn narrow_policy_separates_holdings_with_newlines() {
         let mut etf = minimal_etf();
         etf.composition = Some(EtfComposition {
+            source: scorpio_core::state::EtfCompositionSource::SecNport,
             top_holdings: vec![
                 scorpio_core::state::HoldingWeight {
                     cusip: None,
@@ -578,7 +651,10 @@ mod tests {
             fund_family: None,
             distribution_yield_ttm_pct: None,
             holdings_filing_date: NaiveDate::from_ymd_opt(2026, 4, 30).unwrap(),
+            holdings_report_date: None,
             holdings_age_days: 21,
+            portfolio_turnover_pct: None,
+            inception_date: None,
         });
         let state = etf_state_with(etf);
         let mut out = String::new();

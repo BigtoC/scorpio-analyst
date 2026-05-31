@@ -206,6 +206,7 @@ pub(super) fn build_graph(
     fred: &FredClient,
     yfinance: &YFinanceClient,
     sec_edgar: Arc<SecEdgarClient>,
+    alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
     snapshot_store: Arc<SnapshotStore>,
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
@@ -226,6 +227,7 @@ pub(super) fn build_graph(
         fred,
         yfinance,
         sec_edgar,
+        alpha_vantage,
         snapshot_store,
         quick_handle,
         deep_handle,
@@ -533,7 +535,7 @@ pub async fn run_analysis_cycle(
     let transcript_fetch: crate::data::adapters::transcripts::TranscriptFetch = if enrichment_intent
         .transcripts
     {
-        if let Some(ref av_client) = pipeline.alpha_vantage {
+        if let Some(av_client) = pipeline.alpha_vantage.as_deref() {
             hydrate_transcript(av_client, &pipeline.finnhub, &symbol, &date, fetch_timeout).await
         } else {
             warn!("transcripts enabled but AlphaVantageClient not constructed");

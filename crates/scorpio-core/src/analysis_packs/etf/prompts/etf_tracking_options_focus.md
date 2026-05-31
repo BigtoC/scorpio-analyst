@@ -2,9 +2,14 @@
 
 In addition to standard technicals:
 
-- **Tracking error** — if `TrackingError` is present, cite `te_pct_90d` and
-  `te_pct_1y`. >0.20% annualised on a vanilla index-tracker is structurally
-  costly; >1.0% suggests active management or sampling mismatch.
+- **Official benchmark name** — when present, cite it as filed reference
+  context. Do not infer a benchmark ticker from the textual name.
+- **Tracking error** — unavailable in the current scope unless a verified daily
+  benchmark-history source is present (`TrackingStatus::Computed`). Treat the
+  official benchmark name as reference context only, and any stale
+  `TrackingError` value as optional reference — never deterministic evidence.
+  Distinguish annualised tracking-error volatility, cumulative tracking
+  difference, and fee drag; do not collapse them into one claim.
 
 - **Dealer positioning (secondary baseline overlay)** — when `options_gex` is
   available in the prompt context, treat it as a **secondary overlay** on top

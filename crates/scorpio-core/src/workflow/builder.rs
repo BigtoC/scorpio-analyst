@@ -57,6 +57,7 @@ pub fn build_graph_from_pack(
     fred: &FredClient,
     yfinance: &YFinanceClient,
     sec_edgar: Arc<SecEdgarClient>,
+    alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
     snapshot_store: Arc<SnapshotStore>,
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
@@ -94,10 +95,11 @@ pub fn build_graph_from_pack(
     graph.add_task(fan_out);
     graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
 
-    let analyst_sync = AnalystSyncTask::with_yfinance_and_edgar(
+    let analyst_sync = AnalystSyncTask::with_yfinance_edgar_and_alpha_vantage(
         Arc::clone(&snapshot_store),
         Arc::new(yfinance.clone()),
         sec_edgar,
+        alpha_vantage,
         Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
     );
     graph.add_task(analyst_sync);
@@ -258,6 +260,7 @@ impl TradingPipeline {
             &fred,
             &yfinance,
             Arc::clone(&sec_edgar),
+            None,
             Arc::clone(&snapshot_store),
             &quick_handle,
             &deep_handle,

@@ -24,7 +24,7 @@ fn strip_angle_brackets(s: &str) -> String {
 ///    rows (Reddit snippets, news summaries, etc.) cannot smuggle tag-like
 ///    prompt boundary tokens like `</context>` or `<system>` into the
 ///    shared analyst context.
-fn sanitize_untrusted_prompt_block(input: &str) -> String {
+pub(crate) fn sanitize_untrusted_prompt_block(input: &str) -> String {
     strip_angle_brackets(&sanitize_prompt_context(input))
 }
 

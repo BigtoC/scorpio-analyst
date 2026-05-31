@@ -257,9 +257,38 @@ pub struct PremiumSnapshot {
     pub as_of: chrono::DateTime<chrono::Utc>,
 }
 
+/// Provider that supplied ETF composition/profile rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EtfCompositionSource {
+    #[default]
+    SecNport,
+    AlphaVantageEtfProfile,
+}
+
+/// Official textual benchmark-name source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkSource {
+    SecRiskReturn,
+    SecNport,
+}
+
+/// Status for ETF tracking-error computation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingStatus {
+    #[default]
+    NotResolved,
+    BenchmarkNameOnly,
+    Computed,
+}
+
 /// Composition + cost snapshot derived from N-PORT-P + fund metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct EtfComposition {
+    #[serde(default)]
+    pub source: EtfCompositionSource,
     pub top_holdings: Vec<HoldingWeight>,
     pub top10_concentration_pct: f64,
     pub sector_weights: Vec<SectorWeight>,
@@ -272,7 +301,13 @@ pub struct EtfComposition {
     #[serde(default)]
     pub distribution_yield_ttm_pct: Option<f64>,
     pub holdings_filing_date: chrono::NaiveDate,
+    #[serde(default)]
+    pub holdings_report_date: Option<chrono::NaiveDate>,
     pub holdings_age_days: u32,
+    #[serde(default)]
+    pub portfolio_turnover_pct: Option<f64>,
+    #[serde(default)]
+    pub inception_date: Option<chrono::NaiveDate>,
 }
 
 /// Tracking error vs a source-provided benchmark.
@@ -390,6 +425,14 @@ pub struct EtfValuation {
     pub composition: Option<EtfComposition>,
     #[serde(default)]
     pub tracking: Option<TrackingError>,
+    #[serde(default)]
+    pub tracking_status: TrackingStatus,
+    #[serde(default)]
+    pub official_benchmark_name: Option<String>,
+    #[serde(default)]
+    pub official_benchmark_source: Option<BenchmarkSource>,
+    #[serde(default)]
+    pub official_benchmark_metadata_age_days: Option<u32>,
     /// Phase 2 — always `None` in Phase 1.
     #[serde(default)]
     pub options_gex: Option<GexSummary>,
@@ -656,6 +699,10 @@ mod tests {
             },
             composition: None,
             tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: Some("Large Blend".to_owned()),
             leverage_factor: Some(1.0),
@@ -681,6 +728,10 @@ mod tests {
             },
             composition: None,
             tracking: None,
+            tracking_status: TrackingStatus::NotResolved,
+            official_benchmark_name: None,
+            official_benchmark_source: None,
+            official_benchmark_metadata_age_days: None,
             options_gex: None,
             category: None,
             leverage_factor: None,
@@ -707,6 +758,25 @@ mod tests {
         assert!(!flags.benchmark_resolved);
         assert!(!flags.options_chain_present);
         assert!(!flags.expense_ratio_available);
+    }
+
+    #[test]
+    fn legacy_etf_data_availability_with_benchmark_resolved_roundtrips() {
+        let json = r#"{
+            "nav_available": true,
+            "bid_ask_available": true,
+            "holdings_present": true,
+            "holdings_age_band": "fresh",
+            "benchmark_resolved": true,
+            "options_chain_present": false,
+            "expense_ratio_available": true
+        }"#;
+
+        let flags: EtfDataAvailability = serde_json::from_str(json).expect("legacy flags");
+        assert!(flags.benchmark_resolved);
+
+        let serialized = serde_json::to_string(&flags).expect("serialize flags");
+        assert!(serialized.contains("\"benchmark_resolved\":true"));
     }
 
     #[test]

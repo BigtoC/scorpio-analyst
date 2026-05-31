@@ -13,7 +13,7 @@ rationale prefixes the runtime expects).
 
 An ETF dual-risk violation is triggered when BOTH the conservative and
 neutral risk agents lead `assessment` with the same condition tag from
-`{extreme_premium, tracking_failure, leverage_decay, stale_holdings}`.
+`{extreme_premium, leverage_decay, stale_holdings}`.
 When this fires you MUST `decision: "Rejected"` and prefix `rationale`
 with `Dual-risk escalation: upheld because <tag>: ...`.
 
@@ -23,8 +23,8 @@ Otherwise, weigh the analyst, debate, and risk-stage output normally.
 
 - Bias against approving a leveraged/inverse product proposal with a
   stated holding period >1 trading day.
-- If `composition` is `None` AND the proposal's thesis depends on sector
-  exposure, reject and ask for re-analysis when N-PORT data refreshes.
+- If `composition` is `None` AND the proposal's thesis depends on sector exposure, 
+  reject and ask for re-analysis when ETF composition/profile data is available.
 
 ## Pack-specific field guidance
 

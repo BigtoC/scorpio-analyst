@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use scorpio_core::state::{FundamentalData, TradingState};
+use scorpio_core::state::{
+    AssetShape, BenchmarkSource, DerivedValuation, EtfDataAvailability, EtfValuation,
+    FundamentalData, PremiumBand, PremiumSnapshot, ScenarioValuation, TrackingStatus, TradingState,
+};
 use scorpio_reporters::json::{JsonReport, JsonReporter};
 use scorpio_reporters::{ReportContext, Reporter};
 use tempfile::tempdir;
@@ -160,4 +163,60 @@ async fn json_reporter_writes_v2_equity_shape_without_legacy_root_fields() {
         value["trading_state"].get("fundamental_metrics").is_none(),
         "v2 artifact must not reintroduce legacy root fundamental_metrics"
     );
+}
+
+#[tokio::test]
+async fn json_reporter_keeps_v2_for_additive_etf_profile_fields() {
+    let dir = tempdir().unwrap();
+    let mut state = TradingState::new("SOXX", "2026-05-30");
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(240.0),
+                market_price: 241.0,
+                bid: None,
+                ask: None,
+                premium_pct: Some(0.42),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: None,
+                as_of: Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            tracking_status: TrackingStatus::BenchmarkNameOnly,
+            official_benchmark_name: Some("NYSE Semiconductor Index".to_owned()),
+            official_benchmark_source: Some(BenchmarkSource::SecRiskReturn),
+            official_benchmark_metadata_age_days: Some(316),
+            options_gex: None,
+            category: Some("Technology".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability {
+                benchmark_resolved: false,
+                ..EtfDataAvailability::default()
+            },
+        }),
+    });
+    let state = Arc::new(state);
+    let ctx = test_ctx("SOXX", dir.path().to_path_buf());
+
+    JsonReporter
+        .emit(Arc::clone(&state), Arc::clone(&ctx))
+        .await
+        .expect("emit should succeed");
+
+    let path = std::fs::read_dir(dir.path())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let content = std::fs::read_to_string(path).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&content).expect("file must be valid json");
+
+    assert_eq!(value["schema_version"], 2);
+    let etf = &value["trading_state"]["equity"]["derived_valuation"]["scenario"]["etf"];
+    assert_eq!(etf["tracking_status"], "benchmark_name_only");
+    assert_eq!(etf["official_benchmark_name"], "NYSE Semiconductor Index");
+    assert_eq!(etf["flags"]["benchmark_resolved"], false);
 }

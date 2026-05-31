@@ -159,6 +159,7 @@ async fn build_graph_from_pack_entry_task_is_preflight() {
         &FredClient::for_test(),
         &dummy_yfinance(),
         dummy_sec_edgar(),
+        None,
         Arc::clone(&snapshot_store),
         &CompletionModelHandle::for_test(),
         &CompletionModelHandle::for_test(),

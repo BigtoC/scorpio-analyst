@@ -29,7 +29,6 @@
 pub mod adapters;
 pub mod alpha_vantage;
 pub mod entity;
-pub mod etf_benchmarks;
 pub mod finnhub;
 pub mod fred;
 mod provider_impls;
@@ -37,6 +36,7 @@ pub mod reddit;
 pub mod routing;
 pub mod sec_edgar;
 pub mod sec_edgar_nport;
+pub mod sec_risk_return;
 pub mod symbol;
 pub mod traits;
 pub mod transcript_cache;
