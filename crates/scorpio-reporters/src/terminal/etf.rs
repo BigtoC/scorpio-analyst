@@ -109,7 +109,7 @@ fn render_premium_block(
     let _ = writeln!(out, "Analysis Pack    ETF Baseline");
     let _ = writeln!(out, "Symbol           {}", state.asset_symbol);
     if let Some(cat) = etf.category.as_deref() {
-        let _ = writeln!(out, "Category         {cat}");
+        let _ = writeln!(out, "Category         {}", sanitize_display_text(cat));
     }
     let _ = writeln!(out, "Market Price     ${:.2}", etf.premium.market_price);
     match etf.premium.nav {
@@ -219,7 +219,12 @@ fn render_composition_block(out: &mut String, comp: &EtfComposition, policy: Ren
             .enumerate()
             .map(|(idx, h)| {
                 let label = h.ticker.as_deref().unwrap_or(&h.name);
-                format!("#{} {label}  {:.1}%", idx + 1, h.weight_pct)
+                format!(
+                    "#{} {}  {:.1}%",
+                    idx + 1,
+                    sanitize_display_text(label),
+                    h.weight_pct
+                )
             })
             .collect();
         let _ = writeln!(out, "{}", pieces.join(policy.holdings_separator()));
@@ -239,7 +244,7 @@ fn render_tracking_block(out: &mut String, tr: &TrackingError, policy: RenderPol
     let _ = writeln!(
         out,
         "{rule}{rule}{rule} TRACKING vs {} {rule}{rule}{rule}{rule}",
-        tr.benchmark_symbol
+        sanitize_display_text(&tr.benchmark_symbol)
     );
     let _ = writeln!(
         out,
@@ -254,7 +259,11 @@ fn render_official_benchmark_block(out: &mut String, etf: &EtfValuation) {
             .official_benchmark_source
             .map(benchmark_source_label)
             .unwrap_or("unknown source");
-        let _ = writeln!(out, "Official benchmark {name} ({source})");
+        let _ = writeln!(
+            out,
+            "Official benchmark {} ({source})",
+            sanitize_display_text(name)
+        );
     }
 }
 
@@ -310,9 +319,13 @@ fn render_sector_summary_block(out: &mut String, comp: Option<&EtfComposition>) 
     let top: Vec<String> = sorted
         .iter()
         .take(2)
-        .map(|s| format!("{}: {:.1}%", s.sector, s.weight_pct))
+        .map(|s| format!("{}: {:.1}%", sanitize_display_text(&s.sector), s.weight_pct))
         .collect();
     let _ = writeln!(out, "Sector tilt      {}", top.join("  |  "));
+}
+
+fn sanitize_display_text(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 fn render_trust_signals(out: &mut String, etf: &EtfValuation, policy: RenderPolicy) {

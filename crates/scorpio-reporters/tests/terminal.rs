@@ -481,6 +481,48 @@ fn etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracki
 }
 
 #[test]
+fn etf_terminal_strips_control_sequences_from_provider_text() {
+    use scorpio_core::state::{
+        AssetShape, BenchmarkSource, DerivedValuation, EtfDataAvailability, EtfValuation,
+        PremiumBand, PremiumSnapshot, ScenarioValuation, TrackingStatus,
+    };
+
+    let mut state = TradingState::new("SOXX".to_owned(), "2026-05-30".to_owned());
+    state.set_derived_valuation(DerivedValuation {
+        asset_shape: AssetShape::Fund,
+        scenario: ScenarioValuation::Etf(EtfValuation {
+            premium: PremiumSnapshot {
+                nav: Some(240.0),
+                market_price: 241.0,
+                bid: None,
+                ask: None,
+                premium_pct: Some(0.42),
+                category_band: PremiumBand::Normal,
+                bid_ask_spread_pct: None,
+                as_of: chrono::Utc::now(),
+            },
+            composition: None,
+            tracking: None,
+            tracking_status: TrackingStatus::BenchmarkNameOnly,
+            official_benchmark_name: Some(
+                "NYSE\u{001b}[31m Semiconductor\u{0007} Index".to_owned(),
+            ),
+            official_benchmark_source: Some(BenchmarkSource::SecRiskReturn),
+            official_benchmark_metadata_age_days: None,
+            options_gex: None,
+            category: Some("Technology".to_owned()),
+            leverage_factor: Some(1.0),
+            flags: EtfDataAvailability::default(),
+        }),
+    });
+
+    let rendered = render_final_report(&state);
+    assert!(!rendered.contains('\u{001b}'));
+    assert!(!rendered.contains('\u{0007}'));
+    assert!(rendered.contains("NYSE[31m Semiconductor Index"));
+}
+
+#[test]
 fn etf_terminal_renders_sec_nport_composition_source_with_report_and_filing_dates() {
     use scorpio_core::state::{
         AssetShape, DerivedValuation, EtfComposition, EtfCompositionSource, EtfDataAvailability,
