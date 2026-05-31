@@ -3,8 +3,9 @@
 use std::fmt::Write;
 
 use scorpio_core::state::{
-    EtfComposition, EtfValuation, GexSummary, HoldingsAgeBand, PremiumBand, ScenarioValuation,
-    StrikeGex, TrackingError, TradingState,
+    BenchmarkSource, EtfComposition, EtfCompositionSource, EtfValuation, GexSummary,
+    HoldingsAgeBand, PremiumBand, ScenarioValuation, StrikeGex, TrackingError, TrackingStatus,
+    TradingState,
 };
 
 /// Render policy. Picks glyphs + layout based on terminal capability.
@@ -85,16 +86,8 @@ pub(crate) fn render_etf_panel_with_policy(
     }
     render_cost_block(out, etf);
     render_sector_summary_block(out, etf.composition.as_ref());
-    match etf.tracking.as_ref() {
-        Some(tr) => render_tracking_block(out, tr, policy),
-        None => {
-            let _ = writeln!(
-                out,
-                "{} Tracking error skipped — benchmark not resolved",
-                policy.warn()
-            );
-        }
-    }
+    render_official_benchmark_block(out, etf);
+    render_tracking_status(out, etf, policy);
     render_trust_signals(out, etf, policy);
     if let Some(gex) = etf.options_gex.as_ref() {
         render_dealer_positioning_block(out, gex);
@@ -174,13 +167,49 @@ fn render_premium_block(
     }
 }
 
+fn composition_source_label(source: EtfCompositionSource) -> &'static str {
+    match source {
+        EtfCompositionSource::AlphaVantageEtfProfile => "Alpha Vantage ETF_PROFILE",
+        EtfCompositionSource::SecNport => "SEC N-PORT",
+    }
+}
+
+fn benchmark_source_label(source: BenchmarkSource) -> &'static str {
+    match source {
+        BenchmarkSource::SecRiskReturn => "SEC DERA Risk/Return Summary",
+        BenchmarkSource::SecNport => "SEC N-PORT",
+    }
+}
+
 fn render_composition_block(out: &mut String, comp: &EtfComposition, policy: RenderPolicy) {
     let rule = policy.rule_char();
     let _ = writeln!(
         out,
-        "{rule}{rule}{rule} COMPOSITION  (filing {}, {} days old) {rule}{rule}{rule}{rule}",
-        comp.holdings_filing_date, comp.holdings_age_days,
+        "{rule}{rule}{rule} COMPOSITION {rule}{rule}{rule}{rule}"
     );
+    let _ = writeln!(
+        out,
+        "Composition source  {}",
+        composition_source_label(comp.source)
+    );
+    match comp.source {
+        EtfCompositionSource::AlphaVantageEtfProfile => {
+            let _ = writeln!(
+                out,
+                "Provider snapshot  Alpha Vantage latest available profile"
+            );
+        }
+        EtfCompositionSource::SecNport => {
+            if let Some(report_date) = comp.holdings_report_date {
+                let _ = writeln!(out, "Report date      {report_date}");
+            }
+            let _ = writeln!(
+                out,
+                "Filing date      {} ({} days old)",
+                comp.holdings_filing_date, comp.holdings_age_days
+            );
+        }
+    }
     let _ = writeln!(out, "Top-10 weight    {:.1}%", comp.top10_concentration_pct);
     if !comp.top_holdings.is_empty() {
         let pieces: Vec<String> = comp
@@ -217,6 +246,31 @@ fn render_tracking_block(out: &mut String, tr: &TrackingError, policy: RenderPol
         "90d TE: {:.2}% annualised   |   1y TE: {:.2}% annualised  (n={} days)",
         tr.te_pct_90d, tr.te_pct_1y, tr.sample_days
     );
+}
+
+fn render_official_benchmark_block(out: &mut String, etf: &EtfValuation) {
+    if let Some(name) = etf.official_benchmark_name.as_deref() {
+        let source = etf
+            .official_benchmark_source
+            .map(benchmark_source_label)
+            .unwrap_or("unknown source");
+        let _ = writeln!(out, "Official benchmark {name} ({source})");
+    }
+}
+
+fn render_tracking_status(out: &mut String, etf: &EtfValuation, policy: RenderPolicy) {
+    match etf.tracking.as_ref() {
+        Some(tr) if etf.tracking_status == TrackingStatus::Computed => {
+            render_tracking_block(out, tr, policy)
+        }
+        _ => {
+            let _ = writeln!(
+                out,
+                "{} Tracking error unavailable - benchmark daily history not resolved",
+                policy.warn()
+            );
+        }
+    }
 }
 
 fn render_cost_block(out: &mut String, etf: &EtfValuation) {
@@ -269,11 +323,12 @@ fn render_trust_signals(out: &mut String, etf: &EtfValuation, policy: RenderPoli
     );
     let _ = writeln!(
         out,
-        "NAV: {}  Bid/Ask: {}  Holdings: {}  Benchmark: {}",
+        "NAV: {}  Bid/Ask: {}  Holdings: {}  Official benchmark: {}  Tracking history: {}",
         policy.check(etf.flags.nav_available),
         policy.check(etf.flags.bid_ask_available),
         policy.check(etf.flags.holdings_present),
-        policy.check(etf.flags.benchmark_resolved),
+        policy.check(etf.official_benchmark_name.is_some()),
+        policy.check(etf.tracking_status == TrackingStatus::Computed),
     );
     let _ = writeln!(
         out,
