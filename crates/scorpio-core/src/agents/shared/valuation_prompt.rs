@@ -88,6 +88,58 @@ fn build_etf_valuation_context(etf: &crate::state::EtfValuation) -> String {
             sanitize_untrusted_prompt_block(category)
         ));
     }
+    match etf.composition.as_ref() {
+        Some(comp) => {
+            let source = match comp.source {
+                crate::state::EtfCompositionSource::AlphaVantageEtfProfile => {
+                    "Alpha Vantage ETF_PROFILE"
+                }
+                crate::state::EtfCompositionSource::SecNport => "SEC N-PORT",
+            };
+            lines.push(format!(
+                "  - composition source: {source} (top-10 concentration {:.1}%)",
+                comp.top10_concentration_pct,
+            ));
+            if !comp.top_holdings.is_empty() {
+                let top: Vec<String> = comp
+                    .top_holdings
+                    .iter()
+                    .take(5)
+                    .map(|h| {
+                        format!(
+                            "{} {:.1}%",
+                            sanitize_untrusted_prompt_block(
+                                h.ticker.as_deref().unwrap_or(h.name.as_str())
+                            ),
+                            h.weight_pct,
+                        )
+                    })
+                    .collect();
+                lines.push(format!("  - top holdings: {}", top.join(", ")));
+            }
+            if !comp.sector_weights.is_empty() {
+                let secs: Vec<String> = comp
+                    .sector_weights
+                    .iter()
+                    .take(3)
+                    .map(|s| {
+                        format!(
+                            "{} {:.1}%",
+                            sanitize_untrusted_prompt_block(&s.sector),
+                            s.weight_pct,
+                        )
+                    })
+                    .collect();
+                lines.push(format!("  - sector tilt: {}", secs.join(", ")));
+            }
+            if let Some(er) = comp.expense_ratio_pct {
+                lines.push(format!("  - expense ratio: {:.2}%", er * 100.0));
+            }
+        }
+        None => lines.push(
+            "  - composition: unavailable; do not assert sector or factor exposure".to_owned(),
+        ),
+    }
     if let Some(name) = etf.official_benchmark_name.as_deref() {
         lines.push(format!(
             "  - official benchmark: {} ({})",
@@ -229,9 +281,9 @@ mod tests {
     use super::*;
     use crate::state::{
         AssetShape, BroadGex, CorporateEquityValuation, DcfValuation, DerivedValuation,
-        EtfDataAvailability, EtfValuation, EvEbitdaValuation, ForwardPeValuation, GexSummary,
-        PegValuation, PremiumBand, PremiumSnapshot, ScenarioValuation, StrikeGex, ThesisMemory,
-        VexSummary,
+        EtfComposition, EtfCompositionSource, EtfDataAvailability, EtfValuation, EvEbitdaValuation,
+        ForwardPeValuation, GexSummary, HoldingWeight, PegValuation, PremiumBand, PremiumSnapshot,
+        ScenarioValuation, SectorWeight, StrikeGex, ThesisMemory, VexSummary,
     };
 
     fn empty_state() -> TradingState {
@@ -301,6 +353,48 @@ mod tests {
         assert!(context.contains("tracking error: unavailable"));
         assert!(context.contains("benchmark daily history not resolved"));
         assert!(!context.contains("official benchmark:"));
+        // No composition on the minimal valuation → explicit unavailable line so
+        // the trader does not silently assume exposure.
+        assert!(context.contains("composition: unavailable"));
+    }
+
+    #[test]
+    fn etf_valuation_context_surfaces_composition_when_present() {
+        // Regression: the deterministic context must expose the composition so
+        // the trader does not claim it is absent when the ETF panel shows it.
+        let mut etf = minimal_etf_valuation();
+        etf.composition = Some(EtfComposition {
+            source: EtfCompositionSource::AlphaVantageEtfProfile,
+            top_holdings: vec![HoldingWeight {
+                cusip: None,
+                ticker: Some("NVDA".to_owned()),
+                name: "NVIDIA Corp".to_owned(),
+                weight_pct: 8.4,
+                value_usd: None,
+            }],
+            top10_concentration_pct: 8.4,
+            sector_weights: vec![SectorWeight {
+                sector: "Semiconductors".to_owned(),
+                weight_pct: 78.2,
+            }],
+            expense_ratio_pct: Some(0.0035),
+            aum_usd: None,
+            fund_family: None,
+            distribution_yield_ttm_pct: None,
+            holdings_filing_date: Utc::now().date_naive(),
+            holdings_report_date: None,
+            holdings_age_days: 0,
+            portfolio_turnover_pct: None,
+            inception_date: None,
+        });
+
+        let context = build_etf_valuation_context(&etf);
+        assert!(context.contains("composition source"));
+        assert!(context.contains("Alpha Vantage ETF_PROFILE"));
+        assert!(context.contains("NVDA"));
+        assert!(context.contains("Semiconductors"));
+        assert!(context.contains("expense ratio: 0.35%"));
+        assert!(!context.contains("composition: unavailable"));
     }
 
     #[test]
