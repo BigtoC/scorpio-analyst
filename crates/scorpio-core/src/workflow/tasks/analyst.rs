@@ -1629,8 +1629,11 @@ mod tests {
             })
         });
         let info = etf_fund_info_snapshot();
-        let today = chrono::Utc::now()
-            .date_naive()
+        // Use the market-local (Eastern) date so the live ETF fetch path runs
+        // deterministically — Utc::now().date_naive() diverges from the Eastern
+        // trading date in the early-UTC window and would trip the historical
+        // short-circuit, making the get_ohlcv expectation flaky.
+        let today = crate::market_time::market_local_date_eastern()
             .format("%Y-%m-%d")
             .to_string();
 
@@ -1740,8 +1743,11 @@ mod tests {
         });
 
         let info = etf_fund_info_snapshot();
-        let today = chrono::Utc::now()
-            .date_naive()
+        // Use the market-local (Eastern) date so the live ETF fetch path runs
+        // deterministically — Utc::now().date_naive() diverges from the Eastern
+        // trading date in the early-UTC window and would trip the historical
+        // short-circuit, making the get_ohlcv expectation flaky.
+        let today = crate::market_time::market_local_date_eastern()
             .format("%Y-%m-%d")
             .to_string();
         // The single get_ohlcv expectation (times(1), symbol == "SOXX") proves
