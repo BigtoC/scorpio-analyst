@@ -58,7 +58,7 @@
 - Modify: `crates/scorpio-core/src/state/derived.rs`
 - Modify: `crates/scorpio-core/tests/state_roundtrip.rs`
 
-- [ ] **Step 1: Write failing state tests**
+- [x] **Step 1: Write failing state tests**
 
 Add these tests near the ETF round-trip tests in `crates/scorpio-core/tests/state_roundtrip.rs`:
 
@@ -129,13 +129,13 @@ fn etf_composition_profile_quality_fields_roundtrip() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core legacy_etf_snapshot_without_profile_quality_fields_deserializes_with_defaults etf_composition_profile_quality_fields_roundtrip --no-fail-fast`
 
 Expected: FAIL with missing `EtfCompositionSource`, `TrackingStatus`, `official_benchmark_name`, `official_benchmark_source`, `holdings_report_date`, `portfolio_turnover_pct`, or `inception_date` symbols/fields.
 
-- [ ] **Step 3: Add state enums and fields**
+- [x] **Step 3: Add state enums and fields**
 
 Modify `crates/scorpio-core/src/state/derived.rs` by adding these enums near the existing ETF state types:
 
@@ -244,13 +244,13 @@ portfolio_turnover_pct: None,
 inception_date: None,
 ```
 
-- [ ] **Step 4: Run state tests to verify they pass**
+- [x] **Step 4: Run state tests to verify they pass**
 
 Run: `cargo nextest run -p scorpio-core legacy_etf_snapshot_without_profile_quality_fields_deserializes_with_defaults etf_composition_profile_quality_fields_roundtrip trading_state_with_etf_variant_roundtrips --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/scorpio-core/src/state/derived.rs crates/scorpio-core/tests/state_roundtrip.rs
@@ -265,7 +265,7 @@ git commit -m "feat(etf): add profile quality metadata to ETF state"
 - Modify: `crates/scorpio-core/src/data/alpha_vantage.rs`
 - Create: `crates/scorpio-core/tests/fixtures/alpha_vantage/soxx_etf_profile.json`
 
-- [ ] **Step 1: Add the fixture**
+- [x] **Step 1: Add the fixture**
 
 Create `crates/scorpio-core/tests/fixtures/alpha_vantage/soxx_etf_profile.json`:
 
@@ -289,7 +289,7 @@ Create `crates/scorpio-core/tests/fixtures/alpha_vantage/soxx_etf_profile.json`:
 }
 ```
 
-- [ ] **Step 2: Write failing parser tests**
+- [x] **Step 2: Write failing parser tests**
 
 Add this test module content inside the existing `#[cfg(test)] mod tests` in `crates/scorpio-core/src/data/alpha_vantage.rs`:
 
@@ -336,13 +336,13 @@ fn parse_etf_profile_classifies_provider_diagnostics_without_secret_text() {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core parse_etf_profile_converts_decimal_weights_and_profile_fields parse_etf_profile_classifies_provider_diagnostics_without_secret_text --no-fail-fast`
 
 Expected: FAIL with missing `EtfProfileFetch`, `EtfProfileData`, or `parse_etf_profile_response`.
 
-- [ ] **Step 4: Implement ETF profile types and parser**
+- [x] **Step 4: Implement ETF profile types and parser**
 
 Add these imports near the top of `crates/scorpio-core/src/data/alpha_vantage.rs`:
 
@@ -496,7 +496,7 @@ pub(crate) fn parse_etf_profile_response(raw: &str) -> Result<EtfProfileFetch, T
 }
 ```
 
-- [ ] **Step 5: Add fail-soft fetch method**
+- [x] **Step 5: Add fail-soft fetch method**
 
 Add this method to `impl AlphaVantageClient`:
 
@@ -547,13 +547,13 @@ pub async fn fetch_etf_profile(&self, symbol: &str) -> Result<EtfProfileFetch, T
 }
 ```
 
-- [ ] **Step 6: Run Alpha Vantage tests**
+- [x] **Step 6: Run Alpha Vantage tests**
 
 Run: `cargo nextest run -p scorpio-core parse_etf_profile_converts_decimal_weights_and_profile_fields parse_etf_profile_classifies_provider_diagnostics_without_secret_text --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/alpha_vantage.rs crates/scorpio-core/tests/fixtures/alpha_vantage/soxx_etf_profile.json
@@ -569,7 +569,7 @@ git commit -m "feat(data): parse Alpha Vantage ETF profiles"
 - Modify: `crates/scorpio-core/src/data/sec_edgar/nport.rs`
 - Modify: `crates/scorpio-core/src/valuation/etf/premium_discount.rs`
 
-- [ ] **Step 1: Write failing N-PORT tests**
+- [x] **Step 1: Write failing N-PORT tests**
 
 Add these tests to `crates/scorpio-core/src/data/sec_edgar/nport.rs`:
 
@@ -634,13 +634,13 @@ fn build_composition_uses_report_date_for_age_when_present() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core parse_nport_p_extracts_report_date_from_rep_pd_date parse_nport_p_ignores_na_designated_index_fields build_composition_uses_report_date_for_age_when_present --no-fail-fast`
 
 Expected: FAIL because `NPortHoldings.report_date` is missing and `build_composition` uses filing date only.
 
-- [ ] **Step 3: Add `report_date` to N-PORT state**
+- [x] **Step 3: Add `report_date` to N-PORT state**
 
 Modify `crates/scorpio-core/src/data/sec_edgar_nport.rs`:
 
@@ -658,7 +658,7 @@ pub struct NPortHoldings {
 
 Update every existing `NPortHoldings { ... }` construction to include `report_date: None` unless a test needs a real report date.
 
-- [ ] **Step 4: Parse report date and normalize benchmark values**
+- [x] **Step 4: Parse report date and normalize benchmark values**
 
 Modify `crates/scorpio-core/src/data/sec_edgar/nport.rs` so `parse_nport_p` tracks report date:
 
@@ -709,7 +709,7 @@ Some(NPortHoldings {
 })
 ```
 
-- [ ] **Step 5: Use report date in composition age**
+- [x] **Step 5: Use report date in composition age**
 
 Modify `build_composition` in `crates/scorpio-core/src/valuation/etf/premium_discount.rs`:
 
@@ -727,13 +727,13 @@ portfolio_turnover_pct: None,
 inception_date: None,
 ```
 
-- [ ] **Step 6: Run N-PORT and composition tests**
+- [x] **Step 6: Run N-PORT and composition tests**
 
 Run: `cargo nextest run -p scorpio-core parse_nport_p_extracts_report_date_from_rep_pd_date parse_nport_p_ignores_na_designated_index_fields build_composition_uses_report_date_for_age_when_present --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/sec_edgar_nport.rs crates/scorpio-core/src/data/sec_edgar/nport.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs
@@ -750,7 +750,7 @@ git commit -m "fix(etf): use N-PORT report dates for holdings age"
 - Modify: `crates/scorpio-core/src/data/mod.rs`
 - Create: `crates/scorpio-core/tests/fixtures/sec_risk_return/soxx_rr.tsv`
 
-- [ ] **Step 1: Create SOXX SEC risk/return fixture**
+- [x] **Step 1: Create SOXX SEC risk/return fixture**
 
 Create `crates/scorpio-core/tests/fixtures/sec_risk_return/soxx_rr.tsv`:
 
@@ -761,7 +761,7 @@ adsh	cik	series_id	class_id	filed	period	doc	stmt	line	tag	value
 0001193125-25-162603	1100663	S000004354	C000012084	2025-07-18	2025-06-30	soxx-485bpos.htm	RR	3	AvgAnnlRtrPct	NYSESemiconductorIndex
 ```
 
-- [ ] **Step 2: Write failing parser tests**
+- [x] **Step 2: Write failing parser tests**
 
 Create `crates/scorpio-core/src/data/sec_risk_return.rs` with these tests first:
 
@@ -811,13 +811,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core extracts_soxx_benchmark_from_strategy_text returns_none_when_series_class_do_not_match --no-fail-fast`
 
 Expected: FAIL with missing `RiskReturnLookup`, `parse_risk_return_tsv_for_benchmark`, and `BenchmarkMetadata` implementation.
 
-- [ ] **Step 4: Implement parser and metadata type**
+- [x] **Step 4: Implement parser and metadata type**
 
 Add this implementation above the tests in `crates/scorpio-core/src/data/sec_risk_return.rs`:
 
@@ -914,7 +914,7 @@ fn extract_index_name(text: &str) -> Option<String> {
 
 `parse_risk_return_tsv_for_benchmark` resolves the benchmark name from `extract_index_name` over the narrative text (the authoritative spaced name) and uses the structured `AvgAnnlRtrPct` index-member token only to corroborate — matching the spec's evidence hierarchy. (The structured token is unspaced, e.g. `NYSESemiconductorIndex`, so it cannot itself satisfy the spaced-name assertion in the Step 2 test.) Add a direct unit test calling `extract_index_name` with non-SOXX inline strategy strings — a well-formed `"...track the <Name> Index..."` case and an ambiguous one — asserting it returns the spaced name or `None`, never a mangled fragment. Inline `&str` inputs need no fixture file.
 
-- [ ] **Step 5: Preserve class ID from SEC MF ticker map**
+- [x] **Step 5: Preserve class ID from SEC MF ticker map**
 
 Modify `MfTickerEntry` in `crates/scorpio-core/src/data/sec_edgar/mod.rs`:
 
@@ -946,7 +946,7 @@ Update existing tests that construct `MfTickerEntry` so they include `class_id: 
 
 In `parse_company_tickers_mf`, extend the existing schema-position guard (which already asserts `fields[0] == "cik"`, `fields[1] == "seriesId"`, and `fields[3] == "symbol"`) to also assert `fields.get(2).map(String::as_str) == Some("classId")`. `class_id` is now load-bearing for the risk/return lookup, so a silent SEC column reorder must fail loudly here rather than mismatching every benchmark downstream.
 
-- [ ] **Step 6: Export the module**
+- [x] **Step 6: Export the module**
 
 Modify `crates/scorpio-core/src/data/mod.rs`:
 
@@ -954,13 +954,13 @@ Modify `crates/scorpio-core/src/data/mod.rs`:
 pub mod sec_risk_return;
 ```
 
-- [ ] **Step 7: Run SEC parser and MF ticker tests**
+- [x] **Step 7: Run SEC parser and MF ticker tests**
 
 Run: `cargo nextest run -p scorpio-core extracts_soxx_benchmark_from_strategy_text returns_none_when_series_class_do_not_match parse_company_tickers_mf_extracts_etf_to_entry_map --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/sec_risk_return.rs crates/scorpio-core/src/data/sec_edgar/mod.rs crates/scorpio-core/src/data/mod.rs crates/scorpio-core/tests/fixtures/sec_risk_return/soxx_rr.tsv
@@ -979,7 +979,7 @@ git commit -m "feat(data): extract official ETF benchmarks from SEC risk return 
 - Modify: `crates/scorpio-core/src/valuation/mod.rs`
 - Modify: `crates/scorpio-core/examples/etf_live_test.rs`
 
-- [ ] **Step 1: Write failing workflow tests**
+- [x] **Step 1: Write failing workflow tests**
 
 Replace the current static lookup tests in `crates/scorpio-core/src/workflow/tasks/analyst.rs` with:
 
@@ -1009,13 +1009,13 @@ fn benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup --no-fail-fast`
 
 Expected: FAIL because static fallback still resolves SOXX to `^SOX`.
 
-- [ ] **Step 3: Remove static module export and file**
+- [x] **Step 3: Remove static module export and file**
 
 Modify `crates/scorpio-core/src/data/mod.rs` by deleting:
 
@@ -1034,7 +1034,7 @@ Modify `crates/scorpio-core/src/data/yfinance/etf.rs` module docs by replacing t
 //! source can resolve daily benchmark history.
 ```
 
-- [ ] **Step 4: Replace benchmark symbol resolver with textual resolver**
+- [x] **Step 4: Replace benchmark symbol resolver with textual resolver**
 
 In `crates/scorpio-core/src/workflow/tasks/analyst.rs`, replace `resolve_benchmark_symbol` with:
 
@@ -1067,11 +1067,11 @@ fn benchmark_metadata_age_days(
 
 Remove calls that write fallback symbols into `FundInfo.stated_benchmark` before valuation.
 
-- [ ] **Step 5: Stop benchmark OHLCV fetches**
+- [x] **Step 5: Stop benchmark OHLCV fetches**
 
 In `fetch_valuation_inputs`, delete the block that calls `fetch_ohlcv_1y(yfinance, &bench)` for `etf_benchmark_ohlcv`, and remove the `etf_benchmark_ohlcv` field from the local `ValuationInputs` struct in this file. Step 6 removes the matching field from the crate-level `crate::valuation::ValuationInputs` and updates its remaining references.
 
-- [ ] **Step 6: Remove benchmark OHLCV from valuation carrier**
+- [x] **Step 6: Remove benchmark OHLCV from valuation carrier**
 
 Remove `etf_benchmark_ohlcv` from every remaining site. Delete the field from `crate::valuation::ValuationInputs` in `crates/scorpio-core/src/valuation/mod.rs`:
 
@@ -1081,17 +1081,17 @@ pub etf_benchmark_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 
 Then update the `derive_runtime_valuation` construction so it no longer supplies `etf_benchmark_ohlcv`; update the crate-level `ValuationInputs` construction in `crates/scorpio-core/src/valuation/equity/default.rs` (the `etf_benchmark_ohlcv: None` line) so it no longer sets the removed field; delete the now-dead `use super::tracking_error::compute_tracking_error;` import in `premium_discount.rs` once its call site is gone; and drop `etf_benchmark_ohlcv: None` from the `empty_inputs()` test helper in `premium_discount.rs` so the existing valuator tests still compile. Leaving any of these behind trips the repo's `-D warnings` gate (unused import) or fails to compile (`no field named etf_benchmark_ohlcv`).
 
-- [ ] **Step 7: Update example**
+- [x] **Step 7: Update example**
 
 Modify `crates/scorpio-core/examples/etf_live_test.rs` so it no longer imports or prints `etf_benchmarks`. Replace benchmark output with official benchmark fields from `EtfValuation` when present.
 
-- [ ] **Step 8: Run no-static-fallback tests**
+- [x] **Step 8: Run no-static-fallback tests**
 
 Run: `cargo nextest run -p scorpio-core benchmark_name_resolution_does_not_fall_back_to_static_symbol_lookup --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/mod.rs crates/scorpio-core/src/data/yfinance/etf.rs crates/scorpio-core/src/workflow/tasks/analyst.rs crates/scorpio-core/src/valuation/mod.rs crates/scorpio-core/examples/etf_live_test.rs
@@ -1112,7 +1112,7 @@ git commit -m "fix(etf): remove static benchmark symbol fallback"
 - Modify: `crates/scorpio-core/src/workflow/pipeline/mod.rs`
 - Modify: `crates/scorpio-core/src/app/mod.rs`
 
-- [ ] **Step 1: Write failing valuator tests**
+- [x] **Step 1: Write failing valuator tests**
 
 Add tests to `crates/scorpio-core/src/valuation/etf/premium_discount.rs`:
 
@@ -1220,13 +1220,13 @@ fn etf_valuator_renders_benchmark_name_only_status_when_official_name_exists() {
 }
 ```
 
-- [ ] **Step 2: Run valuator tests to verify they fail**
+- [x] **Step 2: Run valuator tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core etf_valuator_prefers_alpha_vantage_profile_composition etf_valuator_renders_benchmark_name_only_status_when_official_name_exists --no-fail-fast`
 
 Expected: FAIL because valuation inputs and merge logic do not yet carry Alpha Vantage profile or official benchmark metadata.
 
-- [ ] **Step 3: Extend valuation carrier**
+- [x] **Step 3: Extend valuation carrier**
 
 Modify `crates/scorpio-core/src/valuation/mod.rs`:
 
@@ -1236,7 +1236,7 @@ pub etf_official_benchmark:
     Option<(&'a crate::data::sec_risk_return::BenchmarkMetadata, Option<u32>)>,
 ```
 
-- [ ] **Step 4: Implement Alpha Vantage composition builder**
+- [x] **Step 4: Implement Alpha Vantage composition builder**
 
 Add this helper in `crates/scorpio-core/src/valuation/etf/premium_discount.rs`:
 
@@ -1280,7 +1280,7 @@ fn build_alpha_vantage_composition(
 }
 ```
 
-- [ ] **Step 5: Merge profile and benchmark metadata in valuator**
+- [x] **Step 5: Merge profile and benchmark metadata in valuator**
 
 Modify `EtfPremiumDiscountValuator::assess` composition selection:
 
@@ -1327,7 +1327,7 @@ official_benchmark_source,
 official_benchmark_metadata_age_days,
 ```
 
-- [ ] **Step 6: Thread Alpha Vantage into AnalystSyncTask**
+- [x] **Step 6: Thread Alpha Vantage into AnalystSyncTask**
 
 Modify `AnalystSyncTask` in `crates/scorpio-core/src/workflow/tasks/analyst.rs` to add:
 
@@ -1388,7 +1388,7 @@ pub fn with_yfinance_and_edgar(
 }
 ```
 
-- [ ] **Step 7: Thread Alpha Vantage through graph construction**
+- [x] **Step 7: Thread Alpha Vantage through graph construction**
 
 Update `build_graph_from_pack` and `runtime::build_graph` signatures to accept:
 
@@ -1437,7 +1437,7 @@ Changing the `runtime::build_graph` / `build_graph_from_pack` signatures breaks 
 
 Every site must compile after the signature change; do not leave the new parameter unused in `runtime::build_graph` or any caller passing the old arity.
 
-- [ ] **Step 8: Fetch ETF profile and official benchmark in valuation inputs**
+- [x] **Step 8: Fetch ETF profile and official benchmark in valuation inputs**
 
 Extend the local `ValuationInputs` struct in `workflow/tasks/analyst.rs`:
 
@@ -1513,7 +1513,7 @@ async fn etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists
 
 Include `etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists` in the Step 10 run command.
 
-- [ ] **Step 9: Pass new inputs to valuator**
+- [x] **Step 9: Pass new inputs to valuator**
 
 In `derive_runtime_valuation`, pass:
 
@@ -1525,13 +1525,13 @@ etf_official_benchmark: valuation_inputs
     .map(|(metadata, age_days)| (metadata, *age_days)),
 ```
 
-- [ ] **Step 10: Run valuation and wiring tests**
+- [x] **Step 10: Run valuation and wiring tests**
 
 Run: `cargo nextest run -p scorpio-core etf_valuator_prefers_alpha_vantage_profile_composition etf_valuator_renders_benchmark_name_only_status_when_official_name_exists etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add crates/scorpio-core/src/valuation/mod.rs crates/scorpio-core/src/valuation/etf/premium_discount.rs crates/scorpio-core/src/workflow/tasks/analyst.rs crates/scorpio-core/src/workflow/builder.rs crates/scorpio-core/src/workflow/pipeline/runtime.rs crates/scorpio-core/src/workflow/pipeline/mod.rs crates/scorpio-core/src/app/mod.rs
@@ -1549,7 +1549,7 @@ git commit -m "feat(etf): merge ETF profile and official benchmark metadata"
 
 > **Scope note (round-2 decision):** The *live* SEC DERA risk/return fetch is deferred to a follow-on plan. This task ships the parser, the `risk_return_zip_path` URL helper, and `fetch_risk_return_benchmark_for_ticker` as pure, unit-tested building blocks, but does **not** wire the live fetch into the valuation path — official benchmark names come from the N-PORT `stated_benchmark` fallback (Step 5). The bytes-returning seam, ZIP decode (member-by-header + size cap), and publication-lag-aware quarter selection are out of scope here.
 
-- [ ] **Step 1: Write failing SEC lookup tests**
+- [x] **Step 1: Write failing SEC lookup tests**
 
 Add this test to `crates/scorpio-core/src/data/sec_edgar/mod.rs`:
 
@@ -1588,13 +1588,13 @@ fn risk_return_zip_url_uses_official_sec_quarter_path() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo nextest run -p scorpio-core lookup_cik_mf_returns_class_id_for_risk_return_lookup risk_return_zip_url_uses_official_sec_quarter_path --no-fail-fast`
 
 Expected: FAIL until `class_id` and URL helper are implemented.
 
-- [ ] **Step 3: Implement risk/return quarter URL helper**
+- [x] **Step 3: Implement risk/return quarter URL helper**
 
 Add to `crates/scorpio-core/src/data/sec_risk_return.rs`:
 
@@ -1607,7 +1607,7 @@ pub fn risk_return_zip_path(quarter: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Add fetch orchestration seam**
+- [x] **Step 4: Add fetch orchestration seam**
 
 Use the existing `SecEdgarClient` HTTP seam rather than a second SEC client. Add a method in `crates/scorpio-core/src/data/sec_edgar/mod.rs`:
 
@@ -1638,7 +1638,7 @@ pub async fn fetch_risk_return_benchmark_for_ticker(
 
 **Live fetch deferred to a follow-on plan.** The live SEC DERA risk/return path needs machinery that is out of scope here: a bytes-returning `EdgarHttp` seam (the `String`-returning `get` cannot carry ZIP bytes), ZIP member selection *by header* (the archive is named `{quarter}_rr1.zip` but contains several TSVs, none named `_rr1`), a decompressed-size cap (zip-bomb guard), and publication-lag-aware quarter selection. In this plan, `fetch_risk_return_benchmark_for_ticker` and `risk_return_zip_path` are defined and unit-tested as pure building blocks but are **not** wired into the live valuation path; official benchmark names come solely from the N-PORT `stated_benchmark` fallback (Step 5). A follow-on plan adds the byte-fetch + decode seam and wires it ahead of the N-PORT fallback. Keep the pure TSV-parser tests unchanged.
 
-- [ ] **Step 5: Wire lookup into ETF valuation input fetch**
+- [x] **Step 5: Wire lookup into ETF valuation input fetch**
 
 In `fetch_valuation_inputs`, after N-PORT fetch, add:
 
@@ -1662,13 +1662,13 @@ if let Some((name, source, age)) = resolve_official_benchmark_name(None, etf_hol
 
 (Live quarter selection — `risk_return_quarter` and the prior-quarter fallback — moves to the follow-on plan with the byte-fetch seam. This plan keeps only the pure `risk_return_zip_path` helper and its `risk_return_zip_url_uses_official_sec_quarter_path` test.)
 
-- [ ] **Step 6: Run SEC wiring tests**
+- [x] **Step 6: Run SEC wiring tests**
 
 Run: `cargo nextest run -p scorpio-core lookup_cik_mf_returns_class_id_for_risk_return_lookup risk_return_zip_url_uses_official_sec_quarter_path --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scorpio-core/src/data/sec_risk_return.rs crates/scorpio-core/src/data/sec_edgar/mod.rs crates/scorpio-core/src/workflow/tasks/analyst.rs
@@ -1690,7 +1690,7 @@ git commit -m "feat(etf): fetch SEC risk return benchmark metadata"
 - Modify: `crates/scorpio-core/src/analysis_packs/etf/prompts/etf_runtime_contract.md`
 - Modify: `crates/scorpio-core/tests/prompt_bundle_regression_gate.rs`
 
-- [ ] **Step 1: Write failing valuation prompt test**
+- [x] **Step 1: Write failing valuation prompt test**
 
 Add this test to `crates/scorpio-core/src/agents/shared/valuation_prompt.rs` tests:
 
@@ -1711,13 +1711,13 @@ fn etf_valuation_context_renders_official_benchmark_and_unavailable_tracking() {
 }
 ```
 
-- [ ] **Step 2: Run prompt test to verify it fails**
+- [x] **Step 2: Run prompt test to verify it fails**
 
 Run: `cargo nextest run -p scorpio-core etf_valuation_context_renders_official_benchmark_and_unavailable_tracking --no-fail-fast`
 
 Expected: FAIL because prompt context does not render official benchmark or tracking status yet.
 
-- [ ] **Step 3: Update valuation context rendering**
+- [x] **Step 3: Update valuation context rendering**
 
 Modify `build_etf_valuation_context` in `crates/scorpio-core/src/agents/shared/valuation_prompt.rs`:
 
@@ -1758,7 +1758,7 @@ fn benchmark_source_label(source: Option<BenchmarkSource>) -> &'static str {
 }
 ```
 
-- [ ] **Step 4: Update ETF prompt markdown**
+- [x] **Step 4: Update ETF prompt markdown**
 
 Use these replacements:
 
@@ -1805,13 +1805,13 @@ status says benchmark daily history is unresolved.
 
 Update trader/aggressive/runtime text so tracking-error language says unavailable/reference-only unless `TrackingStatus::Computed` exists.
 
-- [ ] **Step 5: Run prompt and regression tests**
+- [x] **Step 5: Run prompt and regression tests**
 
 Run: `cargo nextest run -p scorpio-core etf_valuation_context_renders_official_benchmark_and_unavailable_tracking prompt_bundle_regression_gate --no-fail-fast`
 
 Expected: PASS after updating prompt golden fixtures if this repo stores prompt bundle snapshots.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/scorpio-core/src/agents/shared/valuation_prompt.rs crates/scorpio-core/src/analysis_packs/etf/prompts/etf_tracking_options_focus.md crates/scorpio-core/src/analysis_packs/etf/prompts/trader.md crates/scorpio-core/src/analysis_packs/etf/prompts/conservative_risk.md crates/scorpio-core/src/analysis_packs/etf/prompts/neutral_risk.md crates/scorpio-core/src/analysis_packs/etf/prompts/fund_manager.md crates/scorpio-core/src/analysis_packs/etf/prompts/aggressive_risk.md crates/scorpio-core/src/analysis_packs/etf/prompts/etf_runtime_contract.md crates/scorpio-core/tests/prompt_bundle_regression_gate.rs
@@ -1826,7 +1826,7 @@ git commit -m "fix(etf): make tracking prompts benchmark-name aware"
 - Modify: `crates/scorpio-reporters/src/terminal/etf.rs`
 - Modify: `crates/scorpio-reporters/tests/terminal.rs`
 
-- [ ] **Step 1: Write failing reporter test**
+- [x] **Step 1: Write failing reporter test**
 
 Add this test to `crates/scorpio-reporters/tests/terminal.rs`:
 
@@ -1898,13 +1898,13 @@ fn etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracki
 }
 ```
 
-- [ ] **Step 2: Run reporter test to verify it fails**
+- [x] **Step 2: Run reporter test to verify it fails**
 
 Run: `cargo nextest run -p scorpio-reporters etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracking --no-fail-fast`
 
 Expected: FAIL because current renderer only shows N-PORT filing date and benchmark-resolved trust signal.
 
-- [ ] **Step 3: Add source and benchmark labels**
+- [x] **Step 3: Add source and benchmark labels**
 
 Modify `crates/scorpio-reporters/src/terminal/etf.rs` imports to include:
 
@@ -1930,7 +1930,7 @@ fn benchmark_source_label(source: BenchmarkSource) -> &'static str {
 }
 ```
 
-- [ ] **Step 4: Render composition source and date semantics**
+- [x] **Step 4: Render composition source and date semantics**
 
 Update `render_composition_block`:
 
@@ -1955,7 +1955,7 @@ match comp.source {
 
 Keep the existing top holdings and staleness rows after the source/date block.
 
-- [ ] **Step 5: Render official benchmark and tracking status**
+- [x] **Step 5: Render official benchmark and tracking status**
 
 Add a benchmark block before tracking:
 
@@ -1995,7 +1995,7 @@ render_official_benchmark_block(out, etf);
 render_tracking_status(out, etf, policy);
 ```
 
-- [ ] **Step 6: Update trust signals**
+- [x] **Step 6: Update trust signals**
 
 Change trust signals from `Benchmark` to separate benchmark-name and tracking-history concepts:
 
@@ -2008,13 +2008,13 @@ policy.check(etf.official_benchmark_name.is_some()),
 policy.check(etf.tracking_status == TrackingStatus::Computed),
 ```
 
-- [ ] **Step 7: Run reporter tests**
+- [x] **Step 7: Run reporter tests**
 
 Run: `cargo nextest run -p scorpio-reporters etf_terminal_renders_profile_source_official_benchmark_and_unavailable_tracking --no-fail-fast`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/scorpio-reporters/src/terminal/etf.rs crates/scorpio-reporters/tests/terminal.rs
@@ -2032,7 +2032,7 @@ git commit -m "feat(report): render source-aware ETF benchmark status"
 - Modify: `crates/scorpio-reporters/src/json.rs`
 - Modify: `crates/scorpio-reporters/tests/json.rs`
 
-- [ ] **Step 1: Confirm JSON artifact schema version (stays v2)**
+- [x] **Step 1: Confirm JSON artifact schema version (stays v2)**
 
 If consumers treat additive ETF fields as backward-compatible, keep `JSON_REPORT_SCHEMA_VERSION` at `2` and add this comment in `crates/scorpio-reporters/src/json.rs` below the v2 note:
 
@@ -2044,7 +2044,7 @@ If consumers treat additive ETF fields as backward-compatible, keep `JSON_REPORT
 
 Keep `JSON_REPORT_SCHEMA_VERSION` at `2`: these ETF fields are additive and do not change the envelope shape or any existing field meaning, so old consumers ignore the new nested fields — the same additive-is-backward-compatible rule the Scope section applies to `THESIS_MEMORY_SCHEMA_VERSION`. Bump the version only when a future change removes or renames a field. Leave `crates/scorpio-reporters/tests/json.rs` asserting `2`.
 
-- [ ] **Step 2: Update architecture docs**
+- [x] **Step 2: Update architecture docs**
 
 In `docs/architecture/dependencies.md`, add Alpha Vantage `ETF_PROFILE` and SEC DERA risk/return datasets to the provider dependency table.
 
@@ -2052,13 +2052,13 @@ In `docs/architecture/equity-analysis-pack.md`, update ETF valuation sections so
 
 In `docs/architecture/config-and-errors.md`, add the Alpha Vantage key note that transcripts and ETF profile share `SCORPIO_ALPHA_VANTAGE_API_KEY`, and both fail open when the key is absent or throttled.
 
-- [ ] **Step 3: Run doc-adjacent tests**
+- [x] **Step 3: Run doc-adjacent tests**
 
 Run: `cargo nextest run -p scorpio-reporters json_reporter_writes_valid_file_with_correct_schema_version --no-fail-fast`
 
 Expected: PASS with the v2 assertion unchanged.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/architecture/dependencies.md docs/architecture/equity-analysis-pack.md docs/architecture/config-and-errors.md crates/scorpio-reporters/src/json.rs crates/scorpio-reporters/tests/json.rs
@@ -2072,31 +2072,31 @@ git commit -m "docs(etf): document profile and benchmark data sources"
 **Files:**
 - No code changes expected.
 
-- [ ] **Step 1: Run formatter check**
+- [x] **Step 1: Run formatter check**
 
 Run: `cargo fmt -- --check`
 
 Expected: PASS. If it fails, run `cargo fmt`, inspect the diff, and repeat `cargo fmt -- --check`.
 
-- [ ] **Step 2: Run clippy**
+- [x] **Step 2: Run clippy**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`
 
 Expected: PASS with zero warnings.
 
-- [ ] **Step 3: Run full nextest suite**
+- [x] **Step 3: Run full nextest suite**
 
 Run: `cargo nextest run --workspace --all-features --locked --no-fail-fast`
 
 Expected: PASS. If `protoc` is missing locally, install it with `brew install protobuf` on macOS before rerunning.
 
-- [ ] **Step 4: Optional smoke run**
+- [x] **Step 4: Optional smoke run**
 
 Run: `SCORPIO__LLM__MAX_DEBATE_ROUNDS=1 cargo run -p scorpio-cli -- analyze SOXX`
 
 Expected: terminal report shows `Official benchmark: NYSE Semiconductor Index (SEC DERA Risk/Return Summary)` when the SEC risk/return fixture/live data path is available, `Tracking error unavailable - benchmark daily history not resolved`, and no static `^SOX` benchmark fallback.
 
-- [ ] **Step 5: Commit any verification-only fixes**
+- [x] **Step 5: Commit any verification-only fixes**
 
 ```bash
 git add <files changed by verification fixes>
