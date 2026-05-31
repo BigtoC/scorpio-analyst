@@ -410,6 +410,8 @@ pub struct EtfDataAvailability {
     #[serde(default)]
     pub holdings_age_band: HoldingsAgeBand,
     #[serde(default)]
+    pub benchmark_resolved: bool,
+    #[serde(default)]
     pub options_chain_present: bool,
     #[serde(default)]
     pub expense_ratio_available: bool,
@@ -753,8 +755,28 @@ mod tests {
         assert!(!flags.bid_ask_available);
         assert!(!flags.holdings_present);
         assert_eq!(flags.holdings_age_band, HoldingsAgeBand::Unknown);
+        assert!(!flags.benchmark_resolved);
         assert!(!flags.options_chain_present);
         assert!(!flags.expense_ratio_available);
+    }
+
+    #[test]
+    fn legacy_etf_data_availability_with_benchmark_resolved_roundtrips() {
+        let json = r#"{
+            "nav_available": true,
+            "bid_ask_available": true,
+            "holdings_present": true,
+            "holdings_age_band": "fresh",
+            "benchmark_resolved": true,
+            "options_chain_present": false,
+            "expense_ratio_available": true
+        }"#;
+
+        let flags: EtfDataAvailability = serde_json::from_str(json).expect("legacy flags");
+        assert!(flags.benchmark_resolved);
+
+        let serialized = serde_json::to_string(&flags).expect("serialize flags");
+        assert!(serialized.contains("\"benchmark_resolved\":true"));
     }
 
     #[test]
