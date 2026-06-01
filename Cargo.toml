@@ -100,6 +100,7 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 # Self-update and release verification
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate", "rustls"] }
 semver = "1"
+sha1 = "0.11"
 sha2 = "0.11"
 hex = "0.4"
 

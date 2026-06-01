@@ -5211,6 +5211,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sqlx 0.9.0",
  "statrs",
  "tempfile",
