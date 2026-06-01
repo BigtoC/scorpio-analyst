@@ -4,6 +4,7 @@
 
 mod frame;
 mod messages;
+mod select;
 
 // ── OpenD frame constants ───────────────────────────────────────────────────
 // Constants are added alongside the modules that consume them so the per-task
