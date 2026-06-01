@@ -110,3 +110,32 @@ impl FutuConn for LiveFutuConn {
         Ok(body_buf)
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::config::FutuConfig;
+
+    /// Manual connectivity spike. Requires a running OpenD on 127.0.0.1:11111
+    /// with API encryption disabled. Prints the resolved state so the operator
+    /// can confirm JSON mode, the no-encryption handshake, and field casing.
+    /// Sanitize any captured payloads before turning them into fixtures.
+    #[tokio::test]
+    #[ignore = "requires live Futu OpenD on 127.0.0.1:11111 — run manually"]
+    async fn futu_live_account_positions_smoke() {
+        let cfg = FutuConfig {
+            enabled: true,
+            account_id: None,
+            timeout_secs: 10,
+        };
+        let client = FutuClient::new(&cfg);
+        let symbol = Symbol::parse("AAPL").unwrap();
+        let state = client.account_positions(Some(&symbol)).await;
+        // Print, don't hard-assert specific holdings — this is a capture spike.
+        println!("live account positions: {state:#?}");
+        match state {
+            AccountPositionsState::Available(_) | AccountPositionsState::Unavailable(_) => {}
+            AccountPositionsState::Disabled => panic!("enabled client must not be Disabled"),
+        }
+    }
+}

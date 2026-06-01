@@ -164,6 +164,17 @@ cargo run -p scorpio-cli -- analyze AAPL --no-terminal --json --output-dir /tmp/
 # Output: JSON file only, no terminal report
 ```
 
+### Futu positions (optional, read-only)
+
+Set `SCORPIO__FUTU__ENABLED=true` (default off) to let the Fund Manager see your
+current Real-account holdings for the analyzed symbol's market. Requires a local
+Futu OpenD reachable on `127.0.0.1:11111` with **API encryption disabled**. The
+integration is strictly read-only (positions only; never unlocks trading), but
+enabled account context is included in the Fund Manager prompt sent to your
+configured LLM provider and may be persisted in local run snapshots. When disabled
+or unavailable, account-position text is omitted from the Fund Manager prompt and
+analysis behaves exactly as before.
+
 ### Example report
 
 ![Final report — page 1](docs/images/report-example/final_report_1.png)
