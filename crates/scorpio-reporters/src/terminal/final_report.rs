@@ -1441,4 +1441,16 @@ mod tests {
         write_account_context(&mut out, &state);
         assert!(out.is_empty(), "disabled account positions render nothing");
     }
+
+    #[test]
+    fn account_context_line_renders_unavailable_reason() {
+        use scorpio_core::state::{AccountPositionsState, TradingState};
+        let mut state = TradingState::new("AAPL", "2026-04-23");
+        state.account_positions =
+            AccountPositionsState::Unavailable("OpenD unreachable".to_owned());
+        let mut out = String::new();
+        write_account_context(&mut out, &state);
+        assert!(out.contains("Account Positions"));
+        assert!(out.contains("unavailable (OpenD unreachable)"));
+    }
 }
