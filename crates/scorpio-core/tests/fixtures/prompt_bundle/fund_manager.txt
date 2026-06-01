@@ -14,7 +14,7 @@ Available inputs:
 - Sentiment data: see user context
 - News data: see user context
 - Past learnings: see user context
-- Account positions: 
+- Account positions:
 
 Current market price: 182.34
 
