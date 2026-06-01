@@ -184,6 +184,7 @@ pub(super) fn reset_cycle_outputs(state: &mut TradingState) {
     state.final_execution_status = None;
     state.audit_status = Default::default();
     state.audit_report = None;
+    state.account_positions = Default::default();
     // Thesis memory is reset here so stale thesis never leaks across reused
     // runs. Preflight will reload `prior_thesis` from the snapshot store for
     // the current canonical symbol; FundManagerTask will set `current_thesis`.
