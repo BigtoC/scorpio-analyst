@@ -29,6 +29,7 @@ fn resolve_timeout(secs: u64) -> Duration {
 
 /// Read-only Futu OpenD client. Infallible to construct — it only stores config
 /// (there is no fallible step; the socket connects lazily per fetch).
+#[derive(Debug)]
 pub struct FutuClient {
     enabled: bool,
     account_id: Option<u64>,
