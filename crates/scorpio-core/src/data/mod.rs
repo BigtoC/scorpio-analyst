@@ -53,6 +53,7 @@ pub use finnhub::{
     GetMarketNews, GetNews, SymbolArgs,
 };
 pub use fred::{FredClient, GetEconomicIndicators};
+pub use futu::FutuClient;
 pub use reddit::{RedditClient, RedditNewsProvider};
 pub use sec_edgar::{FilingHeader, SecEdgarClient};
 pub use sec_edgar_nport::{NPortHoldingRow, NPortHoldings, NPortSectorRow};
