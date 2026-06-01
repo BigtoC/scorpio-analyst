@@ -5,7 +5,8 @@ use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
 
 use scorpio_core::data::adapters::EnrichmentStatus;
 use scorpio_core::state::{
-    AgentTokenUsage, Decision, RiskReport, TokenUsageTracker, TradeAction, TradingState,
+    AccountPositionsState, AgentTokenUsage, Decision, RiskReport, TokenUsageTracker, TradeAction,
+    TradingState,
     auditor::{AuditStatus, Severity},
 };
 
@@ -19,6 +20,7 @@ pub(crate) fn format_final_report(state: &TradingState) -> String {
     write_trader_proposal(&mut out, state);
     write_analyst_snapshot(&mut out, state);
     write_enrichment_summary(&mut out, state);
+    write_account_context(&mut out, state);
     super::valuation::write_scenario_valuation(&mut out, state);
     super::coverage::write_data_quality_and_coverage(&mut out, state);
     super::provenance::write_evidence_provenance(&mut out, state);
@@ -493,6 +495,58 @@ fn write_enrichment_summary(out: &mut String, state: &TradingState) {
             "Consensus Estimates:".bold(),
             c.as_of_date,
         );
+    }
+}
+
+fn write_account_context(out: &mut String, state: &TradingState) {
+    match &state.account_positions {
+        // Disabled is the default for the vast majority of runs — render nothing
+        // to avoid noise (matches enrichment's skip-when-NotConfigured behavior).
+        AccountPositionsState::Disabled => {}
+        AccountPositionsState::Unavailable(reason) => {
+            section_header(out, "Account Positions");
+            let _ = writeln!(
+                out,
+                "{} unavailable ({reason})",
+                "Account Positions:".bold()
+            );
+        }
+        AccountPositionsState::Available(snapshot) => {
+            section_header(out, "Account Positions");
+            let held = state
+                .symbol
+                .as_ref()
+                .and_then(|s| snapshot.held_position(s));
+            let held_str = match held {
+                Some(p) => {
+                    let cost = p
+                        .cost_price
+                        .map_or_else(|| "n/a".to_owned(), |c| format!("{c:.2}"));
+                    let pl = p
+                        .pl_ratio
+                        .map_or_else(String::new, |r| format!(", P/L {:+.1}%", r * 100.0));
+                    format!("hold {} {} @ {cost}{pl}", p.code, p.qty.round() as i64)
+                }
+                None => "no holding in analyzed symbol".to_owned(),
+            };
+            let total = snapshot.total_market_value.map_or_else(
+                || "n/a".to_owned(),
+                |t| format!("{} {}", t.round() as i64, snapshot.currency),
+            );
+            let _ = writeln!(
+                out,
+                "{} ({}/{}): {held_str}; portfolio {total} / {} position{}",
+                "Account Positions".bold(),
+                snapshot.market,
+                snapshot.currency,
+                snapshot.positions.len(),
+                if snapshot.positions.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+            );
+        }
     }
 }
 
@@ -1345,5 +1399,46 @@ mod tests {
         let report = format_final_report(&state);
         assert!(report.contains("Quick-thinking model: gpt-4o-mini"));
         assert!(!report.contains("Deep-thinking model: gpt-4o-mini"));
+    }
+
+    #[test]
+    fn account_context_line_renders_available_held() {
+        use scorpio_core::state::{
+            AccountPosition, AccountPositionsState, AccountSnapshot, PositionSide, TradingState,
+        };
+        let mut state = TradingState::new("AAPL", "2026-04-23");
+        state.account_positions = AccountPositionsState::Available(AccountSnapshot {
+            account_label: Some("acct-abc123".to_owned()),
+            market: "US".to_owned(),
+            currency: "USD".to_owned(),
+            total_market_value: Some(250_000.0),
+            positions: vec![AccountPosition {
+                code: "US.AAPL".to_owned(),
+                name: "Apple".to_owned(),
+                qty: 100.0,
+                can_sell_qty: 100.0,
+                cost_price: Some(150.0),
+                current_price: Some(185.42),
+                market_value: Some(35_000.0),
+                pl_ratio: Some(0.236),
+                pl_val: Some(3_542.0),
+                currency: "USD".to_owned(),
+                side: PositionSide::Long,
+            }],
+        });
+        let mut out = String::new();
+        write_account_context(&mut out, &state);
+        assert!(out.contains("Account Positions"));
+        assert!(out.contains("AAPL"));
+        assert!(out.contains("1 position"));
+    }
+
+    #[test]
+    fn account_context_line_omitted_when_disabled() {
+        use scorpio_core::state::TradingState;
+        let state = TradingState::new("AAPL", "2026-04-23"); // Disabled by default
+        let mut out = String::new();
+        write_account_context(&mut out, &state);
+        assert!(out.is_empty(), "disabled account positions render nothing");
     }
 }

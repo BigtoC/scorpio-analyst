@@ -217,3 +217,30 @@ async fn json_reporter_keeps_v2_for_additive_etf_profile_fields() {
     assert_eq!(etf["official_benchmark_name"], "NYSE Semiconductor Index");
     assert_eq!(etf["flags"]["benchmark_resolved"], false);
 }
+
+#[tokio::test]
+async fn json_reporter_keeps_v2_with_account_positions_default_disabled() {
+    let dir = tempdir().unwrap();
+    let state = test_state("AAPL"); // account_positions defaults to Disabled
+    let ctx = test_ctx("AAPL", dir.path().to_path_buf());
+
+    JsonReporter
+        .emit(Arc::clone(&state), Arc::clone(&ctx))
+        .await
+        .expect("emit should succeed");
+
+    let path = std::fs::read_dir(dir.path())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let content = std::fs::read_to_string(path).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&content).expect("valid json");
+
+    assert_eq!(
+        value["schema_version"], 2,
+        "additive field must not bump schema"
+    );
+    assert_eq!(value["trading_state"]["account_positions"], "disabled");
+}
