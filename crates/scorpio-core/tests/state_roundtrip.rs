@@ -780,6 +780,7 @@ fn arb_trading_state() -> impl Strategy<Value = TradingState> {
                     etf_risk_free_rate_source: None,
                     audit_status: scorpio_core::state::auditor::AuditStatus::Disabled,
                     audit_report: None,
+                    account_positions: Default::default(),
                 }
             },
         )

@@ -182,6 +182,10 @@ pub struct TradingState {
     #[serde(default)]
     pub audit_report: Option<AuditorReport>,
 
+    /// Read-only account positions from local Futu OpenD (default `Disabled`).
+    #[serde(default)]
+    pub account_positions: crate::state::AccountPositionsState,
+
     /// Thesis memory: prior-run context + current-run capture.
     #[serde(default)]
     pub prior_thesis: Option<ThesisMemory>,
@@ -275,6 +279,8 @@ struct TradingStateWire {
     #[serde(default)]
     audit_report: Option<AuditorReport>,
     #[serde(default)]
+    account_positions: crate::state::AccountPositionsState,
+    #[serde(default)]
     prior_thesis: Option<ThesisMemory>,
     #[serde(default)]
     current_thesis: Option<ThesisMemory>,
@@ -330,6 +336,7 @@ impl From<TradingStateWire> for TradingState {
             final_execution_status: wire.final_execution_status,
             audit_status: wire.audit_status,
             audit_report: wire.audit_report,
+            account_positions: wire.account_positions,
             prior_thesis: wire.prior_thesis,
             current_thesis: wire.current_thesis,
             analysis_pack_name: wire.analysis_pack_name,
@@ -437,6 +444,7 @@ impl TradingState {
             final_execution_status: None,
             audit_status: AuditStatus::Disabled,
             audit_report: None,
+            account_positions: crate::state::AccountPositionsState::default(),
             prior_thesis: None,
             current_thesis: None,
             analysis_pack_name: None,

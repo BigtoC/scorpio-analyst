@@ -153,6 +153,22 @@ impl SnapshotStore {
             .with_context(|| "failed to run phase_snapshots migration")
             .map_err(TradingError::Config)?;
 
+        // Data-at-rest: phase snapshots may include read-only account-position
+        // holdings (Futu integration), so restrict the DB and its directory to
+        // the owning user. Best-effort — on filesystems without Unix permission
+        // support this is a no-op and exposure is a property of that mount.
+        #[cfg(unix)]
+        {
+            use std::fs::{Permissions, set_permissions};
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(parent) = resolved.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                let _ = set_permissions(parent, Permissions::from_mode(0o700));
+            }
+            let _ = set_permissions(&resolved, Permissions::from_mode(0o600));
+        }
+
         Ok(Self { pool })
     }
 
