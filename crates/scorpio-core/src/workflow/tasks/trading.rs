@@ -7,8 +7,9 @@ use tracing::info;
 
 use crate::{
     agents::{fund_manager::run_fund_manager, trader::run_trader},
-    config::Config,
-    state::{PhaseTokenUsage, ThesisMemory, auditor::AuditStatus},
+    config::{Config, FutuConfig},
+    data::futu::FutuClient,
+    state::{PhaseTokenUsage, ThesisMemory, TradingState, auditor::AuditStatus},
     workflow::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
@@ -117,6 +118,10 @@ impl Task for FundManagerTask {
         let phase_start = std::time::Instant::now();
         let mut state = load_state(Self::TASK_NAME, &context).await?;
 
+        // Lazily fetch read-only account positions (default-off). Failure is
+        // non-fatal and resolves to Unavailable; the Fund Manager always runs.
+        populate_account_positions(&mut state, &self.config.futu).await;
+
         let usage = run_fund_manager(&mut state, &self.config, &context)
             .await
             .map_err(|error| task_error(Self::TASK_NAME, "run_fund_manager failed", error))?;
@@ -189,11 +194,22 @@ impl Task for FundManagerTask {
     }
 }
 
+/// Populate `state.account_positions` from local Futu OpenD before the Fund
+/// Manager runs. Default-off and never fatal: disabled or any failure resolves
+/// to `Disabled`/`Unavailable` inside `FutuClient::account_positions`. Takes the
+/// `FutuConfig` it actually needs (not the whole `Config`) and is a standalone
+/// helper so the workflow assignment is directly testable without a live LLM.
+async fn populate_account_positions(state: &mut TradingState, futu: &FutuConfig) {
+    state.account_positions = FutuClient::new(futu)
+        .account_positions(state.symbol.as_ref())
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::workflow::tasks::runtime::task_error;
 
-    use super::TraderTask;
+    use super::{TraderTask, populate_account_positions};
 
     #[test]
     fn trader_task_identity_constants_drive_error_identity() {
@@ -206,5 +222,17 @@ mod tests {
             }
             other => panic!("expected TaskExecutionFailed, got: {other:?}"),
         }
+    }
+
+    /// Default (disabled) Futu config short-circuits before any socket activity:
+    /// the helper assigns `Disabled` without attempting to connect to OpenD.
+    #[tokio::test]
+    async fn populate_account_positions_disabled_by_default_yields_disabled_state() {
+        use crate::config::FutuConfig;
+        use crate::state::{AccountPositionsState, TradingState};
+
+        let mut state = TradingState::new("AAPL", "2026-03-15");
+        populate_account_positions(&mut state, &FutuConfig::default()).await;
+        assert_eq!(state.account_positions, AccountPositionsState::Disabled);
     }
 }
