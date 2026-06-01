@@ -372,4 +372,18 @@ mod tests {
         let half = append_leverage_warning_if_needed(base.clone(), Some(1.5));
         assert!(half.contains("1.5x"), "must substitute 1.5x: {half}");
     }
+
+    #[test]
+    fn etf_fund_manager_prompt_carries_account_positions_contract() {
+        let pack = resolve_pack(PackId::EtfBaseline);
+        let fm = pack.prompt_bundle.fund_manager.as_ref();
+        assert!(
+            fm.contains("{account_positions}"),
+            "ETF fund_manager prompt must keep the account_positions placeholder"
+        );
+        assert!(
+            fm.contains("sent to the configured LLM provider"),
+            "ETF fund_manager prompt must carry the account-positions instruction"
+        );
+    }
 }
