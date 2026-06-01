@@ -1190,6 +1190,7 @@ mod preflight_copilot_guard_tests {
             storage: Default::default(),
             rate_limits: Default::default(),
             enrichment: Default::default(),
+            futu: Default::default(),
             analysis_pack: "baseline".to_owned(),
         }
     }

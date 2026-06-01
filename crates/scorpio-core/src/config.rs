@@ -20,6 +20,8 @@ pub struct Config {
     pub rate_limits: RateLimitConfig,
     #[serde(default)]
     pub enrichment: DataEnrichmentConfig,
+    #[serde(default)]
+    pub futu: FutuConfig,
     /// Selected analysis pack identifier (default: "baseline").
     /// Override: `SCORPIO__ANALYSIS_PACK=baseline`
     #[serde(default = "default_analysis_pack")]
@@ -66,6 +68,44 @@ impl Default for DataEnrichmentConfig {
             enable_event_news: false,
             max_evidence_age_hours: default_max_evidence_age_hours(),
             fetch_timeout_secs: default_enrichment_fetch_timeout_secs(),
+        }
+    }
+}
+
+/// Read-only Futu OpenD position-lookup configuration.
+///
+/// Default-off, following the [`DataEnrichmentConfig`] precedent: with
+/// `enabled = false` (the default) there is no socket activity and the Fund
+/// Manager behaves exactly as before. The OpenD endpoint is hardcoded to
+/// `127.0.0.1:11111` and the trading environment is hardcoded to Real in
+/// code — there is intentionally no `host`, `port`, or `trd_env` field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FutuConfig {
+    /// Enable the read-only OpenD position lookup.
+    /// Env: `SCORPIO__FUTU__ENABLED` (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Explicit Real-account id override (must be a Real account). When unset,
+    /// the account is chosen by market-match.
+    /// Env: `SCORPIO__FUTU__ACCOUNT_ID`.
+    #[serde(default)]
+    pub account_id: Option<u64>,
+    /// One-shot connect→init→query→close timeout (seconds).
+    /// Env: `SCORPIO__FUTU__TIMEOUT_SECS` (default `5`).
+    #[serde(default = "default_futu_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_futu_timeout() -> u64 {
+    5
+}
+
+impl Default for FutuConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            timeout_secs: default_futu_timeout(),
         }
     }
 }
@@ -999,6 +1039,7 @@ mod tests {
             storage: StorageConfig::default(),
             rate_limits: RateLimitConfig::default(),
             enrichment: DataEnrichmentConfig::default(),
+            futu: FutuConfig::default(),
             analysis_pack: default_analysis_pack(),
         }
     }
@@ -1579,6 +1620,33 @@ fetch_timeout_secs = 0
         }
         let cfg = result.expect("config should load with max_evidence_age_hours override");
         assert_eq!(cfg.enrichment.max_evidence_age_hours, 24);
+    }
+
+    #[test]
+    fn futu_config_defaults_are_disabled_with_five_second_timeout() {
+        let cfg = FutuConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.account_id, None);
+        assert_eq!(cfg.timeout_secs, 5);
+    }
+
+    #[test]
+    fn futu_env_override_enables_and_sets_timeout() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        // SAFETY: serialized by ENV_LOCK; no other thread mutates env vars concurrently.
+        unsafe {
+            std::env::set_var("SCORPIO__FUTU__ENABLED", "true");
+            std::env::set_var("SCORPIO__FUTU__TIMEOUT_SECS", "9");
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__FUTU__ENABLED");
+            std::env::remove_var("SCORPIO__FUTU__TIMEOUT_SECS");
+        }
+        let cfg = result.expect("config should load with futu overrides");
+        assert!(cfg.futu.enabled);
+        assert_eq!(cfg.futu.timeout_secs, 9);
     }
 
     #[test]

@@ -64,6 +64,7 @@ fn sample_config() -> Config {
         providers: sample_providers_config(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     }
 }

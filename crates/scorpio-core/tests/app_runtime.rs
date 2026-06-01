@@ -12,8 +12,8 @@ mod workflow_pipeline_make_pipeline;
 
 use scorpio_core::app::AnalysisRuntime;
 use scorpio_core::config::{
-    ApiConfig, Config, DataEnrichmentConfig, LlmConfig, ProvidersConfig, RateLimitConfig,
-    StorageConfig, TradingConfig,
+    ApiConfig, Config, DataEnrichmentConfig, FutuConfig, LlmConfig, ProvidersConfig,
+    RateLimitConfig, StorageConfig, TradingConfig,
 };
 use scorpio_core::state::TradingState;
 use scorpio_core::workflow::SnapshotStore;
@@ -183,6 +183,7 @@ async fn new_wraps_snapshot_store_initialization_failures() {
         },
         rate_limits: RateLimitConfig::default(),
         enrichment: DataEnrichmentConfig::default(),
+        futu: FutuConfig::default(),
         analysis_pack: "baseline".to_owned(),
     };
 
@@ -232,6 +233,7 @@ async fn new_continues_when_transcript_cache_initialization_fails() {
         },
         rate_limits: RateLimitConfig::default(),
         enrichment: DataEnrichmentConfig::default(),
+        futu: FutuConfig::default(),
         analysis_pack: "baseline".to_owned(),
     };
 
