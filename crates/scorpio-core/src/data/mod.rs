@@ -31,6 +31,7 @@ pub mod alpha_vantage;
 pub mod entity;
 pub mod finnhub;
 pub mod fred;
+pub mod futu;
 mod provider_impls;
 pub mod reddit;
 pub mod routing;
