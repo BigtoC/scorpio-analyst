@@ -183,4 +183,16 @@ mod tests {
         assert!(validate_response_header(&header, PROTO_GET_ACC_LIST, 8).is_err());
         assert!(validate_response_header(&header, PROTO_GET_ACC_LIST, 7).is_ok());
     }
+
+    #[test]
+    fn response_validation_rejects_unexpected_format_or_version() {
+        let frame = encode_frame(PROTO_INIT_CONNECT, 1, b"{}");
+        let mut wrong_fmt = decode_header(&frame[..FUTU_HEADER_LEN]).unwrap();
+        wrong_fmt.proto_fmt = PROTO_FMT_JSON + 1; // e.g. protobuf
+        assert!(validate_response_header(&wrong_fmt, PROTO_INIT_CONNECT, 1).is_err());
+
+        let mut wrong_ver = decode_header(&frame[..FUTU_HEADER_LEN]).unwrap();
+        wrong_ver.proto_ver = PROTO_VER + 9;
+        assert!(validate_response_header(&wrong_ver, PROTO_INIT_CONNECT, 1).is_err());
+    }
 }

@@ -129,13 +129,20 @@ impl SnapshotStore {
     pub async fn new(db_path: Option<&Path>) -> Result<Self, TradingError> {
         let resolved = resolve_db_path(db_path)?;
 
-        // Ensure the parent directory exists.
+        // Ensure the parent directory exists. Track whether we created it so the
+        // data-at-rest hardening below only narrows a directory this store owns,
+        // never a pre-existing (possibly shared) operator-configured directory.
+        let mut created_dir: Option<std::path::PathBuf> = None;
         if let Some(parent) = resolved.parent()
             && !parent.as_os_str().is_empty()
         {
+            let pre_existed = parent.exists();
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory: {}", parent.display()))
                 .map_err(TradingError::Config)?;
+            if !pre_existed {
+                created_dir = Some(parent.to_path_buf());
+            }
         }
 
         let db_url = format!("sqlite://{}?mode=rwc", resolved.display());
@@ -154,19 +161,22 @@ impl SnapshotStore {
             .map_err(TradingError::Config)?;
 
         // Data-at-rest: phase snapshots may include read-only account-position
-        // holdings (Futu integration), so restrict the DB and its directory to
-        // the owning user. Best-effort — on filesystems without Unix permission
-        // support this is a no-op and exposure is a property of that mount.
+        // holdings (Futu integration), so restrict the DB file to the owning
+        // user. Best-effort — on filesystems without Unix permission support this
+        // is a no-op and exposure is a property of that mount.
         #[cfg(unix)]
         {
             use std::fs::{Permissions, set_permissions};
             use std::os::unix::fs::PermissionsExt;
-            if let Some(parent) = resolved.parent()
-                && !parent.as_os_str().is_empty()
-            {
-                let _ = set_permissions(parent, Permissions::from_mode(0o700));
-            }
+            // The DB file holds the holdings — always restrict it.
             let _ = set_permissions(&resolved, Permissions::from_mode(0o600));
+            // Only tighten a directory this store just created (e.g. the default
+            // ~/.scorpio-analyst data dir on first run, which also covers any
+            // SQLite -wal/-shm sidecars). Never mutate a pre-existing,
+            // operator-configured directory that may be shared with other files.
+            if let Some(dir) = &created_dir {
+                let _ = set_permissions(dir, Permissions::from_mode(0o700));
+            }
         }
 
         Ok(Self { pool })

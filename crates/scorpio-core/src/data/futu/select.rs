@@ -59,9 +59,18 @@ pub(crate) fn assemble_snapshot(
         .unwrap_or_else(|| market_default_currency(market).to_owned());
 
     let mut total = 0.0;
+    // Summing market value only makes sense within a single currency. The account
+    // is market-matched, so rows are expected to share one currency; if OpenD ever
+    // returns a mixed-currency list (e.g. a cross-listed name), drop the total
+    // rather than report a meaningless sum under one currency label.
+    let mut uniform_currency = true;
     let positions: Vec<AccountPosition> = rows
         .into_iter()
         .map(|r| {
+            let row_currency = currency_label(r.currency);
+            if row_currency != currency {
+                uniform_currency = false;
+            }
             total += r.val.unwrap_or(0.0);
             AccountPosition {
                 code: normalize_code(&r.code),
@@ -76,7 +85,7 @@ pub(crate) fn assemble_snapshot(
                 // domain stores pl_ratio as a fraction (0.088), so divide by 100.
                 pl_ratio: r.pl_ratio.map(|p| p / 100.0),
                 pl_val: r.pl_val,
-                currency: currency_label(r.currency),
+                currency: row_currency,
                 side: position_side(r.position_side),
             }
         })
@@ -86,7 +95,7 @@ pub(crate) fn assemble_snapshot(
         account_label: Some(redact_account_id(acc_id)),
         market: trd_market_label(market).to_owned(),
         currency,
-        total_market_value: Some(total),
+        total_market_value: uniform_currency.then_some(total),
         positions,
     }
 }
@@ -129,8 +138,10 @@ fn trd_market_label(market: i32) -> &'static str {
     }
 }
 
-/// Non-reversible short label for an account id (first 6 hex of SHA-1). Keeps
-/// raw account ids out of persisted state and reports.
+/// Redacted short label for an account id (first 6 hex of SHA-1). Its purpose is
+/// to keep the raw `accID` out of persisted state and reports — not to be a
+/// cryptographic privacy boundary: account ids are a small enumerable space, so
+/// the label is recoverable by brute force and must not be treated as anonymized.
 fn redact_account_id(acc_id: u64) -> String {
     let mut hasher = Sha1::new();
     hasher.update(acc_id.to_le_bytes());
@@ -205,6 +216,13 @@ mod tests {
     }
 
     #[test]
+    fn account_id_override_real_but_unauthorized_for_market_is_unavailable() {
+        // Real account, but only authorized for HK (1), not the requested US (2).
+        let accounts = vec![acc(9, TRD_ENV_REAL, &[1])];
+        assert!(select_account(&accounts, TRD_MARKET_US, Some(9)).is_err());
+    }
+
+    #[test]
     fn no_matching_real_account_is_unavailable() {
         let accounts = vec![acc(1, 0, &[TRD_MARKET_US])]; // only paper
         let err = select_account(&accounts, TRD_MARKET_US, None).unwrap_err();
@@ -245,6 +263,20 @@ mod tests {
         let snap = assemble_snapshot(1, vec![row], TRD_MARKET_US);
         assert_eq!(snap.positions[0].side, crate::state::PositionSide::Short);
         assert_eq!(snap.positions[0].currency, "USD");
+    }
+
+    #[test]
+    fn assemble_snapshot_drops_total_when_currencies_are_mixed() {
+        // USD (2) + HKD (1) in one list — summing under a single label is wrong,
+        // so total_market_value is dropped while per-row currencies are preserved.
+        let rows = vec![
+            position("US.AAPL", 18_542.0, 2),
+            position("HK.0700", 12_000.0, 1),
+        ];
+        let snap = assemble_snapshot(1, rows, TRD_MARKET_US);
+        assert_eq!(snap.total_market_value, None);
+        assert_eq!(snap.positions[0].currency, "USD");
+        assert_eq!(snap.positions[1].currency, "HKD");
     }
 
     #[test]

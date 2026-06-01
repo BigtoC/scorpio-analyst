@@ -280,6 +280,54 @@ async fn snapshot_db_file_is_user_only_readable() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_store_leaves_preexisting_parent_dir_permissions_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // The store must not narrow a pre-existing (possibly shared) operator-
+    // configured directory as a side effect of opening — only the DB file.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let db_path = dir.path().join("preexisting.db");
+
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("store should open");
+    drop(store);
+
+    let dir_mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        dir_mode, 0o755,
+        "pre-existing parent dir must be left untouched, got {dir_mode:o}"
+    );
+    let file_mode = std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(file_mode, 0o600, "DB file must still be user-only");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_store_tightens_a_directory_it_creates() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A directory the store creates (e.g. the default data dir on first run) is
+    // narrowed to user-only, which also covers any SQLite -wal/-shm sidecars.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let created = dir.path().join("scorpio-data"); // does not exist yet
+    let db_path = created.join("snap.db");
+
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("store should open");
+    drop(store);
+
+    let dir_mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        dir_mode, 0o700,
+        "a store-created directory must be user-only, got {dir_mode:o}"
+    );
+}
+
 #[tokio::test]
 async fn account_positions_survive_snapshot_round_trip() {
     use crate::state::{AccountPosition, AccountPositionsState, AccountSnapshot, PositionSide};

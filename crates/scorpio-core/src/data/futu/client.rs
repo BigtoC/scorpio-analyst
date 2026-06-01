@@ -15,6 +15,18 @@ use crate::config::FutuConfig;
 use crate::domain::Symbol;
 use crate::state::AccountPositionsState;
 
+/// Lower bound for the one-shot lookup timeout. `timeout_secs = 0` would make
+/// every enabled lookup time out instantly (a silent footgun), so it is floored.
+const FUTU_TIMEOUT_MIN_SECS: u64 = 1;
+/// Upper bound: a misconfigured/slowloris OpenD must not stall the analysis past
+/// a hard ceiling, even if the operator sets a very large `timeout_secs`.
+const FUTU_TIMEOUT_MAX_SECS: u64 = 30;
+
+/// Clamp the configured timeout into `[MIN, MAX]` seconds. Pure and testable.
+fn resolve_timeout(secs: u64) -> Duration {
+    Duration::from_secs(secs.clamp(FUTU_TIMEOUT_MIN_SECS, FUTU_TIMEOUT_MAX_SECS))
+}
+
 /// Read-only Futu OpenD client. Infallible to construct — it only stores config
 /// (there is no fallible step; the socket connects lazily per fetch).
 pub struct FutuClient {
@@ -29,7 +41,7 @@ impl FutuClient {
         Self {
             enabled: config.enabled,
             account_id: config.account_id,
-            timeout: Duration::from_secs(config.timeout_secs),
+            timeout: resolve_timeout(config.timeout_secs),
         }
     }
 
@@ -112,6 +124,85 @@ impl FutuConn for LiveFutuConn {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_timeout_clamps_zero_up_and_huge_down() {
+        assert_eq!(
+            resolve_timeout(0),
+            Duration::from_secs(FUTU_TIMEOUT_MIN_SECS)
+        );
+        assert_eq!(resolve_timeout(5), Duration::from_secs(5));
+        assert_eq!(
+            resolve_timeout(u64::MAX),
+            Duration::from_secs(FUTU_TIMEOUT_MAX_SECS)
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_client_resolves_to_disabled_without_a_socket() {
+        let client = FutuClient::new(&FutuConfig::default());
+        let symbol = Symbol::parse("AAPL").unwrap();
+        assert_eq!(
+            client.account_positions(Some(&symbol)).await,
+            AccountPositionsState::Disabled
+        );
+    }
+
+    #[tokio::test]
+    async fn enabled_client_without_typed_symbol_is_unavailable_without_a_socket() {
+        let cfg = FutuConfig {
+            enabled: true,
+            account_id: None,
+            timeout_secs: 5,
+        };
+        let client = FutuClient::new(&cfg);
+        match client.account_positions(None).await {
+            AccountPositionsState::Unavailable(reason) => {
+                assert!(reason.contains("no typed symbol"), "got: {reason}")
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    // Covers the one production path the FutuConn trait seam does not: the live
+    // socket frame I/O loop (write -> read header -> decode/validate -> read body
+    // -> verify SHA-1). A loopback server speaks the frame protocol back.
+    #[tokio::test]
+    async fn live_conn_request_round_trips_a_framed_response_over_a_socket() {
+        // `encode_frame` and `FUTU_HEADER_LEN` come from client's top-level
+        // `use super::frame::{...}` via this module's `use super::*`.
+        use crate::data::futu::PROTO_INIT_CONNECT;
+        use tokio::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut hdr = [0u8; FUTU_HEADER_LEN];
+            sock.read_exact(&mut hdr).await.unwrap();
+            let body_len = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]) as usize;
+            let mut req_body = vec![0u8; body_len];
+            sock.read_exact(&mut req_body).await.unwrap();
+            // Respond with serial = 1 (LiveFutuConn's first serial) and matching proto.
+            let resp = encode_frame(PROTO_INIT_CONNECT, 1, br#"{"retType":0}"#);
+            sock.write_all(&resp).await.unwrap();
+        });
+
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let mut conn = LiveFutuConn::new(stream);
+        let body = conn
+            .request(PROTO_INIT_CONNECT, br#"{"c2s":{}}"#.to_vec())
+            .await
+            .expect("request should round-trip");
+        assert_eq!(body, br#"{"retType":0}"#);
+        server.await.unwrap();
+    }
+}
+
+#[cfg(test)]
 mod live_tests {
     use super::*;
     use crate::config::FutuConfig;
@@ -131,10 +222,18 @@ mod live_tests {
         let client = FutuClient::new(&cfg);
         let symbol = Symbol::parse("AAPL").unwrap();
         let state = client.account_positions(Some(&symbol)).await;
-        // Print, don't hard-assert specific holdings — this is a capture spike.
-        println!("live account positions: {state:#?}");
-        match state {
-            AccountPositionsState::Available(_) | AccountPositionsState::Unavailable(_) => {}
+        // Print only the resolved shape — never raw holdings — mirroring the
+        // "names + types, no values" discipline of examples/futu_opend_smoke.rs.
+        match &state {
+            AccountPositionsState::Available(snap) => println!(
+                "live: Available (market {}, {}, {} position(s))",
+                snap.market,
+                snap.currency,
+                snap.positions.len()
+            ),
+            AccountPositionsState::Unavailable(reason) => {
+                println!("live: Unavailable ({reason})")
+            }
             AccountPositionsState::Disabled => panic!("enabled client must not be Disabled"),
         }
     }

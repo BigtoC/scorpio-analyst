@@ -19,11 +19,9 @@ use messages::{
 };
 use select::{assemble_snapshot, market_for_symbol, select_account};
 
-// ── OpenD frame constants ───────────────────────────────────────────────────
-// Constants are added alongside the modules that consume them so the per-task
-// `-D warnings` gate stays green: handshake/market constants land in Task 6
-// (messages), and `ENDPOINT` in Task 8 (client). Defining them all here now
-// would trip `dead_code` until those consumers exist.
+// ── OpenD protocol constants ────────────────────────────────────────────────
+// Grouped here and consumed by the submodules: frame-header fields by `frame`,
+// handshake/market codes by `messages`, and `ENDPOINT` by `client`.
 /// `nProtoFmtType` = 1 (JSON body).
 pub(crate) const PROTO_FMT_JSON: u8 = 1;
 /// `nProtoVer` = 0.
