@@ -61,7 +61,7 @@ pub async fn prompt_text_with_retry(
                 rate_limit_wait_ms,
             }),
             Ok(Err(err)) => {
-                if should_retry_text_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient text prompt error, will retry");
                     continue;
                 }
@@ -161,7 +161,7 @@ where
                 Err(other) => Err(other),
             },
             Ok(Err(err)) => {
-                if should_retry_text_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient validated text prompt error, will retry");
                     continue;
                 }
@@ -189,10 +189,6 @@ where
 // ────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
-
-fn should_retry_text_error(err: &TradingError) -> bool {
-    should_retry_trading_error(err)
-}
 
 fn text_timeout_error(started_at: Instant, agent: &LlmAgent, attempt: u32) -> TradingError {
     TradingError::NetworkTimeout {

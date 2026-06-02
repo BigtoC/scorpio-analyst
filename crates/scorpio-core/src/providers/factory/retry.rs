@@ -166,15 +166,13 @@ where
             attempt_budget.timeout,
             agent.prompt_details(&current_prompt),
         )
-            .await
+        .await
         {
             Ok(Ok(response)) => match validator(&response.output) {
-                Ok(()) => {
-                    Ok(RetryOutcome {
-                        result: response,
-                        rate_limit_wait_ms,
-                    })
-                }
+                Ok(()) => Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                }),
                 Err(TradingError::SchemaViolation { message }) => {
                     if attempt < policy.max_retries {
                         warn!(
@@ -212,7 +210,7 @@ where
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
@@ -260,12 +258,10 @@ where
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
         return match tokio::time::timeout(attempt_budget.timeout, call_fn()).await {
-            Ok(Ok(response)) => {
-                Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                })
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
                 if attempt < policy.max_retries
                     && let Some(error) = transient_prompt_error_summary(&err)
@@ -287,7 +283,7 @@ where
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     // The loop runs for `0..=max_retries` iterations. Every iteration either
@@ -405,14 +401,12 @@ pub(crate) async fn chat_with_retry_details_budget(
             attempt_budget.timeout,
             agent.chat_details(prompt, chat_history),
         )
-            .await
+        .await
         {
-            Ok(Ok(response)) => {
-                Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                })
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
                 // Restore caller-owned history on any failed attempt before retrying or returning.
                 chat_history.truncate(initial_len);
@@ -438,7 +432,7 @@ pub(crate) async fn chat_with_retry_details_budget(
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
@@ -485,16 +479,14 @@ where
             attempt_budget.timeout,
             agent.prompt_typed_details::<T>(prompt, max_turns),
         )
-            .await
+        .await
         {
-            Ok(Ok(response)) => {
-                Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                })
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
-                if should_retry_typed_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     continue;
                 }
                 Err(err)
@@ -506,7 +498,7 @@ where
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     // The loop runs for `0..=max_retries` iterations. Every iteration either
@@ -575,15 +567,13 @@ where
             attempt_budget.timeout,
             agent.prompt_typed_details::<T>(&current_prompt, max_turns),
         )
-            .await
+        .await
         {
             Ok(Ok(response)) => match validator(&response.output) {
-                Ok(()) => {
-                    Ok(RetryOutcome {
-                        result: response,
-                        rate_limit_wait_ms,
-                    })
-                }
+                Ok(()) => Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                }),
                 Err(TradingError::SchemaViolation { message }) => {
                     if attempt < policy.max_retries {
                         warn!(
@@ -601,7 +591,7 @@ where
                 Err(other) => Err(other),
             },
             Ok(Err(err)) => {
-                if should_retry_typed_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     continue;
                 }
                 Err(err)
@@ -614,7 +604,7 @@ where
                 }
                 Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
@@ -715,15 +705,6 @@ fn attempt_timeout_error(
     }
 }
 
-/// Classify whether a `PromptError` is likely transient (worth retrying).
-///
-/// Rate-limit and HTTP transport errors are considered transient.
-/// Authentication, schema, and tool errors are permanent.
-#[cfg(test)]
-fn is_transient_error(err: &PromptError) -> bool {
-    transient_prompt_error_summary(err).is_some()
-}
-
 /// Shared attempt-preparation logic exposed to sibling submodules (e.g. `text_retry`).
 ///
 /// Uses fixed log messages appropriate for the "text prompt" operation.
@@ -752,6 +733,10 @@ pub(super) async fn prepare_attempt_text(
     .await
 }
 
+/// Classify a `PromptError`: `Some(summary)` when it is likely transient and
+/// worth retrying (rate-limit and HTTP transport errors), `None` when it is
+/// permanent (authentication, schema, and tool errors). The summary is the
+/// sanitized provider message used for retry logging.
 fn transient_prompt_error_summary(err: &PromptError) -> Option<String> {
     match err {
         PromptError::CompletionError(ce) => {
@@ -803,10 +788,6 @@ pub(super) fn should_retry_trading_error(err: &TradingError) -> bool {
     }
 }
 
-fn should_retry_typed_error(err: &TradingError) -> bool {
-    should_retry_trading_error(err)
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────
@@ -829,7 +810,7 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "rate limit exceeded".to_owned(),
         ));
-        assert!(is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
@@ -837,7 +818,7 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "HTTP 429 Too Many Requests".to_owned(),
         ));
-        assert!(is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
@@ -845,7 +826,7 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ResponseError(
             "Internal server error 500".to_owned(),
         ));
-        assert!(is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
@@ -853,14 +834,14 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "invalid API key".to_owned(),
         ));
-        assert!(!is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_none());
     }
 
     #[test]
     fn tool_error_is_not_transient() {
         use rig::tool::ToolSetError;
         let err = PromptError::ToolError(ToolSetError::ToolNotFoundError("foo".to_owned()));
-        assert!(!is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_none());
     }
 
     // ── Retry policy arithmetic ──────────────────────────────────────────
@@ -894,7 +875,7 @@ mod tests {
             message: "bad output".to_owned(),
         };
         assert!(
-            !should_retry_typed_error(&err),
+            !should_retry_trading_error(&err),
             "SchemaViolation must not be retried"
         );
     }
@@ -905,20 +886,20 @@ mod tests {
             elapsed: Duration::from_secs(30),
             message: "timed out".to_owned(),
         };
-        assert!(should_retry_typed_error(&err));
+        assert!(should_retry_trading_error(&err));
     }
 
     #[test]
     fn rig_timeout_message_is_retryable_for_typed_prompts() {
         let err =
             TradingError::Rig("provider=openai model=o3 summary=connection timeout".to_owned());
-        assert!(should_retry_typed_error(&err));
+        assert!(should_retry_trading_error(&err));
     }
 
     #[test]
     fn rig_auth_message_is_not_retryable_for_typed_prompts() {
         let err = TradingError::Rig("provider=openai model=o3 summary=invalid api key".to_owned());
-        assert!(!should_retry_typed_error(&err));
+        assert!(!should_retry_trading_error(&err));
     }
 
     #[test]
@@ -926,7 +907,7 @@ mod tests {
         let err = TradingError::RateLimitExceeded {
             provider: "openai".to_owned(),
         };
-        assert!(should_retry_typed_error(&err));
+        assert!(should_retry_trading_error(&err));
     }
 
     // ── Integration: chat_with_retry_details ─────────────────────────────
