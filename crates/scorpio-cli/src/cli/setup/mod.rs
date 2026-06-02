@@ -11,7 +11,7 @@ use scorpio_core::settings::{
     PartialConfig, UserConfigFileError, load_user_config_at, save_user_config_at, user_config_path,
 };
 use steps::{
-    step_langfuse_observability, step1_finnhub_api_key, step2_fred_api_key,
+    step_futu_positions, step_langfuse_observability, step1_finnhub_api_key, step2_fred_api_key,
     step2b_alpha_vantage_api_key, step3_llm_provider_keys, step4_provider_routing,
     step5_health_check,
 };
@@ -121,7 +121,8 @@ where
 ///    when previously authorized; selecting it runs the OAuth device flow inline.
 /// 5. Provider routing (quick/deep model selection)
 /// 6. Langfuse observability credentials (optional)
-/// 7. LLM health check
+/// 7. Futu account positions (optional, read-only; enable + optional account id)
+/// 8. LLM health check
 ///
 /// ESC or Ctrl-C at any point cancels without saving.
 pub fn run() -> anyhow::Result<()> {
@@ -163,6 +164,7 @@ pub fn run() -> anyhow::Result<()> {
         &step3_outcome
     ));
     step!(step_langfuse_observability(&mut partial));
+    step!(step_futu_positions(&mut partial));
 
     // Step 5: health check — manages its own confirm prompt.
     let should_save = match step5_health_check(&partial) {

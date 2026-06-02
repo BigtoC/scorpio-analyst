@@ -41,8 +41,12 @@ fn render_account_positions(account: &AccountPositionsState, symbol: Option<&Sym
 }
 
 fn render_available(snapshot: &AccountSnapshot, symbol: Option<&Symbol>) -> String {
+    // Leading space owns the separator after `Account positions:` in the prompt
+    // template, so the disabled/unavailable (empty) case renders no trailing
+    // space — keeping the byte-for-byte prompt fixture stable against
+    // trailing-whitespace trimmers.
     let mut out = format!(
-        "Account context ({}, {}). ",
+        " Account context ({}, {}). ",
         snapshot.market, snapshot.currency
     );
     let symbol_label = symbol.map(Symbol::to_string);

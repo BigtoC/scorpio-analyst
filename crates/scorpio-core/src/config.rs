@@ -932,6 +932,24 @@ fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) 
         root.insert("providers".to_owned(), toml::Value::Table(providers));
     }
 
+    // Futu position lookup (default-off). Only emit keys the user set so env
+    // overrides and the FutuConfig defaults still apply to anything unset.
+    let mut futu = toml::map::Map::new();
+    if let Some(enabled) = partial.futu_enabled {
+        futu.insert("enabled".to_owned(), toml::Value::Boolean(enabled));
+    }
+    if let Some(account_id) = partial.futu_account_id {
+        // TOML integers are i64; account ids comfortably fit. Cast is lossless
+        // for any realistic Futu account id (well under i64::MAX).
+        futu.insert(
+            "account_id".to_owned(),
+            toml::Value::Integer(account_id as i64),
+        );
+    }
+    if !futu.is_empty() {
+        root.insert("futu".to_owned(), toml::Value::Table(futu));
+    }
+
     toml::to_string(&toml::Value::Table(root))
         .context("failed to serialize non-secret partial config")
 }
@@ -1982,6 +2000,75 @@ deep_thinking_model = "o3"
         assert_eq!(
             parsed["providers"]["deepseek"]["rpm"].as_integer(),
             Some(45)
+        );
+    }
+
+    #[test]
+    fn partial_to_nested_toml_non_secrets_emits_futu_table() {
+        let partial = crate::settings::PartialConfig {
+            futu_enabled: Some(true),
+            futu_account_id: Some(987654321),
+            ..Default::default()
+        };
+        let nested = partial_to_nested_toml_non_secrets(&partial).expect("serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("parse");
+        assert_eq!(parsed["futu"]["enabled"].as_bool(), Some(true));
+        assert_eq!(parsed["futu"]["account_id"].as_integer(), Some(987654321));
+    }
+
+    #[test]
+    fn partial_to_nested_toml_non_secrets_omits_futu_when_unset() {
+        let nested = partial_to_nested_toml_non_secrets(&crate::settings::PartialConfig::default())
+            .expect("serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("parse");
+        assert!(parsed.get("futu").is_none());
+    }
+
+    #[test]
+    fn partial_futu_settings_round_trip_into_futu_config() {
+        // Closes the loop partial -> nested TOML -> FutuConfig without the env
+        // layer (load_effective_runtime/load_from both dotenv-load the repo's
+        // `.env`, so env wins there and an "applies from partial" assertion can't
+        // be isolated). timeout is unset, so the FutuConfig default applies.
+        let partial = crate::settings::PartialConfig {
+            futu_enabled: Some(true),
+            futu_account_id: Some(281756),
+            ..Default::default()
+        };
+        let nested = partial_to_nested_toml_non_secrets(&partial).expect("serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("parse");
+        let futu: FutuConfig = parsed["futu"]
+            .clone()
+            .try_into()
+            .expect("futu table deserializes");
+        assert!(futu.enabled);
+        assert_eq!(futu.account_id, Some(281756));
+        assert_eq!(futu.timeout_secs, 5);
+    }
+
+    #[test]
+    fn load_effective_runtime_env_overrides_futu_enabled_from_partial() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let partial = crate::settings::PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            futu_enabled: Some(false),
+            ..Default::default()
+        };
+        // SAFETY: serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("SCORPIO__FUTU__ENABLED", "true");
+        }
+        let result = Config::load_effective_runtime(partial);
+        unsafe {
+            std::env::remove_var("SCORPIO__FUTU__ENABLED");
+        }
+        let cfg = result.expect("config should load");
+        assert!(
+            cfg.futu.enabled,
+            "SCORPIO__FUTU__ENABLED env must override the persisted futu_enabled"
         );
     }
 

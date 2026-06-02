@@ -14,7 +14,7 @@ Available inputs:
 - Sentiment data: {sentiment_report}
 - News data: {news_report}
 - Past learnings: {past_memory_str}
-- Account positions: {account_positions}
+- Account positions:{account_positions}
 
 Current market price: {current_price}
 

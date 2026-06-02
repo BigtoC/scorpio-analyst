@@ -350,6 +350,45 @@ pub fn step_langfuse_observability(
     Ok(())
 }
 
+// ── Step 4c: Futu account positions (optional, read-only) ────────────────────
+
+/// Prompt to enable the read-only Futu OpenD position lookup and, when enabled,
+/// optionally pin a specific Real account id. Default-off; disabling clears any
+/// previously saved account id. Empty account-id input means auto-select.
+pub fn step_futu_positions(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
+    println!(
+        "Futu positions (optional, read-only): let the Fund Manager see your current\n\
+         Real-account holdings for the analyzed symbol's market. Requires a local Futu\n\
+         OpenD on 127.0.0.1:11111 with API encryption disabled.\n\
+         When enabled, holdings are sent to your configured LLM provider and saved in\n\
+         local run snapshots. Strictly read-only (never unlocks trading). Default off."
+    );
+
+    let enabled = inquire::Confirm::new("Enable Futu account positions?")
+        .with_default(partial.futu_enabled.unwrap_or(false))
+        .prompt()?;
+    partial.futu_enabled = Some(enabled);
+
+    if !enabled {
+        partial.futu_account_id = None;
+        return Ok(());
+    }
+
+    let existing = partial.futu_account_id.map(|id| id.to_string());
+    let mut prompt = inquire::Text::new("Futu account ID (optional — leave blank to auto-select):")
+        .with_help_message("Leave blank to use the first Real account for the market.")
+        .with_validator(|input: &str| match parse_optional_account_id(input) {
+            Ok(_) => Ok(Validation::Valid),
+            Err(message) => Ok(Validation::Invalid(message.into())),
+        });
+    if let Some(ref id) = existing {
+        prompt = prompt.with_initial_value(id);
+    }
+    let input = prompt.prompt()?;
+    partial.futu_account_id = parse_optional_account_id(&input).unwrap_or(None);
+    Ok(())
+}
+
 // ── Step 5: LLM health check ──────────────────────────────────────────────────
 
 /// Run a single `"Hello"` prompt through the configured deep-thinking provider.
@@ -504,6 +543,21 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
     } else {
         Some(input.to_owned())
     }
+}
+
+/// Parse the optional Futu account-id prompt input. Blank/whitespace yields
+/// `None` (auto-select the first matching Real account); any other value must be
+/// a base-10 `u64`. Returns `Err(message)` on a non-numeric or out-of-range value
+/// so the prompt validator can reject it inline.
+pub(super) fn parse_optional_account_id(input: &str) -> Result<Option<u64>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| "Account ID must be a positive whole number".to_owned())
 }
 
 /// Return `Err` when no LLM provider key is present (unless `copilot_only_selected` or
@@ -1141,6 +1195,30 @@ mod tests {
             Some("https://openai.example.com/v1")
         );
         assert_eq!(cfg.providers.openai.rpm, 123);
+    }
+
+    // ── parse_optional_account_id (Futu) ──────────────────────────────────────
+
+    #[test]
+    fn parse_optional_account_id_blank_is_auto_select() {
+        assert_eq!(parse_optional_account_id(""), Ok(None));
+        assert_eq!(parse_optional_account_id("   "), Ok(None));
+    }
+
+    #[test]
+    fn parse_optional_account_id_accepts_u64() {
+        assert_eq!(parse_optional_account_id("281756"), Ok(Some(281756)));
+        assert_eq!(
+            parse_optional_account_id("  1001237387290123 "),
+            Ok(Some(1001237387290123))
+        );
+    }
+
+    #[test]
+    fn parse_optional_account_id_rejects_non_numeric_and_negative() {
+        assert!(parse_optional_account_id("abc").is_err());
+        assert!(parse_optional_account_id("-1").is_err());
+        assert!(parse_optional_account_id("1.5").is_err());
     }
 
     // ── ProviderId Display ────────────────────────────────────────────────────
