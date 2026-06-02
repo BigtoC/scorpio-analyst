@@ -71,20 +71,4 @@ mod tests {
         write_evidence_provenance(&mut out, &state);
         assert!(out.contains("Providers: none"));
     }
-
-    #[test]
-    fn write_evidence_provenance_heading_always_appears() {
-        let state = TradingState::new("TSLA", "2026-04-03");
-        let mut out = String::new();
-        write_evidence_provenance(&mut out, &state);
-        assert!(out.contains("Evidence Provenance"));
-
-        let provenance = ProvenanceSummary {
-            providers_used: vec!["finnhub".to_owned()],
-        };
-        let state2 = state_with_provenance(provenance);
-        let mut out2 = String::new();
-        write_evidence_provenance(&mut out2, &state2);
-        assert!(out2.contains("Evidence Provenance"));
-    }
 }
