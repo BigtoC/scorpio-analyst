@@ -20,10 +20,8 @@ pub(crate) fn market_for_symbol(symbol: &Symbol) -> Result<i32, String> {
 
 /// Resolve the `acc_id` to query. With `account` set, the chosen account must be
 /// Real, authorized for `market`, and match `account` against its `uni_card_num`
-/// (universal account number shown in the Futu app), `card_num`, or raw `acc_id`
-/// (`uni_card_num` is sparse — only universal-system accounts carry it — so
-/// `card_num`/`acc_id` keep securities accounts selectable). Otherwise the first
-/// Real account authorized for `market` is used.
+/// (universal account number shown in the Futu app) or raw `acc_id`. Otherwise
+/// the first Real account authorized for `market` is used.
 pub(crate) fn select_account(
     accounts: &[AccListItem],
     market: i32,
@@ -49,11 +47,9 @@ pub(crate) fn select_account(
 }
 
 /// Whether the user-supplied selector matches this account by any of its
-/// identifiers: universal account number, card number, or raw `acc_id`.
+/// identifiers: universal account number or raw `acc_id`.
 fn account_matches(acc: &AccListItem, wanted: &str) -> bool {
-    acc.uni_card_num.as_deref() == Some(wanted)
-        || acc.card_num.as_deref() == Some(wanted)
-        || acc.acc_id.to_string() == wanted
+    acc.uni_card_num.as_deref() == Some(wanted) || acc.acc_id.to_string() == wanted
 }
 
 /// Build the single-currency snapshot from raw position rows. `total` is
@@ -175,23 +171,20 @@ mod tests {
             acc_id,
             trd_market_auth_list: markets.to_vec(),
             uni_card_num: None,
-            card_num: None,
         }
     }
 
-    fn acc_with_nums(
+    fn acc_with_uni_card_num(
         acc_id: u64,
         trd_env: i32,
         markets: &[i32],
-        uni_card_num: Option<&str>,
-        card_num: Option<&str>,
+        uni_card_num: &str,
     ) -> AccListItem {
         AccListItem {
             trd_env,
             acc_id,
             trd_market_auth_list: markets.to_vec(),
-            uni_card_num: uni_card_num.map(str::to_owned),
-            card_num: card_num.map(str::to_owned),
+            uni_card_num: Some(uni_card_num.to_owned()),
         }
     }
 
@@ -241,50 +234,23 @@ mod tests {
 
     #[test]
     fn account_override_selects_by_uni_card_num() {
-        // The US securities account has no uni_card_num; the futures-style account
-        // does. Selecting by uni_card_num resolves to that account's acc_id.
+        // The selector is the universal account number shown in the Futu app;
+        // it resolves to that account's acc_id.
         let accounts = vec![
-            acc_with_nums(
-                3,
-                TRD_ENV_REAL,
-                &[TRD_MARKET_US],
-                None,
-                Some("1001100580092142"),
-            ),
-            acc_with_nums(
-                9,
-                TRD_ENV_REAL,
-                &[TRD_MARKET_US],
-                Some("1001237387290123"),
-                None,
-            ),
+            acc(3, TRD_ENV_REAL, &[TRD_MARKET_US]),
+            acc_with_uni_card_num(9, TRD_ENV_REAL, &[TRD_MARKET_US], "1001237387290123"),
         ];
         let chosen = select_account(&accounts, TRD_MARKET_US, Some("1001237387290123")).unwrap();
         assert_eq!(chosen, 9);
     }
 
     #[test]
-    fn account_override_selects_by_card_num_for_account_without_uni_card_num() {
-        // The real-world US case: no uni_card_num, only a card_num.
-        let accounts = vec![acc_with_nums(
-            7,
-            TRD_ENV_REAL,
-            &[TRD_MARKET_US],
-            None,
-            Some("1001100580092142"),
-        )];
-        let chosen = select_account(&accounts, TRD_MARKET_US, Some("1001100580092142")).unwrap();
-        assert_eq!(chosen, 7);
-    }
-
-    #[test]
     fn account_override_trims_whitespace_before_matching() {
-        let accounts = vec![acc_with_nums(
+        let accounts = vec![acc_with_uni_card_num(
             7,
             TRD_ENV_REAL,
             &[TRD_MARKET_US],
-            None,
-            Some("123"),
+            "123",
         )];
         assert_eq!(
             select_account(&accounts, TRD_MARKET_US, Some("  123 ")).unwrap(),
@@ -307,12 +273,11 @@ mod tests {
 
     #[test]
     fn account_override_no_identifier_matches_is_unavailable() {
-        let accounts = vec![acc_with_nums(
+        let accounts = vec![acc_with_uni_card_num(
             9,
             TRD_ENV_REAL,
             &[TRD_MARKET_US],
-            Some("uni-1"),
-            Some("card-1"),
+            "uni-1",
         )];
         assert!(select_account(&accounts, TRD_MARKET_US, Some("nonexistent")).is_err());
     }

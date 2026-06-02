@@ -218,7 +218,7 @@ mod live_tests {
         let cfg = FutuConfig {
             enabled: true,
             // Honor SCORPIO__FUTU__ACCOUNT so the operator can exercise account
-            // selection (uni_card_num / card_num / acc_id); blank => auto-select.
+            // selection (uni_card_num / acc_id); blank => auto-select.
             account: std::env::var("SCORPIO__FUTU__ACCOUNT")
                 .ok()
                 .filter(|s| !s.is_empty()),

@@ -125,9 +125,6 @@ pub(crate) struct AccListItem {
     /// populated only for universal-system accounts (e.g. futures/crypto).
     #[serde(rename = "uniCardNum", default)]
     pub uni_card_num: Option<String>,
-    /// Per-account trading number (`cardNum`). Present on every real account.
-    #[serde(rename = "cardNum", default)]
-    pub card_num: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
