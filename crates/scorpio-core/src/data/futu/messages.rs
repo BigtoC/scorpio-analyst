@@ -121,6 +121,13 @@ pub(crate) struct AccListItem {
     pub acc_id: u64,
     #[serde(default)]
     pub trd_market_auth_list: Vec<i32>,
+    /// Universal-account number shown in the Futu app (`uniCardNum`). Optional —
+    /// populated only for universal-system accounts (e.g. futures/crypto).
+    #[serde(rename = "uniCardNum", default)]
+    pub uni_card_num: Option<String>,
+    /// Per-account trading number (`cardNum`). Present on every real account.
+    #[serde(rename = "cardNum", default)]
+    pub card_num: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

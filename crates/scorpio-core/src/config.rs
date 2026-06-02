@@ -85,11 +85,13 @@ pub struct FutuConfig {
     /// Env: `SCORPIO__FUTU__ENABLED` (default `false`).
     #[serde(default)]
     pub enabled: bool,
-    /// Explicit Real-account id override (must be a Real account). When unset,
-    /// the account is chosen by market-match.
-    /// Env: `SCORPIO__FUTU__ACCOUNT_ID`.
+    /// Explicit Real-account selector. Matched against each Real account's
+    /// `uni_card_num` (universal account number shown in the Futu app),
+    /// `card_num`, or raw `acc_id` for the analyzed symbol's market. When unset,
+    /// the first Real account authorized for the market is used.
+    /// Env: `SCORPIO__FUTU__ACCOUNT`.
     #[serde(default)]
-    pub account_id: Option<u64>,
+    pub account: Option<String>,
     /// One-shot connect→init→query→close timeout (seconds).
     /// Env: `SCORPIO__FUTU__TIMEOUT_SECS` (default `5`).
     #[serde(default = "default_futu_timeout")]
@@ -104,7 +106,7 @@ impl Default for FutuConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            account_id: None,
+            account: None,
             timeout_secs: default_futu_timeout(),
         }
     }
@@ -938,13 +940,8 @@ fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) 
     if let Some(enabled) = partial.futu_enabled {
         futu.insert("enabled".to_owned(), toml::Value::Boolean(enabled));
     }
-    if let Some(account_id) = partial.futu_account_id {
-        // TOML integers are i64; account ids comfortably fit. Cast is lossless
-        // for any realistic Futu account id (well under i64::MAX).
-        futu.insert(
-            "account_id".to_owned(),
-            toml::Value::Integer(account_id as i64),
-        );
+    if let Some(account) = &partial.futu_account {
+        futu.insert("account".to_owned(), toml::Value::String(account.clone()));
     }
     if !futu.is_empty() {
         root.insert("futu".to_owned(), toml::Value::Table(futu));
@@ -1644,7 +1641,7 @@ fetch_timeout_secs = 0
     fn futu_config_defaults_are_disabled_with_five_second_timeout() {
         let cfg = FutuConfig::default();
         assert!(!cfg.enabled);
-        assert_eq!(cfg.account_id, None);
+        assert_eq!(cfg.account, None);
         assert_eq!(cfg.timeout_secs, 5);
     }
 
@@ -2007,13 +2004,13 @@ deep_thinking_model = "o3"
     fn partial_to_nested_toml_non_secrets_emits_futu_table() {
         let partial = crate::settings::PartialConfig {
             futu_enabled: Some(true),
-            futu_account_id: Some(987654321),
+            futu_account: Some("1001100580092142".to_owned()),
             ..Default::default()
         };
         let nested = partial_to_nested_toml_non_secrets(&partial).expect("serialize");
         let parsed: toml::Value = toml::from_str(&nested).expect("parse");
         assert_eq!(parsed["futu"]["enabled"].as_bool(), Some(true));
-        assert_eq!(parsed["futu"]["account_id"].as_integer(), Some(987654321));
+        assert_eq!(parsed["futu"]["account"].as_str(), Some("1001100580092142"));
     }
 
     #[test]
@@ -2032,7 +2029,7 @@ deep_thinking_model = "o3"
         // be isolated). timeout is unset, so the FutuConfig default applies.
         let partial = crate::settings::PartialConfig {
             futu_enabled: Some(true),
-            futu_account_id: Some(281756),
+            futu_account: Some("1001100580092142".to_owned()),
             ..Default::default()
         };
         let nested = partial_to_nested_toml_non_secrets(&partial).expect("serialize");
@@ -2042,7 +2039,7 @@ deep_thinking_model = "o3"
             .try_into()
             .expect("futu table deserializes");
         assert!(futu.enabled);
-        assert_eq!(futu.account_id, Some(281756));
+        assert_eq!(futu.account.as_deref(), Some("1001100580092142"));
         assert_eq!(futu.timeout_secs, 5);
     }
 

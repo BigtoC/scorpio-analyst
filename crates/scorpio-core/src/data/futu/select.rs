@@ -18,21 +18,25 @@ pub(crate) fn market_for_symbol(symbol: &Symbol) -> Result<i32, String> {
     }
 }
 
-/// Pick the account id. With `account_id` set, that account must exist, be
-/// Real, and be authorized for `market`. Otherwise choose the first Real
-/// account authorized for `market`.
+/// Resolve the `acc_id` to query. With `account` set, the chosen account must be
+/// Real, authorized for `market`, and match `account` against its `uni_card_num`
+/// (universal account number shown in the Futu app), `card_num`, or raw `acc_id`
+/// (`uni_card_num` is sparse — only universal-system accounts carry it — so
+/// `card_num`/`acc_id` keep securities accounts selectable). Otherwise the first
+/// Real account authorized for `market` is used.
 pub(crate) fn select_account(
     accounts: &[AccListItem],
     market: i32,
-    account_id: Option<u64>,
+    account: Option<&str>,
 ) -> Result<u64, String> {
-    if let Some(wanted) = account_id {
+    if let Some(wanted) = account {
+        let wanted = wanted.trim();
         return accounts
             .iter()
             .find(|a| {
-                a.acc_id == wanted
-                    && a.trd_env == TRD_ENV_REAL
+                a.trd_env == TRD_ENV_REAL
                     && a.trd_market_auth_list.contains(&market)
+                    && account_matches(a, wanted)
             })
             .map(|a| a.acc_id)
             .ok_or_else(|| "configured account is not available for this market".to_owned());
@@ -42,6 +46,14 @@ pub(crate) fn select_account(
         .find(|a| a.trd_env == TRD_ENV_REAL && a.trd_market_auth_list.contains(&market))
         .map(|a| a.acc_id)
         .ok_or_else(|| format!("no real account for {}", trd_market_label(market)))
+}
+
+/// Whether the user-supplied selector matches this account by any of its
+/// identifiers: universal account number, card number, or raw `acc_id`.
+fn account_matches(acc: &AccListItem, wanted: &str) -> bool {
+    acc.uni_card_num.as_deref() == Some(wanted)
+        || acc.card_num.as_deref() == Some(wanted)
+        || acc.acc_id.to_string() == wanted
 }
 
 /// Build the single-currency snapshot from raw position rows. `total` is
@@ -162,6 +174,24 @@ mod tests {
             trd_env,
             acc_id,
             trd_market_auth_list: markets.to_vec(),
+            uni_card_num: None,
+            card_num: None,
+        }
+    }
+
+    fn acc_with_nums(
+        acc_id: u64,
+        trd_env: i32,
+        markets: &[i32],
+        uni_card_num: Option<&str>,
+        card_num: Option<&str>,
+    ) -> AccListItem {
+        AccListItem {
+            trd_env,
+            acc_id,
+            trd_market_auth_list: markets.to_vec(),
+            uni_card_num: uni_card_num.map(str::to_owned),
+            card_num: card_num.map(str::to_owned),
         }
     }
 
@@ -200,26 +230,91 @@ mod tests {
     }
 
     #[test]
-    fn account_id_override_selects_that_real_account() {
+    fn account_override_selects_by_raw_acc_id() {
         let accounts = vec![
             acc(3, TRD_ENV_REAL, &[TRD_MARKET_US]),
             acc(9, TRD_ENV_REAL, &[TRD_MARKET_US]),
         ];
-        let chosen = select_account(&accounts, TRD_MARKET_US, Some(9)).unwrap();
+        let chosen = select_account(&accounts, TRD_MARKET_US, Some("9")).unwrap();
         assert_eq!(chosen, 9);
     }
 
     #[test]
-    fn account_id_override_that_is_not_real_is_unavailable() {
-        let accounts = vec![acc(9, 0, &[TRD_MARKET_US])]; // paper
-        assert!(select_account(&accounts, TRD_MARKET_US, Some(9)).is_err());
+    fn account_override_selects_by_uni_card_num() {
+        // The US securities account has no uni_card_num; the futures-style account
+        // does. Selecting by uni_card_num resolves to that account's acc_id.
+        let accounts = vec![
+            acc_with_nums(
+                3,
+                TRD_ENV_REAL,
+                &[TRD_MARKET_US],
+                None,
+                Some("1001100580092142"),
+            ),
+            acc_with_nums(
+                9,
+                TRD_ENV_REAL,
+                &[TRD_MARKET_US],
+                Some("1001237387290123"),
+                None,
+            ),
+        ];
+        let chosen = select_account(&accounts, TRD_MARKET_US, Some("1001237387290123")).unwrap();
+        assert_eq!(chosen, 9);
     }
 
     #[test]
-    fn account_id_override_real_but_unauthorized_for_market_is_unavailable() {
+    fn account_override_selects_by_card_num_for_account_without_uni_card_num() {
+        // The real-world US case: no uni_card_num, only a card_num.
+        let accounts = vec![acc_with_nums(
+            7,
+            TRD_ENV_REAL,
+            &[TRD_MARKET_US],
+            None,
+            Some("1001100580092142"),
+        )];
+        let chosen = select_account(&accounts, TRD_MARKET_US, Some("1001100580092142")).unwrap();
+        assert_eq!(chosen, 7);
+    }
+
+    #[test]
+    fn account_override_trims_whitespace_before_matching() {
+        let accounts = vec![acc_with_nums(
+            7,
+            TRD_ENV_REAL,
+            &[TRD_MARKET_US],
+            None,
+            Some("123"),
+        )];
+        assert_eq!(
+            select_account(&accounts, TRD_MARKET_US, Some("  123 ")).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn account_override_that_is_not_real_is_unavailable() {
+        let accounts = vec![acc(9, 0, &[TRD_MARKET_US])]; // paper
+        assert!(select_account(&accounts, TRD_MARKET_US, Some("9")).is_err());
+    }
+
+    #[test]
+    fn account_override_real_but_unauthorized_for_market_is_unavailable() {
         // Real account, but only authorized for HK (1), not the requested US (2).
         let accounts = vec![acc(9, TRD_ENV_REAL, &[1])];
-        assert!(select_account(&accounts, TRD_MARKET_US, Some(9)).is_err());
+        assert!(select_account(&accounts, TRD_MARKET_US, Some("9")).is_err());
+    }
+
+    #[test]
+    fn account_override_no_identifier_matches_is_unavailable() {
+        let accounts = vec![acc_with_nums(
+            9,
+            TRD_ENV_REAL,
+            &[TRD_MARKET_US],
+            Some("uni-1"),
+            Some("card-1"),
+        )];
+        assert!(select_account(&accounts, TRD_MARKET_US, Some("nonexistent")).is_err());
     }
 
     #[test]

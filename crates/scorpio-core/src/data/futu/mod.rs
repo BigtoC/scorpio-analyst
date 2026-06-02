@@ -72,7 +72,7 @@ pub(crate) trait FutuConn: Send {
 pub(crate) async fn fetch_account_snapshot<C: FutuConn + ?Sized>(
     conn: &mut C,
     symbol: &Symbol,
-    account_id: Option<u64>,
+    account: Option<&str>,
 ) -> Result<AccountSnapshot, String> {
     let market = market_for_symbol(symbol)?;
 
@@ -88,7 +88,7 @@ pub(crate) async fn fetch_account_snapshot<C: FutuConn + ?Sized>(
             .await?,
     )?;
 
-    let acc_id = select_account(&accounts, market, account_id)?;
+    let acc_id = select_account(&accounts, market, account)?;
 
     let rows = parse_position_list_response(
         &conn

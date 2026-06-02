@@ -32,7 +32,7 @@ fn resolve_timeout(secs: u64) -> Duration {
 #[derive(Debug)]
 pub struct FutuClient {
     enabled: bool,
-    account_id: Option<u64>,
+    account: Option<String>,
     timeout: Duration,
 }
 
@@ -41,7 +41,7 @@ impl FutuClient {
     pub fn new(config: &FutuConfig) -> Self {
         Self {
             enabled: config.enabled,
-            account_id: config.account_id,
+            account: config.account.clone(),
             timeout: resolve_timeout(config.timeout_secs),
         }
     }
@@ -72,7 +72,7 @@ impl FutuClient {
                 .await
                 .map_err(|_| format!("OpenD unreachable on {ENDPOINT}"))?;
             let mut conn = LiveFutuConn::new(stream);
-            fetch_account_snapshot(&mut conn, symbol, self.account_id).await
+            fetch_account_snapshot(&mut conn, symbol, self.account.as_deref()).await
         };
         match tokio::time::timeout(self.timeout, work).await {
             Ok(result) => result,
@@ -155,7 +155,7 @@ mod tests {
     async fn enabled_client_without_typed_symbol_is_unavailable_without_a_socket() {
         let cfg = FutuConfig {
             enabled: true,
-            account_id: None,
+            account: None,
             timeout_secs: 5,
         };
         let client = FutuClient::new(&cfg);
@@ -217,7 +217,11 @@ mod live_tests {
     async fn futu_live_account_positions_smoke() {
         let cfg = FutuConfig {
             enabled: true,
-            account_id: None,
+            // Honor SCORPIO__FUTU__ACCOUNT so the operator can exercise account
+            // selection (uni_card_num / card_num / acc_id); blank => auto-select.
+            account: std::env::var("SCORPIO__FUTU__ACCOUNT")
+                .ok()
+                .filter(|s| !s.is_empty()),
             timeout_secs: 10,
         };
         let client = FutuClient::new(&cfg);

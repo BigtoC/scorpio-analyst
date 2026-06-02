@@ -82,7 +82,7 @@ struct UserConfigFutu {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    account_id: Option<u64>,
+    account: Option<String>,
 }
 
 impl UserConfigFutu {
@@ -170,7 +170,7 @@ impl From<UserConfigFile> for PartialConfig {
             langfuse_secret_key: value.langfuse_secret_key,
             langfuse_base_url: value.langfuse_base_url,
             futu_enabled: value.futu.enabled,
-            futu_account_id: value.futu.account_id,
+            futu_account: value.futu.account,
         }
     }
 }
@@ -236,7 +236,7 @@ impl From<&PartialConfig> for UserConfigFile {
             langfuse_base_url: value.langfuse_base_url.clone(),
             futu: UserConfigFutu {
                 enabled: value.futu_enabled,
-                account_id: value.futu_account_id,
+                account: value.futu_account.clone(),
             },
         }
     }
@@ -378,10 +378,11 @@ pub struct PartialConfig {
     /// Maps to `[futu] enabled` / `SCORPIO__FUTU__ENABLED`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub futu_enabled: Option<bool>,
-    /// Optional explicit Real Futu account id; when unset the account is chosen
-    /// by market-match. Maps to `[futu] account_id` / `SCORPIO__FUTU__ACCOUNT_ID`.
+    /// Optional explicit Real Futu account selector (uni_card_num, card_num, or
+    /// raw acc_id); when unset the account is chosen by market-match.
+    /// Maps to `[futu] account` / `SCORPIO__FUTU__ACCOUNT`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub futu_account_id: Option<u64>,
+    pub futu_account: Option<String>,
 }
 
 /// Redacts an `Option<String>` API-key field for `Debug` output.
@@ -428,7 +429,7 @@ impl std::fmt::Debug for PartialConfig {
             .field("langfuse_secret_key", &redact(&self.langfuse_secret_key))
             .field("langfuse_base_url", &self.langfuse_base_url)
             .field("futu_enabled", &self.futu_enabled)
-            .field("futu_account_id", &self.futu_account_id)
+            .field("futu_account", &self.futu_account)
             .finish()
     }
 }
@@ -663,7 +664,7 @@ mod tests {
             langfuse_secret_key: Some("sk-lf-test".into()),
             langfuse_base_url: Some("https://cloud.langfuse.com".into()),
             futu_enabled: Some(true),
-            futu_account_id: Some(281756),
+            futu_account: Some("1001100580092142".to_owned()),
         }
     }
 
@@ -673,7 +674,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         let partial = PartialConfig {
             futu_enabled: Some(true),
-            futu_account_id: Some(987654321),
+            futu_account: Some("1001100580092142".to_owned()),
             ..Default::default()
         };
 
@@ -683,11 +684,11 @@ mod tests {
             raw.contains("[futu]"),
             "futu settings persist under a [futu] table: {raw}"
         );
-        assert!(raw.contains("account_id = 987654321"));
+        assert!(raw.contains("account = \"1001100580092142\""));
 
         let loaded = load_user_config_at(&path).expect("load should succeed");
         assert_eq!(loaded.futu_enabled, Some(true));
-        assert_eq!(loaded.futu_account_id, Some(987654321));
+        assert_eq!(loaded.futu_account.as_deref(), Some("1001100580092142"));
     }
 
     #[test]
