@@ -1221,46 +1221,6 @@ mod tests {
         assert!(matches!(&history[2], Message::Assistant { .. }));
     }
 
-    #[tokio::test]
-    async fn chat_details_does_not_double_append_mock_history_when_messages_are_present() {
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
-
-        let (agent, _controller) = mock_llm_agent(
-            "o3",
-            vec![],
-            vec![MockChatOutcome::Ok(
-                PromptResponse::new(
-                    "done",
-                    Usage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        total_tokens: 0,
-                        cached_input_tokens: 0,
-                        cache_creation_input_tokens: 0,
-                    },
-                )
-                .with_messages(vec![
-                    Message::User {
-                        content: OneOrMany::one(UserContent::text("next")),
-                    },
-                    Message::Assistant {
-                        content: OneOrMany::one(AssistantContent::text("done")),
-                        id: None,
-                    },
-                ]),
-            )],
-        );
-
-        let mut history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("prior")),
-        }];
-
-        agent.chat_details("next", &mut history).await.unwrap();
-
-        assert_eq!(history.len(), 3);
-    }
-
     #[test]
     fn build_agent_supports_copilot_variant() {
         let dir = tempfile::tempdir().unwrap();

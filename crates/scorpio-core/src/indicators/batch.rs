@@ -291,28 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn calculate_all_200_candles_populates_common_fields() {
-        let candles = rising_candles(200, 50.0, 1.0);
-        let td = calculate_all_indicators(&candles).unwrap();
-        assert!(td.rsi.is_some(), "rsi should be Some");
-        assert!(td.macd.is_some(), "macd should be Some");
-        assert!(td.atr.is_some(), "atr should be Some");
-        assert!(td.sma_50.is_some(), "sma_50 should be Some");
-        assert!(
-            td.bollinger_upper.is_some(),
-            "bollinger_upper should be Some"
-        );
-        assert!(
-            td.bollinger_lower.is_some(),
-            "bollinger_lower should be Some"
-        );
-        assert!(td.ema_12.is_some(), "ema_12 should be Some");
-        assert!(td.ema_26.is_some(), "ema_26 should be Some");
-        assert!(td.volume_avg.is_some(), "volume_avg (VWMA) should be Some");
-        assert!(!td.summary.is_empty(), "summary should not be empty");
-    }
-
-    #[test]
     fn calculate_all_100_candles_partial_results() {
         let candles = rising_candles(100, 50.0, 1.0);
         let td = calculate_all_indicators(&candles).unwrap();

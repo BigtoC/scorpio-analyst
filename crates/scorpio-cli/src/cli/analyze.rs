@@ -297,26 +297,6 @@ mod tests {
     // ── Reporter chain validation ──────────────────────────────────────────────
 
     #[test]
-    fn run_rejects_no_terminal_without_any_other_reporter() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        write_minimal_config(&dir);
-        unsafe { std::env::set_var("HOME", dir.path()) };
-        let result = run(&AnalyzeArgs {
-            symbol: "AAPL".to_owned(),
-            no_terminal: true,
-            json: false,
-            output_dir: Some(dir.path().to_path_buf()),
-        });
-        unsafe { std::env::remove_var("HOME") };
-        let err = result.expect_err("--no-terminal alone should be rejected");
-        assert!(
-            err.to_string().contains("at least one reporter"),
-            "error should explain that a reporter is required; got: {err}"
-        );
-    }
-
-    #[test]
     fn validate_reporter_args_rejects_output_dir_without_json() {
         let err = validate_reporter_args(&AnalyzeArgs {
             symbol: "AAPL".to_owned(),

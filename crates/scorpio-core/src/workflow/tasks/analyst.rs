@@ -1587,7 +1587,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // start_paused: the 20ms per-attempt timeout must deterministically fire before the
+    // 40ms peer sleep on the same virtual clock, so the slow fetch resolves to a timeout
+    // (None) while the fast fetch returns its value, instead of racing the real clock.
+    #[tokio::test(start_paused = true)]
     async fn fetch_with_timeout_preserves_fast_result_when_parallel_peer_times_out() {
         let timeout = Duration::from_millis(20);
 

@@ -310,19 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn baseline_pack_uses_extracted_prompt_assets_not_empty_placeholders() {
-        let pack = resolve_pack(PackId::Baseline);
-
-        assert_ne!(pack.prompt_bundle, PromptBundle::empty());
-    }
-
-    #[test]
-    fn resolve_pack_returns_matching_id() {
-        let pack = resolve_pack(PackId::Baseline);
-        assert_eq!(pack.id, PackId::Baseline);
-    }
-
-    #[test]
     fn baseline_fund_manager_prompt_carries_account_positions_contract() {
         let pack = resolve_pack(PackId::Baseline);
         let fm = pack.prompt_bundle.fund_manager.as_ref();

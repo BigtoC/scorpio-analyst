@@ -102,18 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn thesis_memory_serde_preserves_all_optional_fields_when_present() {
-        let thesis = sample_thesis();
-        let json = serde_json::to_string(&thesis).unwrap();
-        let recovered: ThesisMemory = serde_json::from_str(&json).unwrap();
-        assert!(recovered.summary.is_some());
-        assert_eq!(
-            recovered.summary.as_deref(),
-            Some("Buy: strong fundamentals")
-        );
-    }
-
-    #[test]
     fn thesis_memory_implements_debug() {
         let thesis = sample_thesis();
         let rendered = format!("{thesis:?}");

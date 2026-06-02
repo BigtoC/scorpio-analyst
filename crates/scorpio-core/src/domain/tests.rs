@@ -47,12 +47,6 @@ fn parse_overlong_input_rejects() {
 }
 
 #[test]
-fn symbol_display_round_trips() {
-    let sym = Symbol::parse("tsla").expect("tsla should parse");
-    assert_eq!(sym.to_string(), "TSLA");
-}
-
-#[test]
 fn symbol_serde_round_trips_equity() {
     let sym = Symbol::parse("NVDA").expect("valid ticker");
     let json = serde_json::to_string(&sym).expect("serialize");

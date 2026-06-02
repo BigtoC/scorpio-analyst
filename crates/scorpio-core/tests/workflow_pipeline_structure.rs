@@ -331,51 +331,6 @@ async fn integration_two_analyst_failures_abort_pipeline() {
 }
 
 #[tokio::test]
-async fn integration_debate_round_counter_drives_cycling() {
-    let ctx = Context::new();
-    ctx.set(KEY_MAX_DEBATE_ROUNDS, 2u32).await;
-    ctx.set(KEY_DEBATE_ROUND, 0u32).await;
-
-    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-    let max: u32 = ctx.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
-    assert!(round < max);
-
-    ctx.set(KEY_DEBATE_ROUND, 1u32).await;
-    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-    assert!(round < max);
-
-    ctx.set(KEY_DEBATE_ROUND, 2u32).await;
-    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-    assert!(round >= max);
-}
-
-#[tokio::test]
-async fn integration_risk_round_counter_drives_cycling() {
-    let ctx = Context::new();
-    ctx.set(KEY_MAX_RISK_ROUNDS, 2u32).await;
-    ctx.set(KEY_RISK_ROUND, 0u32).await;
-
-    let round: u32 = ctx.get(KEY_RISK_ROUND).await.unwrap_or(0);
-    let max: u32 = ctx.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
-    assert!(round < max);
-
-    ctx.set(KEY_RISK_ROUND, 2u32).await;
-    let round: u32 = ctx.get(KEY_RISK_ROUND).await.unwrap_or(0);
-    assert!(round >= max);
-}
-
-#[tokio::test]
-async fn integration_zero_risk_rounds_bypasses_loop() {
-    let ctx = Context::new();
-    ctx.set(KEY_MAX_RISK_ROUNDS, 0u32).await;
-    ctx.set(KEY_RISK_ROUND, 0u32).await;
-
-    let round: u32 = ctx.get(KEY_RISK_ROUND).await.unwrap_or(0);
-    let max: u32 = ctx.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
-    assert!(round >= max);
-}
-
-#[tokio::test]
 async fn integration_phase_snapshot_written_and_readable() {
     let (store, _dir) = make_store().await;
     let ctx = Context::new();
@@ -636,17 +591,6 @@ async fn build_graph_returns_detached_graph_not_live_pipeline_graph() {
 
     let result = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20")).await;
     assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn integration_zero_debate_rounds_bypasses_loop() {
-    let ctx = Context::new();
-    ctx.set(KEY_MAX_DEBATE_ROUNDS, 0u32).await;
-    ctx.set(KEY_DEBATE_ROUND, 0u32).await;
-
-    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-    let max: u32 = ctx.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
-    assert!(round >= max);
 }
 
 #[tokio::test]
@@ -946,18 +890,6 @@ fn workflow_non_task_graph_error_redacts_credentials() {
 // between the classifier and the resolved pack manifest.
 
 #[test]
-fn classify_with_no_profile_falls_back_to_baseline_with_reason() {
-    use scorpio_core::workflow::pack_classifier::{RuntimePackSelection, classify_runtime_pack};
-    let result = classify_runtime_pack(None, None);
-    assert_eq!(
-        result,
-        RuntimePackSelection::BaselineFallback {
-            reason: "profile_lookup_unavailable",
-        }
-    );
-}
-
-#[test]
 fn etf_baseline_pack_drives_same_four_analyst_topology() {
     use scorpio_core::analysis_packs::{PackId, resolve_pack};
     let pack = resolve_pack(PackId::EtfBaseline);
@@ -986,68 +918,6 @@ fn etf_baseline_pack_id_canonicalizes_to_etf_baseline() {
     let pack = resolve_pack(PackId::EtfBaseline);
     assert_eq!(pack.id, PackId::EtfBaseline);
     assert_eq!(pack.id.as_str(), "etf_baseline");
-}
-
-// Optional classifier tests that require constructing a `Profile::Fund`
-// fixture. The unit-test module in `workflow/pack_classifier.rs` already
-// uses this exact construction pattern, so it's safe to mirror here for
-// end-to-end coverage that goes through the public crate surface.
-
-#[test]
-fn unsupported_fund_shape_falls_back_with_reason() {
-    use scorpio_core::data::yfinance::etf::FundInfo;
-    use scorpio_core::workflow::pack_classifier::{RuntimePackSelection, classify_runtime_pack};
-    use yfinance_rs::profile::{Fund, Profile};
-
-    let profile = Profile::Fund(Fund {
-        name: "Generic Mutual Fund".to_owned(),
-        family: None,
-        kind: Default::default(),
-        isin: None,
-    });
-    let fund_info = FundInfo {
-        symbol: "VFIAX".into(),
-        category: None,
-        fund_family: None,
-        expense_ratio: None,
-        total_assets: None,
-        leverage_factor: None,
-        fund_kind: Some("mutual_fund".into()),
-        stated_benchmark: None,
-    };
-    let result = classify_runtime_pack(Some(&profile), Some(&fund_info));
-    assert_eq!(
-        result,
-        RuntimePackSelection::BaselineFallback {
-            reason: "unsupported_fund_shape",
-        }
-    );
-}
-
-#[test]
-fn supported_etf_fund_routes_to_etf_baseline() {
-    use scorpio_core::data::yfinance::etf::FundInfo;
-    use scorpio_core::workflow::pack_classifier::{RuntimePackSelection, classify_runtime_pack};
-    use yfinance_rs::profile::{Fund, Profile};
-
-    let profile = Profile::Fund(Fund {
-        name: "SPDR S&P 500 ETF Trust".to_owned(),
-        family: Some("State Street Global Advisors".to_owned()),
-        kind: Default::default(),
-        isin: None,
-    });
-    let fund_info = FundInfo {
-        symbol: "SPY".into(),
-        category: None,
-        fund_family: None,
-        expense_ratio: None,
-        total_assets: None,
-        leverage_factor: None,
-        fund_kind: Some("etf".into()),
-        stated_benchmark: None,
-    };
-    let result = classify_runtime_pack(Some(&profile), Some(&fund_info));
-    assert_eq!(result, RuntimePackSelection::EtfBaseline);
 }
 
 // --- Task 19: Risk-free-rate preflight integration tests ---

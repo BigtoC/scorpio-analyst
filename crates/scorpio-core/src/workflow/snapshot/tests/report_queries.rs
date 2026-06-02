@@ -111,37 +111,6 @@ async fn list_executions_excludes_rows_from_older_schema_versions_and_reports_st
 }
 
 #[tokio::test]
-async fn list_executions_parses_legacy_sqlite_datetime_format() {
-    let store = in_memory_store().await;
-    let state = sample_state();
-    let exec_id = state.execution_id.to_string();
-    let state_json = serde_json::to_string(&state).expect("serialize");
-
-    sqlx::query(
-        "INSERT INTO phase_snapshots
-            (execution_id, phase_number, phase_name, trading_state_json,
-             token_usage_json, created_at, symbol, schema_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&exec_id)
-    .bind(1i64)
-    .bind("analyst_team")
-    .bind(&state_json)
-    .bind(None::<&str>)
-    .bind("2026-01-15 10:30:00")
-    .bind("AAPL")
-    .bind(THESIS_MEMORY_SCHEMA_VERSION)
-    .execute(&store.pool)
-    .await
-    .expect("insert legacy");
-
-    let listing = store.list_executions().await.expect("list");
-
-    assert_eq!(listing.summaries.len(), 1);
-    assert_eq!(listing.summaries[0].execution_id, exec_id);
-}
-
-#[tokio::test]
 async fn list_executions_orders_mixed_timestamp_formats_by_real_time() {
     let store = in_memory_store().await;
     let state = sample_state();

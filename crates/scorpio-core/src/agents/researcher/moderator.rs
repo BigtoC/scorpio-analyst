@@ -176,7 +176,6 @@ mod tests {
     };
     use crate::providers::factory::{mock_llm_agent, mock_prompt_response};
     use crate::providers::{ModelTier, factory::create_completion_model};
-    use crate::state::AgentTokenUsage;
     use secrecy::SecretString;
 
     fn sample_llm_config() -> LlmConfig {
@@ -242,22 +241,6 @@ mod tests {
     }
 
     // ── Task 3.4 / 3.6: Structural checks (no LLM call needed) ──────────
-
-    #[test]
-    fn agent_token_usage_has_correct_agent_name() {
-        let usage = AgentTokenUsage {
-            agent_name: "Debate Moderator".to_owned(),
-            model_id: "o3".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 10,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "Debate Moderator");
-        assert_eq!(usage.model_id, "o3");
-    }
 
     // ── Task 3.7: Oversized / control-char output rejected ───────────────
 

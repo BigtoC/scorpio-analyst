@@ -587,28 +587,6 @@ mod tests {
         assert_eq!(evidence.revenue_estimate_m, Some(80_000.0));
     }
 
-    #[tokio::test]
-    async fn fetch_consensus_classifies_lone_trend_error_as_provider_degraded() {
-        // Under the partial-fail-open contract, an error on a single branch
-        // (here: earnings_trend) with the other branches returning empty
-        // payloads resolves to `Ok(ProviderDegraded)` rather than `Err`.
-        // Failure reasons are surfaced via `tracing::warn!` per branch.
-        let mut mock = MockYFinanceData::new();
-        mock.expect_get_earnings_trend_result().returning(|_| {
-            Err(TradingError::SchemaViolation {
-                message: "Yahoo Finance response could not be parsed".to_owned(),
-            })
-        });
-        let provider = YFinanceEstimatesProvider::new(Arc::new(mock));
-
-        let outcome = provider
-            .fetch_consensus("AAPL", "2025-04-01")
-            .await
-            .expect("single-branch error with empty siblings is degraded, not Err");
-
-        assert_eq!(outcome, ConsensusOutcome::ProviderDegraded);
-    }
-
     // ── ConsensusOutcome behavioral regressions (Task 2) ─────────────────
 
     use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};

@@ -1406,30 +1406,7 @@ mod tests {
         assert!(validate_scoped_symbol(Some("AAPL"), "MSFT", "test").is_err());
     }
 
-    /// Verify that `get_fundamentals` awaits the limiter exactly twice
-    /// (once for metrics, once for company_profile).
-    /// Because this requires a real Finnhub key and network, the actual
-    /// client call is skipped; we verify the pattern through the
-    /// `SharedRateLimiter::acquire` call count on a fast limiter.
-    #[tokio::test]
-    async fn rate_limiter_is_awaited_before_requests() {
-        // A rate limiter with a very high limit (effectively no-op) to
-        // check that `acquire()` is called without blocking.
-        let limiter = SharedRateLimiter::new("test", 10_000);
-        limiter.acquire().await;
-        assert_eq!(limiter.label(), "test");
-    }
-
     // ── Calendar endpoint structural tests ───────────────────────────────
-
-    #[test]
-    fn fetch_earnings_calendar_method_is_accessible_on_test_client() {
-        // Compile-time reachability: the test client can be constructed and
-        // the two calendar methods are callable (the async runtime would be
-        // needed to actually call them, so we just touch the client).
-        let client = FinnhubClient::for_test();
-        let _ = std::mem::size_of_val(&client);
-    }
 
     #[tokio::test]
     #[ignore = "requires live Finnhub API key — run manually"]

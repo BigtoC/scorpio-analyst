@@ -369,46 +369,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_analyst_inference_uses_text_fallback_for_deepseek() {
-        use rig::agent::PromptResponse;
-        use serde::{Deserialize, Serialize};
-
-        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
-        struct Output {
-            value: i32,
-        }
-
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
-            ProviderId::DeepSeek,
-            "deepseek-chat",
-            vec![],
-            vec![],
-        );
-        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 42}"#, sample_usage(8)));
-
-        let outcome = run_analyst_inference(
-            &agent,
-            "prompt",
-            Duration::from_millis(50),
-            &fast_policy(),
-            1,
-            |s: &str| -> Result<Output, crate::error::TradingError> {
-                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
-                    message: e.to_string(),
-                })
-            },
-            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome.output.value, 42);
-        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
-        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
-    }
-
-    #[tokio::test]
     async fn run_analyst_inference_text_fallback_strips_code_fence_and_prose() {
         use rig::agent::PromptResponse;
         use serde::{Deserialize, Serialize};

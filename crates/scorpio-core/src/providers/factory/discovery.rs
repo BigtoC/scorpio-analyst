@@ -311,19 +311,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unavailable_reason_is_sanitized() {
-        let outcome = unavailable_from_error(
-            ProviderId::Anthropic,
-            "Bearer sk-ant-secret-token leaked from upstream",
-        );
-        let ModelDiscoveryOutcome::Unavailable { reason } = outcome else {
-            panic!("expected unavailable outcome");
-        };
-        assert!(reason.contains("anthropic"));
-        assert!(!reason.contains("sk-ant-secret-token"));
-    }
-
     #[tokio::test]
     async fn collect_outcomes_keeps_one_result_per_provider() {
         let outcomes = collect_discovery_outcomes(

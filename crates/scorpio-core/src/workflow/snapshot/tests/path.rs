@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use super::in_memory_store;
 use crate::workflow::snapshot::SnapshotStore;
 use crate::workflow::snapshot::path::resolve_db_path;
 
@@ -82,9 +81,4 @@ async fn parent_directory_is_created() {
         .expect("store should be created with auto-mkdir");
 
     assert!(nested.parent().unwrap().exists());
-}
-
-#[tokio::test]
-async fn in_memory_store_smoke_test() {
-    let _store = in_memory_store().await;
 }

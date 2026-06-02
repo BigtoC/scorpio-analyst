@@ -119,21 +119,4 @@ mod tests {
         let recovered: ProvenanceSummary = serde_json::from_str(&json).unwrap();
         assert!(recovered.providers_used.is_empty());
     }
-
-    #[test]
-    fn data_coverage_required_inputs_fixed_order() {
-        let report = DataCoverageReport {
-            required_inputs: vec![
-                "fundamentals".to_owned(),
-                "sentiment".to_owned(),
-                "news".to_owned(),
-                "technical".to_owned(),
-            ],
-            missing_inputs: vec![],
-        };
-        assert_eq!(
-            report.required_inputs,
-            vec!["fundamentals", "sentiment", "news", "technical"]
-        );
-    }
 }

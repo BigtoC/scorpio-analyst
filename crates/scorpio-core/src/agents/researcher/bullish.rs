@@ -136,12 +136,11 @@ fn build_bullish_prompt(debate_history: &[DebateMessage], bear_argument: Option<
 
 #[cfg(test)]
 mod tests {
-    use super::super::common::validate_debate_content;
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
     use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
     use crate::providers::{ModelTier, factory::create_completion_model};
-    use crate::state::{AgentTokenUsage, DebateMessage};
+    use crate::state::DebateMessage;
     use secrecy::SecretString;
 
     fn sample_llm_config() -> LlmConfig {
@@ -204,58 +203,6 @@ mod tests {
             audit_report: None,
             account_positions: Default::default(),
         }
-    }
-
-    // ── Task 1.4: Correct DebateMessage construction ─────────────────────
-
-    #[test]
-    fn debate_message_has_bullish_researcher_role() {
-        let msg = DebateMessage {
-            role: "bullish_researcher".to_owned(),
-            content: "Strong earnings growth supports upside.".to_owned(),
-        };
-        assert_eq!(msg.role, "bullish_researcher");
-        assert!(!msg.content.is_empty());
-    }
-
-    // ── Task 1.6: AgentTokenUsage agent name ─────────────────────────────
-
-    #[test]
-    fn agent_token_usage_has_correct_agent_name() {
-        let usage = AgentTokenUsage {
-            agent_name: "Bullish Researcher".to_owned(),
-            model_id: "o3".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 10,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "Bullish Researcher");
-        assert_eq!(usage.model_id, "o3");
-    }
-
-    // ── Task 1.7: Oversized / control-char output rejected ───────────────
-
-    #[test]
-    fn control_char_output_returns_schema_violation() {
-        let result = validate_debate_content("BullishResearcher", "bad\x00output");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TradingError::SchemaViolation { .. }
-        ));
-    }
-
-    // ── Task 1.5: Chat history accumulation (unit-level structural check) ─
-
-    #[test]
-    fn bullish_researcher_starts_with_empty_chat_history() {
-        // We verify the struct initializes correctly without making a real LLM call.
-        // Full accumulation across `run` invocations is covered by integration tests.
-        let history: Vec<Message> = Vec::new();
-        assert!(history.is_empty());
     }
 
     #[test]

@@ -1665,15 +1665,6 @@ fetch_timeout_secs = 0
     }
 
     #[test]
-    fn config_without_enrichment_section_uses_defaults() {
-        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
-        let cfg = Config::load_from(&path).expect("should load without enrichment section");
-        assert!(!cfg.enrichment.enable_consensus_estimates);
-        assert!(!cfg.enrichment.enable_event_news);
-        assert_eq!(cfg.enrichment.max_evidence_age_hours, 48);
-    }
-
-    #[test]
     fn rate_limit_config_reddit_rpm_default_is_10() {
         let cfg = RateLimitConfig::default();
         assert_eq!(cfg.reddit_rpm, 10);

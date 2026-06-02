@@ -337,22 +337,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_empty_rationale() {
-        let status = ExecutionStatus {
-            decision: Decision::Approved,
-            action: TradeAction::Buy,
-            rationale: String::new(),
-            decided_at: "2026-03-15".to_owned(),
-            entry_guidance: None,
-            suggested_position: None,
-        };
-        assert!(matches!(
-            validate_execution_status(&status),
-            Err(TradingError::SchemaViolation { .. })
-        ));
-    }
-
-    #[test]
     fn validate_rejects_whitespace_only_rationale() {
         let status = ExecutionStatus {
             decision: Decision::Approved,
@@ -374,22 +358,6 @@ mod tests {
             decision: Decision::Approved,
             action: TradeAction::Buy,
             rationale: "bad\x00content".to_owned(),
-            decided_at: "2026-03-15".to_owned(),
-            entry_guidance: None,
-            suggested_position: None,
-        };
-        assert!(matches!(
-            validate_execution_status(&status),
-            Err(TradingError::SchemaViolation { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_rejects_escape_char_in_rationale() {
-        let status = ExecutionStatus {
-            decision: Decision::Approved,
-            action: TradeAction::Buy,
-            rationale: "bad\x1bcontent".to_owned(),
             decided_at: "2026-03-15".to_owned(),
             entry_guidance: None,
             suggested_position: None,

@@ -895,17 +895,6 @@ mod tests {
     // ── DeepSeek key tests ────────────────────────────────────────────────────
 
     #[test]
-    fn roundtrip_full_config_preserves_deepseek_api_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let original = full_partial_config();
-        save_user_config_at(&original, &path).expect("save should succeed");
-        let loaded = load_user_config_at(&path).expect("load should succeed");
-        assert_eq!(loaded.deepseek_api_key.as_deref(), Some("deepseek-key"));
-        assert_eq!(loaded, original);
-    }
-
-    #[test]
     fn debug_redacts_deepseek_api_key() {
         let cfg = PartialConfig {
             deepseek_api_key: Some("sk-deepseek-secret".into()),

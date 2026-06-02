@@ -233,16 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn report_skips_upgrade_notice() {
-        let command = Commands::Report(ReportArgs {
-            subcommand: ReportSubcommand::List { json: false },
-        });
-
-        assert!(matches!(&command, Commands::Report(_)));
-        assert!(matches!(&command, Commands::Upgrade | Commands::Report(_)));
-    }
-
-    #[test]
     fn report_never_shows_analyze_banner() {
         let command = Commands::Report(ReportArgs {
             subcommand: ReportSubcommand::Show {

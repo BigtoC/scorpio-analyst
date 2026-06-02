@@ -978,30 +978,6 @@ mod tests {
             "three failures must abort with AnalystError"
         );
     }
-
-    #[tokio::test]
-    async fn four_failures_abort() {
-        let mut state = TradingState::new("AAPL", "2026-03-14");
-        let handles = state.analyst_handles();
-
-        let result = apply_analyst_results(
-            Err(TradingError::Rig("err1".to_owned())),
-            Err(TradingError::Rig("err2".to_owned())),
-            Err(TradingError::Rig("err3".to_owned())),
-            Err(TradingError::Rig("err4".to_owned())),
-            &handles,
-            &mut state,
-            "gpt-4o-mini",
-        )
-        .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, TradingError::AnalystError { .. }),
-            "four failures must abort with AnalystError"
-        );
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

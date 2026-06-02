@@ -412,14 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn researcher_runtime_config_uses_timeout_and_retry_settings() {
-        let cfg = sample_llm_config();
-        let runtime = researcher_runtime_config(&cfg);
-        assert_eq!(runtime.timeout, Duration::from_secs(45));
-        assert_eq!(runtime.retry_policy.max_retries, 3);
-    }
-
-    #[test]
     fn build_analyst_context_serializes_missing_fields_as_null() {
         let state = TradingState {
             execution_id: uuid::Uuid::new_v4(),

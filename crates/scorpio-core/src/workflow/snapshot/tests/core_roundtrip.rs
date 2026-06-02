@@ -118,30 +118,6 @@ async fn save_with_token_usage_round_trip() {
 }
 
 #[tokio::test]
-async fn save_snapshot_uses_typed_phase_api() {
-    let store = in_memory_store().await;
-    let state = sample_state();
-
-    store
-        .save_snapshot(
-            &state.execution_id.to_string(),
-            SnapshotPhase::Trader,
-            &state,
-            None,
-        )
-        .await
-        .expect("typed phase save should succeed");
-
-    let loaded = store
-        .load_snapshot(&state.execution_id.to_string(), SnapshotPhase::Trader)
-        .await
-        .expect("load should succeed")
-        .expect("snapshot should exist");
-
-    assert_eq!(loaded.state.asset_symbol, state.asset_symbol);
-}
-
-#[tokio::test]
 async fn snapshot_store_implements_debug() {
     let store = in_memory_store().await;
     let rendered = format!("{store:?}");

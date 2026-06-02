@@ -164,20 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn write_scenario_valuation_shows_not_assessed_with_insufficient_inputs_reason() {
-        let dv = DerivedValuation {
-            asset_shape: AssetShape::Unknown,
-            scenario: ScenarioValuation::NotAssessed {
-                reason: "insufficient_corporate_fundamentals".to_owned(),
-            },
-        };
-        let state = state_with_valuation(dv);
-        let mut out = String::new();
-        write_scenario_valuation(&mut out, &state);
-        assert!(out.contains("insufficient_corporate_fundamentals"));
-    }
-
-    #[test]
     fn write_scenario_valuation_renders_all_metrics_when_present() {
         let state = state_with_valuation(full_corporate_valuation());
         let mut out = String::new();
@@ -236,13 +222,5 @@ mod tests {
         let mut out = String::new();
         write_scenario_valuation(&mut out, &state);
         assert!(out.contains("No valuation metrics computed"));
-    }
-
-    #[test]
-    fn write_scenario_valuation_never_panics_on_absent_valuation() {
-        let state = TradingState::new("SPY", "2026-04-03");
-        let mut out = String::new();
-        write_scenario_valuation(&mut out, &state);
-        assert!(!out.is_empty());
     }
 }

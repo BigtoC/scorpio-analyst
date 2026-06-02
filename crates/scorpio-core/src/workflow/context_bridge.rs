@@ -277,22 +277,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prefixed_write_and_read_round_trip() {
-        let ctx = Context::new();
-        let values = vec!["alpha".to_string(), "beta".to_string()];
-
-        write_prefixed_result(&ctx, "analyst", "fundamental", &values)
-            .await
-            .expect("write should succeed");
-
-        let recovered: Vec<String> = read_prefixed_result(&ctx, "analyst", "fundamental")
-            .await
-            .expect("read should succeed");
-
-        assert_eq!(values, recovered);
-    }
-
-    #[tokio::test]
     async fn prefixed_multiple_analysts_independent() {
         let ctx = Context::new();
 
