@@ -11,11 +11,12 @@
 //! that code exists. It deliberately duplicates a minimal copy of the frame
 //! encode/decode logic so it does not depend on the later modules.
 //!
-//! Privacy: this script prints **field names and JSON types only**. It never
-//! prints raw account ids, raw holdings quantities/codes/names, or raw broker
-//! error text. Account ids are redacted to `acct-<hash>`; `loginUserID` is
-//! reported only as zero/non-zero. Sanitize anything captured here before
-//! turning it into a test fixture.
+//! Privacy: this script prints account ids in decimal (so the operator can copy
+//! the one to configure) plus a redacted `acct-<hash>` label, but **never** the
+//! raw holdings (quantities/codes/names) or raw broker error text — only field
+//! names and JSON types for position rows. `loginUserID` is reported only as
+//! zero/non-zero. Sanitize anything captured here before turning it into a test
+//! fixture.
 //!
 //! Answers:
 //! - Does JSON mode (`nProtoFmtType = 1`) work for 1001 / 2001 / 2102?
@@ -135,6 +136,17 @@ fn print_object_shape(indent: &str, obj: &Value) {
     }
 }
 
+/// The raw account id as a decimal string (wire `accID` is a string or number).
+/// Printed in this manual diagnostic so the operator can copy the exact id into
+/// `SCORPIO__FUTU__ACCOUNT_ID` / the setup wizard. Holdings stay redacted.
+fn raw_acc_id(acc: &Value) -> String {
+    match acc {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => "?".to_owned(),
+    }
+}
+
 /// Redact an account id (string or number) to a short non-reversible label.
 fn redact_acc_id(acc: &Value) -> String {
     let raw = match acc {
@@ -235,8 +247,11 @@ async fn main() {
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_i64).collect())
             .unwrap_or_default();
+        let uni_card_num = acc["uniCardNum"].as_str().unwrap_or("<none>");
+        let card_num = acc["cardNum"].as_str().unwrap_or("<none>");
         println!(
-            "    {} trdEnv={env} ({}) markets={markets:?}",
+            "    accID={} ({}) uniCardNum={uni_card_num} cardNum={card_num} trdEnv={env} ({}) markets={markets:?}",
+            raw_acc_id(&acc["accID"]),
             redact_acc_id(&acc["accID"]),
             if env == TRD_ENV_REAL {
                 "REAL"
@@ -256,7 +271,11 @@ async fn main() {
         println!("\nDone.");
         return;
     };
-    println!("  using {} (Real, US)", redact_acc_id(&acc["accID"]));
+    println!(
+        "  using accID={} ({}) (Real, US)",
+        raw_acc_id(&acc["accID"]),
+        redact_acc_id(&acc["accID"])
+    );
 
     // accID must be sent back in the same representation OpenD used. The wire
     // header field is a uint64; if accID arrived as a string, parse it.
@@ -337,7 +356,8 @@ async fn main() {
                     .unwrap_or_default();
                 if !rows.is_empty() {
                     println!(
-                        "  {} (market={market}) has {} position row(s)",
+                        "  accID={} ({}) (market={market}) has {} position row(s)",
+                        raw_acc_id(&acc["accID"]),
                         redact_acc_id(&acc["accID"]),
                         rows.len()
                     );
