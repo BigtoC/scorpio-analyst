@@ -1,3 +1,4 @@
+mod account;
 mod analyst_output;
 pub mod auditor;
 mod crypto;
@@ -19,6 +20,7 @@ mod token_usage;
 mod trading_state;
 mod valuation_derive;
 
+pub use account::*;
 pub use analyst_output::AnalystOutput;
 pub use crypto::CryptoState;
 pub use derived::*;

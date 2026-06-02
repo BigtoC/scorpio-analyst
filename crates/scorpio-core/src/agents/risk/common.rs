@@ -495,6 +495,7 @@ mod tests {
             etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
+            account_positions: Default::default(),
         }
     }
 

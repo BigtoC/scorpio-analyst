@@ -350,6 +350,45 @@ pub fn step_langfuse_observability(
     Ok(())
 }
 
+// ── Step 4c: Futu account positions (optional, read-only) ────────────────────
+
+/// Prompt to enable the read-only Futu OpenD position lookup and, when enabled,
+/// optionally pin a specific Real account. Default-off; disabling clears any
+/// previously saved account. Empty account input means auto-select. The account
+/// is matched against each Real account's universal account number (the one
+/// shown in the Futu app) or raw acc_id.
+pub fn step_futu_positions(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
+    println!(
+        "Futu positions (optional, read-only): let the Fund Manager see your current\n\
+         Real-account holdings for the analyzed symbol's market. Requires a local Futu\n\
+         OpenD on 127.0.0.1:11111 with API encryption disabled.\n\
+         When enabled, holdings are sent to your configured LLM provider and saved in\n\
+         local run snapshots. Strictly read-only (never unlocks trading). Default off."
+    );
+
+    let enabled = inquire::Confirm::new("Enable Futu account positions?")
+        .with_default(partial.futu_enabled.unwrap_or(false))
+        .prompt()?;
+    partial.futu_enabled = Some(enabled);
+
+    if !enabled {
+        partial.futu_account = None;
+        return Ok(());
+    }
+
+    let existing = partial.futu_account.clone();
+    let mut prompt = inquire::Text::new("Futu account (optional — leave blank to auto-select):")
+        .with_help_message(
+            "Universal account number (shown in the Futu app) or acc_id. Blank = first Real account for the market.",
+        );
+    if let Some(ref account) = existing {
+        prompt = prompt.with_initial_value(account);
+    }
+    let input = prompt.prompt()?;
+    partial.futu_account = normalize_optional_account(&input);
+    Ok(())
+}
+
 // ── Step 5: LLM health check ──────────────────────────────────────────────────
 
 /// Run a single `"Hello"` prompt through the configured deep-thinking provider.
@@ -503,6 +542,19 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
         current
     } else {
         Some(input.to_owned())
+    }
+}
+
+/// Normalize the optional Futu account prompt input. Blank/whitespace yields
+/// `None` (auto-select the first matching Real account); any other value is
+/// trimmed and kept verbatim (it may be a universal account number or raw
+/// acc_id — matched flexibly at fetch time, so no numeric validation).
+pub(super) fn normalize_optional_account(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
     }
 }
 
@@ -1141,6 +1193,27 @@ mod tests {
             Some("https://openai.example.com/v1")
         );
         assert_eq!(cfg.providers.openai.rpm, 123);
+    }
+
+    // ── normalize_optional_account (Futu) ─────────────────────────────────────
+
+    #[test]
+    fn normalize_optional_account_blank_is_auto_select() {
+        assert_eq!(normalize_optional_account(""), None);
+        assert_eq!(normalize_optional_account("   "), None);
+    }
+
+    #[test]
+    fn normalize_optional_account_trims_and_keeps_any_identifier() {
+        // Universal account number, card number, or raw acc_id — all kept verbatim.
+        assert_eq!(
+            normalize_optional_account("  1001100580092142 "),
+            Some("1001100580092142".to_owned())
+        );
+        assert_eq!(
+            normalize_optional_account("281756460288629917"),
+            Some("281756460288629917".to_owned())
+        );
     }
 
     // ── ProviderId Display ────────────────────────────────────────────────────

@@ -237,6 +237,7 @@ mod tests {
             etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
+            account_positions: Default::default(),
         }
     }
 
@@ -359,6 +360,7 @@ mod tests {
             etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
+            account_positions: Default::default(),
         };
 
         let prompt = build_moderator_prompt(&state, None);
@@ -466,6 +468,7 @@ mod tests {
             etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
+            account_positions: Default::default(),
         };
 
         let result = moderator.run(&state).await;
@@ -521,6 +524,7 @@ mod tests {
             etf_risk_free_rate_source: None,
             audit_status: Default::default(),
             audit_report: None,
+            account_positions: Default::default(),
         };
 
         let (summary, usage) = moderator.run(&state).await.unwrap();

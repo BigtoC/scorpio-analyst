@@ -49,6 +49,7 @@ fn baseline_config(analysis_pack: &str) -> Config {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: analysis_pack.to_owned(),
     }
 }

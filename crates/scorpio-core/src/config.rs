@@ -20,6 +20,8 @@ pub struct Config {
     pub rate_limits: RateLimitConfig,
     #[serde(default)]
     pub enrichment: DataEnrichmentConfig,
+    #[serde(default)]
+    pub futu: FutuConfig,
     /// Selected analysis pack identifier (default: "baseline").
     /// Override: `SCORPIO__ANALYSIS_PACK=baseline`
     #[serde(default = "default_analysis_pack")]
@@ -66,6 +68,46 @@ impl Default for DataEnrichmentConfig {
             enable_event_news: false,
             max_evidence_age_hours: default_max_evidence_age_hours(),
             fetch_timeout_secs: default_enrichment_fetch_timeout_secs(),
+        }
+    }
+}
+
+/// Read-only Futu OpenD position-lookup configuration.
+///
+/// Default-off, following the [`DataEnrichmentConfig`] precedent: with
+/// `enabled = false` (the default) there is no socket activity and the Fund
+/// Manager behaves exactly as before. The OpenD endpoint is hardcoded to
+/// `127.0.0.1:11111` and the trading environment is hardcoded to Real in
+/// code — there is intentionally no `host`, `port`, or `trd_env` field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FutuConfig {
+    /// Enable the read-only OpenD position lookup.
+    /// Env: `SCORPIO__FUTU__ENABLED` (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Explicit Real-account selector. Matched against each Real account's
+    /// `uni_card_num` (universal account number shown in the Futu app) or raw
+    /// `acc_id` for the analyzed symbol's market. When unset, the first Real
+    /// account authorized for the market is used.
+    /// Env: `SCORPIO__FUTU__ACCOUNT`.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// One-shot connect→init→query→close timeout (seconds).
+    /// Env: `SCORPIO__FUTU__TIMEOUT_SECS` (default `5`).
+    #[serde(default = "default_futu_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_futu_timeout() -> u64 {
+    5
+}
+
+impl Default for FutuConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account: None,
+            timeout_secs: default_futu_timeout(),
         }
     }
 }
@@ -892,6 +934,19 @@ fn partial_to_nested_toml_non_secrets(partial: &crate::settings::PartialConfig) 
         root.insert("providers".to_owned(), toml::Value::Table(providers));
     }
 
+    // Futu position lookup (default-off). Only emit keys the user set so env
+    // overrides and the FutuConfig defaults still apply to anything unset.
+    let mut futu = toml::map::Map::new();
+    if let Some(enabled) = partial.futu_enabled {
+        futu.insert("enabled".to_owned(), toml::Value::Boolean(enabled));
+    }
+    if let Some(account) = &partial.futu_account {
+        futu.insert("account".to_owned(), toml::Value::String(account.clone()));
+    }
+    if !futu.is_empty() {
+        root.insert("futu".to_owned(), toml::Value::Table(futu));
+    }
+
     toml::to_string(&toml::Value::Table(root))
         .context("failed to serialize non-secret partial config")
 }
@@ -999,6 +1054,7 @@ mod tests {
             storage: StorageConfig::default(),
             rate_limits: RateLimitConfig::default(),
             enrichment: DataEnrichmentConfig::default(),
+            futu: FutuConfig::default(),
             analysis_pack: default_analysis_pack(),
         }
     }
@@ -1582,6 +1638,33 @@ fetch_timeout_secs = 0
     }
 
     #[test]
+    fn futu_config_defaults_are_disabled_with_five_second_timeout() {
+        let cfg = FutuConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.account, None);
+        assert_eq!(cfg.timeout_secs, 5);
+    }
+
+    #[test]
+    fn futu_env_override_enables_and_sets_timeout() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
+        // SAFETY: serialized by ENV_LOCK; no other thread mutates env vars concurrently.
+        unsafe {
+            std::env::set_var("SCORPIO__FUTU__ENABLED", "true");
+            std::env::set_var("SCORPIO__FUTU__TIMEOUT_SECS", "9");
+        }
+        let result = Config::load_from(&path);
+        unsafe {
+            std::env::remove_var("SCORPIO__FUTU__ENABLED");
+            std::env::remove_var("SCORPIO__FUTU__TIMEOUT_SECS");
+        }
+        let cfg = result.expect("config should load with futu overrides");
+        assert!(cfg.futu.enabled);
+        assert_eq!(cfg.futu.timeout_secs, 9);
+    }
+
+    #[test]
     fn config_without_enrichment_section_uses_defaults() {
         let (_dir, path) = write_config(MINIMAL_CONFIG_TOML);
         let cfg = Config::load_from(&path).expect("should load without enrichment section");
@@ -1914,6 +1997,75 @@ deep_thinking_model = "o3"
         assert_eq!(
             parsed["providers"]["deepseek"]["rpm"].as_integer(),
             Some(45)
+        );
+    }
+
+    #[test]
+    fn partial_to_nested_toml_non_secrets_emits_futu_table() {
+        let partial = crate::settings::PartialConfig {
+            futu_enabled: Some(true),
+            futu_account: Some("1001100580092142".to_owned()),
+            ..Default::default()
+        };
+        let nested = partial_to_nested_toml_non_secrets(&partial).expect("serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("parse");
+        assert_eq!(parsed["futu"]["enabled"].as_bool(), Some(true));
+        assert_eq!(parsed["futu"]["account"].as_str(), Some("1001100580092142"));
+    }
+
+    #[test]
+    fn partial_to_nested_toml_non_secrets_omits_futu_when_unset() {
+        let nested = partial_to_nested_toml_non_secrets(&crate::settings::PartialConfig::default())
+            .expect("serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("parse");
+        assert!(parsed.get("futu").is_none());
+    }
+
+    #[test]
+    fn partial_futu_settings_round_trip_into_futu_config() {
+        // Closes the loop partial -> nested TOML -> FutuConfig without the env
+        // layer (load_effective_runtime/load_from both dotenv-load the repo's
+        // `.env`, so env wins there and an "applies from partial" assertion can't
+        // be isolated). timeout is unset, so the FutuConfig default applies.
+        let partial = crate::settings::PartialConfig {
+            futu_enabled: Some(true),
+            futu_account: Some("1001100580092142".to_owned()),
+            ..Default::default()
+        };
+        let nested = partial_to_nested_toml_non_secrets(&partial).expect("serialize");
+        let parsed: toml::Value = toml::from_str(&nested).expect("parse");
+        let futu: FutuConfig = parsed["futu"]
+            .clone()
+            .try_into()
+            .expect("futu table deserializes");
+        assert!(futu.enabled);
+        assert_eq!(futu.account.as_deref(), Some("1001100580092142"));
+        assert_eq!(futu.timeout_secs, 5);
+    }
+
+    #[test]
+    fn load_effective_runtime_env_overrides_futu_enabled_from_partial() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let partial = crate::settings::PartialConfig {
+            quick_thinking_provider: Some("openai".into()),
+            quick_thinking_model: Some("gpt-4o-mini".into()),
+            deep_thinking_provider: Some("openai".into()),
+            deep_thinking_model: Some("o3".into()),
+            futu_enabled: Some(false),
+            ..Default::default()
+        };
+        // SAFETY: serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("SCORPIO__FUTU__ENABLED", "true");
+        }
+        let result = Config::load_effective_runtime(partial);
+        unsafe {
+            std::env::remove_var("SCORPIO__FUTU__ENABLED");
+        }
+        let cfg = result.expect("config should load");
+        assert!(
+            cfg.futu.enabled,
+            "SCORPIO__FUTU__ENABLED env must override the persisted futu_enabled"
         );
     }
 

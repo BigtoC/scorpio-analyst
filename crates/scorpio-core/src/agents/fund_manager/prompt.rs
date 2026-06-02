@@ -10,7 +10,8 @@ use crate::{
         },
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
-    state::{DebateMessage, RiskReport, TradingState},
+    domain::Symbol,
+    state::{AccountPositionsState, AccountSnapshot, DebateMessage, RiskReport, TradingState},
 };
 
 use super::validation::state_has_missing_analyst_inputs;
@@ -27,6 +28,84 @@ fn fund_manager_system_prompt_template(state: &TradingState) -> &str {
         .prompt_bundle
         .fund_manager
         .as_ref()
+}
+
+/// Render the `{account_positions}` placeholder. Only an available snapshot is
+/// rendered into the Fund Manager prompt. Disabled/unavailable return an empty
+/// string to preserve baseline prompt behavior when no usable snapshot exists.
+fn render_account_positions(account: &AccountPositionsState, symbol: Option<&Symbol>) -> String {
+    match account {
+        AccountPositionsState::Disabled | AccountPositionsState::Unavailable(_) => String::new(),
+        AccountPositionsState::Available(snapshot) => render_available(snapshot, symbol),
+    }
+}
+
+fn render_available(snapshot: &AccountSnapshot, symbol: Option<&Symbol>) -> String {
+    // Leading space owns the separator after `Account positions:` in the prompt
+    // template, so the disabled/unavailable (empty) case renders no trailing
+    // space — keeping the byte-for-byte prompt fixture stable against
+    // trailing-whitespace trimmers.
+    let mut out = format!(
+        " Account context ({}, {}). ",
+        snapshot.market, snapshot.currency
+    );
+    let symbol_label = symbol.map(Symbol::to_string);
+    let held = symbol.and_then(|s| snapshot.held_position(s));
+    match (symbol_label.as_deref(), held) {
+        (Some(label), Some(pos)) => {
+            let cost = pos
+                .cost_price
+                .map_or_else(|| "n/a".to_owned(), |c| format!("avg {c:.2}"));
+            let mark = pos
+                .current_price
+                .map_or_else(|| "mark n/a".to_owned(), |c| format!("mark {c:.2}"));
+            let pl = pos
+                .pl_ratio
+                .map_or_else(String::new, |r| format!(", P/L {:+.1}%", r * 100.0));
+            let pl_val = pos.pl_val.map_or_else(String::new, |v| {
+                format!(" ({:+} {})", v.round() as i64, pos.currency)
+            });
+            out.push_str(&format!(
+                "You hold {label}: {} sh @ {cost}, {mark}{pl}{pl_val}. ",
+                fmt_qty(pos.qty)
+            ));
+        }
+        (Some(label), None) => {
+            out.push_str(&format!("You do NOT currently hold {label}. "));
+        }
+        (None, _) => {}
+    }
+    out.push_str(&render_portfolio_line(snapshot));
+    out
+}
+
+fn render_portfolio_line(snapshot: &AccountSnapshot) -> String {
+    let total = snapshot.total_market_value.map_or_else(
+        || "n/a".to_owned(),
+        |t| format!("{} {}", t.round() as i64, snapshot.currency),
+    );
+    let mut line = format!(
+        "Portfolio total {total} across {} positions",
+        snapshot.positions.len()
+    );
+    let top = snapshot.top_holdings(3);
+    if !top.is_empty() {
+        let parts: Vec<String> = top
+            .iter()
+            .map(|(p, pct)| format!("{} {:.0}%", p.code, pct * 100.0))
+            .collect();
+        line.push_str(&format!("; top: {}", parts.join(", ")));
+    }
+    line.push('.');
+    line
+}
+
+fn fmt_qty(qty: f64) -> String {
+    if (qty - qty.round()).abs() < 1e-9 {
+        format!("{}", qty.round() as i64)
+    } else {
+        format!("{qty:.2}")
+    }
 }
 
 pub(crate) fn build_prompt_context(
@@ -69,6 +148,10 @@ pub(crate) fn build_prompt_context(
             &state
                 .current_price
                 .map_or_else(|| "unavailable".to_owned(), |p| format!("{p:.2}")),
+        )
+        .replace(
+            "{account_positions}",
+            &render_account_positions(&state.account_positions, state.symbol.as_ref()),
         );
 
     let user_prompt = build_user_prompt(
@@ -297,6 +380,98 @@ mod tests {
     fn with_baseline_policy(state: &mut TradingState) {
         state.analysis_runtime_policy = Some(
             resolve_runtime_policy("baseline").expect("baseline runtime policy should resolve"),
+        );
+    }
+
+    #[test]
+    fn render_account_positions_disabled_and_unavailable_branches() {
+        use crate::state::AccountPositionsState;
+        assert_eq!(
+            super::render_account_positions(&AccountPositionsState::Disabled, None),
+            ""
+        );
+        let unavailable =
+            AccountPositionsState::Unavailable("OpenD unreachable on 127.0.0.1:11111".to_owned());
+        assert_eq!(super::render_account_positions(&unavailable, None), "");
+    }
+
+    #[test]
+    fn render_account_positions_available_held_and_not_held() {
+        use crate::domain::Symbol;
+        use crate::state::{AccountPosition, AccountPositionsState, AccountSnapshot, PositionSide};
+
+        let snap = AccountSnapshot {
+            account_label: Some("acct-abc123".to_owned()),
+            market: "US".to_owned(),
+            currency: "USD".to_owned(),
+            total_market_value: Some(250_000.0),
+            positions: vec![
+                AccountPosition {
+                    code: "US.AAPL".to_owned(),
+                    name: "Apple".to_owned(),
+                    qty: 100.0,
+                    can_sell_qty: 100.0,
+                    cost_price: Some(150.0),
+                    current_price: Some(185.42),
+                    market_value: Some(35_000.0),
+                    pl_ratio: Some(0.236),
+                    pl_val: Some(3_542.0),
+                    currency: "USD".to_owned(),
+                    side: PositionSide::Long,
+                },
+                AccountPosition {
+                    code: "US.MSFT".to_owned(),
+                    name: "Microsoft".to_owned(),
+                    qty: 50.0,
+                    can_sell_qty: 50.0,
+                    cost_price: Some(300.0),
+                    current_price: Some(420.0),
+                    market_value: Some(30_000.0),
+                    pl_ratio: Some(0.4),
+                    pl_val: Some(6_000.0),
+                    currency: "USD".to_owned(),
+                    side: PositionSide::Long,
+                },
+            ],
+        };
+        let available = AccountPositionsState::Available(snap);
+
+        let aapl = Symbol::parse("AAPL").unwrap();
+        let held = super::render_account_positions(&available, Some(&aapl));
+        assert!(held.contains("Account context (US, USD)."));
+        assert!(held.contains("You hold AAPL"));
+        assert!(held.contains("avg 150.00"));
+        assert!(held.contains("mark 185.42"));
+        assert!(held.contains("P/L +23.6%"));
+        assert!(held.contains("2 positions"));
+
+        let nvda = Symbol::parse("NVDA").unwrap();
+        let not_held = super::render_account_positions(&available, Some(&nvda));
+        assert!(not_held.contains("You do NOT currently hold NVDA"));
+        assert!(not_held.contains("2 positions"));
+    }
+
+    #[test]
+    fn build_prompt_context_renders_account_context_into_system_prompt() {
+        use crate::state::{AccountPositionsState, AccountSnapshot};
+        let mut state = populated_state();
+        state.account_positions = AccountPositionsState::Available(AccountSnapshot {
+            account_label: Some("acct-abc123".to_owned()),
+            market: "US".to_owned(),
+            currency: "USD".to_owned(),
+            total_market_value: Some(0.0),
+            positions: vec![],
+        });
+        let (system, _user) = build_prompt_context(
+            &state,
+            &state.asset_symbol,
+            &state.target_date,
+            DualRiskStatus::Absent,
+        );
+        assert!(system.contains("Account context (US, USD)."));
+        assert!(
+            !system.contains("{account_positions}"),
+            "placeholder must be substituted"
         );
     }
 

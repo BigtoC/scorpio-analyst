@@ -26,6 +26,12 @@ Otherwise, weigh the analyst, debate, and risk-stage output normally.
 - If `composition` is `None` AND the proposal's thesis depends on sector exposure, 
   reject and ask for re-analysis when ETF composition/profile data is available.
 
+## Account context
+
+- Account positions:{account_positions}
+
+If account positions are provided, factor existing exposure into your decision — weigh add/trim/hold against the current holding and cost basis, and size relative to portfolio concentration; reflect this in `suggested_position` and `entry_guidance`. These holdings are read-only account context from local OpenD and are sent to the configured LLM provider as part of this prompt. If account positions are absent, decide exactly as you otherwise would, with no penalty.
+
 ## Pack-specific field guidance
 
 - `entry_guidance`: anchor price levels on premium-band thresholds, NAV,

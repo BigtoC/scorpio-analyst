@@ -64,6 +64,7 @@ fn sample_config() -> Config {
         providers: sample_providers_config(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     }
 }
@@ -1784,4 +1785,129 @@ fn fund_manager_prompt_drift_guard_forbids_deterministic_phrases() {
             "Fund Manager user prompt must not contain \"{phrase}\""
         );
     }
+}
+
+// ── account-positions acceptance scenarios (captured system prompt) ──────────
+
+struct CapturingInference {
+    response: String,
+    captured_system: Mutex<Option<String>>,
+}
+
+impl CapturingInference {
+    fn new(response: String) -> Self {
+        Self {
+            response,
+            captured_system: Mutex::new(None),
+        }
+    }
+    fn system_prompt(&self) -> String {
+        self.captured_system
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("infer was called")
+    }
+}
+
+impl FundManagerInference for CapturingInference {
+    async fn infer(
+        &self,
+        _handle: &CompletionModelHandle,
+        system_prompt: &str,
+        _user_prompt: &str,
+        _timeout: Duration,
+        _retry_policy: &RetryPolicy,
+        _validator: &(dyn Fn(&str) -> Result<(), TradingError> + Send + Sync),
+    ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
+        *self.captured_system.lock().unwrap() = Some(system_prompt.to_owned());
+        Ok(RetryOutcome {
+            result: make_prompt_response(&self.response, nonzero_usage()),
+            rate_limit_wait_ms: 0,
+        })
+    }
+}
+
+fn available_held_state() -> TradingState {
+    use crate::state::{AccountPosition, AccountPositionsState, AccountSnapshot, PositionSide};
+    let mut state = populated_state();
+    state.account_positions = AccountPositionsState::Available(AccountSnapshot {
+        account_label: Some("acct-abc123".to_owned()),
+        market: "US".to_owned(),
+        currency: "USD".to_owned(),
+        total_market_value: Some(250_000.0),
+        positions: vec![AccountPosition {
+            code: "US.AAPL".to_owned(),
+            name: "Apple".to_owned(),
+            qty: 100.0,
+            can_sell_qty: 100.0,
+            cost_price: Some(150.0),
+            current_price: Some(185.42),
+            market_value: Some(35_000.0),
+            pl_ratio: Some(0.236),
+            pl_val: Some(3_542.0),
+            currency: "USD".to_owned(),
+            side: PositionSide::Long,
+        }],
+    });
+    state
+}
+
+#[tokio::test]
+async fn fund_manager_receives_held_account_context_in_system_prompt() {
+    let mut state = available_held_state();
+    let inference = CapturingInference::new(approved_json());
+    let agent = fund_manager_for_test();
+    agent
+        .run_with_inference(&mut state, true, &inference)
+        .await
+        .unwrap();
+    let system = inference.system_prompt();
+    assert!(system.contains("You hold AAPL"));
+    assert!(system.contains("P/L +23.6%"));
+}
+
+#[tokio::test]
+async fn fund_manager_receives_not_held_account_context_in_system_prompt() {
+    use crate::providers::factory::create_completion_model;
+    let mut state = available_held_state();
+    state.asset_symbol = "MSFT".to_owned();
+    state.symbol = crate::domain::Symbol::parse("MSFT").ok();
+    let inference = CapturingInference::new(approved_json());
+    let agent = FundManagerAgent::new(
+        create_completion_model(
+            ModelTier::DeepThinking,
+            &sample_llm_config(),
+            &sample_providers_config(),
+            &crate::rate_limit::ProviderRateLimiters::default(),
+        )
+        .unwrap(),
+        "MSFT",
+        "2026-03-15",
+        &sample_llm_config(),
+    )
+    .unwrap();
+    agent
+        .run_with_inference(&mut state, true, &inference)
+        .await
+        .unwrap();
+    assert!(
+        inference
+            .system_prompt()
+            .contains("You do NOT currently hold MSFT")
+    );
+}
+
+#[tokio::test]
+async fn fund_manager_disabled_account_context_is_baseline_equivalent() {
+    let mut state = populated_state(); // account_positions defaults to Disabled
+    let inference = CapturingInference::new(approved_json());
+    let agent = fund_manager_for_test();
+    agent
+        .run_with_inference(&mut state, true, &inference)
+        .await
+        .unwrap();
+    let system = inference.system_prompt();
+    assert!(!system.contains("Account context ("));
+    assert!(state.final_execution_status.is_some());
 }

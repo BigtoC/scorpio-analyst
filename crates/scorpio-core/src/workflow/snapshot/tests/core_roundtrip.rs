@@ -258,3 +258,146 @@ deep_thinking_model = "o3"
     );
     drop(store);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_db_file_is_user_only_readable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Holdings persisted via the account_positions feature land in this DB, so
+    // the file must not be group/other readable (data-at-rest gate).
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db_path = dir.path().join("perms.db");
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("store should open");
+    drop(store);
+
+    let mode = std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "snapshot db must be user-only (rw-------), got {mode:o}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_store_leaves_preexisting_parent_dir_permissions_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // The store must not narrow a pre-existing (possibly shared) operator-
+    // configured directory as a side effect of opening — only the DB file.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let db_path = dir.path().join("preexisting.db");
+
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("store should open");
+    drop(store);
+
+    let dir_mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        dir_mode, 0o755,
+        "pre-existing parent dir must be left untouched, got {dir_mode:o}"
+    );
+    let file_mode = std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(file_mode, 0o600, "DB file must still be user-only");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_store_tightens_a_directory_it_creates() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A directory the store creates (e.g. the default data dir on first run) is
+    // narrowed to user-only, which also covers any SQLite -wal/-shm sidecars.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let created = dir.path().join("scorpio-data"); // does not exist yet
+    let db_path = created.join("snap.db");
+
+    let store = SnapshotStore::new(Some(&db_path))
+        .await
+        .expect("store should open");
+    drop(store);
+
+    let dir_mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        dir_mode, 0o700,
+        "a store-created directory must be user-only, got {dir_mode:o}"
+    );
+}
+
+#[tokio::test]
+async fn account_positions_survive_snapshot_round_trip() {
+    use crate::state::{AccountPosition, AccountPositionsState, AccountSnapshot, PositionSide};
+
+    let store = in_memory_store().await;
+    let mut state = crate::state::TradingState::new("AAPL", "2026-01-15");
+    let exec_id = state.execution_id.to_string();
+    state.account_positions = AccountPositionsState::Available(AccountSnapshot {
+        account_label: Some("acct-abc123".to_owned()),
+        market: "US".to_owned(),
+        currency: "USD".to_owned(),
+        total_market_value: Some(250_000.0),
+        positions: vec![AccountPosition {
+            code: "US.AAPL".to_owned(),
+            name: "Apple".to_owned(),
+            qty: 100.0,
+            can_sell_qty: 100.0,
+            cost_price: Some(150.0),
+            current_price: Some(185.42),
+            market_value: Some(18_542.0),
+            pl_ratio: Some(0.236),
+            pl_val: Some(3_542.0),
+            currency: "USD".to_owned(),
+            side: PositionSide::Long,
+        }],
+    });
+
+    store
+        .save_snapshot(&exec_id, SnapshotPhase::FundManager, &state, None)
+        .await
+        .expect("save should succeed");
+    let loaded = store
+        .load_snapshot(&exec_id, SnapshotPhase::FundManager)
+        .await
+        .expect("load should succeed")
+        .expect("snapshot should exist");
+
+    assert_eq!(loaded.state.account_positions, state.account_positions);
+}
+
+#[test]
+fn persisted_account_positions_contain_no_raw_account_id() {
+    use crate::state::{AccountPositionsState, AccountSnapshot};
+
+    // `save_snapshot` persists `serde_json::to_string(state)`, so asserting on
+    // the serialized state tests the exact bytes that hit disk — no store needed.
+    let mut state = crate::state::TradingState::new("AAPL", "2026-01-15");
+    state.account_positions = AccountPositionsState::Available(AccountSnapshot {
+        account_label: Some("acct-9f8e7d".to_owned()), // redacted hash, not the raw id
+        market: "US".to_owned(),
+        currency: "USD".to_owned(),
+        total_market_value: Some(0.0),
+        positions: vec![],
+    });
+    let raw = serde_json::to_string(&state).expect("state serializes");
+    assert!(
+        !raw.contains("\"acc_id\"") && !raw.contains("\"accID\""),
+        "persisted snapshot must not contain a raw account id field: {raw}"
+    );
+}
+
+#[test]
+fn legacy_snapshot_without_account_positions_loads_as_disabled() {
+    use crate::state::{AccountPositionsState, TradingState};
+    // A serialized state from before this feature has no `account_positions` key.
+    let mut value = serde_json::to_value(TradingState::new("AAPL", "2026-01-15")).unwrap();
+    value.as_object_mut().unwrap().remove("account_positions");
+    let legacy_json = serde_json::to_string(&value).unwrap();
+
+    let state: TradingState =
+        serde_json::from_str(&legacy_json).expect("legacy snapshot must still deserialize");
+    assert_eq!(state.account_positions, AccountPositionsState::Disabled);
+}

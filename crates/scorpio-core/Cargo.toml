@@ -65,6 +65,8 @@ num-traits.workspace = true
 quick-xml.workspace = true
 statrs.workspace = true
 zip.workspace = true
+# Futu OpenD frame body checksums (44-byte header SHA-1)
+sha1.workspace = true
 # paft 0.8 exposes per-unit values as `Price`/`Decimal` (e.g. option implied
 # volatility); rust_decimal is paft's underlying Decimal impl and provides the
 # `ToPrimitive` conversion to f64 used at the data-adapter boundary.

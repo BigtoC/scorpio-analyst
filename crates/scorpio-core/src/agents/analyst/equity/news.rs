@@ -386,6 +386,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_news_tolerates_missing_snippet_and_confidence() {
+        // A weaker LLM may omit the per-article snippet and the macro-event
+        // confidence; these must default rather than abort the analyst phase.
+        let json = r#"{
+            "articles":[{"title":"T","source":"S","published_at":"2026-06-01","relevance_score":0.5}],
+            "macro_events":[{"event":"Fed holds rates","impact_direction":"neutral"}],
+            "summary":"Stable backdrop."
+        }"#;
+        let data = parse_news(json).expect("missing snippet/confidence must default, not fail");
+        assert_eq!(data.articles[0].snippet, "");
+        assert_eq!(data.macro_events[0].confidence, 0.0);
+        // The defaulted confidence still passes range validation.
+        assert!(validate_news(&data).is_ok());
+    }
+
+    #[test]
     fn confidence_out_of_range_returns_schema_violation() {
         let json = r#"{
             "articles": [],

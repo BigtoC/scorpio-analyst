@@ -52,6 +52,7 @@ pub async fn make_pipeline(
         providers: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
 
@@ -115,6 +116,7 @@ pub async fn make_pipeline_from_pack(
         providers: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: analysis_pack.to_owned(),
     };
 

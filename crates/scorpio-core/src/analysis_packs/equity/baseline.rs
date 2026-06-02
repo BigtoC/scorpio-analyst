@@ -321,4 +321,18 @@ mod tests {
         let pack = resolve_pack(PackId::Baseline);
         assert_eq!(pack.id, PackId::Baseline);
     }
+
+    #[test]
+    fn baseline_fund_manager_prompt_carries_account_positions_contract() {
+        let pack = resolve_pack(PackId::Baseline);
+        let fm = pack.prompt_bundle.fund_manager.as_ref();
+        assert!(
+            fm.contains("{account_positions}"),
+            "equity fund_manager prompt must keep the account_positions placeholder"
+        );
+        assert!(
+            fm.contains("sent to the configured LLM provider"),
+            "equity fund_manager prompt must carry the account-positions instruction"
+        );
+    }
 }

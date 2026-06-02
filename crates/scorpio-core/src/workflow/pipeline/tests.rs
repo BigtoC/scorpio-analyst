@@ -8,8 +8,9 @@ use super::{
 use crate::{
     error::TradingError,
     state::{
-        AgentTokenUsage, DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource,
-        FundamentalData, NewsData, ProvenanceSummary, SentimentData, TechnicalData,
+        AccountPosition, AccountPositionsState, AccountSnapshot, AgentTokenUsage,
+        DataCoverageReport, EvidenceKind, EvidenceRecord, EvidenceSource, FundamentalData,
+        NewsData, PositionSide, ProvenanceSummary, SentimentData, TechnicalData,
         TechnicalOptionsContext, TradingState,
     },
     workflow::{
@@ -210,6 +211,34 @@ impl Task for PartialAnalystChild {
 }
 
 #[test]
+fn reset_cycle_outputs_clears_stale_account_positions() {
+    let mut state = TradingState::new("AAPL", "2026-03-20");
+    state.account_positions = AccountPositionsState::Available(AccountSnapshot {
+        account_label: Some("acct-abc123".to_owned()),
+        market: "US".to_owned(),
+        currency: "USD".to_owned(),
+        total_market_value: Some(18_542.0),
+        positions: vec![AccountPosition {
+            code: "AAPL".to_owned(),
+            name: "Apple".to_owned(),
+            qty: 100.0,
+            can_sell_qty: 100.0,
+            cost_price: Some(150.0),
+            current_price: Some(185.42),
+            market_value: Some(18_542.0),
+            pl_ratio: Some(0.236),
+            pl_val: Some(3_542.0),
+            currency: "USD".to_owned(),
+            side: PositionSide::Long,
+        }],
+    });
+
+    runtime::reset_cycle_outputs(&mut state);
+
+    assert_eq!(state.account_positions, AccountPositionsState::Disabled);
+}
+
+#[test]
 fn map_graph_error_extracts_task_phase_from_task_execution_failure() {
     let err = map_graph_error(graph_flow::GraphError::TaskExecutionFailed(
         "Task 'bullish_researcher' failed: provider timeout".to_owned(),
@@ -303,6 +332,7 @@ async fn task_id_constants_match_task_impl_ids() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     });
     let (snapshot_store, _dir) = test_snapshot_store("task-id-constants.db").await;
@@ -409,6 +439,7 @@ async fn run_analysis_cycle_clears_stale_evidence_and_reporting_fields_from_reus
             ..Default::default()
         },
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
     let (snapshot_store, _dir) = test_snapshot_store("pipeline-reused-state.db").await;
@@ -541,6 +572,7 @@ async fn try_new_rejects_invalid_pack_id_with_typed_error() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "totally-not-a-real-pack".to_owned(),
     };
     let (snapshot_store, _dir) = test_snapshot_store("pipeline-try-new-bad-pack.db").await;
@@ -593,6 +625,7 @@ async fn try_new_succeeds_for_baseline_pack_id() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
     let (snapshot_store, _dir) = test_snapshot_store("pipeline-try-new-ok.db").await;
@@ -801,6 +834,7 @@ async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
     let (snapshot_store, _dir) =
@@ -886,6 +920,7 @@ fn make_pipeline(db_name: &'static str) -> (crate::workflow::TradingPipeline, te
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
     let dir = tempfile::tempdir().expect("tempdir");
@@ -933,6 +968,7 @@ fn runtime_reddit_subreddits_are_disabled_when_reddit_rpm_is_zero() {
             ..Default::default()
         },
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
 
@@ -1104,6 +1140,7 @@ async fn run_analysis_cycle_hydrates_catalyst_calendar_enrichment() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
     let (snapshot_store, _dir) = test_snapshot_store("pipeline-hydrate-catalyst.db").await;
@@ -1174,6 +1211,7 @@ async fn run_analysis_cycle_reuses_injected_catalyst_provider_across_cycles() {
         storage: Default::default(),
         rate_limits: Default::default(),
         enrichment: Default::default(),
+        futu: Default::default(),
         analysis_pack: "baseline".to_owned(),
     };
     let (snapshot_store, _dir) = test_snapshot_store("pipeline-catalyst-provider-reuse.db").await;

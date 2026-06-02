@@ -32,6 +32,9 @@ const KNOWN_PLACEHOLDERS: &[&str] = &[
     "{news_report}",
     "{past_memory_str}",
     "{current_price}",
+    // Fund-manager read-only account-position context (Futu integration);
+    // replaced at prompt-render time, empty when disabled/unavailable.
+    "{account_positions}",
     "{consensus_summary}",
     "{market_volatility_report}",
     "{data_quality_note}",
@@ -280,10 +283,11 @@ mod tests {
     fn known_placeholder_vocabulary_is_closed() {
         // Locking the closed allowlist size so any future placeholder addition
         // forces a deliberate code change to this constant + tests.
-        assert_eq!(KNOWN_PLACEHOLDERS.len(), 29);
+        assert_eq!(KNOWN_PLACEHOLDERS.len(), 30);
         assert!(KNOWN_PLACEHOLDERS.contains(&"{ticker}"));
         assert!(KNOWN_PLACEHOLDERS.contains(&"{trader_proposal}"));
         assert!(KNOWN_PLACEHOLDERS.contains(&"{current_price}"));
+        assert!(KNOWN_PLACEHOLDERS.contains(&"{account_positions}"));
     }
 
     // ─── sanitize_analysis_emphasis ─────────────────────────────────────────
