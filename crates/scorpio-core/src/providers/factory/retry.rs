@@ -162,18 +162,18 @@ where
             ),
         };
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.prompt_details(&current_prompt),
         )
-        .await
+            .await
         {
             Ok(Ok(response)) => match validator(&response.output) {
                 Ok(()) => {
-                    return Ok(RetryOutcome {
+                    Ok(RetryOutcome {
                         result: response,
                         rate_limit_wait_ms,
-                    });
+                    })
                 }
                 Err(TradingError::SchemaViolation { message }) => {
                     if attempt < policy.max_retries {
@@ -187,9 +187,9 @@ where
                         corrective_feedback = Some(message);
                         continue;
                     }
-                    return Err(TradingError::SchemaViolation { message });
+                    Err(TradingError::SchemaViolation { message })
                 }
-                Err(other) => return Err(other),
+                Err(other) => Err(other),
             },
             Ok(Err(err)) => {
                 if attempt < policy.max_retries
@@ -198,11 +198,11 @@ where
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient validated-prompt error, will retry");
                     continue;
                 }
-                return Err(map_prompt_error_with_context(
+                Err(map_prompt_error_with_context(
                     agent.provider_name(),
                     agent.model_id(),
                     err,
-                ));
+                ))
             }
             Err(_elapsed) => {
                 let err = attempt_timeout_error(started_at, agent, attempt, "validated prompt");
@@ -210,7 +210,7 @@ where
                     warn!(attempt, "validated prompt timed out, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
         }
     }
@@ -259,12 +259,12 @@ where
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(attempt_budget.timeout, call_fn()).await {
+        return match tokio::time::timeout(attempt_budget.timeout, call_fn()).await {
             Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
+                Ok(RetryOutcome {
                     result: response,
                     rate_limit_wait_ms,
-                });
+                })
             }
             Ok(Err(err)) => {
                 if attempt < policy.max_retries
@@ -273,11 +273,11 @@ where
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient prompt error, will retry");
                     continue;
                 }
-                return Err(map_prompt_error_with_context(
+                Err(map_prompt_error_with_context(
                     agent.provider_name(),
                     agent.model_id(),
                     err,
-                ));
+                ))
             }
             Err(_elapsed) => {
                 let err = attempt_timeout_error(started_at, agent, attempt, "prompt");
@@ -285,7 +285,7 @@ where
                     warn!(attempt, "prompt timed out, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
         }
     }
@@ -401,17 +401,17 @@ pub(crate) async fn chat_with_retry_details_budget(
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.chat_details(prompt, chat_history),
         )
-        .await
+            .await
         {
             Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
+                Ok(RetryOutcome {
                     result: response,
                     rate_limit_wait_ms,
-                });
+                })
             }
             Ok(Err(err)) => {
                 // Restore caller-owned history on any failed attempt before retrying or returning.
@@ -422,11 +422,11 @@ pub(crate) async fn chat_with_retry_details_budget(
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient chat-details error, will retry");
                     continue;
                 }
-                return Err(map_prompt_error_with_context(
+                Err(map_prompt_error_with_context(
                     agent.provider_name(),
                     agent.model_id(),
                     err,
-                ));
+                ))
             }
             Err(_elapsed) => {
                 // On timeout, also truncate any partial messages.
@@ -436,7 +436,7 @@ pub(crate) async fn chat_with_retry_details_budget(
                     warn!(attempt, "chat-details timed out, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
         }
     }
@@ -481,30 +481,30 @@ where
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.prompt_typed_details::<T>(prompt, max_turns),
         )
-        .await
+            .await
         {
             Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
+                Ok(RetryOutcome {
                     result: response,
                     rate_limit_wait_ms,
-                });
+                })
             }
             Ok(Err(err)) => {
                 if should_retry_typed_error(&err) && attempt < policy.max_retries {
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
             Err(_elapsed) => {
                 let err = attempt_timeout_error(started_at, agent, attempt, "typed prompt");
                 if attempt < policy.max_retries {
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
         }
     }
@@ -571,18 +571,18 @@ where
             ),
         };
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.prompt_typed_details::<T>(&current_prompt, max_turns),
         )
-        .await
+            .await
         {
             Ok(Ok(response)) => match validator(&response.output) {
                 Ok(()) => {
-                    return Ok(RetryOutcome {
+                    Ok(RetryOutcome {
                         result: response,
                         rate_limit_wait_ms,
-                    });
+                    })
                 }
                 Err(TradingError::SchemaViolation { message }) => {
                     if attempt < policy.max_retries {
@@ -596,15 +596,15 @@ where
                         corrective_feedback = Some(message);
                         continue;
                     }
-                    return Err(TradingError::SchemaViolation { message });
+                    Err(TradingError::SchemaViolation { message })
                 }
-                Err(other) => return Err(other),
+                Err(other) => Err(other),
             },
             Ok(Err(err)) => {
                 if should_retry_typed_error(&err) && attempt < policy.max_retries {
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
             Err(_elapsed) => {
                 let err =
@@ -612,7 +612,7 @@ where
                 if attempt < policy.max_retries {
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
         }
     }
