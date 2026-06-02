@@ -384,7 +384,7 @@ fn default_finnhub_rps() -> u32 {
     30
 }
 fn default_fred_rps() -> u32 {
-    2
+    1
 }
 fn default_yahoo_finance_rps() -> u32 {
     30
@@ -1172,7 +1172,7 @@ deep_thinking_model = "o3"
         assert_eq!(cfg.llm.max_debate_rounds, 2);
         assert_eq!(cfg.llm.valuation_fetch_timeout_secs, 30);
         assert_eq!(cfg.rate_limits.finnhub_rps, 30);
-        assert_eq!(cfg.rate_limits.fred_rps, 2);
+        assert_eq!(cfg.rate_limits.fred_rps, 1);
         assert_eq!(cfg.rate_limits.yahoo_finance_rps, 30);
         // Provider rpm defaults (default_openai_settings etc.) only activate when a
         // [providers] section is present in TOML; absent the section entirely, serde

@@ -541,7 +541,10 @@ fn classify_retry_decision(error: &FredRequestError) -> FredRetryDecision {
         FredRequestError::RateLimited { retry_after } => FredRetryDecision {
             retryable: true,
             degradable: true,
-            delay_override: *retry_after,
+            // Use server-supplied Retry-After when present; fall back to 5 s.
+            // The 500 ms linear backoff is far too short for a server-side
+            // rate limit window and produces a thundering-herd retry pattern.
+            delay_override: Some(retry_after.unwrap_or(Duration::from_secs(5))),
         },
         FredRequestError::RetryBudgetExhausted => FredRetryDecision {
             retryable: false,
@@ -755,6 +758,17 @@ mod tests {
         assert!(decision.retryable);
         assert!(decision.degradable);
         assert_eq!(decision.delay_override, Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn retry_decision_uses_5s_floor_when_rate_limited_without_retry_after_header() {
+        let decision = classify_retry_decision(&FredRequestError::RateLimited {
+            retry_after: None,
+        });
+
+        assert!(decision.retryable);
+        assert!(decision.degradable);
+        assert_eq!(decision.delay_override, Some(Duration::from_secs(5)));
     }
 
     #[test]
