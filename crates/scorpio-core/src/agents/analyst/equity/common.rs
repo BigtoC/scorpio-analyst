@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
+use crate::agents::shared::extract_json_object;
 use crate::{
     agents::shared::sanitize_prompt_context,
     analysis_packs::RuntimePolicy,
@@ -210,8 +211,11 @@ where
         .unwrap_or("unknown");
     let model_id = agent.model_id();
 
+    // Text-emitting models often wrap the JSON in markdown code fences or
+    // surrounding prose, so extract the JSON object before parsing — without
+    // this, a fenced/prefixed response fails serde at "line 1 column 1".
     // Run parse + validate inside the retry loop so flaky JSON-emitting models
-    // (e.g. DeepSeek) get a chance to self-correct from a schema violation.
+    // (e.g. DeepSeek, Gemini text-fallback) get a chance to self-correct.
     let outcome =
         prompt_text_with_retry_validated(agent, prompt, timeout, retry_policy, max_turns, |raw| {
             if raw.trim().is_empty() {
@@ -221,13 +225,15 @@ where
                     ),
                 });
             }
-            let value = parse(raw)?;
+            let json = extract_json_object(type_name, raw)?;
+            let value = parse(&json)?;
             validate(&value)
         })
         .await?;
 
     let raw = &outcome.result.output;
-    let output = parse(raw)?;
+    let json = extract_json_object(type_name, raw)?;
+    let output = parse(&json)?;
     Ok(AnalystInferenceOutcome {
         output,
         usage: outcome.result.usage,
@@ -400,6 +406,49 @@ mod tests {
         assert_eq!(agent_test_support::typed_attempts(&agent), 0);
         assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
         assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+    }
+
+    #[tokio::test]
+    async fn run_analyst_inference_text_fallback_strips_code_fence_and_prose() {
+        use rig::agent::PromptResponse;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+        struct Output {
+            value: i32,
+        }
+
+        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+            ProviderId::DeepSeek,
+            "deepseek-chat",
+            vec![],
+            vec![],
+        );
+        // Model wraps the JSON in a ```json fence with surrounding prose —
+        // previously this failed serde at "line 1 column 1". The text-fallback
+        // path now extracts the JSON object before parsing.
+        agent.push_text_turn_ok(PromptResponse::new(
+            "Here is the analysis:\n```json\n{\"value\": 42}\n```\nDone.",
+            sample_usage(8),
+        ));
+
+        let outcome = run_analyst_inference(
+            &agent,
+            "prompt",
+            Duration::from_millis(50),
+            &fast_policy(),
+            1,
+            |s: &str| -> Result<Output, crate::error::TradingError> {
+                serde_json::from_str(s).map_err(|e| crate::error::TradingError::SchemaViolation {
+                    message: e.to_string(),
+                })
+            },
+            |_o: &Output| -> Result<(), crate::error::TradingError> { Ok(()) },
+        )
+        .await
+        .expect("fenced/prose-wrapped JSON must parse after extraction");
+
+        assert_eq!(outcome.output.value, 42);
     }
 
     #[tokio::test]

@@ -39,6 +39,9 @@ pub struct NewsArticle {
     pub source: String,
     pub published_at: String,
     pub relevance_score: Option<f64>,
+    /// Short article excerpt. `#[serde(default)]` so a weaker LLM that omits it
+    /// degrades to an empty snippet instead of aborting the whole analyst phase.
+    #[serde(default)]
     pub snippet: String,
     /// Optional source URL for the article. Additive field — older snapshots
     /// produced before Yahoo news enrichment will deserialize with `None`.
@@ -67,5 +70,10 @@ pub enum ImpactDirection {
 pub struct MacroEvent {
     pub event: String,
     pub impact_direction: ImpactDirection,
+    /// Model confidence in the event's impact, in `[0.0, 1.0]`.
+    /// `#[serde(default)]` (→ `0.0`) so a weaker LLM that omits it degrades
+    /// gracefully instead of aborting the analyst phase; `validate_news` still
+    /// range-checks any value the model does provide.
+    #[serde(default)]
     pub confidence: f64,
 }
