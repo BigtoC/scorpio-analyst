@@ -21,7 +21,7 @@ type TypedResultQueue = Arc<Mutex<VecDeque<Result<Box<dyn std::any::Any + Send>,
 use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
-    completion::{Chat, Message, Prompt, PromptError},
+    completion::{Message, Prompt, PromptError},
     tool::ToolDyn,
 };
 use serde::de::DeserializeOwned;
@@ -324,21 +324,14 @@ impl LlmAgent {
             gen_ai.request.model = self.model_id(),
             gen_ai.usage.input_tokens = tracing::field::Empty,
             gen_ai.usage.output_tokens = tracing::field::Empty,
+            gen_ai.prompt = tracing::field::Empty,
+            gen_ai.completion = tracing::field::Empty,
         )
     }
 
     /// Send a one-shot prompt and return the response text.
     pub async fn prompt(&self, prompt: &str) -> Result<String, PromptError> {
-        let span = self.llm_span("prompt");
-        async {
-            dispatch_llm_agent!(
-                &self.inner,
-                |agent| agent.prompt(prompt).await,
-                mock = |agent| { Ok(agent.prompt_details(prompt).await?.output) }
-            )
-        }
-        .instrument(span)
-        .await
+        Ok(self.prompt_details(prompt).await?.output)
     }
 
     /// Send a one-shot prompt and return text plus aggregated usage details.
@@ -350,7 +343,7 @@ impl LlmAgent {
                 |agent| agent.prompt(prompt).extended_details().await,
                 mock = |agent| agent.prompt_details(prompt).await
             )?;
-            record_usage(&span, &response.usage);
+            record_generation(&span, prompt, Some(&response.output), &response.usage);
             Ok(response)
         }
         .instrument(span.clone())
@@ -387,7 +380,7 @@ impl LlmAgent {
                     .prompt_typed_details::<T>(prompt, max_turns)
                     .await
             )?;
-            record_usage(&span, &response.usage);
+            record_generation(&span, prompt, None, &response.usage);
             Ok(response)
         }
         .instrument(span.clone())
@@ -427,7 +420,7 @@ impl LlmAgent {
                 },
                 mock = |mock_agent| mock_agent.prompt_text_details(prompt, max_turns).await
             )?;
-            record_usage(&span, &response.usage);
+            record_generation(&span, prompt, Some(&response.output), &response.usage);
             Ok(response)
         }
         .instrument(span.clone())
@@ -440,19 +433,8 @@ impl LlmAgent {
         prompt: &str,
         chat_history: Vec<Message>,
     ) -> Result<String, PromptError> {
-        let span = self.llm_span("chat");
-        async {
-            dispatch_llm_agent!(
-                &self.inner,
-                |agent| agent.chat(prompt, chat_history).await,
-                mock = |agent| {
-                    let mut history = chat_history;
-                    Ok(agent.chat_details(prompt, &mut history).await?.output)
-                }
-            )
-        }
-        .instrument(span)
-        .await
+        let mut history = chat_history;
+        Ok(self.chat_details(prompt, &mut history).await?.output)
     }
 
     /// Send a prompt with mutable chat history and return response text plus usage details.
@@ -479,8 +461,7 @@ impl LlmAgent {
                 },
                 mock = |agent| agent.chat_details(prompt, chat_history).await
             )?;
-            record_usage(&span, &response.usage);
-
+            record_generation(&span, prompt, Some(&response.output), &response.usage);
             append_response_messages(chat_history, &response);
             Ok(response)
         }
@@ -489,13 +470,23 @@ impl LlmAgent {
     }
 }
 
-/// Record provider-reported token usage onto an LLM generation span.
+/// Record the LLM generation onto its OTel span.
 ///
-/// The fields are declared [`Empty`](tracing::field::Empty) by
-/// [`LlmAgent::llm_span`] and filled here on success; Langfuse maps the
-/// `gen_ai.usage.*` attributes to the observation's usage and computes cost
-/// from them instead of falling back to tokenizer inference.
-fn record_usage(span: &tracing::Span, usage: &rig::completion::Usage) {
+/// The `gen_ai.*` fields are declared [`Empty`](tracing::field::Empty) by
+/// [`LlmAgent::llm_span`] and filled here on success so Langfuse can display
+/// the prompt input, completion output, and provider-reported token counts
+/// instead of relying on tokenizer inference. `completion` is `None` for
+/// typed/structured calls where the output is not a plain string.
+fn record_generation(
+    span: &tracing::Span,
+    prompt: &str,
+    completion: Option<&str>,
+    usage: &rig::completion::Usage,
+) {
+    span.record("gen_ai.prompt", prompt);
+    if let Some(c) = completion {
+        span.record("gen_ai.completion", c);
+    }
     span.record("gen_ai.usage.input_tokens", usage.input_tokens);
     span.record("gen_ai.usage.output_tokens", usage.output_tokens);
 }
@@ -814,6 +805,9 @@ where
 {
     use rig::completion::TypedPrompt;
     let span = agent.llm_span("prompt_typed");
+    // Record the prompt before the call; usage/completion aren't available
+    // without extended_details, which this one-shot helper intentionally avoids.
+    span.record("gen_ai.prompt", prompt);
     async {
         dispatch_llm_agent!(
             &agent.inner,
