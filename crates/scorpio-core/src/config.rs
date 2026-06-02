@@ -86,9 +86,9 @@ pub struct FutuConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Explicit Real-account selector. Matched against each Real account's
-    /// `uni_card_num` (universal account number shown in the Futu app),
-    /// `card_num`, or raw `acc_id` for the analyzed symbol's market. When unset,
-    /// the first Real account authorized for the market is used.
+    /// `uni_card_num` (universal account number shown in the Futu app) or raw
+    /// `acc_id` for the analyzed symbol's market. When unset, the first Real
+    /// account authorized for the market is used.
     /// Env: `SCORPIO__FUTU__ACCOUNT`.
     #[serde(default)]
     pub account: Option<String>,

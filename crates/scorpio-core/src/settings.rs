@@ -378,8 +378,8 @@ pub struct PartialConfig {
     /// Maps to `[futu] enabled` / `SCORPIO__FUTU__ENABLED`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub futu_enabled: Option<bool>,
-    /// Optional explicit Real Futu account selector (uni_card_num, card_num, or
-    /// raw acc_id); when unset the account is chosen by market-match.
+    /// Optional explicit Real Futu account selector (uni_card_num or raw
+    /// acc_id); when unset the account is chosen by market-match.
     /// Maps to `[futu] account` / `SCORPIO__FUTU__ACCOUNT`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub futu_account: Option<String>,
