@@ -167,9 +167,9 @@ cargo run -p scorpio-cli -- analyze AAPL --no-terminal --json --output-dir /tmp/
 ### Futu positions (optional, read-only)
 
 Run `scorpio setup` (it now prompts to enable Futu positions and optionally pin a
-Real account — by its universal account number, card number, or `acc_id` — persisted
-under `[futu]` in `~/.scorpio-analyst/config.toml`; set `SCORPIO__FUTU__ACCOUNT` to
-override), or
+Real account — by its universal account number (shown in the Futu app) or `acc_id` —
+persisted under `[futu]` in `~/.scorpio-analyst/config.toml`; set
+`SCORPIO__FUTU__ACCOUNT` to override), or
 set `SCORPIO__FUTU__ENABLED=true` (default off) to let the Fund Manager see your
 current Real-account holdings for the analyzed symbol's market. Requires a local
 Futu OpenD reachable on `127.0.0.1:11111` with **API encryption disabled**. The
