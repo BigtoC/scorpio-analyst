@@ -80,6 +80,7 @@ pub(crate) fn assemble_snapshot(
                 uniform_currency = false;
             }
             total += r.val.unwrap_or(0.0);
+            let pl_ratio = normalize_pl_ratio(&r);
             AccountPosition {
                 code: normalize_code(&r.code),
                 name: sanitize_label(&r.name),
@@ -88,10 +89,7 @@ pub(crate) fn assemble_snapshot(
                 cost_price: r.cost_price,
                 current_price: r.price,
                 market_value: r.val,
-                // OpenD returns plRatio as a percentage ("plRatio 8.8 ==> +8.8%",
-                // confirmed against Trd_Common.proto + the Task 0 spike). The
-                // domain stores pl_ratio as a fraction (0.088), so divide by 100.
-                pl_ratio: r.pl_ratio.map(|p| p / 100.0),
+                pl_ratio,
                 pl_val: r.pl_val,
                 currency: row_currency,
                 side: position_side(r.position_side),
@@ -106,6 +104,28 @@ pub(crate) fn assemble_snapshot(
         total_market_value: uniform_currency.then_some(total),
         positions,
     }
+}
+
+/// Normalize the wire `plRatio` to the fraction the domain stores (0.088 =
+/// +8.8%). The wire scale is ambiguous across account generations: the
+/// Trd_Common proto documents a percentage ("plRatio 8.8 ==> +8.8%"), but
+/// unified (general securities) accounts observably return a fraction
+/// (22/22 rows in the Task 0 spike's cross-check). Disambiguate against
+/// `plVal / (costPrice × qty)`, which is unit-unambiguous; when that basis is
+/// unavailable, keep the raw value as a fraction — the only scale observed on
+/// a live account.
+fn normalize_pl_ratio(row: &PositionListItem) -> Option<f64> {
+    let pl_ratio = row.pl_ratio?;
+    if let (Some(pl_val), Some(cost)) = (row.pl_val, row.cost_price) {
+        let basis = cost * row.qty;
+        if basis.abs() > f64::EPSILON {
+            let computed = pl_val / basis;
+            if (pl_ratio / 100.0 - computed).abs() < (pl_ratio - computed).abs() {
+                return Some(pl_ratio / 100.0);
+            }
+        }
+    }
+    Some(pl_ratio)
 }
 
 fn position_side(value: i32) -> PositionSide {
@@ -341,8 +361,9 @@ mod tests {
 
     #[test]
     fn assemble_snapshot_converts_plratio_percentage_to_fraction() {
-        // Wire plRatio is a percentage (23.6 == +23.6%); the domain stores it as
-        // a fraction (0.236) so the prompt/report ×100 render is correct.
+        // Percentage-scale wire row (legacy accounts; "plRatio 23.6 == +23.6%"):
+        // the fixture's plVal/(costPrice*qty) cross-check (3542/15000 ≈ 0.236)
+        // identifies the percent scale, and the stored fraction is 0.236.
         let mut row = position("AAPL", 1_000.0, 2);
         row.pl_ratio = Some(23.6);
         let snap = assemble_snapshot(1, vec![row], TRD_MARKET_US);
@@ -351,5 +372,31 @@ mod tests {
             (stored - 0.236).abs() < 1e-9,
             "expected fraction 0.236, got {stored}"
         );
+    }
+
+    #[test]
+    fn assemble_snapshot_keeps_fraction_scale_plratio_unscaled() {
+        // Fraction-scale wire row (unified/general securities accounts return
+        // 0.236 for +23.6%): the cross-check picks the raw value, no ÷100.
+        let mut row = position("AAPL", 1_000.0, 2);
+        row.pl_ratio = Some(0.236);
+        let snap = assemble_snapshot(1, vec![row], TRD_MARKET_US);
+        let stored = snap.positions[0].pl_ratio.unwrap();
+        assert!(
+            (stored - 0.236).abs() < 1e-9,
+            "expected fraction 0.236, got {stored}"
+        );
+    }
+
+    #[test]
+    fn assemble_snapshot_without_cost_basis_keeps_plratio_as_fraction() {
+        // No plVal/costPrice to disambiguate against — the raw value is kept
+        // as a fraction (the only scale observed on a live account).
+        let mut row = position("AAPL", 1_000.0, 2);
+        row.pl_ratio = Some(0.5);
+        row.pl_val = None;
+        let snap = assemble_snapshot(1, vec![row], TRD_MARKET_US);
+        let stored = snap.positions[0].pl_ratio.unwrap();
+        assert!((stored - 0.5).abs() < 1e-9, "expected 0.5, got {stored}");
     }
 }
