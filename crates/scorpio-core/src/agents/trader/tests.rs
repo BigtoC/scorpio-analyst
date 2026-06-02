@@ -9,7 +9,7 @@ use super::*;
 use crate::agents::shared::UNTRUSTED_CONTEXT_NOTICE;
 use crate::testing::with_baseline_runtime_policy;
 use crate::{
-    config::{ProviderSettings, ProvidersConfig, TradingConfig},
+    config::{ProviderSettings, ProvidersConfig},
     providers::factory::RetryOutcome,
     state::{
         CorporateEquityValuation, FundamentalData, ImpactDirection, MacroEvent, NewsArticle,
@@ -45,20 +45,6 @@ fn sample_providers_config() -> ProvidersConfig {
             ..Default::default()
         },
         ..Default::default()
-    }
-}
-
-fn sample_config() -> Config {
-    Config {
-        llm: sample_llm_config(),
-        trading: TradingConfig::default(),
-        api: Default::default(),
-        storage: Default::default(),
-        providers: sample_providers_config(),
-        rate_limits: Default::default(),
-        enrichment: Default::default(),
-        futu: Default::default(),
-        analysis_pack: "baseline".to_owned(),
     }
 }
 
@@ -433,28 +419,6 @@ async fn run_records_nonzero_latency_on_success() {
         .unwrap();
 
     assert!(usage.latency_ms < 5_000);
-}
-
-#[tokio::test]
-async fn run_trader_public_entrypoint_works_with_injected_inference() {
-    let mut state = populated_state();
-    let inference = StubInference::new(vec![Ok(TypedPromptResponse::new(
-        TraderProposalResponse::from(valid_proposal()),
-        Usage {
-            input_tokens: 80,
-            output_tokens: 25,
-            total_tokens: 105,
-            cached_input_tokens: 0,
-            cache_creation_input_tokens: 0,
-        },
-    ))]);
-
-    let usage = run_trader_with_inference(&mut state, &sample_config(), &inference)
-        .await
-        .unwrap();
-
-    assert_eq!(state.trader_proposal, Some(valid_proposal()));
-    assert_eq!(usage.model_id, "o3");
 }
 
 #[tokio::test]

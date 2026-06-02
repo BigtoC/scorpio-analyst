@@ -128,19 +128,6 @@ impl TraderAgent {
         })
     }
 
-    /// Run the Trader Agent: prompt the LLM, validate the response, and write to `state`.
-    ///
-    /// # Returns
-    /// [`AgentTokenUsage`] for the single LLM invocation.
-    ///
-    /// # Errors
-    /// - [`TradingError::Rig`] / [`TradingError::NetworkTimeout`] for LLM failures.
-    /// - [`TradingError::SchemaViolation`] when the LLM returns a response that
-    ///   fails provider-layer JSON decoding or trader-layer domain validation.
-    pub async fn run(&self, state: &mut TradingState) -> Result<AgentTokenUsage, TradingError> {
-        self.run_with_inference(state, &RigTraderInference).await
-    }
-
     async fn run_with_inference<I: TraderInference>(
         &self,
         state: &mut TradingState,
@@ -212,14 +199,6 @@ pub async fn run_trader(
     state: &mut TradingState,
     config: &Config,
 ) -> Result<AgentTokenUsage, TradingError> {
-    run_trader_with_inference(state, config, &RigTraderInference).await
-}
-
-async fn run_trader_with_inference<I: TraderInference>(
-    state: &mut TradingState,
-    config: &Config,
-    inference: &I,
-) -> Result<AgentTokenUsage, TradingError> {
     let handle = create_completion_model(
         ModelTier::DeepThinking,
         &config.llm,
@@ -227,7 +206,7 @@ async fn run_trader_with_inference<I: TraderInference>(
         &ProviderRateLimiters::from_config(&config.providers),
     )?;
     let agent = TraderAgent::new(handle, &state.asset_symbol, &state.target_date, &config.llm)?;
-    agent.run_with_inference(state, inference).await
+    agent.run_with_inference(state, &RigTraderInference).await
 }
 
 /// Domain-validate a [`TradeProposal`] after successful JSON deserialization.
