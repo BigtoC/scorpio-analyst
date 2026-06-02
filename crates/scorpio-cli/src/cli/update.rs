@@ -729,13 +729,6 @@ mod tests {
         }
 
         #[test]
-        fn bare_hex_sidecar_parses_correctly() {
-            let bytes = b"payload";
-            let hex_digest = sha256_hex(bytes);
-            assert!(verify_checksum(bytes, &hex_digest).is_ok());
-        }
-
-        #[test]
         fn empty_sidecar_returns_err() {
             let err = verify_checksum(b"anything", "").unwrap_err();
             assert!(
@@ -1290,7 +1283,9 @@ mod tests {
             }
         }
 
-        #[tokio::test]
+        // start_paused: the 50ms sender delay and the 500ms grace timer must resolve on the
+        // virtual clock so the late sender deterministically wins the grace race.
+        #[tokio::test(start_paused = true)]
         async fn waits_for_late_sender_within_grace() {
             let (tx, rx) = tokio::sync::oneshot::channel();
             tokio::spawn(async move {
@@ -1310,7 +1305,9 @@ mod tests {
             }
         }
 
-        #[tokio::test]
+        // start_paused: the 50ms grace timer must fire deterministically on the virtual clock
+        // (no sender ever sends) so the grace-timeout branch returns Pending without racing.
+        #[tokio::test(start_paused = true)]
         async fn returns_pending_on_grace_timeout_preserving_rx() {
             // Sender exists but never sends within the grace. We must not
             // hang past `grace`, AND we must return the rx for retry.

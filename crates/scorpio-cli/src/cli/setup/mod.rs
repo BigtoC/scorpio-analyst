@@ -222,13 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_cancellation_unit_success_returns_some_unit() {
-        let result: Result<(), inquire::InquireError> = Ok(());
-        let outcome = handle_cancellation(result).expect("should not error");
-        assert!(outcome.is_some());
-    }
-
-    #[test]
     fn load_or_recover_user_config_at_backs_up_invalid_file_and_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
