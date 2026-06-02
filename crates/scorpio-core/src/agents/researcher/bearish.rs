@@ -141,7 +141,7 @@ mod tests {
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
     use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
     use crate::providers::{ModelTier, factory::create_completion_model};
-    use crate::state::{AgentTokenUsage, DebateMessage};
+    use crate::state::DebateMessage;
     use secrecy::SecretString;
 
     fn sample_llm_config() -> LlmConfig {
@@ -206,36 +206,6 @@ mod tests {
         }
     }
 
-    // ── Task 2.4: Correct DebateMessage construction ─────────────────────
-
-    #[test]
-    fn debate_message_has_bearish_researcher_role() {
-        let msg = DebateMessage {
-            role: "bearish_researcher".to_owned(),
-            content: "High debt load threatens the downside scenario.".to_owned(),
-        };
-        assert_eq!(msg.role, "bearish_researcher");
-        assert!(!msg.content.is_empty());
-    }
-
-    // ── Task 2.6: AgentTokenUsage agent name ─────────────────────────────
-
-    #[test]
-    fn agent_token_usage_has_correct_agent_name() {
-        let usage = AgentTokenUsage {
-            agent_name: "Bearish Researcher".to_owned(),
-            model_id: "o3".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 10,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "Bearish Researcher");
-        assert_eq!(usage.model_id, "o3");
-    }
-
     // ── Task 2.7: Oversized / control-char output rejected ───────────────
 
     #[test]
@@ -246,14 +216,6 @@ mod tests {
             result.unwrap_err(),
             TradingError::SchemaViolation { .. }
         ));
-    }
-
-    // ── Task 2.5: Chat history starts empty ──────────────────────────────
-
-    #[test]
-    fn bearish_researcher_starts_with_empty_chat_history() {
-        let history: Vec<Message> = Vec::new();
-        assert!(history.is_empty());
     }
 
     #[test]

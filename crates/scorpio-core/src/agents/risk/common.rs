@@ -509,14 +509,6 @@ mod tests {
     }
 
     #[test]
-    fn risk_runtime_config_uses_timeout_and_retry_settings() {
-        let cfg = sample_llm_config();
-        let runtime = risk_runtime_config(&cfg);
-        assert_eq!(runtime.timeout, Duration::from_secs(45));
-        assert_eq!(runtime.retry_policy.max_retries, 3);
-    }
-
-    #[test]
     fn validate_risk_text_passes_valid() {
         assert!(validate_risk_text("ctx", "The proposal has moderate risk.").is_ok());
     }

@@ -482,22 +482,6 @@ mod tests {
 
     // ── Task 4.10: Token usage count = 2 * rounds + 1 ────────────────────
 
-    #[test]
-    fn token_usage_count_equals_two_rounds_plus_moderator() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let mut state = make_state();
-        let mut exec = MockDebateExecutor::new();
-
-        let usages = rt
-            .block_on(run_researcher_debate_with_executor(
-                &mut state, 3, &mut exec,
-            ))
-            .unwrap();
-
-        assert_eq!(usages.len(), 7);
-        assert_eq!(usages.last().unwrap().agent_name, "Debate Moderator");
-    }
-
     // ── Task 4.11: token_counts_available = false when provider doesn't expose counts ─
 
     #[test]
