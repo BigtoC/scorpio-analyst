@@ -352,20 +352,6 @@ mod tests {
         assert_eq!(result, Some(42));
     }
 
-    // Smoke: ensure all methods exist and have the correct signatures.
-    // Network calls are not made in CI; this test only validates that the
-    // code compiles and the client can be constructed without panicking.
-
-    #[test]
-    fn yfinance_client_has_financial_fetcher_methods_and_is_constructible() {
-        // If this test compiles, all method signatures are syntactically correct.
-        let _client = YFinanceClient::default();
-        // Method existence is proven by the fact that this file compiles.
-        // We cannot coerce async fn items to fn pointers due to lifetime
-        // constraints — verifying via trait object wrapping is intentionally
-        // avoided here; the presence of the method signatures above is sufficient.
-    }
-
     // ── Empty-payload collapse helpers ───────────────────────────────────
 
     use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};

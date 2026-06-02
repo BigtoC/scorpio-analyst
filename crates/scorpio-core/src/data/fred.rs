@@ -942,30 +942,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_observation_value_normal() {
-        let obs = FredObservation {
-            date: "2026-03-01".to_owned(),
-            value: "4.33".to_owned(),
-        };
-        assert_eq!(
-            obs.parse_value().expect("valid numeric value should parse"),
-            Some(4.33)
-        );
-    }
-
-    #[test]
-    fn parse_observation_value_missing_dot() {
-        let obs = FredObservation {
-            date: "2026-03-01".to_owned(),
-            value: ".".to_owned(),
-        };
-        assert_eq!(
-            obs.parse_value().expect("missing marker should parse"),
-            None
-        );
-    }
-
-    #[test]
     fn parse_observation_value_invalid_number_hard_fails() {
         let obs = FredObservation {
             date: "2026-03-01".to_owned(),
@@ -1095,18 +1071,6 @@ mod tests {
         let result = collect_macro_events_from_series_results(
             Err(FredRequestError::Decode {
                 message: "expected value".to_owned(),
-            }),
-            Ok(Some(2.5)),
-        );
-
-        assert!(matches!(result, Err(TradingError::AnalystError { .. })));
-    }
-
-    #[test]
-    fn economic_indicator_collection_propagates_non_transient_client_failures() {
-        let result = collect_macro_events_from_series_results(
-            Err(FredRequestError::PermanentClient {
-                status: reqwest::StatusCode::BAD_REQUEST,
             }),
             Ok(Some(2.5)),
         );

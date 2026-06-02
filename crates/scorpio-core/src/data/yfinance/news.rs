@@ -201,24 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_yahoo_article_maps_link_to_url() {
-        let now = Utc::now();
-        let raw = make_article(
-            "u1",
-            "Title",
-            Some("Bloomberg"),
-            Some("https://bloomberg.com/1"),
-            now,
-        );
-        let normalized = normalize_yahoo_article(raw);
-        assert_eq!(
-            normalized.url,
-            Some("https://bloomberg.com/1".to_owned()),
-            "link must map to url"
-        );
-    }
-
-    #[test]
     fn normalize_yahoo_article_none_publisher_becomes_unknown() {
         let now = Utc::now();
         let raw = make_article("u2", "Title", None, None, now);

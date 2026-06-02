@@ -241,15 +241,4 @@ mod tests {
         let json = serde_json::to_string(&fetch).expect("serialization");
         assert_eq!(json, "\"NotPublished\"");
     }
-
-    #[test]
-    fn call_date_is_quarter_format() {
-        let evidence = TranscriptEvidence {
-            symbol: "MSFT".to_owned(),
-            call_date: "2025Q3".to_owned(),
-            segments: vec![],
-        };
-        assert!(evidence.call_date.contains('Q'));
-        assert_eq!(evidence.call_date, "2025Q3");
-    }
 }

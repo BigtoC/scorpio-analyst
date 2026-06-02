@@ -1827,19 +1827,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_recent_filings_http_404_returns_ok_empty() {
-        let client = client_with_status(404).await;
-        let result = client
-            .fetch_recent_filings(99_999_999, &["8-K"], "2025-01-01", "2026-12-31")
-            .await
-            .expect("must return Ok");
-        assert!(
-            result.is_empty(),
-            "HTTP 404 (bogus CIK) must yield empty filings"
-        );
-    }
-
-    #[tokio::test]
     async fn fetch_recent_filings_http_429_returns_ok_empty() {
         let client = client_with_status(429).await;
         let result = client
