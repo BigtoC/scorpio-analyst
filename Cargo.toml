@@ -12,7 +12,7 @@ debug = 1
 split-debuginfo = "unpacked"
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/BigtoC/scorpio-analyst"
