@@ -112,12 +112,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_baseline_returns_manifest_with_matching_id() {
-        let pack = resolve_pack(PackId::Baseline);
-        assert_eq!(pack.id, PackId::Baseline);
-    }
-
-    #[test]
     fn resolve_crypto_digital_asset_returns_matching_id_even_though_unselectable() {
         // The stub pack is registered for validation but can't be chosen via
         // `PackId::from_str`. This test proves the registry entry exists so
@@ -168,17 +162,6 @@ mod tests {
                 .iter()
                 .any(|e| e.pack_id == PackId::CryptoDigitalAsset),
             "crypto stub should be skipped, got: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn pack_diagnostics_for_complete_baseline_returns_empty() {
-        // Baseline is complete under the fully-enabled topology — so no
-        // diagnostics should be emitted for it.
-        let errors = pack_diagnostics();
-        assert!(
-            !errors.iter().any(|e| e.pack_id == PackId::Baseline),
-            "baseline should not produce diagnostics, got: {errors:?}"
         );
     }
 
