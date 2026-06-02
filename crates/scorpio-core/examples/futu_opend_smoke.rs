@@ -34,10 +34,14 @@
 //!   *string* (handled by `flex_u64` in `messages.rs`).
 //! - `accID` is a wire *string* but OpenD accepts it back as a number in the
 //!   `TrdHeader` (`GetPositionList` returned `retType = 0`).
-//! - `plRatio` is a **percentage**, not a fraction: the proto states
-//!   "plRatio 等于 8.8 代表涨 8.8%". `assemble_snapshot` divides by 100 to store a
-//!   fraction (the render/report code multiplies back by 100). See plan
-//!   decision #3.
+//! - `plRatio` scale is **ambiguous across account generations**: the proto
+//!   states "plRatio 等于 8.8 代表涨 8.8%" (percentage), but unified (general
+//!   securities) accounts observably return a **fraction** — 22/22 live rows
+//!   matched `plVal / (costPrice × qty)` at fraction scale. `assemble_snapshot`
+//!   disambiguates per row against that computed ratio.
+//! - `GetAccList` omits unified accounts (the rows whose `uniCardNum` matches
+//!   the number shown in the Futu app) unless `needGeneralSecAccount: true` is
+//!   sent — without it only legacy per-market accounts are returned.
 //! - Omitting `filterConditions` returns the full account/market position list.
 //! - Enums: PositionSide Long=0/Short=1; TrdEnv Real=1; TrdMarket US=2;
 //!   Currency USD=2 — all match the plan's label tables.
@@ -444,6 +448,33 @@ fn report_position_shape(rows: &[Value]) {
             }
         );
     }
+    // Cross-check the scale against plVal / (costPrice × qty), which is
+    // unit-unambiguous. Each row votes for whichever interpretation of plRatio
+    // is closer to the computed ratio. Only vote counts are printed.
+    let (mut fraction_votes, mut percent_votes) = (0u32, 0u32);
+    for r in rows {
+        let (Some(pl_ratio), Some(pl_val), Some(cost), Some(qty)) = (
+            r.get("plRatio").and_then(Value::as_f64),
+            r.get("plVal").and_then(Value::as_f64),
+            r.get("costPrice").and_then(Value::as_f64),
+            r.get("qty").and_then(Value::as_f64),
+        ) else {
+            continue;
+        };
+        let basis = cost * qty;
+        if basis.abs() < f64::EPSILON || pl_ratio.abs() < f64::EPSILON {
+            continue;
+        }
+        let computed = pl_val / basis; // a fraction by construction
+        if (pl_ratio - computed).abs() < (pl_ratio / 100.0 - computed).abs() {
+            fraction_votes += 1;
+        } else {
+            percent_votes += 1;
+        }
+    }
+    println!(
+        "  plRatio vs plVal/(costPrice*qty): fraction_votes={fraction_votes} percent_votes={percent_votes}"
+    );
     if let Some(side) = first.get("positionSide") {
         println!("  positionSide json type: {}", type_of(side));
     }
@@ -470,7 +501,12 @@ async fn probe_acc_list(
         if uid == login_user_id && login_user_id == 0 && label.contains("loginUserID") {
             continue; // same as the 0 probe; skip
         }
-        let body = serde_json::to_vec(&json!({ "c2s": { "userID": uid } })).unwrap();
+        // needGeneralSecAccount: include the unified (universal) securities
+        // accounts — the rows whose uniCardNum matches the number shown in the
+        // Futu app. Without it OpenD omits them entirely.
+        let body =
+            serde_json::to_vec(&json!({ "c2s": { "userID": uid, "needGeneralSecAccount": true } }))
+                .unwrap();
         match request(stream, next(), PROTO_GET_ACC_LIST, &body).await {
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                 Ok(v) => {
