@@ -6,6 +6,7 @@
 //! Replaces the paid Finnhub `economic().data()` endpoint for interest-rate
 //! and inflation indicators.
 
+use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -130,20 +131,17 @@ impl FredClient {
     /// Upper bound for the full retry loop, including limiter waits and backoff.
     const TOTAL_RETRY_BUDGET: Duration = Duration::from_secs(45);
 
-    /// Fetch the latest observation for a FRED series.
+    /// Shared retry harness for all FRED operations.
     ///
-    /// Returns `Ok(None)` when the latest value is missing (`"."`) or no
-    /// observation is present. Retries transient failures with linear backoff.
-    pub async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
-        self.get_series_latest_classified(series_id)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn get_series_latest_classified(
-        &self,
-        series_id: &str,
-    ) -> Result<Option<f64>, FredRequestError> {
+    /// Acquires a rate-limit permit, calls `f()` to get a single-attempt
+    /// future, and retries transient failures (transport, 429, 5xx) with
+    /// linear backoff up to `MAX_ATTEMPTS`, capped by `TOTAL_RETRY_BUDGET`.
+    /// Non-retryable errors propagate immediately.
+    async fn with_retry<T, F, Fut>(&self, op: &str, mut f: F) -> Result<T, FredRequestError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, FredRequestError>>,
+    {
         let started_at = tokio::time::Instant::now();
         let deadline = started_at + Self::TOTAL_RETRY_BUDGET;
         let mut last_err = None;
@@ -163,10 +161,10 @@ impl FredClient {
             }
 
             if attempt > 0 {
-                tracing::debug!(attempt, series_id, "retrying FRED request");
+                tracing::debug!(attempt, op, "retrying FRED request");
             }
 
-            match tokio::time::timeout_at(deadline, self.send_series_request(series_id)).await {
+            match tokio::time::timeout_at(deadline, f()).await {
                 Ok(Ok(val)) => return Ok(val),
                 Ok(Err(error)) => {
                     let decision = classify_retry_decision(&error);
@@ -193,7 +191,7 @@ impl FredClient {
 
                     tracing::warn!(
                         attempt,
-                        series_id,
+                        op,
                         error = %TradingError::from(last_err.as_ref().expect("retry error stored").clone()),
                         retry_delay_ms = retry_delay.as_millis(),
                         "transient FRED error, will retry"
@@ -208,6 +206,16 @@ impl FredClient {
         }
 
         Err(last_err.unwrap_or(FredRequestError::RetryBudgetExhausted))
+    }
+
+    /// Fetch the latest observation for a FRED series.
+    ///
+    /// Returns `Ok(None)` when the latest value is missing (`"."`) or no
+    /// observation is present. Retries transient failures with linear backoff.
+    pub async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
+        self.with_retry(series_id, || self.send_series_request(series_id))
+            .await
+            .map_err(Into::into)
     }
 
     async fn send_series_request(&self, series_id: &str) -> Result<Option<f64>, FredRequestError> {
@@ -242,8 +250,8 @@ impl FredClient {
     /// (`CPALTT01USM657N`) concurrently, then classifies each into a
     /// [`MacroEvent`] with an impact direction and confidence score.
     pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
-        let interest_fut = self.get_series_latest_classified(SERIES_FEDFUNDS);
-        let inflation_fut = self.get_series_latest_classified(SERIES_CPALTT01);
+        let interest_fut = self.with_retry(SERIES_FEDFUNDS, || self.send_series_request(SERIES_FEDFUNDS));
+        let inflation_fut = self.with_retry(SERIES_CPALTT01, || self.send_series_request(SERIES_CPALTT01));
 
         let (interest_result, inflation_result) = tokio::join!(interest_fut, inflation_fut);
 
@@ -257,94 +265,17 @@ impl FredClient {
     /// historical and future dates for the given release ID.
     ///
     /// Returns `Ok(Vec::new())` when the window contains no dates — not an error.
-    /// Retries transient failures (including 429) with the same backoff policy
-    /// as `get_series_latest`.
+    /// Retries transient failures (including 429) with linear backoff.
     pub async fn release_dates(
         &self,
         release_id: u32,
         from: &str,
         to: &str,
     ) -> Result<Vec<chrono::NaiveDate>, TradingError> {
-        self.release_dates_classified(release_id, from, to)
+        let label = format!("release_id={release_id}");
+        self.with_retry(&label, || self.send_release_dates_request(release_id, from, to))
             .await
             .map_err(Into::into)
-    }
-
-    async fn release_dates_classified(
-        &self,
-        release_id: u32,
-        from: &str,
-        to: &str,
-    ) -> Result<Vec<chrono::NaiveDate>, FredRequestError> {
-        let started_at = tokio::time::Instant::now();
-        let deadline = started_at + Self::TOTAL_RETRY_BUDGET;
-        let mut last_err = None;
-
-        for attempt in 0..Self::MAX_ATTEMPTS {
-            if !within_retry_budget(tokio::time::Instant::now(), deadline, None) {
-                last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
-                break;
-            }
-
-            if tokio::time::timeout_at(deadline, self.limiter.acquire())
-                .await
-                .is_err()
-            {
-                last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
-                break;
-            }
-
-            if attempt > 0 {
-                tracing::debug!(attempt, release_id, "retrying FRED release_dates request");
-            }
-
-            match tokio::time::timeout_at(
-                deadline,
-                self.send_release_dates_request(release_id, from, to),
-            )
-            .await
-            {
-                Ok(Ok(dates)) => return Ok(dates),
-                Ok(Err(error)) => {
-                    let decision = classify_retry_decision(&error);
-
-                    if !decision.retryable {
-                        return Err(error);
-                    }
-
-                    last_err = Some(error);
-
-                    if attempt + 1 == Self::MAX_ATTEMPTS {
-                        break;
-                    }
-
-                    let retry_delay = compute_retry_delay(attempt + 1, decision.delay_override);
-                    if !within_retry_budget(
-                        tokio::time::Instant::now(),
-                        deadline,
-                        Some(retry_delay),
-                    ) {
-                        last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
-                        break;
-                    }
-
-                    tracing::warn!(
-                        attempt,
-                        release_id,
-                        error = %TradingError::from(last_err.as_ref().expect("retry error stored").clone()),
-                        retry_delay_ms = retry_delay.as_millis(),
-                        "transient FRED error, will retry"
-                    );
-                    tokio::time::sleep(retry_delay).await;
-                }
-                Err(_) => {
-                    last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
-                    break;
-                }
-            }
-        }
-
-        Err(last_err.unwrap_or(FredRequestError::RetryBudgetExhausted))
     }
 
     async fn send_release_dates_request(
