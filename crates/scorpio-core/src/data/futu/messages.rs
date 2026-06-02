@@ -110,6 +110,10 @@ pub(crate) fn parse_init_connect_response(body: &[u8]) -> Result<u64, String> {
 struct GetAccListC2S {
     #[serde(rename = "userID")]
     user_id: u64,
+    /// Include unified (general securities) accounts — the rows whose
+    /// `uniCardNum` matches the account number shown in the Futu app. Without
+    /// this flag OpenD omits them, returning only legacy per-market accounts.
+    need_general_sec_account: bool,
 }
 
 /// One account row from `accList`.
@@ -122,7 +126,8 @@ pub(crate) struct AccListItem {
     #[serde(default)]
     pub trd_market_auth_list: Vec<i32>,
     /// Universal-account number shown in the Futu app (`uniCardNum`). Optional —
-    /// populated only for universal-system accounts (e.g. futures/crypto).
+    /// populated on unified (general securities) accounts and universal-system
+    /// accounts (e.g. futures); absent on legacy per-market rows.
     #[serde(rename = "uniCardNum", default)]
     pub uni_card_num: Option<String>,
 }
@@ -138,6 +143,7 @@ pub(crate) fn serialize_get_acc_list(login_user_id: u64) -> Result<Vec<u8>, Stri
     serde_json::to_vec(&Request {
         c2s: GetAccListC2S {
             user_id: login_user_id,
+            need_general_sec_account: true,
         },
     })
     .map_err(|e| format!("OpenD: failed to encode GetAccList request: {e}"))
@@ -239,10 +245,13 @@ mod tests {
     }
 
     #[test]
-    fn serializes_get_acc_list_request_with_user_id() {
+    fn serializes_get_acc_list_request_with_user_id_and_general_sec_accounts() {
         let body = serialize_get_acc_list(42).expect("serialize");
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["c2s"]["userID"], 42);
+        // Unified accounts (uniCardNum = the number shown in the Futu app) are
+        // omitted by OpenD unless explicitly requested.
+        assert_eq!(v["c2s"]["needGeneralSecAccount"], true);
     }
 
     #[test]
