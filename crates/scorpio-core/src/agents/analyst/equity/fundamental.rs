@@ -274,26 +274,6 @@ mod tests {
 
     // ── Task 1.5: AgentTokenUsage recording ──────────────────────────────
 
-    #[test]
-    fn agent_token_usage_fields() {
-        let usage = AgentTokenUsage {
-            agent_name: "Fundamental Analyst".to_owned(),
-            model_id: "gpt-4o-mini".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 250,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "Fundamental Analyst");
-        assert_eq!(usage.model_id, "gpt-4o-mini");
-        assert_eq!(usage.prompt_tokens, 0);
-        assert_eq!(usage.completion_tokens, 0);
-        assert_eq!(usage.total_tokens, 0);
-        assert!(usage.latency_ms > 0);
-    }
-
     // ── Task 1.6: SchemaViolation on malformed JSON ───────────────────────
 
     #[test]

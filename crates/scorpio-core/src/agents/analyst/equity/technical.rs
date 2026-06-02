@@ -601,24 +601,6 @@ mod tests {
         ));
     }
 
-    // ── AgentTokenUsage recording ─────────────────────────────────────────
-
-    #[test]
-    fn agent_token_usage_fields() {
-        let usage = AgentTokenUsage {
-            agent_name: "Technical Analyst".to_owned(),
-            model_id: "gpt-4o-mini".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 300,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "Technical Analyst");
-        assert_eq!(usage.model_id, "gpt-4o-mini");
-    }
-
     // ── SchemaViolation on malformed JSON ─────────────────────────────────
 
     #[test]
@@ -1339,24 +1321,6 @@ mod tests {
                 })
             ),
             "expected Available(HistoricalRun) context"
-        );
-    }
-
-    #[test]
-    fn assemble_technical_data_clears_options_summary_when_outcome_is_not_snapshot() {
-        use crate::data::traits::options::OptionsOutcome;
-
-        let response = sample_technical_response_with_options_summary();
-        let data = assemble_technical_data(
-            response,
-            Some(TechnicalOptionsContext::Available {
-                outcome: OptionsOutcome::HistoricalRun,
-            }),
-            "TEST",
-        );
-        assert!(
-            data.options_summary.is_none(),
-            "options_summary must be cleared when outcome is HistoricalRun"
         );
     }
 

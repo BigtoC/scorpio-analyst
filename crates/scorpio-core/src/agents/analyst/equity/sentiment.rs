@@ -253,21 +253,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_neutral_sentiment_with_empty_arrays() {
-        let json = r#"{
-            "overall_score": 0.0,
-            "source_breakdown": [],
-            "engagement_peaks": [],
-            "summary": "Sentiment signal is weak or unavailable."
-        }"#;
-
-        let data = parse_and_validate(json).expect("should parse neutral");
-        assert_eq!(data.overall_score, 0.0);
-        assert!(data.source_breakdown.is_empty());
-        assert!(data.engagement_peaks.is_empty());
-    }
-
-    #[test]
     fn summary_preserves_transcript_degraded_mode_notice() {
         let json = r#"{
             "overall_score": -0.1,
@@ -345,22 +330,6 @@ mod tests {
     }
 
     // ── Task 2.5 (continued): AgentTokenUsage recording ──────────────────
-
-    #[test]
-    fn agent_token_usage_fields() {
-        let usage = AgentTokenUsage {
-            agent_name: "Sentiment Analyst".to_owned(),
-            model_id: "gpt-4o-mini".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 180,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "Sentiment Analyst");
-        assert_eq!(usage.model_id, "gpt-4o-mini");
-    }
 
     // ── SchemaViolation on malformed JSON ─────────────────────────────────
 

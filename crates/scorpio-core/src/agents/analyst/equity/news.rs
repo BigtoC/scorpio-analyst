@@ -345,23 +345,6 @@ mod tests {
 
     // ── Task 3.5: AgentTokenUsage recording ──────────────────────────────
 
-    #[test]
-    fn agent_token_usage_fields() {
-        let usage = AgentTokenUsage {
-            agent_name: "News Analyst".to_owned(),
-            model_id: "gpt-4o-mini".to_owned(),
-            token_counts_available: false,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            latency_ms: 220,
-            rate_limit_wait_ms: 0,
-        };
-        assert_eq!(usage.agent_name, "News Analyst");
-        assert_eq!(usage.model_id, "gpt-4o-mini");
-        assert_eq!(usage.latency_ms, 220);
-    }
-
     // ── SchemaViolation on malformed JSON ─────────────────────────────────
 
     #[test]
