@@ -355,8 +355,8 @@ pub fn step_langfuse_observability(
 /// Prompt to enable the read-only Futu OpenD position lookup and, when enabled,
 /// optionally pin a specific Real account. Default-off; disabling clears any
 /// previously saved account. Empty account input means auto-select. The account
-/// is matched against each Real account's universal account number, card number,
-/// or raw acc_id, so the operator can paste whichever number they recognize.
+/// is matched against each Real account's universal account number (the one
+/// shown in the Futu app) or raw acc_id.
 pub fn step_futu_positions(partial: &mut PartialConfig) -> Result<(), inquire::InquireError> {
     println!(
         "Futu positions (optional, read-only): let the Fund Manager see your current\n\
@@ -379,7 +379,7 @@ pub fn step_futu_positions(partial: &mut PartialConfig) -> Result<(), inquire::I
     let existing = partial.futu_account.clone();
     let mut prompt = inquire::Text::new("Futu account (optional — leave blank to auto-select):")
         .with_help_message(
-            "Universal account number, card number, or acc_id. Blank = first Real account for the market.",
+            "Universal account number (shown in the Futu app) or acc_id. Blank = first Real account for the market.",
         );
     if let Some(ref account) = existing {
         prompt = prompt.with_initial_value(account);
@@ -547,8 +547,8 @@ pub(super) fn apply_optional_secret(input: &str, current: Option<String>) -> Opt
 
 /// Normalize the optional Futu account prompt input. Blank/whitespace yields
 /// `None` (auto-select the first matching Real account); any other value is
-/// trimmed and kept verbatim (it may be a universal account number, card number,
-/// or raw acc_id — matched flexibly at fetch time, so no numeric validation).
+/// trimmed and kept verbatim (it may be a universal account number or raw
+/// acc_id — matched flexibly at fetch time, so no numeric validation).
 pub(super) fn normalize_optional_account(input: &str) -> Option<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
