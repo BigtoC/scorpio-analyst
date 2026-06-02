@@ -24,6 +24,8 @@
 //! - Does `GetAccList` need the real `loginUserID`, or does `0` work?
 //! - How are `accID` / `plRatio` / casing represented on the wire?
 //! - Does omitting `filterConditions.codeList` return the full position list?
+//! - With `SCORPIO__FUTU__ACCOUNT` set, does the `uniCardNum` / `accID` lookup
+//!   (mirroring `select_account`) resolve a Real US account?
 //!
 //! Findings validated against a live OpenD + the bundled Futu proto
 //! (`futu/common/pb/Trd_Common.proto`, `Trd_GetPositionList.proto`):
@@ -138,12 +140,25 @@ fn print_object_shape(indent: &str, obj: &Value) {
 
 /// The raw account id as a decimal string (wire `accID` is a string or number).
 /// Printed in this manual diagnostic so the operator can copy the exact id into
-/// `SCORPIO__FUTU__ACCOUNT_ID` / the setup wizard. Holdings stay redacted.
+/// `SCORPIO__FUTU__ACCOUNT` / the setup wizard. Holdings stay redacted.
 fn raw_acc_id(acc: &Value) -> String {
     match acc {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         _ => "?".to_owned(),
+    }
+}
+
+/// Which identifier (if any) the configured selector matches on this account.
+/// Mirrors `select_account`'s lookup in `data::futu::select`: `uniCardNum`
+/// (universal account number shown in the Futu app) or raw `accID`.
+fn matched_identifier(acc: &Value, wanted: &str) -> Option<&'static str> {
+    if acc["uniCardNum"].as_str() == Some(wanted) {
+        Some("uniCardNum")
+    } else if raw_acc_id(&acc["accID"]) == wanted {
+        Some("accID")
+    } else {
+        None
     }
 }
 
@@ -231,6 +246,13 @@ async fn main() {
     let acc_list = probe_acc_list(&mut stream, &mut next, login_user_id).await;
 
     // Inspect account rows: shape + types, redacted ids, find a Real US account.
+    // With SCORPIO__FUTU__ACCOUNT set, the account is instead resolved by
+    // uniCardNum / accID — same lookup as `select_account` — to validate the
+    // selector against live wire data.
+    let wanted_account = std::env::var("SCORPIO__FUTU__ACCOUNT")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
     let mut chosen_acc: Option<Value> = None;
     if let Some(first) = acc_list.first() {
         println!("  accList[0] shape:");
@@ -248,9 +270,8 @@ async fn main() {
             .map(|a| a.iter().filter_map(Value::as_i64).collect())
             .unwrap_or_default();
         let uni_card_num = acc["uniCardNum"].as_str().unwrap_or("<none>");
-        let card_num = acc["cardNum"].as_str().unwrap_or("<none>");
         println!(
-            "    accID={} ({}) uniCardNum={uni_card_num} cardNum={card_num} trdEnv={env} ({}) markets={markets:?}",
+            "    accID={} ({}) uniCardNum={uni_card_num} trdEnv={env} ({}) markets={markets:?}",
             raw_acc_id(&acc["accID"]),
             redact_acc_id(&acc["accID"]),
             if env == TRD_ENV_REAL {
@@ -259,9 +280,40 @@ async fn main() {
                 "non-real"
             }
         );
-        if chosen_acc.is_none() && env == TRD_ENV_REAL && markets.contains(&TRD_MARKET_US) {
-            chosen_acc = Some(acc.clone());
+        let selectable = env == TRD_ENV_REAL && markets.contains(&TRD_MARKET_US);
+        match &wanted_account {
+            Some(wanted) => {
+                if let Some(field) = matched_identifier(acc, wanted) {
+                    if selectable && chosen_acc.is_none() {
+                        println!("      ↑ matches SCORPIO__FUTU__ACCOUNT via {field}");
+                        chosen_acc = Some(acc.clone());
+                    } else if !selectable {
+                        // Near-miss: identifier matched but the account fails the
+                        // Real + US-authorized gate `select_account` applies too.
+                        let reason = if env != TRD_ENV_REAL {
+                            "not a Real account".to_owned()
+                        } else {
+                            format!(
+                                "not authorized for US (markets={markets:?}, need {TRD_MARKET_US})"
+                            )
+                        };
+                        println!(
+                            "      ↑ matches SCORPIO__FUTU__ACCOUNT via {field}, but skipped: {reason}"
+                        );
+                    }
+                }
+            }
+            None => {
+                if chosen_acc.is_none() && selectable {
+                    chosen_acc = Some(acc.clone());
+                }
+            }
         }
+    }
+    if wanted_account.is_some() && chosen_acc.is_none() {
+        println!(
+            "  ! SCORPIO__FUTU__ACCOUNT is set but no Real US account matched it by uniCardNum/accID"
+        );
     }
 
     // ── 2102 GetPositionList for the chosen Real US account, no code filter ───
