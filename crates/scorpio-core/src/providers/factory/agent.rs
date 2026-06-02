@@ -25,6 +25,7 @@ use rig::{
     tool::ToolDyn,
 };
 use serde::de::DeserializeOwned;
+use tracing::Instrument;
 
 use crate::{error::TradingError, providers::ProviderId, rate_limit::SharedRateLimiter};
 
@@ -306,22 +307,54 @@ impl LlmAgent {
         }
     }
 
+    /// Create the tracing span for one LLM call, carrying the OTel `gen_ai.*`
+    /// attributes Langfuse maps onto a generation observation.
+    ///
+    /// The model attribute is what makes Langfuse classify the exported span
+    /// as a *generation* and match it against its model definitions for cost
+    /// attribution. The usage fields start [`Empty`](tracing::field::Empty)
+    /// and are filled by [`record_usage`] once the provider responds, so cost
+    /// is computed from provider-reported token counts rather than Langfuse's
+    /// tokenizer inference.
+    fn llm_span(&self, operation: &str) -> tracing::Span {
+        tracing::info_span!(
+            "llm_generation",
+            otel.name = operation,
+            gen_ai.system = self.provider_name(),
+            gen_ai.request.model = self.model_id(),
+            gen_ai.usage.input_tokens = tracing::field::Empty,
+            gen_ai.usage.output_tokens = tracing::field::Empty,
+        )
+    }
+
     /// Send a one-shot prompt and return the response text.
     pub async fn prompt(&self, prompt: &str) -> Result<String, PromptError> {
-        dispatch_llm_agent!(
-            &self.inner,
-            |agent| agent.prompt(prompt).await,
-            mock = |agent| { Ok(agent.prompt_details(prompt).await?.output) }
-        )
+        let span = self.llm_span("prompt");
+        async {
+            dispatch_llm_agent!(
+                &self.inner,
+                |agent| agent.prompt(prompt).await,
+                mock = |agent| { Ok(agent.prompt_details(prompt).await?.output) }
+            )
+        }
+        .instrument(span)
+        .await
     }
 
     /// Send a one-shot prompt and return text plus aggregated usage details.
     pub async fn prompt_details(&self, prompt: &str) -> Result<PromptResponse, PromptError> {
-        dispatch_llm_agent!(
-            &self.inner,
-            |agent| agent.prompt(prompt).extended_details().await,
-            mock = |agent| agent.prompt_details(prompt).await
-        )
+        let span = self.llm_span("prompt_details");
+        async {
+            let response = dispatch_llm_agent!(
+                &self.inner,
+                |agent| agent.prompt(prompt).extended_details().await,
+                mock = |agent| agent.prompt_details(prompt).await
+            )?;
+            record_usage(&span, &response.usage);
+            Ok(response)
+        }
+        .instrument(span.clone())
+        .await
     }
 
     /// Send a typed prompt and return parsed output plus aggregated usage details.
@@ -340,18 +373,25 @@ impl LlmAgent {
             map_structured_output_error_with_context(self.provider_name(), self.model_id(), err)
         };
 
-        dispatch_llm_agent!(
-            &self.inner,
-            |agent| agent
-                .prompt_typed::<T>(prompt)
-                .max_turns(max_turns)
-                .extended_details()
-                .await
-                .map_err(map_err),
-            mock = |mock_agent| mock_agent
-                .prompt_typed_details::<T>(prompt, max_turns)
-                .await
-        )
+        let span = self.llm_span("prompt_typed_details");
+        async {
+            let response = dispatch_llm_agent!(
+                &self.inner,
+                |agent| agent
+                    .prompt_typed::<T>(prompt)
+                    .max_turns(max_turns)
+                    .extended_details()
+                    .await
+                    .map_err(map_err),
+                mock = |mock_agent| mock_agent
+                    .prompt_typed_details::<T>(prompt, max_turns)
+                    .await
+            )?;
+            record_usage(&span, &response.usage);
+            Ok(response)
+        }
+        .instrument(span.clone())
+        .await
     }
 
     /// Send a tool-enabled text prompt and return text plus aggregated usage details.
@@ -373,18 +413,25 @@ impl LlmAgent {
 
         // Use PromptRequest with the multi-turn loop to honour tool calls, returning
         // the raw text output and usage without a structured-output parse step.
-        dispatch_llm_agent!(
-            &self.inner,
-            |agent| {
-                use rig::agent::PromptRequest;
-                PromptRequest::from_agent(agent, prompt)
-                    .max_turns(max_turns)
-                    .extended_details()
-                    .await
-                    .map_err(map_err)
-            },
-            mock = |mock_agent| mock_agent.prompt_text_details(prompt, max_turns).await
-        )
+        let span = self.llm_span("prompt_text_details");
+        async {
+            let response = dispatch_llm_agent!(
+                &self.inner,
+                |agent| {
+                    use rig::agent::PromptRequest;
+                    PromptRequest::from_agent(agent, prompt)
+                        .max_turns(max_turns)
+                        .extended_details()
+                        .await
+                        .map_err(map_err)
+                },
+                mock = |mock_agent| mock_agent.prompt_text_details(prompt, max_turns).await
+            )?;
+            record_usage(&span, &response.usage);
+            Ok(response)
+        }
+        .instrument(span.clone())
+        .await
     }
 
     /// Send a prompt with chat history and return the response text.
@@ -393,14 +440,19 @@ impl LlmAgent {
         prompt: &str,
         chat_history: Vec<Message>,
     ) -> Result<String, PromptError> {
-        dispatch_llm_agent!(
-            &self.inner,
-            |agent| agent.chat(prompt, chat_history).await,
-            mock = |agent| {
-                let mut history = chat_history;
-                Ok(agent.chat_details(prompt, &mut history).await?.output)
-            }
-        )
+        let span = self.llm_span("chat");
+        async {
+            dispatch_llm_agent!(
+                &self.inner,
+                |agent| agent.chat(prompt, chat_history).await,
+                mock = |agent| {
+                    let mut history = chat_history;
+                    Ok(agent.chat_details(prompt, &mut history).await?.output)
+                }
+            )
+        }
+        .instrument(span)
+        .await
     }
 
     /// Send a prompt with mutable chat history and return response text plus usage details.
@@ -415,20 +467,37 @@ impl LlmAgent {
     ) -> Result<PromptResponse, PromptError> {
         use rig::agent::PromptRequest;
 
-        let response = dispatch_llm_agent!(
-            &self.inner,
-            |agent| {
-                PromptRequest::from_agent(agent, prompt)
-                    .with_history(chat_history.clone())
-                    .extended_details()
-                    .await
-            },
-            mock = |agent| agent.chat_details(prompt, chat_history).await
-        )?;
+        let span = self.llm_span("chat_details");
+        async {
+            let response = dispatch_llm_agent!(
+                &self.inner,
+                |agent| {
+                    PromptRequest::from_agent(agent, prompt)
+                        .with_history(chat_history.clone())
+                        .extended_details()
+                        .await
+                },
+                mock = |agent| agent.chat_details(prompt, chat_history).await
+            )?;
+            record_usage(&span, &response.usage);
 
-        append_response_messages(chat_history, &response);
-        Ok(response)
+            append_response_messages(chat_history, &response);
+            Ok(response)
+        }
+        .instrument(span.clone())
+        .await
     }
+}
+
+/// Record provider-reported token usage onto an LLM generation span.
+///
+/// The fields are declared [`Empty`](tracing::field::Empty) by
+/// [`LlmAgent::llm_span`] and filled here on success; Langfuse maps the
+/// `gen_ai.usage.*` attributes to the observation's usage and computes cost
+/// from them instead of falling back to tokenizer inference.
+fn record_usage(span: &tracing::Span, usage: &rig::completion::Usage) {
+    span.record("gen_ai.usage.input_tokens", usage.input_tokens);
+    span.record("gen_ai.usage.output_tokens", usage.output_tokens);
 }
 
 /// Append the delta messages from a [`PromptResponse`] to `chat_history`.
@@ -497,20 +566,23 @@ impl MockLlmAgent {
             tokio::time::sleep(delay).await;
         }
 
-        let next = self.text_turn_results.lock().unwrap().pop_front();
-        match next {
-            Some(result) => result,
-            None => Ok(mock_prompt_response(
-                "",
-                rig::completion::Usage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 0,
-                    cached_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                },
-            )),
-        }
+        // next
+        self.text_turn_results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| {
+                Ok(mock_prompt_response(
+                    "",
+                    rig::completion::Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        total_tokens: 0,
+                        cached_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    },
+                ))
+            })
     }
 
     async fn chat_details(
@@ -741,15 +813,24 @@ where
     T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
 {
     use rig::completion::TypedPrompt;
-    dispatch_llm_agent!(
-        &agent.inner,
-        |agent_inner| agent_inner.prompt_typed::<T>(prompt).await.map_err(|err| {
-            map_structured_output_error_with_context(agent.provider_name(), agent.model_id(), err)
-        }),
-        mock = |_mock_agent| Err(TradingError::Config(anyhow::anyhow!(
-            "typed prompt not supported for mock llm agent"
-        )))
-    )
+    let span = agent.llm_span("prompt_typed");
+    async {
+        dispatch_llm_agent!(
+            &agent.inner,
+            |agent_inner| agent_inner.prompt_typed::<T>(prompt).await.map_err(|err| {
+                map_structured_output_error_with_context(
+                    agent.provider_name(),
+                    agent.model_id(),
+                    err,
+                )
+            }),
+            mock = |_mock_agent| Err(TradingError::Config(anyhow::anyhow!(
+                "typed prompt not supported for mock llm agent"
+            )))
+        )
+    }
+    .instrument(span)
+    .await
 }
 
 // ────────────────────────────────────────────────────────────────────────────

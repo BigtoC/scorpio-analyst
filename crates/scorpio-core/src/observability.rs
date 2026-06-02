@@ -1,3 +1,4 @@
+use opentelemetry::KeyValue;
 use opentelemetry::global;
 // `TracerProvider` is the trait that provides the `.tracer(name)` method
 // on `SdkTracerProvider`. Must be in scope at the call site.
@@ -261,6 +262,11 @@ fn init_langfuse_tracer() -> (
         .with_resource(
             Resource::builder()
                 .with_service_name("scorpio-analyst")
+                // Langfuse maps the `langfuse.release` resource attribute to
+                // the trace-level `release` field (its own SDKs set it the
+                // same way), enabling cost/latency comparison across app
+                // versions in the dashboard.
+                .with_attribute(KeyValue::new("langfuse.release", env!("CARGO_PKG_VERSION")))
                 .build(),
         )
         .build();
