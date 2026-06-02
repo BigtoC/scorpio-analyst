@@ -9,7 +9,7 @@
 //! between attempts. Rate-limit permit acquisition is performed outside the per-attempt
 //! timeout but bounded by the remaining total budget (Option C semantics).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
@@ -17,6 +17,13 @@ use rig::{
 };
 use serde::de::DeserializeOwned;
 use tracing::warn;
+// Budget accounting reads tokio's clock (not `std::time::Instant`) so the per-attempt
+// timeout, the exponential-backoff sleep, AND the elapsed/total-budget checks share
+// one clock. In a normal runtime `tokio::time::Instant` tracks real time identically
+// to `std::time::Instant`; under `#[tokio::test(start_paused = true)]` it advances
+// deterministically, removing the real-vs-virtual clock split that let the
+// timeout-vs-budget-exhaustion branch race under parallel-test load.
+use tokio::time::Instant;
 
 use crate::error::{RetryPolicy, TradingError};
 
@@ -162,19 +169,17 @@ where
             ),
         };
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.prompt_details(&current_prompt),
         )
         .await
         {
             Ok(Ok(response)) => match validator(&response.output) {
-                Ok(()) => {
-                    return Ok(RetryOutcome {
-                        result: response,
-                        rate_limit_wait_ms,
-                    });
-                }
+                Ok(()) => Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                }),
                 Err(TradingError::SchemaViolation { message }) => {
                     if attempt < policy.max_retries {
                         warn!(
@@ -187,9 +192,9 @@ where
                         corrective_feedback = Some(message);
                         continue;
                     }
-                    return Err(TradingError::SchemaViolation { message });
+                    Err(TradingError::SchemaViolation { message })
                 }
-                Err(other) => return Err(other),
+                Err(other) => Err(other),
             },
             Ok(Err(err)) => {
                 if attempt < policy.max_retries
@@ -198,11 +203,11 @@ where
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient validated-prompt error, will retry");
                     continue;
                 }
-                return Err(map_prompt_error_with_context(
+                Err(map_prompt_error_with_context(
                     agent.provider_name(),
                     agent.model_id(),
                     err,
-                ));
+                ))
             }
             Err(_elapsed) => {
                 let err = attempt_timeout_error(started_at, agent, attempt, "validated prompt");
@@ -210,9 +215,9 @@ where
                     warn!(attempt, "validated prompt timed out, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
@@ -259,13 +264,11 @@ where
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(attempt_budget.timeout, call_fn()).await {
-            Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                });
-            }
+        return match tokio::time::timeout(attempt_budget.timeout, call_fn()).await {
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
                 if attempt < policy.max_retries
                     && let Some(error) = transient_prompt_error_summary(&err)
@@ -273,11 +276,11 @@ where
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient prompt error, will retry");
                     continue;
                 }
-                return Err(map_prompt_error_with_context(
+                Err(map_prompt_error_with_context(
                     agent.provider_name(),
                     agent.model_id(),
                     err,
-                ));
+                ))
             }
             Err(_elapsed) => {
                 let err = attempt_timeout_error(started_at, agent, attempt, "prompt");
@@ -285,9 +288,9 @@ where
                     warn!(attempt, "prompt timed out, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
-        }
+        };
     }
 
     // The loop runs for `0..=max_retries` iterations. Every iteration either
@@ -401,18 +404,16 @@ pub(crate) async fn chat_with_retry_details_budget(
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.chat_details(prompt, chat_history),
         )
         .await
         {
-            Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                });
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
                 // Restore caller-owned history on any failed attempt before retrying or returning.
                 chat_history.truncate(initial_len);
@@ -422,11 +423,11 @@ pub(crate) async fn chat_with_retry_details_budget(
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient chat-details error, will retry");
                     continue;
                 }
-                return Err(map_prompt_error_with_context(
+                Err(map_prompt_error_with_context(
                     agent.provider_name(),
                     agent.model_id(),
                     err,
-                ));
+                ))
             }
             Err(_elapsed) => {
                 // On timeout, also truncate any partial messages.
@@ -436,9 +437,9 @@ pub(crate) async fn chat_with_retry_details_budget(
                     warn!(attempt, "chat-details timed out, will retry");
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
-        }
+        };
     }
 
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
@@ -481,37 +482,138 @@ where
         .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
-        match tokio::time::timeout(
+        return match tokio::time::timeout(
             attempt_budget.timeout,
             agent.prompt_typed_details::<T>(prompt, max_turns),
         )
         .await
         {
-            Ok(Ok(response)) => {
-                return Ok(RetryOutcome {
-                    result: response,
-                    rate_limit_wait_ms,
-                });
-            }
+            Ok(Ok(response)) => Ok(RetryOutcome {
+                result: response,
+                rate_limit_wait_ms,
+            }),
             Ok(Err(err)) => {
-                if should_retry_typed_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
             Err(_elapsed) => {
                 let err = attempt_timeout_error(started_at, agent, attempt, "typed prompt");
                 if attempt < policy.max_retries {
                     continue;
                 }
-                return Err(err);
+                Err(err)
             }
-        }
+        };
     }
 
     // The loop runs for `0..=max_retries` iterations. Every iteration either
     // returns early or continues. Reaching here requires zero iterations,
     // which is impossible because `max_retries >= 0` guarantees at least one.
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
+}
+
+/// Prompt for a typed response and run a domain `validator` *inside* the retry
+/// loop. A [`TradingError::SchemaViolation`] from the validator re-prompts the
+/// model with the rejection appended as corrective feedback — the structured-
+/// output analogue of [`prompt_text_with_retry_validated`][crate::providers::factory::prompt_text_with_retry_validated]
+/// — up to `policy.max_retries`. Transient provider errors retry exactly as in
+/// [`prompt_typed_with_retry`]; any non-`SchemaViolation` validator error
+/// propagates immediately without retry.
+///
+/// # Errors
+///
+/// - [`TradingError::NetworkTimeout`] / [`TradingError::Rig`] for LLM failures.
+/// - [`TradingError::SchemaViolation`] if the validator keeps rejecting the
+///   typed output after all retries.
+/// - Any non-`SchemaViolation` validator error, propagated without retry.
+pub async fn prompt_typed_with_retry_validated<T, F>(
+    agent: &LlmAgent,
+    initial_prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+    max_turns: usize,
+    validator: F,
+) -> Result<RetryOutcome<TypedPromptResponse<T>>, TradingError>
+where
+    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    F: Fn(&T) -> Result<(), TradingError>,
+{
+    let total_budget = policy.total_budget(timeout);
+    let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
+    let mut corrective_feedback: Option<String> = None;
+
+    for attempt in 0..=policy.max_retries {
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            &RetryMessages {
+                retrying: "retrying validated typed prompt after transient error",
+                retry_budget: "validated typed prompt retry budget exhausted before next attempt",
+                acquire_budget: "validated typed prompt budget exhausted before rate-limit acquire",
+                exhausted: "validated typed prompt retry budget exhausted",
+            },
+        )
+        .await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
+
+        let current_prompt = match corrective_feedback.as_deref() {
+            None => initial_prompt.to_owned(),
+            Some(feedback) => format!(
+                "{initial_prompt}\n\nIMPORTANT — your previous response was rejected: {feedback}\n\nPlease re-emit a corrected response that satisfies this requirement."
+            ),
+        };
+
+        return match tokio::time::timeout(
+            attempt_budget.timeout,
+            agent.prompt_typed_details::<T>(&current_prompt, max_turns),
+        )
+        .await
+        {
+            Ok(Ok(response)) => match validator(&response.output) {
+                Ok(()) => Ok(RetryOutcome {
+                    result: response,
+                    rate_limit_wait_ms,
+                }),
+                Err(TradingError::SchemaViolation { message }) => {
+                    if attempt < policy.max_retries {
+                        warn!(
+                            attempt,
+                            provider = agent.provider_name(),
+                            model = agent.model_id(),
+                            error = %message,
+                            "validator rejected typed output, will retry with corrective feedback"
+                        );
+                        corrective_feedback = Some(message);
+                        continue;
+                    }
+                    Err(TradingError::SchemaViolation { message })
+                }
+                Err(other) => Err(other),
+            },
+            Ok(Err(err)) => {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
+                    continue;
+                }
+                Err(err)
+            }
+            Err(_elapsed) => {
+                let err =
+                    attempt_timeout_error(started_at, agent, attempt, "validated typed prompt");
+                if attempt < policy.max_retries {
+                    continue;
+                }
+                Err(err)
+            }
+        };
+    }
+
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
@@ -610,15 +712,6 @@ fn attempt_timeout_error(
     }
 }
 
-/// Classify whether a `PromptError` is likely transient (worth retrying).
-///
-/// Rate-limit and HTTP transport errors are considered transient.
-/// Authentication, schema, and tool errors are permanent.
-#[cfg(test)]
-fn is_transient_error(err: &PromptError) -> bool {
-    transient_prompt_error_summary(err).is_some()
-}
-
 /// Shared attempt-preparation logic exposed to sibling submodules (e.g. `text_retry`).
 ///
 /// Uses fixed log messages appropriate for the "text prompt" operation.
@@ -647,6 +740,10 @@ pub(super) async fn prepare_attempt_text(
     .await
 }
 
+/// Classify a `PromptError`: `Some(summary)` when it is likely transient and
+/// worth retrying (rate-limit and HTTP transport errors), `None` when it is
+/// permanent (authentication, schema, and tool errors). The summary is the
+/// sanitized provider message used for retry logging.
 fn transient_prompt_error_summary(err: &PromptError) -> Option<String> {
     match err {
         PromptError::CompletionError(ce) => {
@@ -698,10 +795,6 @@ pub(super) fn should_retry_trading_error(err: &TradingError) -> bool {
     }
 }
 
-fn should_retry_typed_error(err: &TradingError) -> bool {
-    should_retry_trading_error(err)
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────
@@ -724,7 +817,7 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "rate limit exceeded".to_owned(),
         ));
-        assert!(is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
@@ -732,7 +825,7 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "HTTP 429 Too Many Requests".to_owned(),
         ));
-        assert!(is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
@@ -740,7 +833,7 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ResponseError(
             "Internal server error 500".to_owned(),
         ));
-        assert!(is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
@@ -748,14 +841,14 @@ mod tests {
         let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
             "invalid API key".to_owned(),
         ));
-        assert!(!is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_none());
     }
 
     #[test]
     fn tool_error_is_not_transient() {
         use rig::tool::ToolSetError;
         let err = PromptError::ToolError(ToolSetError::ToolNotFoundError("foo".to_owned()));
-        assert!(!is_transient_error(&err));
+        assert!(transient_prompt_error_summary(&err).is_none());
     }
 
     // ── Retry policy arithmetic ──────────────────────────────────────────
@@ -789,7 +882,7 @@ mod tests {
             message: "bad output".to_owned(),
         };
         assert!(
-            !should_retry_typed_error(&err),
+            !should_retry_trading_error(&err),
             "SchemaViolation must not be retried"
         );
     }
@@ -800,20 +893,20 @@ mod tests {
             elapsed: Duration::from_secs(30),
             message: "timed out".to_owned(),
         };
-        assert!(should_retry_typed_error(&err));
+        assert!(should_retry_trading_error(&err));
     }
 
     #[test]
     fn rig_timeout_message_is_retryable_for_typed_prompts() {
         let err =
             TradingError::Rig("provider=openai model=o3 summary=connection timeout".to_owned());
-        assert!(should_retry_typed_error(&err));
+        assert!(should_retry_trading_error(&err));
     }
 
     #[test]
     fn rig_auth_message_is_not_retryable_for_typed_prompts() {
         let err = TradingError::Rig("provider=openai model=o3 summary=invalid api key".to_owned());
-        assert!(!should_retry_typed_error(&err));
+        assert!(!should_retry_trading_error(&err));
     }
 
     #[test]
@@ -821,7 +914,7 @@ mod tests {
         let err = TradingError::RateLimitExceeded {
             provider: "openai".to_owned(),
         };
-        assert!(should_retry_typed_error(&err));
+        assert!(should_retry_trading_error(&err));
     }
 
     // ── Integration: chat_with_retry_details ─────────────────────────────
@@ -1071,7 +1164,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // start_paused: the 5ms per-attempt timeout must deterministically fire before the
+    // 25ms mock delay, and the elapsed/budget gate must read the same virtual clock so
+    // the loop reaches attempt 1's timeout instead of racing into budget-exhaustion.
+    #[tokio::test(start_paused = true)]
     async fn prompt_with_retry_public_entrypoint_returns_attempt_timeout_after_budget_exhaustion() {
         let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
         agent.set_prompt_delay(Duration::from_millis(25));
@@ -1097,7 +1193,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // start_paused: the virtual clock makes elapsed advance exactly by the 18ms mock
+    // delay so the pre-attempt budget gate (elapsed + backoff > 20ms budget) trips
+    // deterministically, instead of depending on real-clock drift under load.
+    #[tokio::test(start_paused = true)]
     async fn prompt_with_retry_public_entrypoint_surfaces_retry_budget_exhaustion_before_next_attempt()
      {
         let (agent, _controller) = mock_llm_agent(
@@ -1214,6 +1313,152 @@ mod tests {
 
         assert!(matches!(err, TradingError::SchemaViolation { .. }));
         assert_eq!(agent.typed_attempts(), 1);
+    }
+
+    // ── Typed validator-aware retry (corrective feedback) ─────────────────
+
+    fn proposal_with_rationale(rationale: &str) -> TradeProposal {
+        TradeProposal {
+            action: TradeAction::Buy,
+            target_price: 150.0,
+            stop_loss: 140.0,
+            confidence: 0.7,
+            rationale: rationale.to_owned(),
+            valuation_assessment: None,
+            scenario_valuation: None,
+        }
+    }
+
+    fn typed(proposal: TradeProposal) -> rig::agent::TypedPromptResponse<TradeProposal> {
+        rig::agent::TypedPromptResponse::new(
+            proposal,
+            rig::completion::Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                total_tokens: 15,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        )
+    }
+
+    /// Reject a proposal whose rationale lacks the word "because" — stands in for
+    /// a domain validator like the trader's divergence check.
+    fn explains(p: &TradeProposal) -> Result<(), TradingError> {
+        if p.rationale.contains("because") {
+            Ok(())
+        } else {
+            Err(TradingError::SchemaViolation {
+                message: "rationale must explain itself".to_owned(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_recovers_after_corrective_feedback() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        // First response fails the validator; second satisfies it.
+        agent.push_typed_ok(typed(proposal_with_rationale("Buy it.")));
+        agent.push_typed_ok(typed(proposal_with_rationale(
+            "Buy because momentum confirms.",
+        )));
+
+        let outcome = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            explains,
+        )
+        .await
+        .expect("should recover on the validated retry");
+
+        assert!(outcome.result.output.rationale.contains("because"));
+        assert_eq!(
+            agent.typed_attempts(),
+            2,
+            "validation failure must drive one corrective retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_exhausts_and_returns_schema_violation() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(typed(proposal_with_rationale("nope")));
+        agent.push_typed_ok(typed(proposal_with_rationale("still nope")));
+
+        let err = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            explains,
+        )
+        .await
+        .expect_err("a persistently-invalid response must surface the validator error");
+
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
+        assert_eq!(agent.typed_attempts(), 2);
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_returns_first_valid_without_retry() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(typed(proposal_with_rationale(
+            "Buy because valuation is cheap.",
+        )));
+
+        let outcome = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            explains,
+        )
+        .await
+        .expect("a valid first response needs no retry");
+
+        assert!(outcome.result.output.rationale.contains("because"));
+        assert_eq!(agent.typed_attempts(), 1);
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_propagates_non_schema_validator_errors() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(typed(proposal_with_rationale("anything")));
+
+        let err = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            |_p: &TradeProposal| Err(TradingError::Config(anyhow::anyhow!("not retryable"))),
+        )
+        .await
+        .expect_err("non-SchemaViolation validator errors must not retry");
+
+        assert!(matches!(err, TradingError::Config(_)));
+        assert_eq!(
+            agent.typed_attempts(),
+            1,
+            "non-schema errors must not retry"
+        );
     }
 
     // ── Validator-aware retry ────────────────────────────────────────────

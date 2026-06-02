@@ -8,10 +8,13 @@
 //! structured outputs.  The implementation mirrors [`super::retry::prompt_typed_with_retry`]
 //! but calls [`LlmAgent::prompt_text_details`] instead of the typed agent path.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rig::agent::PromptResponse;
 use tracing::warn;
+// Shares the budget clock with `super::retry` (see the note there): `tokio::time::Instant`
+// keeps the elapsed/timeout accounting on the same clock as the backoff/timeout sleeps.
+use tokio::time::Instant;
 
 use crate::error::{RetryPolicy, TradingError};
 
@@ -61,7 +64,7 @@ pub async fn prompt_text_with_retry(
                 rate_limit_wait_ms,
             }),
             Ok(Err(err)) => {
-                if should_retry_text_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient text prompt error, will retry");
                     continue;
                 }
@@ -161,7 +164,7 @@ where
                 Err(other) => Err(other),
             },
             Ok(Err(err)) => {
-                if should_retry_text_error(&err) && attempt < policy.max_retries {
+                if should_retry_trading_error(&err) && attempt < policy.max_retries {
                     warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %err, "transient validated text prompt error, will retry");
                     continue;
                 }
@@ -189,10 +192,6 @@ where
 // ────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
-
-fn should_retry_text_error(err: &TradingError) -> bool {
-    should_retry_trading_error(err)
-}
 
 fn text_timeout_error(started_at: Instant, agent: &LlmAgent, attempt: u32) -> TradingError {
     TradingError::NetworkTimeout {
@@ -310,7 +309,10 @@ mod tests {
 
     // ── Test 3: timeout error includes "text prompt" in message ──────────
 
-    #[tokio::test]
+    // start_paused: the 5ms per-attempt timeout must deterministically win the race
+    // against the 100ms mock turn-delay. A virtual clock removes the real-clock jitter
+    // that could otherwise let the delay land first (or budget-exhaust) under load.
+    #[tokio::test(start_paused = true)]
     async fn prompt_text_with_retry_times_out_with_text_prompt_operation_name() {
         let (agent, _ctrl) =
             mock_llm_agent_with_provider(ProviderId::OpenAI, "slow-model", vec![], vec![]);
