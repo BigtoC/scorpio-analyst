@@ -117,31 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn vix_regime_boundaries() {
-        // boundary values for each regime
-        let cases: &[(f64, VixRegime)] = &[
-            (14.99, VixRegime::Low),
-            (15.0, VixRegime::Normal),
-            (19.99, VixRegime::Normal),
-            (20.0, VixRegime::Elevated),
-            (29.99, VixRegime::Elevated),
-            (30.0, VixRegime::High),
-        ];
-        for (level, expected) in cases {
-            let regime = if *level < 15.0 {
-                VixRegime::Low
-            } else if *level < 20.0 {
-                VixRegime::Normal
-            } else if *level < 30.0 {
-                VixRegime::Elevated
-            } else {
-                VixRegime::High
-            };
-            assert_eq!(regime, *expected, "level={level}");
-        }
-    }
-
-    #[test]
     fn trend_enum_serializes_snake_case() {
         assert_eq!(
             serde_json::to_string(&VixTrend::Rising).unwrap(),

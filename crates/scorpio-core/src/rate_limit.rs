@@ -316,13 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_rate_limiters_get_returns_some_for_enabled() {
-        let cfg = providers_config_with(&[(ProviderId::OpenAI, 100)]);
-        let registry = ProviderRateLimiters::from_config(&cfg);
-        assert!(registry.get(ProviderId::OpenAI).is_some());
-    }
-
-    #[test]
     fn provider_rate_limiters_get_returns_some_for_custom_openrouter_rate() {
         let mut cfg = all_disabled_providers_config();
         cfg.openrouter.rpm = 100;

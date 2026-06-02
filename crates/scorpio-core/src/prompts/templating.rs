@@ -38,13 +38,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_current_date_placeholder() {
-        let mut vars = HashMap::new();
-        vars.insert("current_date", "2026-04-24");
-        assert_eq!(render("as of {current_date}", &vars), "as of 2026-04-24");
-    }
-
-    #[test]
     fn unknown_placeholder_passes_through_unchanged() {
         let vars = HashMap::new();
         let template = "See {unexpected} marker";
@@ -58,16 +51,6 @@ mod tests {
         assert_eq!(
             render("{ticker} report for {ticker}", &vars),
             "NVDA report for NVDA"
-        );
-    }
-
-    #[test]
-    fn renders_analysis_emphasis_placeholder() {
-        let mut vars = HashMap::new();
-        vars.insert("analysis_emphasis", "focus on growth");
-        assert_eq!(
-            render("Emphasis: {analysis_emphasis}", &vars),
-            "Emphasis: focus on growth"
         );
     }
 

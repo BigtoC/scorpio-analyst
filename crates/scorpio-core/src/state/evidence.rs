@@ -146,18 +146,4 @@ mod tests {
         assert_eq!(record.kind, recovered.kind);
         assert_eq!(record.payload, recovered.payload);
     }
-
-    #[test]
-    fn evidence_record_quality_flags_empty_in_stage1() {
-        let record: EvidenceRecord<FundamentalData> = EvidenceRecord {
-            kind: EvidenceKind::Fundamental,
-            payload: sample_fundamental(),
-            sources: vec![],
-            quality_flags: vec![],
-        };
-        assert!(
-            record.quality_flags.is_empty(),
-            "Stage 1 evidence records must have empty quality_flags"
-        );
-    }
 }

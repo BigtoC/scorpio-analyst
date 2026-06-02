@@ -1169,13 +1169,6 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
     assert_eq!(phase.phase_duration_ms, 320);
 }
 
-#[test]
-fn task_ids_are_correct() {
-    assert_eq!("bearish_researcher", "bearish_researcher");
-    assert_eq!("conservative_risk", "conservative_risk");
-    assert_eq!("neutral_risk", "neutral_risk");
-}
-
 #[tokio::test]
 async fn analyst_sync_honours_restricted_required_inputs_without_phantom_failures() {
     // Phase 2 dynamic analyst dispatch: a pack that declares only

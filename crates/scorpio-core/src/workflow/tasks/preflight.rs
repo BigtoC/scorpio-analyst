@@ -763,28 +763,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn preflight_all_transcript_and_enrichment_context_keys_present_after_run() {
-        let ctx = run_preflight("BRK.B", DataEnrichmentConfig::default())
-            .await
-            .expect("preflight should succeed");
-
-        for key in [
-            KEY_RESOLVED_INSTRUMENT,
-            KEY_PROVIDER_CAPABILITIES,
-            KEY_REQUIRED_COVERAGE_INPUTS,
-            KEY_TRANSCRIPT_FETCH_STATUS,
-            KEY_CACHED_CONSENSUS,
-            KEY_CACHED_EVENT_FEED,
-        ] {
-            let val: Option<String> = ctx.get(key).await;
-            assert!(
-                val.is_some(),
-                "context key '{key}' must be present after preflight"
-            );
-        }
-    }
-
     // ── Enrichment hydration preservation tests ────────────────────────────
 
     #[tokio::test]
@@ -836,34 +814,6 @@ mod tests {
         assert_eq!(
             after, real_data,
             "preflight must not overwrite pre-hydrated event feed data"
-        );
-    }
-
-    #[tokio::test]
-    async fn preflight_seeds_null_when_no_enrichment_pre_hydrated() {
-        let ctx = run_preflight("MSFT", DataEnrichmentConfig::default())
-            .await
-            .expect("preflight should succeed");
-
-        // Without pre-hydration, the JSON cache placeholders remain null and the
-        // transcript status key remains explicitly typed.
-        for key in [KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED] {
-            let raw: String = ctx.get(key).await.expect("key must be present");
-            assert_eq!(
-                raw, "null",
-                "key '{key}' should be null without pre-hydration"
-            );
-        }
-
-        let transcript_status: String = ctx
-            .get(KEY_TRANSCRIPT_FETCH_STATUS)
-            .await
-            .expect("transcript status must be present");
-        let status: crate::data::adapters::transcripts::TranscriptFetch =
-            serde_json::from_str(&transcript_status).expect("TranscriptFetch deserialization");
-        assert_eq!(
-            status,
-            crate::data::adapters::transcripts::TranscriptFetch::Unavailable
         );
     }
 

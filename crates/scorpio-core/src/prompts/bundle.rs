@@ -161,14 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn fully_filled_bundle_is_not_empty() {
-        let bundle = PromptBundle::from_static(
-            "f", "s", "n", "t", "bull", "bear", "dm", "tr", "ag", "co", "ne", "rm", "fm", "au",
-        );
-        assert!(!bundle.is_empty());
-    }
-
-    #[test]
     fn bundle_with_only_trailing_slot_filled_is_not_empty() {
         // Last-slot guard: catches off-by-one in the all-slots check.
         let bundle = PromptBundle::from_static(

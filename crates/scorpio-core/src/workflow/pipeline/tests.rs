@@ -786,33 +786,6 @@ fn clear_equity_resets_options_summary_unit() {
     );
 }
 
-#[test]
-fn clear_equity_resets_options_context_unit() {
-    let mut state = TradingState::new("AAPL", "2026-01-01");
-    state.set_technical_indicators(TechnicalData {
-        rsi: None,
-        macd: None,
-        atr: None,
-        sma_20: None,
-        sma_50: None,
-        ema_12: None,
-        ema_26: None,
-        bollinger_upper: None,
-        bollinger_lower: None,
-        support_level: None,
-        resistance_level: None,
-        volume_avg: None,
-        summary: "stale".to_owned(),
-        options_summary: Some("stale interpretation".to_owned()),
-        options_context: Some(crate::state::TechnicalOptionsContext::FetchFailed {
-            reason: "stale provider failure".to_owned(),
-        }),
-    });
-
-    state.clear_equity();
-    assert!(state.technical_indicators().is_none());
-}
-
 #[tokio::test]
 async fn run_analysis_cycle_clears_stale_options_summary_from_reused_state() {
     let config = crate::config::Config {

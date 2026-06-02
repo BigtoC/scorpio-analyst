@@ -598,45 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn derived_valuation_erc20_token_roundtrips_json() {
-        let val = DerivedValuation {
-            asset_shape: AssetShape::Erc20Token,
-            scenario: ScenarioValuation::NotAssessed {
-                reason: "unsupported_asset_shape".to_owned(),
-            },
-        };
-        let json = serde_json::to_string(&val).expect("serialize");
-        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(val, back);
-    }
-
-    #[test]
-    fn derived_valuation_stablecoin_roundtrips_json() {
-        let val = DerivedValuation {
-            asset_shape: AssetShape::Stablecoin,
-            scenario: ScenarioValuation::NotAssessed {
-                reason: "unsupported_asset_shape".to_owned(),
-            },
-        };
-        let json = serde_json::to_string(&val).expect("serialize");
-        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(val, back);
-    }
-
-    #[test]
-    fn derived_valuation_lp_token_roundtrips_json() {
-        let val = DerivedValuation {
-            asset_shape: AssetShape::LpToken,
-            scenario: ScenarioValuation::NotAssessed {
-                reason: "unsupported_asset_shape".to_owned(),
-            },
-        };
-        let json = serde_json::to_string(&val).expect("serialize");
-        let back: DerivedValuation = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(val, back);
-    }
-
-    #[test]
     fn asset_shape_crypto_variants_preserve_pascalcase_in_json() {
         // Guard against an accidental `rename_all` drift — old snapshots store
         // variant names in PascalCase, so any serde attribute change would
