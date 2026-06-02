@@ -1003,7 +1003,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    // start_paused: the 10ms per-source timeout must deterministically fire before the
+    // 50ms slow-peer sleep on the same virtual clock, so the fast source's result is
+    // preserved instead of racing real-clock drift under parallel test load.
+    #[tokio::test(start_paused = true)]
     async fn timeout_catalyst_source_preserves_fast_results_when_peer_times_out() {
         let fast_event = CatalystEvent {
             symbol: "AAPL".to_owned(),
