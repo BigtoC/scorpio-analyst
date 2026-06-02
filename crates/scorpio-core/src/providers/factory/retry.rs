@@ -9,7 +9,7 @@
 //! between attempts. Rate-limit permit acquisition is performed outside the per-attempt
 //! timeout but bounded by the remaining total budget (Option C semantics).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rig::{
     agent::{PromptResponse, TypedPromptResponse},
@@ -17,6 +17,13 @@ use rig::{
 };
 use serde::de::DeserializeOwned;
 use tracing::warn;
+// Budget accounting reads tokio's clock (not `std::time::Instant`) so the per-attempt
+// timeout, the exponential-backoff sleep, AND the elapsed/total-budget checks share
+// one clock. In a normal runtime `tokio::time::Instant` tracks real time identically
+// to `std::time::Instant`; under `#[tokio::test(start_paused = true)]` it advances
+// deterministically, removing the real-vs-virtual clock split that let the
+// timeout-vs-budget-exhaustion branch race under parallel-test load.
+use tokio::time::Instant;
 
 use crate::error::{RetryPolicy, TradingError};
 
@@ -1157,7 +1164,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // start_paused: the 5ms per-attempt timeout must deterministically fire before the
+    // 25ms mock delay, and the elapsed/budget gate must read the same virtual clock so
+    // the loop reaches attempt 1's timeout instead of racing into budget-exhaustion.
+    #[tokio::test(start_paused = true)]
     async fn prompt_with_retry_public_entrypoint_returns_attempt_timeout_after_budget_exhaustion() {
         let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
         agent.set_prompt_delay(Duration::from_millis(25));
@@ -1183,7 +1193,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // start_paused: the virtual clock makes elapsed advance exactly by the 18ms mock
+    // delay so the pre-attempt budget gate (elapsed + backoff > 20ms budget) trips
+    // deterministically, instead of depending on real-clock drift under load.
+    #[tokio::test(start_paused = true)]
     async fn prompt_with_retry_public_entrypoint_surfaces_retry_budget_exhaustion_before_next_attempt()
      {
         let (agent, _controller) = mock_llm_agent(
