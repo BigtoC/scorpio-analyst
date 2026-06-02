@@ -59,6 +59,9 @@ secrecy.workspace = true
 futures.workspace = true
 
 [dev-dependencies]
+# `test-util` enables `#[tokio::test(start_paused = true)]` for the virtual-clock
+# notice-dispatch tests; the workspace `full` feature set does not include it.
+tokio = { workspace = true, features = ["test-util"] }
 pretty_assertions.workspace = true
 paft-money.workspace = true
 proptest.workspace = true
