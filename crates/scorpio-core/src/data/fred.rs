@@ -257,18 +257,108 @@ impl FredClient {
     /// historical and future dates for the given release ID.
     ///
     /// Returns `Ok(Vec::new())` when the window contains no dates — not an error.
+    /// Retries transient failures (including 429) with the same backoff policy
+    /// as `get_series_latest`.
     pub async fn release_dates(
         &self,
         release_id: u32,
         from: &str,
         to: &str,
     ) -> Result<Vec<chrono::NaiveDate>, TradingError> {
-        self.limiter.acquire().await;
+        self.release_dates_classified(release_id, from, to)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn release_dates_classified(
+        &self,
+        release_id: u32,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<chrono::NaiveDate>, FredRequestError> {
+        let started_at = tokio::time::Instant::now();
+        let deadline = started_at + Self::TOTAL_RETRY_BUDGET;
+        let mut last_err = None;
+
+        for attempt in 0..Self::MAX_ATTEMPTS {
+            if !within_retry_budget(tokio::time::Instant::now(), deadline, None) {
+                last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
+                break;
+            }
+
+            if tokio::time::timeout_at(deadline, self.limiter.acquire())
+                .await
+                .is_err()
+            {
+                last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
+                break;
+            }
+
+            if attempt > 0 {
+                tracing::debug!(attempt, release_id, "retrying FRED release_dates request");
+            }
+
+            match tokio::time::timeout_at(
+                deadline,
+                self.send_release_dates_request(release_id, from, to),
+            )
+            .await
+            {
+                Ok(Ok(dates)) => return Ok(dates),
+                Ok(Err(error)) => {
+                    let decision = classify_retry_decision(&error);
+
+                    if !decision.retryable {
+                        return Err(error);
+                    }
+
+                    last_err = Some(error);
+
+                    if attempt + 1 == Self::MAX_ATTEMPTS {
+                        break;
+                    }
+
+                    let retry_delay = compute_retry_delay(attempt + 1, decision.delay_override);
+                    if !within_retry_budget(
+                        tokio::time::Instant::now(),
+                        deadline,
+                        Some(retry_delay),
+                    ) {
+                        last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
+                        break;
+                    }
+
+                    tracing::warn!(
+                        attempt,
+                        release_id,
+                        error = %TradingError::from(last_err.as_ref().expect("retry error stored").clone()),
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "transient FRED error, will retry"
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                }
+                Err(_) => {
+                    last_err = Some(budget_exceeded_terminal_error(last_err.as_ref()));
+                    break;
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or(FredRequestError::RetryBudgetExhausted))
+    }
+
+    async fn send_release_dates_request(
+        &self,
+        release_id: u32,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<chrono::NaiveDate>, FredRequestError> {
+        let id_str = release_id.to_string();
         let resp = self
             .http
             .get(format!("{FRED_BASE_URL}{FRED_RELEASE_DATES_PATH}"))
             .query(&[
-                ("release_id", release_id.to_string().as_str()),
+                ("release_id", id_str.as_str()),
                 ("realtime_start", from),
                 ("realtime_end", to),
                 ("file_type", "json"),
@@ -277,25 +367,13 @@ impl FredClient {
             .query(&[("api_key", self.api_key.expose_secret())])
             .send()
             .await
-            .map_err(|e| TradingError::AnalystError {
-                agent: "fred".to_owned(),
-                message: format!("release_dates request failed: {e}"),
-            })?;
+            .map_err(map_fred_err)?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(TradingError::AnalystError {
-                agent: "fred".to_owned(),
-                message: format!("release_dates HTTP {status} for release_id={release_id}"),
-            });
-        }
+        let resp = map_fred_response_status(resp)?;
 
-        let body: FredReleaseDatesResponse =
-            resp.json()
-                .await
-                .map_err(|e| TradingError::SchemaViolation {
-                    message: format!("release_dates deserialize: {e}"),
-                })?;
+        let body: FredReleaseDatesResponse = resp.json().await.map_err(|e| FredRequestError::Decode {
+            message: e.to_string(),
+        })?;
 
         let dates = body
             .release_dates
