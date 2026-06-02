@@ -176,6 +176,26 @@ impl StubInference {
     fn observed_system_prompts(&self) -> Vec<String> {
         self.observed_system_prompts.lock().unwrap().clone()
     }
+
+    fn observed_user_prompts(&self) -> Vec<String> {
+        self.observed_user_prompts.lock().unwrap().clone()
+    }
+
+    fn default_valid_outcome() -> RetryOutcome<TypedPromptResponse<TraderProposalResponse>> {
+        RetryOutcome {
+            result: TypedPromptResponse::new(
+                TraderProposalResponse::from(valid_proposal()),
+                Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 0,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            ),
+            rate_limit_wait_ms: 0,
+        }
+    }
 }
 
 impl TraderInference for StubInference {
@@ -186,34 +206,42 @@ impl TraderInference for StubInference {
         user_prompt: &str,
         _timeout: Duration,
         _retry_policy: &RetryPolicy,
+        validator: TraderValidator<'_>,
     ) -> Result<RetryOutcome<TypedPromptResponse<TraderProposalResponse>>, TradingError> {
         self.observed_system_prompts
             .lock()
             .unwrap()
             .push(system_prompt.to_owned());
-        self.observed_user_prompts
-            .lock()
-            .unwrap()
-            .push(user_prompt.to_owned());
-        self.responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| {
-                Ok(RetryOutcome {
-                    result: TypedPromptResponse::new(
-                        TraderProposalResponse::from(valid_proposal()),
-                        Usage {
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            total_tokens: 0,
-                            cached_input_tokens: 0,
-                            cache_creation_input_tokens: 0,
-                        },
-                    ),
-                    rate_limit_wait_ms: 0,
-                })
-            })
+
+        // Mirror the production helper: run the validator inside the loop and, on
+        // a SchemaViolation, retry with the next queued response (corrective
+        // feedback) until one validates or the queue is exhausted. Each iteration
+        // records the prompt so tests can assert how many attempts occurred.
+        loop {
+            self.observed_user_prompts
+                .lock()
+                .unwrap()
+                .push(user_prompt.to_owned());
+
+            let outcome = match self.responses.lock().unwrap().pop_front() {
+                Some(Ok(outcome)) => outcome,
+                Some(Err(err)) => return Err(err),
+                None => return Ok(Self::default_valid_outcome()),
+            };
+
+            match validator(&outcome.result.output) {
+                Ok(()) => return Ok(outcome),
+                Err(TradingError::SchemaViolation { .. }) => {
+                    if self.responses.lock().unwrap().is_empty() {
+                        // Last response still invalid — return it so the caller's
+                        // authoritative post-infer validation surfaces the error.
+                        return Ok(outcome);
+                    }
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
+        }
     }
 }
 
@@ -275,6 +303,50 @@ async fn run_writes_valid_trade_proposal_to_state() {
     assert_eq!(usage.prompt_tokens, 120);
     assert_eq!(usage.completion_tokens, 45);
     assert_eq!(usage.total_tokens, 165);
+}
+
+#[tokio::test]
+async fn run_recovers_after_validator_rejection_then_valid_retry() {
+    // First response fails domain validation (target_price = 0); the corrective
+    // retry returns a valid proposal. The trader must self-correct, not abort.
+    let mut state = populated_state();
+    let mut rejected = valid_proposal();
+    rejected.target_price = 0.0;
+    let inference = StubInference::new(vec![
+        Ok(TypedPromptResponse::new(
+            TraderProposalResponse::from(rejected),
+            Usage {
+                input_tokens: 5,
+                output_tokens: 5,
+                total_tokens: 10,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        )),
+        Ok(TypedPromptResponse::new(
+            TraderProposalResponse::from(valid_proposal()),
+            Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                total_tokens: 15,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        )),
+    ]);
+
+    let agent = trader_agent_for_test(&state);
+    agent
+        .run_with_inference(&mut state, &inference)
+        .await
+        .expect("trader should recover via corrective retry");
+
+    assert_eq!(state.trader_proposal, Some(valid_proposal()));
+    assert_eq!(
+        inference.observed_user_prompts().len(),
+        2,
+        "a validation rejection must drive exactly one corrective retry"
+    );
 }
 
 #[tokio::test]

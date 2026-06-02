@@ -515,6 +515,111 @@ where
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
+/// Prompt for a typed response and run a domain `validator` *inside* the retry
+/// loop. A [`TradingError::SchemaViolation`] from the validator re-prompts the
+/// model with the rejection appended as corrective feedback — the structured-
+/// output analogue of [`prompt_text_with_retry_validated`][crate::providers::factory::prompt_text_with_retry_validated]
+/// — up to `policy.max_retries`. Transient provider errors retry exactly as in
+/// [`prompt_typed_with_retry`]; any non-`SchemaViolation` validator error
+/// propagates immediately without retry.
+///
+/// # Errors
+///
+/// - [`TradingError::NetworkTimeout`] / [`TradingError::Rig`] for LLM failures.
+/// - [`TradingError::SchemaViolation`] if the validator keeps rejecting the
+///   typed output after all retries.
+/// - Any non-`SchemaViolation` validator error, propagated without retry.
+pub async fn prompt_typed_with_retry_validated<T, F>(
+    agent: &LlmAgent,
+    initial_prompt: &str,
+    timeout: Duration,
+    policy: &RetryPolicy,
+    max_turns: usize,
+    validator: F,
+) -> Result<RetryOutcome<TypedPromptResponse<T>>, TradingError>
+where
+    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
+    F: Fn(&T) -> Result<(), TradingError>,
+{
+    let total_budget = policy.total_budget(timeout);
+    let started_at = Instant::now();
+    let mut rate_limit_wait_ms: u64 = 0;
+    let mut corrective_feedback: Option<String> = None;
+
+    for attempt in 0..=policy.max_retries {
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            &RetryMessages {
+                retrying: "retrying validated typed prompt after transient error",
+                retry_budget: "validated typed prompt retry budget exhausted before next attempt",
+                acquire_budget: "validated typed prompt budget exhausted before rate-limit acquire",
+                exhausted: "validated typed prompt retry budget exhausted",
+            },
+        )
+        .await?;
+        rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
+
+        let current_prompt = match corrective_feedback.as_deref() {
+            None => initial_prompt.to_owned(),
+            Some(feedback) => format!(
+                "{initial_prompt}\n\nIMPORTANT — your previous response was rejected: {feedback}\n\nPlease re-emit a corrected response that satisfies this requirement."
+            ),
+        };
+
+        match tokio::time::timeout(
+            attempt_budget.timeout,
+            agent.prompt_typed_details::<T>(&current_prompt, max_turns),
+        )
+        .await
+        {
+            Ok(Ok(response)) => match validator(&response.output) {
+                Ok(()) => {
+                    return Ok(RetryOutcome {
+                        result: response,
+                        rate_limit_wait_ms,
+                    });
+                }
+                Err(TradingError::SchemaViolation { message }) => {
+                    if attempt < policy.max_retries {
+                        warn!(
+                            attempt,
+                            provider = agent.provider_name(),
+                            model = agent.model_id(),
+                            error = %message,
+                            "validator rejected typed output, will retry with corrective feedback"
+                        );
+                        corrective_feedback = Some(message);
+                        continue;
+                    }
+                    return Err(TradingError::SchemaViolation { message });
+                }
+                Err(other) => return Err(other),
+            },
+            Ok(Err(err)) => {
+                if should_retry_typed_error(&err) && attempt < policy.max_retries {
+                    continue;
+                }
+                return Err(err);
+            }
+            Err(_elapsed) => {
+                let err =
+                    attempt_timeout_error(started_at, agent, attempt, "validated typed prompt");
+                if attempt < policy.max_retries {
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────────
@@ -1214,6 +1319,152 @@ mod tests {
 
         assert!(matches!(err, TradingError::SchemaViolation { .. }));
         assert_eq!(agent.typed_attempts(), 1);
+    }
+
+    // ── Typed validator-aware retry (corrective feedback) ─────────────────
+
+    fn proposal_with_rationale(rationale: &str) -> TradeProposal {
+        TradeProposal {
+            action: TradeAction::Buy,
+            target_price: 150.0,
+            stop_loss: 140.0,
+            confidence: 0.7,
+            rationale: rationale.to_owned(),
+            valuation_assessment: None,
+            scenario_valuation: None,
+        }
+    }
+
+    fn typed(proposal: TradeProposal) -> rig::agent::TypedPromptResponse<TradeProposal> {
+        rig::agent::TypedPromptResponse::new(
+            proposal,
+            rig::completion::Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                total_tokens: 15,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        )
+    }
+
+    /// Reject a proposal whose rationale lacks the word "because" — stands in for
+    /// a domain validator like the trader's divergence check.
+    fn explains(p: &TradeProposal) -> Result<(), TradingError> {
+        if p.rationale.contains("because") {
+            Ok(())
+        } else {
+            Err(TradingError::SchemaViolation {
+                message: "rationale must explain itself".to_owned(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_recovers_after_corrective_feedback() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        // First response fails the validator; second satisfies it.
+        agent.push_typed_ok(typed(proposal_with_rationale("Buy it.")));
+        agent.push_typed_ok(typed(proposal_with_rationale(
+            "Buy because momentum confirms.",
+        )));
+
+        let outcome = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            explains,
+        )
+        .await
+        .expect("should recover on the validated retry");
+
+        assert!(outcome.result.output.rationale.contains("because"));
+        assert_eq!(
+            agent.typed_attempts(),
+            2,
+            "validation failure must drive one corrective retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_exhausts_and_returns_schema_violation() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(typed(proposal_with_rationale("nope")));
+        agent.push_typed_ok(typed(proposal_with_rationale("still nope")));
+
+        let err = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            explains,
+        )
+        .await
+        .expect_err("a persistently-invalid response must surface the validator error");
+
+        assert!(matches!(err, TradingError::SchemaViolation { .. }));
+        assert_eq!(agent.typed_attempts(), 2);
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_returns_first_valid_without_retry() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(typed(proposal_with_rationale(
+            "Buy because valuation is cheap.",
+        )));
+
+        let outcome = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            explains,
+        )
+        .await
+        .expect("a valid first response needs no retry");
+
+        assert!(outcome.result.output.rationale.contains("because"));
+        assert_eq!(agent.typed_attempts(), 1);
+    }
+
+    #[tokio::test]
+    async fn prompt_typed_with_retry_validated_propagates_non_schema_validator_errors() {
+        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        agent.push_typed_ok(typed(proposal_with_rationale("anything")));
+
+        let err = prompt_typed_with_retry_validated::<TradeProposal, _>(
+            &agent,
+            "typed prompt",
+            Duration::from_millis(50),
+            &RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(1),
+            },
+            1,
+            |_p: &TradeProposal| Err(TradingError::Config(anyhow::anyhow!("not retryable"))),
+        )
+        .await
+        .expect_err("non-SchemaViolation validator errors must not retry");
+
+        assert!(matches!(err, TradingError::Config(_)));
+        assert_eq!(
+            agent.typed_attempts(),
+            1,
+            "non-schema errors must not retry"
+        );
     }
 
     // ── Validator-aware retry ────────────────────────────────────────────

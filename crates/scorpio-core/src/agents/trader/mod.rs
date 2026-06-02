@@ -22,7 +22,7 @@ use crate::{
         ModelTier,
         factory::{
             CompletionModelHandle, RetryOutcome, build_agent, create_completion_model,
-            prompt_typed_with_retry,
+            prompt_typed_with_retry_validated,
         },
     },
     rate_limit::ProviderRateLimiters,
@@ -38,6 +38,12 @@ use prompt::build_prompt_context;
 pub(crate) use prompt::build_prompt_context as build_prompt_context_for_test;
 use schema::TraderProposalResponse;
 
+/// `validator` runs inside the inference retry loop so a domain-rule violation
+/// (e.g. an unexplained divergence from the moderator consensus) re-prompts the
+/// model with corrective feedback instead of failing the phase on the first try.
+type TraderValidator<'a> =
+    &'a (dyn Fn(&TraderProposalResponse) -> Result<(), TradingError> + Send + Sync);
+
 trait TraderInference {
     async fn infer(
         &self,
@@ -46,6 +52,7 @@ trait TraderInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
+        validator: TraderValidator<'_>,
     ) -> Result<RetryOutcome<TypedPromptResponse<TraderProposalResponse>>, TradingError>;
 }
 
@@ -59,14 +66,16 @@ impl TraderInference for RigTraderInference {
         user_prompt: &str,
         timeout: Duration,
         retry_policy: &RetryPolicy,
+        validator: TraderValidator<'_>,
     ) -> Result<RetryOutcome<TypedPromptResponse<TraderProposalResponse>>, TradingError> {
         let agent = build_agent(handle, system_prompt);
-        prompt_typed_with_retry::<TraderProposalResponse>(
+        prompt_typed_with_retry_validated::<TraderProposalResponse, _>(
             &agent,
             user_prompt,
             timeout,
             retry_policy,
             TRADER_MAX_TURNS,
+            validator,
         )
         .await
     }
@@ -140,15 +149,27 @@ impl TraderAgent {
         let started_at = Instant::now();
         let prompt_context = build_prompt_context(state, &self.symbol, &self.target_date);
 
-        let outcome = inference
-            .infer(
-                &self.handle,
-                &prompt_context.system_prompt,
-                &prompt_context.user_prompt,
-                self.timeout,
-                &self.retry_policy,
-            )
-            .await?;
+        // The validator runs inside the inference retry loop so a domain-rule
+        // rejection re-prompts the model with corrective feedback. Scoped in its
+        // own block so its shared borrow of `state` is released before the
+        // mutable write below. Re-validated post-infer as the authoritative gate.
+        let outcome = {
+            let validate = |response: &TraderProposalResponse| -> Result<(), TradingError> {
+                let proposal: TradeProposal = response.clone().into();
+                validate_trade_proposal(&proposal)?;
+                validate_trade_proposal_context(state, &proposal)
+            };
+            inference
+                .infer(
+                    &self.handle,
+                    &prompt_context.system_prompt,
+                    &prompt_context.user_prompt,
+                    self.timeout,
+                    &self.retry_policy,
+                    &validate,
+                )
+                .await
+        }?;
 
         let llm_proposal: TradeProposal = outcome.result.output.into();
         validate_trade_proposal(&llm_proposal)?;
