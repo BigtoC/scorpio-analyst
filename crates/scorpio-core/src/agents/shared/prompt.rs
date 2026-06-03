@@ -446,7 +446,10 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
             let h = r.hold.unwrap_or(0);
             let s = r.sell.unwrap_or(0);
             let ss = r.strong_sell.unwrap_or(0);
-            format!("strong_buy={sb}, buy={b}, hold={h}, sell={s}, strong_sell={ss}")
+            let mr = r.mean_rating.as_deref().unwrap_or("N/A");
+            format!(
+                "strong_buy={sb}, buy={b}, hold={h}, sell={s}, strong_sell={ss}, mean_rating={mr}"
+            )
         } else {
             "N/A".to_owned()
         };
@@ -1008,6 +1011,7 @@ mod tests {
                     hold: Some(10),
                     sell: Some(2),
                     strong_sell: Some(0),
+                    mean_rating: Some("Buy".to_owned()),
                 }),
                 consecutive_provider_degraded_cycles: 0,
             }),
@@ -1045,6 +1049,10 @@ mod tests {
         assert!(
             ctx.contains("strong_sell=0"),
             "must include strong_sell recommendation bucket: {ctx}"
+        );
+        assert!(
+            ctx.contains("mean_rating=Buy"),
+            "must include mean_rating in recommendations: {ctx}"
         );
         // Existing base fields must still be present.
         assert!(ctx.contains("EPS estimate: 2.15"), "EPS estimate: {ctx}");
