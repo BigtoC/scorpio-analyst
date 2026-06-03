@@ -72,7 +72,7 @@ pub struct NewsAnalyst {
     system_prompt: String,
     timeout: std::time::Duration,
     retry_policy: RetryPolicy,
-    /// Pre-fetched news from `run_analyst_team`.  When `Some`, a
+    /// Pre-fetched news from the analyst fan-out.  When `Some`, a
     /// [`GetCachedNews`] tool is bound instead of the live [`GetNews`] tool,
     /// saving one Finnhub API call per cycle.
     cached_news: Option<Arc<NewsData>>,
@@ -661,9 +661,9 @@ mod tests {
 
         let _ = outcome.output;
 
-        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
-        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+        assert_eq!(agent.typed_attempts(), 0);
+        assert_eq!(agent.text_turn_attempts(), 1);
+        assert_eq!(agent.prompt_attempts(), 0);
     }
 
     // ── Task chunk1: Rendered-prompt evidence-discipline hardening ─────────

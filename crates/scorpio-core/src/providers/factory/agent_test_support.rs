@@ -26,22 +26,3 @@ pub(crate) fn mock_llm_agent_with_provider(
 ) -> (LlmAgent, super::agent::MockLlmAgentController) {
     super::agent::mock_llm_agent_with_provider_id(provider, model_id, prompt_results, chat_results)
 }
-
-/// Return the number of times the one-shot `prompt_details` path was invoked on
-/// the mock agent.  This is the count for `MockLlmAgent::prompt_details`, *not*
-/// the tool-turn path.
-pub(crate) fn prompt_attempts(agent: &LlmAgent) -> usize {
-    agent.prompt_attempts()
-}
-
-/// Return the number of times the tool-enabled text-turn path (`prompt_text_details`)
-/// was invoked on the mock agent.
-pub(crate) fn text_turn_attempts(agent: &LlmAgent) -> usize {
-    agent.text_turn_attempts()
-}
-
-/// Return the number of times the typed-prompt path (`prompt_typed_details`)
-/// was invoked on the mock agent.
-pub(crate) fn typed_attempts(agent: &LlmAgent) -> usize {
-    agent.typed_attempts()
-}

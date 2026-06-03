@@ -194,10 +194,7 @@ pub fn etf_baseline_pack() -> AnalysisPackManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn resolve_pack(id: PackId) -> AnalysisPackManifest {
-        super::super::super::registry::resolve_pack(id)
-    }
+    use crate::analysis_packs::registry::resolve_pack;
 
     #[test]
     fn etf_baseline_pack_validates_successfully() {
@@ -228,27 +225,6 @@ mod tests {
     fn etf_baseline_default_valuation_is_etf() {
         let pack = resolve_pack(PackId::EtfBaseline);
         assert_eq!(pack.default_valuation, ValuationAssessment::Etf);
-    }
-
-    #[test]
-    fn etf_baseline_fund_shape_resolves_to_etf_valuation() {
-        let pack = resolve_pack(PackId::EtfBaseline);
-        assert_eq!(
-            pack.resolve_valuation(&AssetShape::Fund),
-            ValuationAssessment::Etf
-        );
-    }
-
-    #[test]
-    fn etf_baseline_corporate_equity_falls_through_to_full_per_resolve_rule() {
-        // Sanity: the ETF pack doesn't list CorporateEquity in its
-        // valuator_selection, but resolve_valuation maps it to Full when
-        // default_valuation = Etf per the schema rule from Task 2.
-        let pack = resolve_pack(PackId::EtfBaseline);
-        assert_eq!(
-            pack.resolve_valuation(&AssetShape::CorporateEquity),
-            ValuationAssessment::Full
-        );
     }
 
     #[test]

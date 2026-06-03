@@ -153,17 +153,6 @@ impl std::fmt::Debug for YFinanceEstimatesProvider {
 }
 
 impl YFinanceEstimatesProvider {
-    /// Construct a provider with no pre-fetched consensus inputs. The
-    /// earnings-trend branch is fetched live; price target / recommendations
-    /// are treated as absent.
-    pub fn new(client: Arc<dyn YFinanceData>) -> Self {
-        Self {
-            client,
-            price_target: None,
-            recommendations: None,
-        }
-    }
-
     /// Construct a provider seeded with the price target / recommendation
     /// summary already fetched once via `YFinanceClient::get_info`, so
     /// `fetch_consensus` only issues the live earnings-trend call.

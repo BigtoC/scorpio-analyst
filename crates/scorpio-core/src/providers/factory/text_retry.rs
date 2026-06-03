@@ -216,9 +216,7 @@ mod tests {
     use crate::error::RetryPolicy;
     use crate::providers::ProviderId;
 
-    use super::super::agent_test_support::{
-        mock_llm_agent_with_provider, prompt_attempts, text_turn_attempts,
-    };
+    use super::super::agent_test_support::mock_llm_agent_with_provider;
     use super::*;
 
     fn zero_usage() -> Usage {
@@ -304,7 +302,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.result.output, "recovered");
-        assert_eq!(text_turn_attempts(&agent), 2);
+        assert_eq!(agent.text_turn_attempts(), 2);
     }
 
     // ── Test 3: timeout error includes "text prompt" in message ──────────
@@ -392,9 +390,9 @@ mod tests {
         .unwrap();
 
         // text_turn path was used
-        assert_eq!(text_turn_attempts(&agent), 1);
+        assert_eq!(agent.text_turn_attempts(), 1);
         // one-shot prompt path was NOT used
-        assert_eq!(prompt_attempts(&agent), 0);
+        assert_eq!(agent.prompt_attempts(), 0);
         assert_eq!(outcome.result.output, "from text turn");
     }
 }

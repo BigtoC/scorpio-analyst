@@ -21,7 +21,7 @@ use chrono::NaiveDate;
 use tracing::warn;
 use yfinance_rs::{
     FundamentalsBuilder,
-    analysis::{AnalysisBuilder, EarningsTrendRow, PriceTarget, RecommendationSummary},
+    analysis::{AnalysisBuilder, EarningsTrendRow},
     fundamentals::{BalanceSheetRow, Calendar, CashflowRow, IncomeStatementRow, ShareCount},
     profile::{self, Profile},
     ticker::{Info, Ticker},
@@ -165,52 +165,6 @@ impl YFinanceClient {
         }
     }
 
-    /// Fetch the analyst price-target summary while preserving the failure reason.
-    ///
-    /// Returns `Ok(None)` when Yahoo replies with a payload whose every field
-    /// is `None` (i.e. an "empty" 200-OK response). This collapses the upstream
-    /// "no data" shape into the explicit absence variant so the consensus
-    /// adapter can distinguish "no usable fields" from "fetch failed".
-    pub async fn get_analyst_price_target_result(
-        &self,
-        symbol: &str,
-    ) -> Result<Option<PriceTarget>, crate::error::TradingError> {
-        match self
-            .session
-            .with_rate_limit(
-                AnalysisBuilder::new(self.session.client(), symbol).analyst_price_target(None),
-            )
-            .await
-        {
-            Ok(pt) => Ok(empty_price_target_to_none(pt)),
-            Err(e) => {
-                warn!(error = %e, symbol, "failed to fetch analyst price target");
-                Err(super::ohlcv::map_yf_err(e))
-            }
-        }
-    }
-
-    /// Fetch the analyst recommendation summary while preserving the failure
-    /// reason. Returns `Ok(None)` when every aggregate field is `None`.
-    pub async fn get_recommendations_summary_result(
-        &self,
-        symbol: &str,
-    ) -> Result<Option<RecommendationSummary>, crate::error::TradingError> {
-        match self
-            .session
-            .with_rate_limit(
-                AnalysisBuilder::new(self.session.client(), symbol).recommendations_summary(),
-            )
-            .await
-        {
-            Ok(rs) => Ok(empty_recommendation_summary_to_none(rs)),
-            Err(e) => {
-                warn!(error = %e, symbol, "failed to fetch recommendations summary");
-                Err(super::ohlcv::map_yf_err(e))
-            }
-        }
-    }
-
     // ── Profile / asset-shape ────────────────────────────────────────────
 
     /// Fetch the Yahoo Finance profile for `symbol`.
@@ -285,37 +239,6 @@ impl YFinanceClient {
     }
 }
 
-/// Collapse a fully-empty Yahoo `PriceTarget` payload into `None`.
-///
-/// The Yahoo Finance "analyst price target" endpoint occasionally returns a
-/// 200-OK response with every field set to `None`. The consensus adapter
-/// treats that shape as "no usable data" rather than "data available", so we
-/// normalize it before returning to the caller.
-fn empty_price_target_to_none(pt: PriceTarget) -> Option<PriceTarget> {
-    if pt.mean.is_none() && pt.high.is_none() && pt.low.is_none() && pt.number_of_analysts.is_none()
-    {
-        None
-    } else {
-        Some(pt)
-    }
-}
-
-/// Collapse a fully-empty Yahoo `RecommendationSummary` payload into `None`.
-fn empty_recommendation_summary_to_none(
-    rs: RecommendationSummary,
-) -> Option<RecommendationSummary> {
-    if rs.strong_buy.is_none()
-        && rs.buy.is_none()
-        && rs.hold.is_none()
-        && rs.sell.is_none()
-        && rs.strong_sell.is_none()
-    {
-        None
-    } else {
-        Some(rs)
-    }
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -350,33 +273,6 @@ mod tests {
         let client = YFinanceClient::default();
         let result = client.session.with_rate_limit(async { Some(42_u8) }).await;
         assert_eq!(result, Some(42));
-    }
-
-    // ── Empty-payload collapse helpers ───────────────────────────────────
-
-    use yfinance_rs::analysis::{PriceTarget, RecommendationSummary};
-
-    #[test]
-    fn empty_price_target_payload_returns_none() {
-        let pt = PriceTarget {
-            mean: None,
-            high: None,
-            low: None,
-            number_of_analysts: None,
-        };
-
-        assert!(
-            empty_price_target_to_none(pt).is_none(),
-            "expected None for all-empty PriceTarget payload"
-        );
-    }
-
-    #[test]
-    fn empty_recommendations_summary_payload_returns_none() {
-        assert!(
-            empty_recommendation_summary_to_none(RecommendationSummary::default()).is_none(),
-            "expected None for all-empty RecommendationSummary payload"
-        );
     }
 
     // ── TickerCalendar conversion tests ──────────────────────────────────

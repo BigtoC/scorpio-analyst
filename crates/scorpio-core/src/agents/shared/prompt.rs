@@ -497,10 +497,6 @@ pub(crate) fn build_enrichment_context(state: &TradingState) -> String {
 /// When a pack is active, returns the pack's analysis emphasis as a prompt
 /// directive. When no pack metadata is present (old snapshots), returns an
 /// empty string so downstream consumers degrade gracefully.
-///
-/// Ready for use by analyst/researcher agents; will be wired into agent
-/// prompts when pack-aware prompt composition is activated.
-#[allow(dead_code)] // API ready for agent prompt wiring in a follow-on slice
 pub(crate) fn build_pack_context(state: &TradingState) -> String {
     match &state.analysis_runtime_policy {
         Some(policy) => format!(

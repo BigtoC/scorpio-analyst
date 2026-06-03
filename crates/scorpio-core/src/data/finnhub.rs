@@ -960,9 +960,8 @@ impl Tool for GetMarketNews {
 ///
 /// Eliminates the duplicate Finnhub `get_news` call that would otherwise
 /// occur when both [`SentimentAnalyst`] and [`NewsAnalyst`] run
-/// concurrently for the same symbol.  The cache is populated by
-/// [`crate::agents::analyst::run_analyst_team`] before the fan-out, so
-/// both agents share one network round-trip.
+/// concurrently for the same symbol.  The cache is populated before the
+/// analyst fan-out, so both agents share one network round-trip.
 ///
 /// The tool exposes the same `NAME` (`"get_news"`) as [`GetNews`] so that
 /// system prompts written for the live tool work unchanged when the cached

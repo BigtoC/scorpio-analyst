@@ -183,7 +183,7 @@ impl FundManagerAgent {
             trader_proposal_action,
         )?;
 
-        status.decided_at = runtime_timestamp(&state.target_date);
+        status.decided_at = runtime_timestamp();
 
         let usage = agent_token_usage_from_completion(
             "Fund Manager",
@@ -210,21 +210,6 @@ pub(super) async fn run_fund_manager(
                 "fund manager: missing routing flags — preflight must run before fund manager"
             ))
         })?;
-    run_fund_manager_with_inference(
-        state,
-        config,
-        !routing_flags.skip_risk,
-        &RigFundManagerInference,
-    )
-    .await
-}
-
-pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
-    state: &mut TradingState,
-    config: &Config,
-    risk_stage_enabled: bool,
-    inference: &I,
-) -> Result<AgentTokenUsage, TradingError> {
     let handle = create_completion_model(
         ModelTier::DeepThinking,
         &config.llm,
@@ -234,6 +219,6 @@ pub(super) async fn run_fund_manager_with_inference<I: FundManagerInference>(
     let agent =
         FundManagerAgent::new(handle, &state.asset_symbol, &state.target_date, &config.llm)?;
     agent
-        .run_with_inference(state, risk_stage_enabled, inference)
+        .run_with_inference(state, !routing_flags.skip_risk, &RigFundManagerInference)
         .await
 }

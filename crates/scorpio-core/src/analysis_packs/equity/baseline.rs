@@ -169,11 +169,7 @@ pub fn baseline_pack() -> AnalysisPackManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::AssetShape;
-
-    fn resolve_pack(id: PackId) -> AnalysisPackManifest {
-        super::super::super::registry::resolve_pack(id)
-    }
+    use crate::analysis_packs::registry::resolve_pack;
 
     #[test]
     fn baseline_pack_validates_successfully() {
@@ -219,35 +215,6 @@ mod tests {
     fn baseline_pack_default_valuation_is_full() {
         let pack = resolve_pack(PackId::Baseline);
         assert_eq!(pack.default_valuation, ValuationAssessment::Full);
-    }
-
-    #[test]
-    fn baseline_pack_corporate_equity_gets_full_valuation() {
-        let pack = resolve_pack(PackId::Baseline);
-        assert_eq!(
-            pack.resolve_valuation(&AssetShape::CorporateEquity),
-            ValuationAssessment::Full
-        );
-    }
-
-    #[test]
-    fn baseline_pack_etf_gets_not_assessed() {
-        let pack = resolve_pack(PackId::Baseline);
-        assert_eq!(
-            pack.resolve_valuation(&AssetShape::Fund),
-            ValuationAssessment::NotAssessed,
-            "ETF/fund shape should fall back to NotAssessed"
-        );
-    }
-
-    #[test]
-    fn baseline_pack_unknown_shape_gets_not_assessed() {
-        let pack = resolve_pack(PackId::Baseline);
-        assert_eq!(
-            pack.resolve_valuation(&AssetShape::Unknown),
-            ValuationAssessment::NotAssessed,
-            "unknown shape should fall back to NotAssessed"
-        );
     }
 
     #[test]

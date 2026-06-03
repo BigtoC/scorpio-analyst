@@ -136,9 +136,8 @@ pub(super) fn state_has_missing_inputs(
 
 /// Return the runtime-authoritative decision timestamp as an RFC 3339 / ISO 8601 string.
 ///
-/// `Utc::now()` is infallible; `fallback` (typically `state.target_date`) is accepted
-/// for API symmetry but is never reached.
-pub(super) fn runtime_timestamp(_fallback: &str) -> String {
+/// `Utc::now()` is infallible.
+pub(super) fn runtime_timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 

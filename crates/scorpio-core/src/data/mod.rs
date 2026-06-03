@@ -34,7 +34,6 @@ pub mod fred;
 pub mod futu;
 mod provider_impls;
 pub mod reddit;
-pub mod routing;
 pub mod sec_edgar;
 pub mod sec_edgar_nport;
 pub mod sec_risk_return;

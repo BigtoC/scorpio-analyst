@@ -44,9 +44,6 @@ pub const KEYED_WIZARD_PROVIDERS: &[ProviderId] = &[
     ProviderId::XiaomiMimo,
 ];
 
-/// Alias kept for call sites that haven't yet migrated to `KEYED_WIZARD_PROVIDERS`.
-pub const WIZARD_PROVIDERS: &[ProviderId] = KEYED_WIZARD_PROVIDERS;
-
 // ── Step 1: Finnhub API key ───────────────────────────────────────────────────
 
 /// Prompt for the Finnhub API key, preserving an existing saved value on empty input.
@@ -1220,7 +1217,7 @@ mod tests {
 
     #[test]
     fn provider_id_display_matches_as_str() {
-        for &p in WIZARD_PROVIDERS {
+        for &p in KEYED_WIZARD_PROVIDERS {
             assert_eq!(p.to_string(), p.as_str());
         }
     }

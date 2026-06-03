@@ -19,9 +19,9 @@ use crate::{
 use crate::providers::factory::LlmAgent;
 
 use super::common::{
-    DualRiskStatus, RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context,
+    DualRiskStatus, RiskAgentCore, UNTRUSTED_CONTEXT_NOTICE, build_analyst_context_body,
     expected_moderator_violation_sentence, format_risk_history,
-    prepend_violation_status_if_missing, redact_text_for_storage, sanitize_date_for_prompt,
+    prepend_violation_status_if_missing, redact_secret_like_values, sanitize_date_for_prompt,
     sanitize_prompt_context, sanitize_symbol_for_prompt, validate_moderator_output_shape,
 };
 
@@ -141,7 +141,7 @@ fn build_moderator_prompt(
     let neutral_case = format_report(state.neutral_risk_report.as_ref());
     let conservative_case = format_report(state.conservative_risk_report.as_ref());
     let risk_history = format_risk_history(&state.risk_discussion_history);
-    let analyst_context = build_analyst_context(state, transcript_fetch);
+    let analyst_context = build_analyst_context_body(state, transcript_fetch);
     let symbol = sanitize_symbol_for_prompt(&state.asset_symbol);
     let target_date = sanitize_date_for_prompt(&state.target_date);
     let dual_risk_status = DualRiskStatus::from_reports(
@@ -181,7 +181,7 @@ fn build_moderator_result(
         state.neutral_risk_report.as_ref(),
     );
     let output = prepend_violation_status_if_missing(&output, dual_risk_status);
-    let output = redact_text_for_storage(&output);
+    let output = redact_secret_like_values(&output);
     let token_usage = agent_token_usage_from_completion(
         "Risk Moderator",
         model_id,

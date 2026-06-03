@@ -104,7 +104,6 @@ pub struct ValuationInputs<'a> {
         &'a crate::data::sec_risk_return::BenchmarkMetadata,
         Option<u32>,
     )>,
-    pub etf_ohlcv: Option<&'a [crate::data::yfinance::Candle]>,
 
     /// Phase 2 — Live ETF options snapshot threaded through from the persisted
     /// `TechnicalOptionsContext` before valuation runs. `None` when no snapshot

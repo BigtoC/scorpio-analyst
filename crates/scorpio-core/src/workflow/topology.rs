@@ -83,31 +83,6 @@ impl Role {
             Role::Auditor => PromptSlot::Auditor,
         }
     }
-
-    /// True iff this role is one of the four analyst roles that participate
-    /// in the parallel fan-out at the start of a run.
-    ///
-    /// Exhaustive match defends against silent omission when a new `Role` is
-    /// added: the compiler forces the maintainer to classify it.
-    #[must_use]
-    pub fn is_analyst(self) -> bool {
-        match self {
-            Role::FundamentalAnalyst
-            | Role::SentimentAnalyst
-            | Role::NewsAnalyst
-            | Role::TechnicalAnalyst => true,
-            Role::BullishResearcher
-            | Role::BearishResearcher
-            | Role::DebateModerator
-            | Role::Trader
-            | Role::AggressiveRisk
-            | Role::ConservativeRisk
-            | Role::NeutralRisk
-            | Role::RiskModerator
-            | Role::FundManager
-            | Role::Auditor => false,
-        }
-    }
 }
 
 impl PromptSlot {
@@ -302,11 +277,6 @@ mod auditor_role_tests {
     }
 
     #[test]
-    fn auditor_is_not_an_analyst() {
-        assert!(!Role::Auditor.is_analyst());
-    }
-
-    #[test]
     fn topology_carries_manifest_auditor_flag() {
         let topology = build_run_topology(&["news".to_owned()], 0, 0, true);
         assert!(topology.auditor_enabled);
@@ -437,19 +407,6 @@ mod tests {
         );
         assert_eq!(Role::Trader.prompt_slot(), PromptSlot::Trader);
         assert_eq!(Role::FundManager.prompt_slot(), PromptSlot::FundManager);
-    }
-
-    #[test]
-    fn is_analyst_classifies_four_roles_only() {
-        assert!(Role::FundamentalAnalyst.is_analyst());
-        assert!(Role::SentimentAnalyst.is_analyst());
-        assert!(Role::NewsAnalyst.is_analyst());
-        assert!(Role::TechnicalAnalyst.is_analyst());
-        assert!(!Role::BullishResearcher.is_analyst());
-        assert!(!Role::Trader.is_analyst());
-        assert!(!Role::FundManager.is_analyst());
-        assert!(!Role::AggressiveRisk.is_analyst());
-        assert!(!Role::RiskModerator.is_analyst());
     }
 
     #[test]

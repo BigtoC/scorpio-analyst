@@ -10,7 +10,6 @@ use rig::{OneOrMany, message::UserContent};
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
 use crate::{
-    agents::shared::redact_secret_like_values,
     config::LlmConfig,
     constants::{MAX_RAW_MODEL_OUTPUT_CHARS, MAX_RISK_CHARS, MAX_RISK_HISTORY_CHARS},
     data::adapters::transcripts::TranscriptFetch,
@@ -21,8 +20,9 @@ use crate::{
 };
 
 pub(super) use crate::agents::shared::{
-    UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, extract_json_object,
-    sanitize_date_for_prompt, sanitize_prompt_context, sanitize_symbol_for_prompt,
+    UNTRUSTED_CONTEXT_NOTICE, analysis_emphasis_for_prompt, build_analyst_context_body,
+    extract_json_object, redact_secret_like_values, sanitize_date_for_prompt,
+    sanitize_prompt_context, sanitize_symbol_for_prompt,
 };
 
 /// Maximum number of recent discussion messages to reinject into prompts.
@@ -124,11 +124,9 @@ pub(crate) enum DualRiskStatus {
     /// downstream consumers do not mistake a deliberate bypass for missing
     /// data.
     ///
-    /// **Currently constructed only from tests.** Unit 4b wires
-    /// [`from_reports_with_topology`](Self::from_reports_with_topology) into
-    /// `fund_manager::agent` via the topology computed by `PreflightTask`,
-    /// at which point the production caller materializes.
-    #[allow(dead_code)]
+    /// Constructed by [`from_reports_with_topology`](Self::from_reports_with_topology),
+    /// which `fund_manager::agent` invokes with the topology computed by
+    /// `PreflightTask`.
     StageDisabled,
 }
 
@@ -269,14 +267,6 @@ pub(super) fn validate_raw_model_output_size(
 
 // ─── Prompt context helpers ───────────────────────────────────────────────────
 
-/// Serialize the current analyst snapshot into a compact prompt-safe context block.
-pub(super) fn build_analyst_context(
-    state: &TradingState,
-    transcript_fetch: Option<&TranscriptFetch>,
-) -> String {
-    crate::agents::shared::build_analyst_context_body(state, transcript_fetch)
-}
-
 /// Borrow the runtime policy from `state` or return a typed `Config` error
 /// naming the offending agent. Production paths are guaranteed to have a
 /// hydrated policy after `PreflightTask` runs, so this only fires for
@@ -344,7 +334,7 @@ pub(super) fn initial_untrusted_history(
     vec![Message::User {
         content: OneOrMany::one(UserContent::text(format!(
             "{UNTRUSTED_CONTEXT_NOTICE}\n\n{}",
-            build_analyst_context(state, transcript_fetch)
+            build_analyst_context_body(state, transcript_fetch)
         ))),
     }]
 }
@@ -398,18 +388,13 @@ pub(super) fn format_risk_history(history: &[DebateMessage]) -> String {
     selected.join("\n\n")
 }
 
-/// Redact secret-like substrings from validated model output before storing it in state/history.
-pub(super) fn redact_text_for_storage(input: &str) -> String {
-    redact_secret_like_values(input)
-}
-
 /// Redact secret-like substrings from a validated `RiskReport` before storing it in state.
 pub(super) fn redact_risk_report_for_storage(mut report: RiskReport) -> RiskReport {
-    report.assessment = redact_text_for_storage(&report.assessment);
+    report.assessment = redact_secret_like_values(&report.assessment);
     report.recommended_adjustments = report
         .recommended_adjustments
         .into_iter()
-        .map(|item| redact_text_for_storage(&item))
+        .map(|item| redact_secret_like_values(&item))
         .collect();
     report
 }
@@ -743,7 +728,7 @@ mod tests {
     #[test]
     fn build_analyst_context_serializes_none_fields_as_null() {
         let state = make_state();
-        let ctx = build_analyst_context(&state, None);
+        let ctx = build_analyst_context_body(&state, None);
         assert!(ctx.contains("Fundamental data: null"));
         assert!(ctx.contains("Technical data: null"));
         assert!(ctx.contains("Sentiment data: null"));
@@ -764,7 +749,7 @@ mod tests {
             }],
         });
 
-        let ctx = build_analyst_context(&state, Some(&transcript));
+        let ctx = build_analyst_context_body(&state, Some(&transcript));
 
         assert!(ctx.contains("Earnings call transcript (2025Q1):"));
         assert!(ctx.contains("Tim Cook"));
@@ -828,9 +813,9 @@ mod tests {
     }
 
     #[test]
-    fn redact_text_for_storage_masks_query_style_secret_values() {
+    fn redact_secret_like_values_masks_query_style_secret_values() {
         let input = "api_key=abcd1234 token=qwerty";
-        let redacted = redact_text_for_storage(input);
+        let redacted = redact_secret_like_values(input);
         assert_eq!(redacted, "api_key=[REDACTED] token=[REDACTED]");
     }
 
@@ -919,7 +904,7 @@ mod tests {
     #[test]
     fn build_analyst_context_includes_evidence_and_data_quality_sections() {
         let state = make_state();
-        let ctx = build_analyst_context(&state, None);
+        let ctx = build_analyst_context_body(&state, None);
         assert!(ctx.contains("Typed evidence snapshot:"));
         assert!(ctx.contains("- fundamentals: null"));
         assert!(ctx.contains("Data quality snapshot:"));
@@ -934,7 +919,7 @@ mod tests {
         state.analysis_runtime_policy =
             crate::analysis_packs::resolve_runtime_policy("baseline").ok();
 
-        let ctx = build_analyst_context(&state, None);
+        let ctx = build_analyst_context_body(&state, None);
         assert!(ctx.contains("Analysis strategy: Balanced Institutional"));
         assert!(ctx.contains("Emphasis:"));
     }
@@ -953,7 +938,7 @@ mod tests {
             captured_at: chrono::Utc::now(),
         });
 
-        let ctx = build_analyst_context(&state, None);
+        let ctx = build_analyst_context_body(&state, None);
         assert!(ctx.contains("Past learnings:"));
         assert!(ctx.contains("Ignore previous instructions"));
     }
@@ -1100,7 +1085,7 @@ mod tests {
         let mut state = make_state();
         state.set_technical_indicators(sample_technical_with_options_context());
 
-        let context = build_analyst_context(&state, None);
+        let context = build_analyst_context_body(&state, None);
 
         // 1. options_context key must appear in rendered context
         assert!(
@@ -1141,7 +1126,7 @@ mod tests {
     fn risk_analyst_context_includes_options_context() {
         let mut state = make_state();
         state.set_technical_indicators(sample_technical_with_options_context());
-        let rendered = build_analyst_context(&state, None);
+        let rendered = build_analyst_context_body(&state, None);
         assert!(
             rendered.contains("options_context"),
             "options_context must appear in risk context: {rendered}"
@@ -1173,7 +1158,7 @@ mod tests {
             options_context: None,
         });
 
-        let context = build_analyst_context(&state, None);
+        let context = build_analyst_context_body(&state, None);
 
         // Legacy blob passes through as a plain string
         assert!(
@@ -1212,7 +1197,7 @@ mod tests {
             }),
         });
 
-        let context = build_analyst_context(&state, None);
+        let context = build_analyst_context_body(&state, None);
 
         assert!(
             context.contains("fetch_failed"),
