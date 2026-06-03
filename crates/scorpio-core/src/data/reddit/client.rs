@@ -124,7 +124,9 @@ impl RedditClient {
         if status == reqwest::StatusCode::FORBIDDEN {
             return Err(TradingError::AnalystError {
                 agent: "reddit".to_owned(),
-                message: "reddit: access denied (HTTP 403) — anonymous API access may be restricted".to_owned(),
+                message:
+                    "reddit: access denied (HTTP 403) — anonymous API access may be restricted"
+                        .to_owned(),
             });
         }
         if !status.is_success() {

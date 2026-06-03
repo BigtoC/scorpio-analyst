@@ -250,8 +250,12 @@ impl FredClient {
     /// (`CPALTT01USM657N`) concurrently, then classifies each into a
     /// [`MacroEvent`] with an impact direction and confidence score.
     pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
-        let interest_fut = self.with_retry(SERIES_FEDFUNDS, || self.send_series_request(SERIES_FEDFUNDS));
-        let inflation_fut = self.with_retry(SERIES_CPALTT01, || self.send_series_request(SERIES_CPALTT01));
+        let interest_fut = self.with_retry(SERIES_FEDFUNDS, || {
+            self.send_series_request(SERIES_FEDFUNDS)
+        });
+        let inflation_fut = self.with_retry(SERIES_CPALTT01, || {
+            self.send_series_request(SERIES_CPALTT01)
+        });
 
         let (interest_result, inflation_result) = tokio::join!(interest_fut, inflation_fut);
 
@@ -273,9 +277,11 @@ impl FredClient {
         to: &str,
     ) -> Result<Vec<chrono::NaiveDate>, TradingError> {
         let label = format!("release_id={release_id}");
-        self.with_retry(&label, || self.send_release_dates_request(release_id, from, to))
-            .await
-            .map_err(Into::into)
+        self.with_retry(&label, || {
+            self.send_release_dates_request(release_id, from, to)
+        })
+        .await
+        .map_err(Into::into)
     }
 
     async fn send_release_dates_request(
@@ -302,9 +308,10 @@ impl FredClient {
 
         let resp = map_fred_response_status(resp)?;
 
-        let body: FredReleaseDatesResponse = resp.json().await.map_err(|e| FredRequestError::Decode {
-            message: e.to_string(),
-        })?;
+        let body: FredReleaseDatesResponse =
+            resp.json().await.map_err(|e| FredRequestError::Decode {
+                message: e.to_string(),
+            })?;
 
         let dates = body
             .release_dates
@@ -762,9 +769,8 @@ mod tests {
 
     #[test]
     fn retry_decision_uses_5s_floor_when_rate_limited_without_retry_after_header() {
-        let decision = classify_retry_decision(&FredRequestError::RateLimited {
-            retry_after: None,
-        });
+        let decision =
+            classify_retry_decision(&FredRequestError::RateLimited { retry_after: None });
 
         assert!(decision.retryable);
         assert!(decision.degradable);
