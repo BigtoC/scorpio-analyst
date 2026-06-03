@@ -75,6 +75,7 @@ fn arb_recommendations_summary() -> impl Strategy<Value = RecommendationsSummary
                 hold,
                 sell,
                 strong_sell,
+                mean_rating: None,
             },
         )
 }
