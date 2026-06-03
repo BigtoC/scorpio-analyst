@@ -6,6 +6,7 @@
 //! Replaces the paid Finnhub `economic().data()` endpoint for interest-rate
 //! and inflation indicators.
 
+use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -130,20 +131,17 @@ impl FredClient {
     /// Upper bound for the full retry loop, including limiter waits and backoff.
     const TOTAL_RETRY_BUDGET: Duration = Duration::from_secs(45);
 
-    /// Fetch the latest observation for a FRED series.
+    /// Shared retry harness for all FRED operations.
     ///
-    /// Returns `Ok(None)` when the latest value is missing (`"."`) or no
-    /// observation is present. Retries transient failures with linear backoff.
-    pub async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
-        self.get_series_latest_classified(series_id)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn get_series_latest_classified(
-        &self,
-        series_id: &str,
-    ) -> Result<Option<f64>, FredRequestError> {
+    /// Acquires a rate-limit permit, calls `f()` to get a single-attempt
+    /// future, and retries transient failures (transport, 429, 5xx) with
+    /// linear backoff up to `MAX_ATTEMPTS`, capped by `TOTAL_RETRY_BUDGET`.
+    /// Non-retryable errors propagate immediately.
+    async fn with_retry<T, F, Fut>(&self, op: &str, mut f: F) -> Result<T, FredRequestError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, FredRequestError>>,
+    {
         let started_at = tokio::time::Instant::now();
         let deadline = started_at + Self::TOTAL_RETRY_BUDGET;
         let mut last_err = None;
@@ -163,10 +161,10 @@ impl FredClient {
             }
 
             if attempt > 0 {
-                tracing::debug!(attempt, series_id, "retrying FRED request");
+                tracing::debug!(attempt, op, "retrying FRED request");
             }
 
-            match tokio::time::timeout_at(deadline, self.send_series_request(series_id)).await {
+            match tokio::time::timeout_at(deadline, f()).await {
                 Ok(Ok(val)) => return Ok(val),
                 Ok(Err(error)) => {
                     let decision = classify_retry_decision(&error);
@@ -193,7 +191,7 @@ impl FredClient {
 
                     tracing::warn!(
                         attempt,
-                        series_id,
+                        op,
                         error = %TradingError::from(last_err.as_ref().expect("retry error stored").clone()),
                         retry_delay_ms = retry_delay.as_millis(),
                         "transient FRED error, will retry"
@@ -208,6 +206,16 @@ impl FredClient {
         }
 
         Err(last_err.unwrap_or(FredRequestError::RetryBudgetExhausted))
+    }
+
+    /// Fetch the latest observation for a FRED series.
+    ///
+    /// Returns `Ok(None)` when the latest value is missing (`"."`) or no
+    /// observation is present. Retries transient failures with linear backoff.
+    pub async fn get_series_latest(&self, series_id: &str) -> Result<Option<f64>, TradingError> {
+        self.with_retry(series_id, || self.send_series_request(series_id))
+            .await
+            .map_err(Into::into)
     }
 
     async fn send_series_request(&self, series_id: &str) -> Result<Option<f64>, FredRequestError> {
@@ -242,8 +250,12 @@ impl FredClient {
     /// (`CPALTT01USM657N`) concurrently, then classifies each into a
     /// [`MacroEvent`] with an impact direction and confidence score.
     pub async fn get_economic_indicators(&self) -> Result<Vec<MacroEvent>, TradingError> {
-        let interest_fut = self.get_series_latest_classified(SERIES_FEDFUNDS);
-        let inflation_fut = self.get_series_latest_classified(SERIES_CPALTT01);
+        let interest_fut = self.with_retry(SERIES_FEDFUNDS, || {
+            self.send_series_request(SERIES_FEDFUNDS)
+        });
+        let inflation_fut = self.with_retry(SERIES_CPALTT01, || {
+            self.send_series_request(SERIES_CPALTT01)
+        });
 
         let (interest_result, inflation_result) = tokio::join!(interest_fut, inflation_fut);
 
@@ -257,18 +269,33 @@ impl FredClient {
     /// historical and future dates for the given release ID.
     ///
     /// Returns `Ok(Vec::new())` when the window contains no dates — not an error.
+    /// Retries transient failures (including 429) with linear backoff.
     pub async fn release_dates(
         &self,
         release_id: u32,
         from: &str,
         to: &str,
     ) -> Result<Vec<chrono::NaiveDate>, TradingError> {
-        self.limiter.acquire().await;
+        let label = format!("release_id={release_id}");
+        self.with_retry(&label, || {
+            self.send_release_dates_request(release_id, from, to)
+        })
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn send_release_dates_request(
+        &self,
+        release_id: u32,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<chrono::NaiveDate>, FredRequestError> {
+        let id_str = release_id.to_string();
         let resp = self
             .http
             .get(format!("{FRED_BASE_URL}{FRED_RELEASE_DATES_PATH}"))
             .query(&[
-                ("release_id", release_id.to_string().as_str()),
+                ("release_id", id_str.as_str()),
                 ("realtime_start", from),
                 ("realtime_end", to),
                 ("file_type", "json"),
@@ -277,25 +304,14 @@ impl FredClient {
             .query(&[("api_key", self.api_key.expose_secret())])
             .send()
             .await
-            .map_err(|e| TradingError::AnalystError {
-                agent: "fred".to_owned(),
-                message: format!("release_dates request failed: {e}"),
-            })?;
+            .map_err(map_fred_err)?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(TradingError::AnalystError {
-                agent: "fred".to_owned(),
-                message: format!("release_dates HTTP {status} for release_id={release_id}"),
-            });
-        }
+        let resp = map_fred_response_status(resp)?;
 
         let body: FredReleaseDatesResponse =
-            resp.json()
-                .await
-                .map_err(|e| TradingError::SchemaViolation {
-                    message: format!("release_dates deserialize: {e}"),
-                })?;
+            resp.json().await.map_err(|e| FredRequestError::Decode {
+                message: e.to_string(),
+            })?;
 
         let dates = body
             .release_dates
@@ -532,7 +548,10 @@ fn classify_retry_decision(error: &FredRequestError) -> FredRetryDecision {
         FredRequestError::RateLimited { retry_after } => FredRetryDecision {
             retryable: true,
             degradable: true,
-            delay_override: *retry_after,
+            // Use server-supplied Retry-After when present; fall back to 5 s.
+            // The 500 ms linear backoff is far too short for a server-side
+            // rate limit window and produces a thundering-herd retry pattern.
+            delay_override: Some(retry_after.unwrap_or(Duration::from_secs(5))),
         },
         FredRequestError::RetryBudgetExhausted => FredRetryDecision {
             retryable: false,
@@ -746,6 +765,16 @@ mod tests {
         assert!(decision.retryable);
         assert!(decision.degradable);
         assert_eq!(decision.delay_override, Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn retry_decision_uses_5s_floor_when_rate_limited_without_retry_after_header() {
+        let decision =
+            classify_retry_decision(&FredRequestError::RateLimited { retry_after: None });
+
+        assert!(decision.retryable);
+        assert!(decision.degradable);
+        assert_eq!(decision.delay_override, Some(Duration::from_secs(5)));
     }
 
     #[test]
