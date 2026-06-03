@@ -74,6 +74,10 @@ pub struct RecommendationsSummary {
     pub sell: Option<u32>,
     #[serde(default)]
     pub strong_sell: Option<u32>,
+    /// Provider-supplied text label for the mean score (e.g. "Buy", "Overweight").
+    /// Additive field — older snapshots will deserialize with `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean_rating: Option<String>,
 }
 
 /// Structured outcome of an analyst-consensus fetch.
@@ -85,6 +89,7 @@ pub struct RecommendationsSummary {
 /// See `docs/superpowers/plans/2026-04-26-yfinance-news-options-consensus-implementation.md`
 /// (Guardrails > No-data taxonomy) for the full semantics.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // Data is a transient fetch result, not stored in collections
 pub enum ConsensusOutcome {
     /// At least one upstream branch produced usable data.
     Data(ConsensusEvidence),
@@ -321,6 +326,7 @@ fn recommendations_summary_from_upstream(
         hold: rs.hold,
         sell: rs.sell,
         strong_sell: rs.strong_sell,
+        mean_rating: rs.mean_rating_text.clone(),
     }
 }
 

@@ -495,6 +495,59 @@ fn write_enrichment_summary(out: &mut String, state: &TradingState) {
             "Consensus Estimates:".bold(),
             c.as_of_date,
         );
+
+        if let Some(ref pt) = c.price_target {
+            let mean = pt
+                .mean
+                .map(|v| format!("${v:.2}"))
+                .unwrap_or_else(|| "N/A".to_owned());
+            let high = pt
+                .high
+                .map(|v| format!("${v:.2}"))
+                .unwrap_or_else(|| "N/A".to_owned());
+            let low = pt
+                .low
+                .map(|v| format!("${v:.2}"))
+                .unwrap_or_else(|| "N/A".to_owned());
+            let pt_analysts = pt
+                .analyst_count
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_owned());
+            let _ = writeln!(
+                out,
+                "{} mean={mean} | high={high} | low={low} | analysts={pt_analysts}",
+                "Price Target:".bold(),
+            );
+        }
+
+        if let Some(ref r) = c.recommendations {
+            let sb = r
+                .strong_buy
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_owned());
+            let b = r
+                .buy
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_owned());
+            let h = r
+                .hold
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_owned());
+            let s = r
+                .sell
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_owned());
+            let ss = r
+                .strong_sell
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_owned());
+            let mr = r.mean_rating.as_deref().unwrap_or("N/A");
+            let _ = writeln!(
+                out,
+                "{} strong_buy={sb} | buy={b} | hold={h} | sell={s} | strong_sell={ss} | mean_rating={mr}",
+                "Recommendation Summary:".bold(),
+            );
+        }
     }
 }
 
