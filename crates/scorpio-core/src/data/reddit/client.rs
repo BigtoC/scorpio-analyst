@@ -121,8 +121,15 @@ impl RedditClient {
                 message: format!("reddit: upstream error (HTTP {status})"),
             });
         }
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Err(TradingError::AnalystError {
+                agent: "reddit".to_owned(),
+                message: "reddit: access denied (HTTP 403) — anonymous API access may be restricted".to_owned(),
+            });
+        }
         if !status.is_success() {
-            return Err(TradingError::SchemaViolation {
+            return Err(TradingError::AnalystError {
+                agent: "reddit".to_owned(),
                 message: format!("reddit: unexpected HTTP status {status}"),
             });
         }
@@ -366,6 +373,28 @@ mod tests {
             .await
             .expect_err("should time out");
         assert!(matches!(err, TradingError::NetworkTimeout { .. }));
+    }
+
+    #[tokio::test]
+    async fn forbidden_403_maps_to_analyst_error_with_access_denied_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let err = client_against(&server)
+            .search_submissions(&["stocks".to_owned()], "AAPL", 100)
+            .await
+            .expect_err("should fail");
+        assert!(
+            matches!(err, TradingError::AnalystError { ref agent, .. } if agent == "reddit"),
+            "expected AnalystError(reddit), got: {err:?}"
+        );
+        assert!(
+            format!("{err}").contains("access denied"),
+            "error message should mention access denied, got: {err}"
+        );
     }
 
     #[tokio::test]
