@@ -362,18 +362,6 @@ pub struct GetOhlcv {
 }
 
 impl GetOhlcv {
-    /// Create a new OHLCV tool wrapper backed by `client`.
-    #[must_use]
-    pub fn new(client: YFinanceClient) -> Self {
-        Self {
-            client: Some(client),
-            allowed_symbol: None,
-            allowed_start: None,
-            allowed_end: None,
-            context: None,
-        }
-    }
-
     #[must_use]
     pub fn scoped(
         client: YFinanceClient,

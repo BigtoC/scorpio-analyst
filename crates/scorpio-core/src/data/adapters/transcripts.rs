@@ -101,8 +101,7 @@ where
 ///
 /// `call_date` uses `"YYYYQN"` format (e.g., `"2025Q1"`) matching Alpha
 /// Vantage's native quarter granularity. The canonical content is
-/// `segments`; call [`rendered_content`](Self::rendered_content) for a
-/// flat string when needed.
+/// `segments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptEvidence {
     /// Ticker symbol (canonical uppercase).
@@ -111,20 +110,6 @@ pub struct TranscriptEvidence {
     pub call_date: String,
     /// Per-speaker transcript segments.
     pub segments: Vec<TranscriptSegment>,
-}
-
-impl TranscriptEvidence {
-    /// Render all segments into a single string.
-    ///
-    /// Each segment is formatted as `"{speaker} ({title}): {content}"` and
-    /// joined by `"\n\n"`. Returns an empty string when `segments` is empty.
-    pub fn rendered_content(&self) -> String {
-        self.segments
-            .iter()
-            .map(|s| format!("{} ({}): {}", s.speaker, s.title, s.content))
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
 }
 
 /// Outcome of a transcript-fetch attempt.
@@ -187,41 +172,6 @@ mod tests {
         let json = serde_json::to_string(&evidence).expect("serialization");
         let recovered: TranscriptEvidence = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(evidence, recovered);
-    }
-
-    #[test]
-    fn rendered_content_joins_segments() {
-        let evidence = TranscriptEvidence {
-            symbol: "AAPL".to_owned(),
-            call_date: "2025Q1".to_owned(),
-            segments: vec![
-                TranscriptSegment {
-                    speaker: "Tim Cook".to_owned(),
-                    title: "CEO".to_owned(),
-                    content: "Hello everyone.".to_owned(),
-                    sentiment: Some(0.5),
-                },
-                TranscriptSegment {
-                    speaker: "Luca Maestri".to_owned(),
-                    title: "CFO".to_owned(),
-                    content: "Thanks Tim.".to_owned(),
-                    sentiment: None,
-                },
-            ],
-        };
-        let rendered = evidence.rendered_content();
-        assert!(rendered.contains("Tim Cook (CEO): Hello everyone."));
-        assert!(rendered.contains("Luca Maestri (CFO): Thanks Tim."));
-    }
-
-    #[test]
-    fn rendered_content_empty_segments() {
-        let evidence = TranscriptEvidence {
-            symbol: "COIN".to_owned(),
-            call_date: "2024Q4".to_owned(),
-            segments: vec![],
-        };
-        assert_eq!(evidence.rendered_content(), "");
     }
 
     #[test]

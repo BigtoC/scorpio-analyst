@@ -58,11 +58,6 @@ impl<T> EnrichmentResult<T> {
         }
     }
 
-    /// Returns `true` if the result contains available data.
-    pub fn is_available(&self) -> bool {
-        matches!(self, Self::Available(_))
-    }
-
     /// Convert this transient fetch result into a persisted status value.
     pub fn status(&self) -> EnrichmentStatus {
         match self {

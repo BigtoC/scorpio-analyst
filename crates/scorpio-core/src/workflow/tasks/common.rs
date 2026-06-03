@@ -84,10 +84,6 @@ pub const KEY_ROUTING_FLAGS: &str = "routing_flags";
 ///
 /// Value: lower-snake-case pack id (`"baseline"`, `"etf_baseline"`). Absent
 /// before preflight; always present once preflight has emitted runtime policy.
-///
-/// Consumed by Task 12 (preflight routing wiring); declared now so the
-/// classifier wiring can land before that task without churn.
-#[allow(dead_code)]
 pub const KEY_RUNTIME_PACK_ROUTE: &str = "routing.pack";
 
 /// Context key for the routing fallback reason when classification fell back
@@ -97,10 +93,6 @@ pub const KEY_RUNTIME_PACK_ROUTE: &str = "routing.pack";
 /// [`crate::workflow::RuntimePackSelection::BaselineFallback`] (currently one
 /// of `"profile_lookup_unavailable"`, `"unsupported_fund_shape"`). Absent
 /// when the run did not fall back (matched-baseline or ETF-baseline routes).
-///
-/// Consumed by Task 12 (preflight routing wiring); declared now so the
-/// classifier wiring can land before that task without churn.
-#[allow(dead_code)]
 pub const KEY_ROUTING_FALLBACK_REASON: &str = "routing.fallback_reason";
 
 pub(super) const ANALYST_PREFIX: &str = "analyst";

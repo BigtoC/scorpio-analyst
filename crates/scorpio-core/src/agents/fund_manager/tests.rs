@@ -4,13 +4,10 @@ use chrono::Utc;
 use rig::{agent::PromptResponse, completion::Usage};
 use secrecy::SecretString;
 
-use super::{
-    FundManagerAgent,
-    agent::{FundManagerInference, run_fund_manager_with_inference},
-};
+use super::{FundManagerAgent, agent::FundManagerInference};
 use crate::testing::with_baseline_runtime_policy;
 use crate::{
-    config::{Config, LlmConfig, ProviderSettings, ProvidersConfig, TradingConfig},
+    config::{LlmConfig, ProviderSettings, ProvidersConfig},
     error::{RetryPolicy, TradingError},
     providers::{
         ModelTier,
@@ -52,20 +49,6 @@ fn sample_providers_config() -> ProvidersConfig {
             ..Default::default()
         },
         ..Default::default()
-    }
-}
-
-fn sample_config() -> Config {
-    Config {
-        llm: sample_llm_config(),
-        trading: TradingConfig::default(),
-        api: Default::default(),
-        storage: Default::default(),
-        providers: sample_providers_config(),
-        rate_limits: Default::default(),
-        enrichment: Default::default(),
-        futu: Default::default(),
-        analysis_pack: "baseline".to_owned(),
     }
 }
 
@@ -793,24 +776,6 @@ fn constructor_rejects_wrong_model_id() {
     .unwrap();
     let result = FundManagerAgent::new(handle, "AAPL", "2026-03-15", &cfg);
     assert!(matches!(result, Err(TradingError::Config(_))));
-}
-
-// ── run_fund_manager_with_inference wires up agent and state ─────────────
-
-#[tokio::test]
-async fn run_fund_manager_public_entrypoint_works_with_injected_inference() {
-    let mut state = populated_state();
-    let inference = StubInference::new(vec![Ok(make_prompt_response(
-        &approved_json(),
-        nonzero_usage(),
-    ))]);
-
-    let usage = run_fund_manager_with_inference(&mut state, &sample_config(), true, &inference)
-        .await
-        .unwrap();
-
-    assert!(state.final_execution_status.is_some());
-    assert_eq!(usage.model_id, "o3");
 }
 
 // Task 4.8 — fund-manager user prompt includes typed evidence and data quality sections.

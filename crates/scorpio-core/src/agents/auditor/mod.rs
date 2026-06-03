@@ -360,23 +360,6 @@ mod tests {
     use crate::state::auditor::{Finding, Severity};
     use crate::state::{TradeAction, TradeProposal, TradingState};
 
-    fn dummy_report(severities: &[Severity]) -> AuditorReport {
-        AuditorReport {
-            findings: severities
-                .iter()
-                .map(|s| Finding {
-                    severity: *s,
-                    location: "test".into(),
-                    description: "test".into(),
-                    excerpt: None,
-                })
-                .collect(),
-            summary: "x".into(),
-            audited_at: chrono::Utc::now(),
-            auditor_model_id: "test".into(),
-        }
-    }
-
     fn make_state_with_buy_target_below_current_price() -> TradingState {
         let mut state = TradingState::new("TEST".to_owned(), "2026-05-10".to_owned());
         state.current_price = Some(120.0);
@@ -390,18 +373,6 @@ mod tests {
             scenario_valuation: None,
         });
         state
-    }
-
-    #[test]
-    fn report_has_no_critical_findings_is_false_when_critical_exists() {
-        let report = dummy_report(&[Severity::Critical]);
-        assert!(!report.has_no_critical_findings());
-    }
-
-    #[test]
-    fn report_has_no_critical_findings_is_true_when_no_critical_exists() {
-        let report = dummy_report(&[Severity::Warning, Severity::Info]);
-        assert!(report.has_no_critical_findings());
     }
 
     #[test]

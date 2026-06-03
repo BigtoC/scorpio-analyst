@@ -857,9 +857,9 @@ mod tests {
 
         let _ = outcome.output;
 
-        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
-        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+        assert_eq!(agent.typed_attempts(), 0);
+        assert_eq!(agent.text_turn_attempts(), 1);
+        assert_eq!(agent.prompt_attempts(), 0);
     }
 
     #[test]

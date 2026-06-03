@@ -469,12 +469,6 @@ impl TradingState {
     // through shape changes. `*_mut` variants lazily create the equity
     // sub-state so callers never need to pattern-match on `equity.is_none()`.
 
-    /// Borrow the equity sub-state, if any.
-    #[must_use]
-    pub fn equity(&self) -> Option<&EquityState> {
-        self.equity.as_ref()
-    }
-
     /// Mutable borrow of the equity sub-state, creating it on demand.
     pub fn equity_mut(&mut self) -> &mut EquityState {
         self.equity.get_or_insert_with(EquityState::default)
@@ -494,11 +488,6 @@ impl TradingState {
     pub fn set_fundamental_metrics(&mut self, v: FundamentalData) {
         self.equity_mut().fundamental_metrics = Some(v);
     }
-    pub fn clear_fundamental_metrics(&mut self) {
-        if let Some(e) = self.equity.as_mut() {
-            e.fundamental_metrics = None;
-        }
-    }
 
     #[must_use]
     pub fn technical_indicators(&self) -> Option<&TechnicalData> {
@@ -509,11 +498,6 @@ impl TradingState {
     }
     pub fn set_technical_indicators(&mut self, v: TechnicalData) {
         self.equity_mut().technical_indicators = Some(v);
-    }
-    pub fn clear_technical_indicators(&mut self) {
-        if let Some(e) = self.equity.as_mut() {
-            e.technical_indicators = None;
-        }
     }
 
     #[must_use]
@@ -535,11 +519,6 @@ impl TradingState {
     }
     pub fn set_macro_news(&mut self, v: NewsData) {
         self.equity_mut().macro_news = Some(v);
-    }
-    pub fn clear_macro_news(&mut self) {
-        if let Some(e) = self.equity.as_mut() {
-            e.macro_news = None;
-        }
     }
 
     #[must_use]
@@ -581,11 +560,6 @@ impl TradingState {
     pub fn set_market_volatility(&mut self, v: MarketVolatilityData) {
         self.equity_mut().market_volatility = Some(v);
     }
-    pub fn clear_market_volatility(&mut self) {
-        if let Some(e) = self.equity.as_mut() {
-            e.market_volatility = None;
-        }
-    }
 
     #[must_use]
     pub fn derived_valuation(&self) -> Option<&DerivedValuation> {
@@ -602,11 +576,6 @@ impl TradingState {
     }
     pub fn set_derived_valuation(&mut self, v: DerivedValuation) {
         self.equity_mut().derived_valuation = Some(v);
-    }
-    pub fn clear_derived_valuation(&mut self) {
-        if let Some(e) = self.equity.as_mut() {
-            e.derived_valuation = None;
-        }
     }
 
     /// Create per-field async locks for concurrent analyst fan-out writes.

@@ -26,10 +26,7 @@ use crate::{
         adapters::transcripts::TranscriptFetch,
         sec_edgar::nport::normalize_optional_benchmark,
         sec_edgar_nport::NPortHoldings,
-        yfinance::{
-            Candle,
-            etf::{EtfQuote, FundInfo, fund_info_from_profile},
-        },
+        yfinance::etf::{EtfQuote, FundInfo, fund_info_from_profile},
     },
     providers::factory::CompletionModelHandle,
     state::{
@@ -776,31 +773,9 @@ struct ValuationInputs {
     etf_holdings: Option<NPortHoldings>,
     etf_profile: Option<crate::data::alpha_vantage::EtfProfileData>,
     etf_official_benchmark: Option<(crate::data::sec_risk_return::BenchmarkMetadata, Option<u32>)>,
-    etf_ohlcv: Option<Vec<Candle>>,
     /// Cached TTM distribution yield (from yfinance), used to fill
     /// `EtfComposition.distribution_yield_ttm_pct` after the valuator returns.
     etf_distribution_yield_ttm_pct: Option<f64>,
-}
-
-/// Trailing window for ETF / benchmark OHLCV fetches in [`fetch_valuation_inputs`].
-///
-/// One year is sufficient for the 90d and 1y tracking-error windows computed
-/// by [`crate::valuation::EtfPremiumDiscountValuator`].
-const ETF_OHLCV_WINDOW_DAYS: i64 = 365;
-
-/// Fetch an OHLCV series for the last [`ETF_OHLCV_WINDOW_DAYS`] days.
-///
-/// Wraps the `Result`-returning [`YFinanceClient::get_ohlcv`] into an
-/// `Option`-returning future so it can flow through [`fetch_with_timeout`]
-/// alongside the other fail-soft ETF fetches. Date-range failures or
-/// transport errors degrade to `None` rather than propagating.
-async fn fetch_ohlcv_1y(yfinance: &dyn YFinanceData, symbol: &str) -> Option<Vec<Candle>> {
-    let today = chrono::Utc::now().date_naive();
-    let start = today - chrono::Duration::days(ETF_OHLCV_WINDOW_DAYS);
-    yfinance
-        .get_ohlcv(symbol, &start.to_string(), &today.to_string())
-        .await
-        .ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -859,7 +834,6 @@ async fn fetch_valuation_inputs(
     let mut etf_holdings = None;
     let mut etf_profile = None;
     let mut etf_official_benchmark = None;
-    let mut etf_ohlcv = None;
     let mut etf_distribution_yield_ttm_pct = None;
 
     if pack_id == PackId::EtfBaseline {
@@ -879,7 +853,6 @@ async fn fetch_valuation_inputs(
                 etf_holdings,
                 etf_profile,
                 etf_official_benchmark,
-                etf_ohlcv,
                 etf_distribution_yield_ttm_pct,
             };
         }
@@ -890,7 +863,7 @@ async fn fetch_valuation_inputs(
         let fund_info = profile
             .as_ref()
             .and_then(|profile| fund_info_from_profile(symbol, profile));
-        let (quote_opt, yld_opt, etf_ohlcv_opt) = tokio::join!(
+        let (quote_opt, yld_opt) = tokio::join!(
             fetch_with_timeout(
                 symbol,
                 "etf_quote",
@@ -903,17 +876,10 @@ async fn fetch_valuation_inputs(
                 fetch_timeout,
                 yfinance.get_distribution_yield_ttm(symbol),
             ),
-            fetch_with_timeout(
-                symbol,
-                "etf_ohlcv",
-                fetch_timeout,
-                fetch_ohlcv_1y(yfinance, symbol),
-            ),
         );
         etf_quote = quote_opt;
         etf_fund_info = fund_info;
         etf_distribution_yield_ttm_pct = yld_opt;
-        etf_ohlcv = etf_ohlcv_opt;
 
         // N-PORT-P holdings fetch.
         //
@@ -993,7 +959,6 @@ async fn fetch_valuation_inputs(
         etf_holdings,
         etf_profile,
         etf_official_benchmark,
-        etf_ohlcv,
         etf_distribution_yield_ttm_pct,
     }
 }
@@ -1219,7 +1184,6 @@ fn derive_runtime_valuation(
                 .etf_official_benchmark
                 .as_ref()
                 .map(|(metadata, age_days)| (metadata, *age_days)),
-            etf_ohlcv: valuation_inputs.etf_ohlcv.as_deref(),
             etf_options: etf_options_from_state(state),
             etf_risk_free_rate: etf_risk_free_rate_from_state(state),
             etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
@@ -1641,17 +1605,11 @@ mod tests {
         let mut mock = MockYFinanceData::new();
         mock.expect_get_quote().returning(|_| None);
         mock.expect_get_distribution_yield_ttm().returning(|_| None);
-        mock.expect_get_ohlcv().returning(|_, _, _| {
-            Err(crate::error::TradingError::NetworkTimeout {
-                elapsed: Duration::ZERO,
-                message: "no ohlcv in test".to_owned(),
-            })
-        });
         let info = etf_fund_info_snapshot();
         // Use the market-local (Eastern) date so the live ETF fetch path runs
         // deterministically — Utc::now().date_naive() diverges from the Eastern
         // trading date in the early-UTC window and would trip the historical
-        // short-circuit, making the get_ohlcv expectation flaky.
+        // short-circuit, skipping the live ETF fetches under test.
         let today = crate::market_time::market_local_date_eastern()
             .format("%Y-%m-%d")
             .to_string();
@@ -1720,7 +1678,6 @@ mod tests {
         assert!(inputs.etf_quote.is_none());
         assert!(inputs.etf_fund_info.is_none());
         assert!(inputs.etf_holdings.is_none());
-        assert!(inputs.etf_ohlcv.is_none());
         assert!(inputs.etf_distribution_yield_ttm_pct.is_none());
     }
 
@@ -1752,44 +1709,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn etf_baseline_fetch_does_not_fetch_benchmark_ohlcv_when_only_name_exists() {
-        let mut mock = MockYFinanceData::new();
-        mock.expect_get_quote().returning(|_| None);
-        mock.expect_get_distribution_yield_ttm().returning(|_| None);
-        mock.expect_get_ohlcv().times(1).returning(|symbol, _, _| {
-            assert_eq!(symbol, "SOXX", "only ETF OHLCV should be fetched");
-            Ok(vec![])
-        });
-
-        let info = etf_fund_info_snapshot();
-        // Use the market-local (Eastern) date so the live ETF fetch path runs
-        // deterministically — Utc::now().date_naive() diverges from the Eastern
-        // trading date in the early-UTC window and would trip the historical
-        // short-circuit, making the get_ohlcv expectation flaky.
-        let today = crate::market_time::market_local_date_eastern()
-            .format("%Y-%m-%d")
-            .to_string();
-        // The single get_ohlcv expectation (times(1), symbol == "SOXX") proves
-        // no benchmark-symbol OHLCV is fetched; benchmark OHLCV was removed.
-        let _inputs = fetch_valuation_inputs(
-            &mock,
-            None,
-            None,
-            PackId::EtfBaseline,
-            "SOXX",
-            &today,
-            Duration::from_secs(1),
-            Some(&info),
-        )
-        .await;
-    }
-
-    #[tokio::test]
     async fn etf_baseline_fetch_carries_found_alpha_vantage_profile() {
         let mut mock = MockYFinanceData::new();
         mock.expect_get_quote().returning(|_| None);
         mock.expect_get_distribution_yield_ttm().returning(|_| None);
-        mock.expect_get_ohlcv().returning(|_, _, _| Ok(vec![]));
 
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let base_url = crate::data::alpha_vantage::tests::spawn_transcript_server(

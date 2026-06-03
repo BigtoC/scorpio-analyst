@@ -11,7 +11,7 @@ use crate::{
     },
     constants::{MAX_PROMPT_CONTEXT_CHARS, MAX_USER_PROMPT_CHARS},
     domain::Symbol,
-    state::{AccountPositionsState, AccountSnapshot, DebateMessage, RiskReport, TradingState},
+    state::{AccountPositionsState, AccountSnapshot, DebateMessage, TradingState},
 };
 
 use super::validation::state_has_missing_analyst_inputs;
@@ -182,10 +182,6 @@ fn serialize_risk_discussion_history(history: &[DebateMessage]) -> String {
     joined
 }
 
-fn serialize_optional_risk_report(report: &Option<RiskReport>) -> String {
-    serialize_prompt_value(report)
-}
-
 fn build_user_prompt(
     state: &TradingState,
     symbol: &str,
@@ -238,7 +234,7 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Aggressive risk report: {}",
-            serialize_optional_risk_report(&state.aggressive_risk_report)
+            serialize_prompt_value(&state.aggressive_risk_report)
         ),
         MAX_USER_PROMPT_CHARS,
     );
@@ -246,7 +242,7 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Neutral risk report: {}",
-            serialize_optional_risk_report(&state.neutral_risk_report)
+            serialize_prompt_value(&state.neutral_risk_report)
         ),
         MAX_USER_PROMPT_CHARS,
     );
@@ -254,7 +250,7 @@ fn build_user_prompt(
         &mut prompt,
         &format!(
             "Conservative risk report: {}",
-            serialize_optional_risk_report(&state.conservative_risk_report)
+            serialize_prompt_value(&state.conservative_risk_report)
         ),
         MAX_USER_PROMPT_CHARS,
     );

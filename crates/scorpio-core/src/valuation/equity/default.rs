@@ -57,7 +57,6 @@ mod tests {
             etf_holdings: None,
             etf_profile: None,
             etf_official_benchmark: None,
-            etf_ohlcv: None,
             etf_options: None,
             etf_risk_free_rate: None,
             etf_distribution_yield_ttm: None,

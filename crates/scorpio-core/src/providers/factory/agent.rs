@@ -3,7 +3,6 @@
 //! - [`LlmAgent`] — provider-agnostic agent with uniform `prompt`/`chat` interface.
 //! - [`build_agent`] / [`build_agent_with_tools`] — construct agents from a
 //!   [`CompletionModelHandle`] and a system prompt.
-//! - [`prompt_typed`] — one-shot typed prompt dispatched over all provider variants.
 //! - Mock infrastructure (`mock_llm_agent`, [`MockChatOutcome`], etc.) available under
 //!   `#[cfg(test)]` for unit testing agent-using code without real LLM calls.
 
@@ -104,7 +103,6 @@ pub(crate) struct MockLlmAgent {
     text_turn_results: Arc<Mutex<VecDeque<Result<PromptResponse, TradingError>>>>,
     observed_prompts: Arc<Mutex<Vec<String>>>,
     observed_history_lengths: Arc<Mutex<Vec<usize>>>,
-    observed_history_ptrs: Arc<Mutex<Vec<usize>>>,
     observed_max_turns: Arc<Mutex<Vec<usize>>>,
     prompt_delay: Arc<Mutex<Duration>>,
     text_turn_delay: Arc<Mutex<Duration>>,
@@ -117,7 +115,6 @@ pub(crate) struct MockLlmAgent {
 #[derive(Clone)]
 pub(crate) struct MockLlmAgentController {
     observed_history_lengths: Arc<Mutex<Vec<usize>>>,
-    observed_history_ptrs: Arc<Mutex<Vec<usize>>>,
 }
 
 #[cfg(test)]
@@ -130,10 +127,6 @@ pub(crate) enum MockChatOutcome {
 impl MockLlmAgentController {
     pub(crate) fn observed_history_lengths(&self) -> Vec<usize> {
         self.observed_history_lengths.lock().unwrap().clone()
-    }
-
-    pub(crate) fn observed_history_ptrs(&self) -> Vec<usize> {
-        self.observed_history_ptrs.lock().unwrap().clone()
     }
 }
 
@@ -160,7 +153,6 @@ pub(crate) fn mock_llm_agent_with_provider_id(
 ) -> (LlmAgent, MockLlmAgentController) {
     let observed_prompts = Arc::new(Mutex::new(Vec::new()));
     let observed_history_lengths = Arc::new(Mutex::new(Vec::new()));
-    let observed_history_ptrs = Arc::new(Mutex::new(Vec::new()));
     let inner = MockLlmAgent {
         prompt_results: Arc::new(Mutex::new(prompt_results.into())),
         chat_results: Arc::new(Mutex::new(chat_results.into())),
@@ -168,7 +160,6 @@ pub(crate) fn mock_llm_agent_with_provider_id(
         text_turn_results: Arc::new(Mutex::new(VecDeque::new())),
         observed_prompts: Arc::clone(&observed_prompts),
         observed_history_lengths: Arc::clone(&observed_history_lengths),
-        observed_history_ptrs: Arc::clone(&observed_history_ptrs),
         observed_max_turns: Arc::new(Mutex::new(Vec::new())),
         prompt_delay: Arc::new(Mutex::new(Duration::ZERO)),
         text_turn_delay: Arc::new(Mutex::new(Duration::ZERO)),
@@ -186,7 +177,6 @@ pub(crate) fn mock_llm_agent_with_provider_id(
         },
         MockLlmAgentController {
             observed_history_lengths,
-            observed_history_ptrs,
         },
     )
 }
@@ -589,10 +579,6 @@ impl MockLlmAgent {
             .lock()
             .unwrap()
             .push(chat_history.len());
-        self.observed_history_ptrs
-            .lock()
-            .unwrap()
-            .push(chat_history.as_ptr() as usize);
 
         let outcome = self
             .chat_results
@@ -783,48 +769,6 @@ fn build_agent_inner(
             make_agent!(base, XiaomiMimo)
         }
     }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Typed prompt helper
-// ────────────────────────────────────────────────────────────────────────────
-
-/// Prompt for a typed (structured) response, mapping schema failures to
-/// `TradingError::SchemaViolation`.
-///
-/// This is a convenience for agents that need JSON-schema-constrained output.
-/// It calls `prompt_typed` on the underlying rig agent, so the provider's native
-/// structured output support is used when available.
-///
-/// Note: Retry logic is not applied here because `prompt_typed` goes through
-/// a different code path (TypedPrompt). Callers should wrap this in their own
-/// retry loop if needed.
-pub async fn prompt_typed<T>(agent: &LlmAgent, prompt: &str) -> Result<T, TradingError>
-where
-    T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
-{
-    use rig::completion::TypedPrompt;
-    let span = agent.llm_span("prompt_typed");
-    // Record the prompt before the call; usage/completion aren't available
-    // without extended_details, which this one-shot helper intentionally avoids.
-    span.record("gen_ai.prompt", prompt);
-    async {
-        dispatch_llm_agent!(
-            &agent.inner,
-            |agent_inner| agent_inner.prompt_typed::<T>(prompt).await.map_err(|err| {
-                map_structured_output_error_with_context(
-                    agent.provider_name(),
-                    agent.model_id(),
-                    err,
-                )
-            }),
-            mock = |_mock_agent| Err(TradingError::Config(anyhow::anyhow!(
-                "typed prompt not supported for mock llm agent"
-            )))
-        )
-    }
-    .instrument(span)
-    .await
 }
 
 // ────────────────────────────────────────────────────────────────────────────

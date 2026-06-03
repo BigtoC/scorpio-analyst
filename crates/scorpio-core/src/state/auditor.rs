@@ -59,47 +59,9 @@ pub struct AuditorReport {
     pub auditor_model_id: String,
 }
 
-impl AuditorReport {
-    pub fn has_no_critical_findings(&self) -> bool {
-        self.critical_count() == 0
-    }
-
-    pub fn critical_count(&self) -> usize {
-        self.findings
-            .iter()
-            .filter(|f| f.severity == Severity::Critical)
-            .count()
-    }
-
-    pub fn warning_count(&self) -> usize {
-        self.findings
-            .iter()
-            .filter(|f| f.severity == Severity::Warning)
-            .count()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn report_has_no_critical_findings_when_only_warnings_exist() {
-        let report = AuditorReport {
-            findings: vec![Finding {
-                severity: Severity::Warning,
-                location: "trader_proposal.rationale".into(),
-                description: "Unsourced EPS claim".into(),
-                excerpt: None,
-            }],
-            summary: "ok".into(),
-            audited_at: chrono::Utc::now(),
-            auditor_model_id: "claude-haiku-4-5".into(),
-        };
-        assert!(report.has_no_critical_findings());
-        assert_eq!(report.warning_count(), 1);
-        assert_eq!(report.critical_count(), 0);
-    }
 
     #[test]
     fn report_serde_roundtrip() {
@@ -117,7 +79,6 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
         let back: AuditorReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
-        assert_eq!(back.critical_count(), 1);
     }
 
     #[test]

@@ -7,11 +7,6 @@
 //! covers fundamentals + news, Yahoo Finance covers price history, FRED
 //! covers macro. The crypto traits exist so the graph builder can express
 //! crypto-pack routing once the crypto pack implementation lands.
-//!
-//! A routing helper in [`super::routing`] maps a [`crate::domain::Symbol`]
-//! to the right provider for each trait; pipeline code that needs "the
-//! fundamentals provider for this asset" goes through the helper rather
-//! than reaching into concrete client structs.
 pub mod derivatives;
 pub mod fundamentals;
 pub mod macroeconomic;

@@ -12,7 +12,7 @@
 //! | [`error`]  | Internal error mapping and sanitization utilities used by the facade |
 //! | [`client`] | [`CompletionModelHandle`], [`create_completion_model`], [`create_completion_model_with_copilot`], [`CopilotAuthMode`] |
 //! | [`copilot_auth`] | OAuth scope validation, identity binding, and token-cache inspection |
-//! | [`agent`]  | [`LlmAgent`], [`build_agent`], [`build_agent_with_tools`], [`prompt_typed`], mock infrastructure |
+//! | [`agent`]  | [`LlmAgent`], [`build_agent`], [`build_agent_with_tools`], mock infrastructure |
 //! | [`retry`]  | [`RetryOutcome`], all retry/budget loop functions |
 //! | [`text_retry`] | [`prompt_text_with_retry`] — tool-enabled text prompt with retry |
 //! | [`discovery`] | setup-only provider model listing and normalized discovery outcomes |
@@ -36,12 +36,12 @@ pub use client::{
 
 // ── agent submodule ──────────────────────────────────────────────────────────
 
-pub use agent::{LlmAgent, build_agent, build_agent_with_tools, prompt_typed};
+pub use agent::{LlmAgent, build_agent, build_agent_with_tools};
 
 // ── retry submodule ──────────────────────────────────────────────────────────
 
 pub use retry::{
-    RetryOutcome, chat_with_retry, chat_with_retry_details, prompt_typed_with_retry,
+    RetryOutcome, chat_with_retry_details, prompt_typed_with_retry,
     prompt_typed_with_retry_validated, prompt_with_retry, prompt_with_retry_details,
     prompt_with_retry_validated_details,
 };

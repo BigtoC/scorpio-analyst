@@ -43,14 +43,6 @@ pub struct EtfSummary {
     pub ask: Option<f64>,
 }
 
-impl EtfSummary {
-    /// `true` if at least one field was populated.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.nav.is_none() && self.bid.is_none() && self.ask.is_none()
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 struct AuthState {
     cookie: Option<String>,
@@ -291,7 +283,6 @@ mod tests {
         assert_eq!(s.nav, Some(620.30));
         assert_eq!(s.bid, Some(620.50));
         assert_eq!(s.ask, Some(620.52));
-        assert!(!s.is_empty());
     }
 
     #[test]
@@ -334,17 +325,5 @@ mod tests {
     fn parses_garbage_returns_none() {
         assert!(parse_summary_response("not json").is_none());
         assert!(parse_summary_response("").is_none());
-    }
-
-    #[test]
-    fn empty_summary_reports_empty() {
-        assert!(EtfSummary::default().is_empty());
-        assert!(
-            !EtfSummary {
-                nav: Some(1.0),
-                ..Default::default()
-            }
-            .is_empty()
-        );
     }
 }

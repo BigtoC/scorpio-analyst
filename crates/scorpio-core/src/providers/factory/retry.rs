@@ -2,7 +2,7 @@
 //!
 //! - [`RetryOutcome`] — bundles a successful response with rate-limit wait metadata.
 //! - [`prompt_with_retry`] / [`prompt_with_retry_details`] — one-shot prompt with retry.
-//! - [`chat_with_retry`] / [`chat_with_retry_details`] — chat prompt with retry.
+//! - [`chat_with_retry_details`] — chat prompt with retry.
 //! - [`prompt_typed_with_retry`] — typed structured-output prompt with retry.
 //!
 //! All functions apply `tokio::time::timeout` per attempt and exponential backoff
@@ -303,48 +303,6 @@ where
 // Chat retry helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Send a chat prompt (with history) with timeout and exponential-backoff retry.
-///
-/// Behaves identically to [`prompt_with_retry`] but passes `chat_history` to the agent.
-/// The history is cloned on each attempt so retries replay the full context.
-///
-/// Rate-limit acquire is performed outside the per-attempt timeout but is bounded
-/// by the remaining total budget (Option C semantics).
-///
-/// # Errors
-///
-/// Same as [`prompt_with_retry`].
-pub async fn chat_with_retry(
-    agent: &LlmAgent,
-    prompt: &str,
-    chat_history: &[Message],
-    timeout: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<String>, TradingError> {
-    let total_budget = policy.total_budget(timeout);
-    chat_with_retry_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
-}
-
-pub(crate) async fn chat_with_retry_budget(
-    agent: &LlmAgent,
-    prompt: &str,
-    chat_history: &[Message],
-    timeout: Duration,
-    total_budget: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<String>, TradingError> {
-    let mut history = Vec::with_capacity(chat_history.len().saturating_add(2));
-    history.extend_from_slice(chat_history);
-    let outcome =
-        chat_with_retry_details_budget(agent, prompt, &mut history, timeout, total_budget, policy)
-            .await?;
-
-    Ok(RetryOutcome {
-        result: outcome.result.output,
-        rate_limit_wait_ms: outcome.rate_limit_wait_ms,
-    })
-}
-
 /// Send a chat prompt (with mutable history) with timeout/retry and return response plus usage.
 ///
 /// The `chat_history` is updated in place by appending each new message pair. This is the
@@ -355,7 +313,7 @@ pub(crate) async fn chat_with_retry_budget(
 ///
 /// # Errors
 ///
-/// Same as [`chat_with_retry`].
+/// Same as [`prompt_with_retry`].
 pub async fn chat_with_retry_details(
     agent: &LlmAgent,
     prompt: &str,
@@ -1006,56 +964,6 @@ mod tests {
 
         assert_eq!(history.len(), 1);
         assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
-    }
-
-    #[tokio::test]
-    async fn chat_with_retry_retries_without_accumulating_history() {
-        let (agent, controller) = mock_llm_agent(
-            "o3",
-            vec![],
-            vec![
-                MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
-                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
-                )),
-                MockChatOutcome::Ok(mock_prompt_response(
-                    "Recovered response",
-                    rig::completion::Usage {
-                        input_tokens: 10,
-                        output_tokens: 5,
-                        total_tokens: 15,
-                        cached_input_tokens: 0,
-                        cache_creation_input_tokens: 0,
-                    },
-                )),
-            ],
-        );
-
-        let history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("initial context")),
-        }];
-
-        let response = chat_with_retry_budget(
-            &agent,
-            "next prompt",
-            &history,
-            Duration::from_millis(50),
-            Duration::from_millis(200),
-            &RetryPolicy {
-                max_retries: 1,
-                base_delay: Duration::from_millis(1),
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(response.result, "Recovered response");
-        assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
-        assert_eq!(controller.observed_history_ptrs().len(), 2);
-        assert_eq!(
-            controller.observed_history_ptrs()[0],
-            controller.observed_history_ptrs()[1],
-            "chat retries should reuse the same history buffer across attempts"
-        );
     }
 
     #[tokio::test]

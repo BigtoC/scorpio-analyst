@@ -24,7 +24,6 @@ use graph_flow::Context;
 pub use self::agent::FundManagerAgent;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) use self::prompt::build_prompt_context;
-pub use crate::constants::MAX_RATIONALE_CHARS;
 
 /// Construct a [`FundManagerAgent`] and run it against `state`.
 ///

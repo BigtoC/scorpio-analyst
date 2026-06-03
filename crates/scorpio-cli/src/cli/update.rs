@@ -471,31 +471,6 @@ fn format_notice_for_tty(current: &str, latest: &str, stderr_is_terminal: bool) 
     }
 }
 
-/// Best-effort non-blocking drain of the background update-check result.
-///
-/// Returns `Some(formatted_notice)` when the channel has already delivered a
-/// `Some(latest)` payload; returns `None` otherwise (channel empty, sender
-/// dropped, or the task reported "up to date"). This is intentional: the
-/// subcommand should not wait on the check.
-///
-/// `stderr_is_terminal` selects between the boxed/colored notice (TTY) and the
-/// plain-text notice (redirected stderr). Callers typically pass
-/// `std::io::stderr().is_terminal()`.
-pub fn try_show_update_notice_with_tty(
-    rx: tokio::sync::oneshot::Receiver<Option<String>>,
-    current: &str,
-    stderr_is_terminal: bool,
-) -> Option<String> {
-    // Consume the Receiver by value so callers can't reuse it.
-    let mut rx = rx;
-    match rx.try_recv() {
-        Ok(Some(latest)) => Some(format_notice_for_tty(current, &latest, stderr_is_terminal)),
-        Ok(None)
-        | Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-        | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => None,
-    }
-}
-
 /// Outcome of an async update-notice attempt.
 ///
 /// Distinguishing `Pending(rx)` from `Resolved(None)` lets callers retry the
@@ -514,7 +489,7 @@ pub enum NoticeOutcome {
 
 /// Awaits the background update-check result up to `grace`, then dispatches.
 ///
-/// Preferred over [`try_show_update_notice_with_tty`] for fast subcommands
+/// Preferred for fast subcommands
 /// that would otherwise race the background HTTP call. On grace-timeout the
 /// receiver is returned inside [`NoticeOutcome::Pending`] so callers can
 /// retry (useful for showing the notice pre-banner *and* post-command).
@@ -1198,69 +1173,6 @@ mod tests {
         ));
         let got = check_latest_version_with(m).await;
         assert_eq!(got, None);
-    }
-
-    // ── try_show_update_notice_with_tty ────────────────────────────
-
-    mod notice_dispatch {
-        use super::*;
-
-        #[tokio::test]
-        async fn returns_formatted_notice_when_some() {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            tx.send(Some("0.3.0".to_string())).unwrap();
-            let got = try_show_update_notice_with_tty(rx, "0.2.1", true);
-            let s = got.expect("expected Some");
-            assert!(s.contains("0.2.1") && s.contains("0.3.0"));
-        }
-
-        #[tokio::test]
-        async fn returns_boxed_notice_for_terminal_stderr() {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            tx.send(Some("0.3.0".to_string())).unwrap();
-
-            let got = try_show_update_notice_with_tty(rx, "0.2.1", true);
-            let s = got.expect("expected Some");
-
-            assert!(s.contains('╭') && s.contains('╰') && s.contains('│'));
-        }
-
-        #[tokio::test]
-        async fn returns_plain_notice_for_non_terminal_stderr() {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            tx.send(Some("0.3.0".to_string())).unwrap();
-
-            let got = try_show_update_notice_with_tty(rx, "0.2.1", false);
-            let s = got.expect("expected Some");
-
-            assert!(s.contains("Update available"));
-            assert!(s.contains("0.2.1") && s.contains("0.3.0"));
-            assert!(s.contains("scorpio upgrade"));
-            assert!(!s.contains('╭') && !s.contains('╰') && !s.contains('│'));
-            assert!(!s.contains("\u{1b}"));
-        }
-
-        #[tokio::test]
-        async fn returns_none_when_sender_reports_up_to_date() {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            tx.send(None).unwrap();
-            assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
-        }
-
-        #[tokio::test]
-        async fn returns_none_when_sender_not_yet_sent_empty() {
-            // Intentional best-effort: if the check hasn't finished when the
-            // subcommand returns, we silently skip — documented in R3.
-            let (_tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
-            assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
-        }
-
-        #[tokio::test]
-        async fn returns_none_when_sender_dropped_disconnected() {
-            let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
-            drop(tx); // background task panicked before sending
-            assert!(try_show_update_notice_with_tty(rx, "0.2.1", true).is_none());
-        }
     }
 
     // ── show_update_notice_with_tty (async, with grace window) ─────

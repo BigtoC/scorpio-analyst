@@ -323,9 +323,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.output.value, 42);
-        assert_eq!(agent_test_support::typed_attempts(&agent), 1);
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 0);
-        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+        assert_eq!(agent.typed_attempts(), 1);
+        assert_eq!(agent.text_turn_attempts(), 0);
+        assert_eq!(agent.prompt_attempts(), 0);
     }
 
     #[tokio::test]
@@ -363,9 +363,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.output.value, 99);
-        assert_eq!(agent_test_support::typed_attempts(&agent), 0);
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
-        assert_eq!(agent_test_support::prompt_attempts(&agent), 0);
+        assert_eq!(agent.typed_attempts(), 0);
+        assert_eq!(agent.text_turn_attempts(), 1);
+        assert_eq!(agent.prompt_attempts(), 0);
     }
 
     #[tokio::test]
@@ -451,7 +451,7 @@ mod tests {
         ));
         // `fast_policy()` has `max_retries: 0`, so the loop runs exactly once
         // even though schema violations are now retryable inside the loop.
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent.text_turn_attempts(), 1);
     }
 
     #[tokio::test]
@@ -551,7 +551,7 @@ mod tests {
             crate::error::TradingError::SchemaViolation { .. }
         ));
         // `fast_policy()` has `max_retries: 0`, so the loop runs exactly once.
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent.text_turn_attempts(), 1);
     }
 
     #[tokio::test]
@@ -598,7 +598,7 @@ mod tests {
         .expect("validator-aware retry should recover on second attempt");
 
         assert_eq!(outcome.output, Output { value: 42 });
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 2);
+        assert_eq!(agent.text_turn_attempts(), 2);
     }
 
     #[tokio::test]
@@ -646,8 +646,8 @@ mod tests {
         .expect("Gemini should recover via text fallback after a typed schema violation");
 
         assert_eq!(outcome.output, Output { value: 7 });
-        assert_eq!(agent_test_support::typed_attempts(&agent), 1);
-        assert_eq!(agent_test_support::text_turn_attempts(&agent), 1);
+        assert_eq!(agent.typed_attempts(), 1);
+        assert_eq!(agent.text_turn_attempts(), 1);
     }
 
     #[test]
