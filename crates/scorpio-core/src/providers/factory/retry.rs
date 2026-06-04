@@ -102,8 +102,8 @@ pub(crate) async fn prompt_with_retry_budget(
     total_budget: Duration,
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<String>, TradingError> {
-    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
-        agent.prompt(prompt)
+    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || async {
+        Ok(agent.prompt_details(prompt).await?.output)
     })
     .await
 }
@@ -241,7 +241,7 @@ async fn retry_prompt_budget_loop<R, F, Fut>(
 ) -> Result<RetryOutcome<R>, TradingError>
 where
     F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<R, PromptError>>,
+    Fut: Future<Output = Result<R, PromptError>>,
 {
     let started_at = Instant::now();
     let mut rate_limit_wait_ms: u64 = 0;

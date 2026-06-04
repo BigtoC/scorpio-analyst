@@ -319,11 +319,6 @@ impl LlmAgent {
         )
     }
 
-    /// Send a one-shot prompt and return the response text.
-    pub async fn prompt(&self, prompt: &str) -> Result<String, PromptError> {
-        Ok(self.prompt_details(prompt).await?.output)
-    }
-
     /// Send a one-shot prompt and return text plus aggregated usage details.
     pub async fn prompt_details(&self, prompt: &str) -> Result<PromptResponse, PromptError> {
         let span = self.llm_span("prompt_details");
