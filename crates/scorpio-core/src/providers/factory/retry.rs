@@ -124,8 +124,8 @@ where
                     if attempt < policy.max_retries {
                         warn!(
                             attempt,
-                            provider = agent.provider_name(),
-                            model = agent.model_id(),
+                            provider = agent.provider.as_str(),
+                            model = agent.model_id.as_str(),
                             error = %message,
                             "validator rejected LLM output, will retry with corrective feedback"
                         );
@@ -140,12 +140,12 @@ where
                 if attempt < policy.max_retries
                     && let Some(error) = transient_prompt_error_summary(&err)
                 {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient validated-prompt error, will retry");
+                    warn!(attempt, provider = agent.provider.as_str(), model = agent.model_id.as_str(), error = %error, "transient validated-prompt error, will retry");
                     continue;
                 }
                 Err(map_prompt_error_with_context(
-                    agent.provider_name(),
-                    agent.model_id(),
+                    agent.provider.as_str(),
+                    &agent.model_id,
                     err,
                 ))
             }
@@ -212,12 +212,12 @@ where
                 if attempt < policy.max_retries
                     && let Some(error) = transient_prompt_error_summary(&err)
                 {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient prompt error, will retry");
+                    warn!(attempt, provider = agent.provider.as_str(), model = agent.model_id.as_str(), error = %error, "transient prompt error, will retry");
                     continue;
                 }
                 Err(map_prompt_error_with_context(
-                    agent.provider_name(),
-                    agent.model_id(),
+                    agent.provider.as_str(),
+                    &agent.model_id,
                     err,
                 ))
             }
@@ -305,12 +305,12 @@ pub async fn chat_with_retry_details(
                 if attempt < policy.max_retries
                     && let Some(error) = transient_prompt_error_summary(&err)
                 {
-                    warn!(attempt, provider = agent.provider_name(), model = agent.model_id(), error = %error, "transient chat-details error, will retry");
+                    warn!(attempt, provider = agent.provider.as_str(), model = agent.model_id.as_str(), error = %error, "transient chat-details error, will retry");
                     continue;
                 }
                 Err(map_prompt_error_with_context(
-                    agent.provider_name(),
-                    agent.model_id(),
+                    agent.provider.as_str(),
+                    &agent.model_id,
                     err,
                 ))
             }
@@ -470,8 +470,8 @@ where
                     if attempt < policy.max_retries {
                         warn!(
                             attempt,
-                            provider = agent.provider_name(),
-                            model = agent.model_id(),
+                            provider = agent.provider.as_str(),
+                            model = agent.model_id.as_str(),
                             error = %message,
                             "validator rejected typed output, will retry with corrective feedback"
                         );
@@ -564,7 +564,7 @@ async fn acquire_rate_limit_permit(
     total_budget: Duration,
     exhausted_message: &str,
 ) -> Result<u64, TradingError> {
-    let Some(limiter) = agent.rate_limiter() else {
+    let Some(limiter) = agent.rate_limiter.as_ref() else {
         return Ok(0);
     };
 
@@ -600,7 +600,7 @@ fn attempt_timeout_error(
         elapsed: started_at.elapsed(),
         message: format!(
             "{operation} timed out on attempt {attempt} for model {}",
-            agent.model_id()
+            agent.model_id
         ),
     }
 }
@@ -673,7 +673,9 @@ mod tests {
     use rig::completion::Message;
     use rig::message::UserContent;
 
-    use super::super::agent::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+    use crate::providers::ProviderId;
+    use rig::agent::PromptResponse;
+    use super::super::agent::{MockChatOutcome, mock_llm_agent};
 
     // ── Transient error classification ───────────────────────────────────
 
@@ -787,13 +789,14 @@ mod tests {
     #[tokio::test]
     async fn chat_with_retry_details_retries_and_truncates_partial_history() {
         let (agent, controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![
                 MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
                     rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
                 )),
-                MockChatOutcome::Ok(mock_prompt_response(
+                MockChatOutcome::Ok(PromptResponse::new(
                     "Recovered response",
                     rig::completion::Usage {
                         input_tokens: 10,
@@ -827,12 +830,13 @@ mod tests {
         assert_eq!(response.result.usage.total_tokens, 15);
         assert_eq!(response.result.usage.output_tokens, 5);
         assert_eq!(history.len(), 3);
-        assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
+        assert_eq!(controller.observed_history_lengths.lock().unwrap().clone(), vec![1, 1]);
     }
 
     #[tokio::test]
     async fn chat_with_retry_details_truncates_partial_history_on_final_permanent_error() {
         let (agent, controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![
@@ -868,12 +872,13 @@ mod tests {
         }
 
         assert_eq!(history.len(), 1);
-        assert_eq!(controller.observed_history_lengths(), vec![1, 1]);
+        assert_eq!(controller.observed_history_lengths.lock().unwrap().clone(), vec![1, 1]);
     }
 
     #[tokio::test]
     async fn prompt_with_retry_retries_transient_error_once() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![
                 Err(PromptError::CompletionError(
@@ -881,7 +886,7 @@ mod tests {
                         "HTTP 429 Too Many Requests".to_owned(),
                     ),
                 )),
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "Recovered response",
                     rig::completion::Usage {
                         input_tokens: 10,
@@ -913,8 +918,9 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_retry_details_public_entrypoint_returns_usage_and_rate_limit_wait() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
-            vec![Ok(mock_prompt_response(
+            vec![Ok(PromptResponse::new(
                 "Detailed response",
                 rig::completion::Usage {
                     input_tokens: 7,
@@ -947,6 +953,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_retry_public_entrypoint_maps_permanent_errors_without_retry() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![Err(PromptError::CompletionError(
                 rig::completion::CompletionError::ProviderError("invalid API key".to_owned()),
@@ -981,8 +988,8 @@ mod tests {
     // the loop reaches attempt 1's timeout instead of racing into budget-exhaustion.
     #[tokio::test(start_paused = true)]
     async fn prompt_with_retry_public_entrypoint_returns_attempt_timeout_after_budget_exhaustion() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.set_prompt_delay(Duration::from_millis(25));
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        *controller.prompt_delay.lock().unwrap() = Duration::from_millis(25);
 
         let policy = RetryPolicy { max_retries: 1, base_delay: Duration::from_millis(1) };
         let timeout = Duration::from_millis(5);
@@ -1007,11 +1014,11 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_typed_with_retry_public_entrypoint_retries_transient_rig_errors() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.push_typed_error(TradingError::Rig(
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        controller.typed_results.lock().unwrap().push_back(Err(TradingError::Rig(
             "provider=openai model=o3 summary=connection timeout".to_owned(),
-        ));
-        agent.push_typed_ok(TypedPromptResponse::new(
+        )));
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(TypedPromptResponse::new(
             TradeProposal {
                 action: TradeAction::Buy,
                 target_price: 150.0,
@@ -1028,7 +1035,7 @@ mod tests {
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             },
-        ));
+        ))));
 
         let outcome = prompt_typed_with_retry::<TradeProposal>(
             &agent,
@@ -1049,11 +1056,11 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_typed_with_retry_public_entrypoint_does_not_retry_schema_violations() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.push_typed_error(TradingError::SchemaViolation {
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        controller.typed_results.lock().unwrap().push_back(Err(TradingError::SchemaViolation {
             message: "provider=openai model=o3: structured output could not be parsed".to_owned(),
-        });
-        agent.push_typed_ok(TypedPromptResponse::new(
+        }));
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(TypedPromptResponse::new(
             TradeProposal {
                 action: TradeAction::Buy,
                 target_price: 150.0,
@@ -1070,7 +1077,7 @@ mod tests {
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             },
-        ));
+        ))));
 
         let err = prompt_typed_with_retry::<TradeProposal>(
             &agent,
@@ -1086,7 +1093,7 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, TradingError::SchemaViolation { .. }));
-        assert_eq!(agent.typed_attempts(), 1);
+        assert_eq!(*controller.typed_attempts.lock().unwrap(), 1);
     }
 
     // ── Typed validator-aware retry (corrective feedback) ─────────────────
@@ -1130,12 +1137,12 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_typed_with_retry_validated_recovers_after_corrective_feedback() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
         // First response fails the validator; second satisfies it.
-        agent.push_typed_ok(typed(proposal_with_rationale("Buy it.")));
-        agent.push_typed_ok(typed(proposal_with_rationale(
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(typed(proposal_with_rationale("Buy it.")))));
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(typed(proposal_with_rationale(
             "Buy because momentum confirms.",
-        )));
+        )))));
 
         let outcome = prompt_typed_with_retry_validated::<TradeProposal, _>(
             &agent,
@@ -1153,7 +1160,7 @@ mod tests {
 
         assert!(outcome.result.output.rationale.contains("because"));
         assert_eq!(
-            agent.typed_attempts(),
+            *controller.typed_attempts.lock().unwrap(),
             2,
             "validation failure must drive one corrective retry"
         );
@@ -1161,9 +1168,9 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_typed_with_retry_validated_exhausts_and_returns_schema_violation() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.push_typed_ok(typed(proposal_with_rationale("nope")));
-        agent.push_typed_ok(typed(proposal_with_rationale("still nope")));
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(typed(proposal_with_rationale("nope")))));
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(typed(proposal_with_rationale("still nope")))));
 
         let err = prompt_typed_with_retry_validated::<TradeProposal, _>(
             &agent,
@@ -1180,15 +1187,15 @@ mod tests {
         .expect_err("a persistently-invalid response must surface the validator error");
 
         assert!(matches!(err, TradingError::SchemaViolation { .. }));
-        assert_eq!(agent.typed_attempts(), 2);
+        assert_eq!(*controller.typed_attempts.lock().unwrap(), 2);
     }
 
     #[tokio::test]
     async fn prompt_typed_with_retry_validated_returns_first_valid_without_retry() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.push_typed_ok(typed(proposal_with_rationale(
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(typed(proposal_with_rationale(
             "Buy because valuation is cheap.",
-        )));
+        )))));
 
         let outcome = prompt_typed_with_retry_validated::<TradeProposal, _>(
             &agent,
@@ -1205,13 +1212,13 @@ mod tests {
         .expect("a valid first response needs no retry");
 
         assert!(outcome.result.output.rationale.contains("because"));
-        assert_eq!(agent.typed_attempts(), 1);
+        assert_eq!(*controller.typed_attempts.lock().unwrap(), 1);
     }
 
     #[tokio::test]
     async fn prompt_typed_with_retry_validated_propagates_non_schema_validator_errors() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.push_typed_ok(typed(proposal_with_rationale("anything")));
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(typed(proposal_with_rationale("anything")))));
 
         let err = prompt_typed_with_retry_validated::<TradeProposal, _>(
             &agent,
@@ -1229,7 +1236,7 @@ mod tests {
 
         assert!(matches!(err, TradingError::Config(_)));
         assert_eq!(
-            agent.typed_attempts(),
+            *controller.typed_attempts.lock().unwrap(),
             1,
             "non-schema errors must not retry"
         );
@@ -1240,8 +1247,9 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_retry_validated_details_returns_first_valid_response() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
-            vec![Ok(mock_prompt_response(
+            vec![Ok(PromptResponse::new(
                 "good output",
                 rig::completion::Usage {
                     input_tokens: 1,
@@ -1273,9 +1281,10 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_retry_validated_details_retries_on_schema_violation_and_recovers() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "bad",
                     rig::completion::Usage {
                         input_tokens: 1,
@@ -1285,7 +1294,7 @@ mod tests {
                         cache_creation_input_tokens: 0,
                     },
                 )),
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "good",
                     rig::completion::Usage {
                         input_tokens: 1,
@@ -1326,9 +1335,10 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_retry_validated_details_returns_last_violation_when_exhausted() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "bad",
                     rig::completion::Usage {
                         input_tokens: 1,
@@ -1338,7 +1348,7 @@ mod tests {
                         cache_creation_input_tokens: 0,
                     },
                 )),
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "bad",
                     rig::completion::Usage {
                         input_tokens: 1,
@@ -1380,8 +1390,9 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_retry_validated_details_does_not_retry_non_schema_validator_errors() {
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
-            vec![Ok(mock_prompt_response(
+            vec![Ok(PromptResponse::new(
                 "anything",
                 rig::completion::Usage {
                     input_tokens: 1,
