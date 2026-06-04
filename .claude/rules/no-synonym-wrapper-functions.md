@@ -63,7 +63,9 @@ wrappers:
   SchemaViolation { .. })`, or supplying a default the callee lacks.
 - **Argument binding (partial application):** the wrapper fixes one parameter so
   callers pass fewer (`fn save_user_config(c) { save_user_config_at(c,
-  user_config_path()?) }`).
+  user_config_path()?) }`). The bound value must be a genuinely meaningful
+  default — not just a trivial constant that callers should pass explicitly for
+  clarity.
 - **A `pub` re-export defining the crate's public API** over a private impl, or a
   **trait method** that delegates because the trait requires the method to exist.
 - **A genuinely different return contract** (e.g. `Result` → `Option`, a
@@ -73,6 +75,116 @@ The distinguishing test: *"Delete the wrapper and call the callee directly — d
 anything of value disappear (a type conversion, an error map, a default, an
 argument binding, a visibility boundary, a trait obligation)?"* If the only loss
 is one name, it was a synonym — inline it.
+
+## Accessor methods on struct fields
+
+A method that only returns a struct field is a synonym wrapper for the field
+itself. The fix is not a new wrapper — it is **making the field public** and
+deleting the method.
+
+```rust
+// ── banned: accessor wrappers add nothing over pub fields ────────────────────
+impl LlmAgent {
+    pub fn provider_name(&self) -> &'static str { self.provider.as_str() }
+    pub fn provider_id(&self) -> ProviderId     { self.provider }
+    pub fn model_id(&self) -> &str              { &self.model_id }
+    pub fn rate_limiter(&self) -> Option<&_>    { self.rate_limiter.as_ref() }
+}
+
+// ── correct: public fields, callers access directly ───────────────────────────
+pub struct LlmAgent {
+    pub provider:      ProviderId,
+    pub model_id:      String,
+    pub rate_limiter:  Option<SharedRateLimiter>,
+    inner:             LlmAgentInner,   // stays private: callers have no business here
+}
+// call sites: agent.provider.as_str(), agent.model_id, agent.rate_limiter.as_ref()
+```
+
+The boundary added by a getter — visibility promotion — is genuinely valuable
+when the field must stay private (e.g., `inner` above: exposing the dispatch enum
+would couple callers to implementation variants). But when there is no reason
+to hide the field, the getter is a synonym and `pub field` is the honest choice.
+
+## Layered synonym chains
+
+A chain A → B → C where each level is a synonym of the next collapses all at once,
+not layer by layer. Find the deepest function that does real work and wire callers
+to it directly; delete every level in between.
+
+```
+// ── banned chain ──────────────────────────────────────────────────────────────
+pub fn prompt_with_retry(agent, prompt, timeout, policy)
+    → prompt_with_retry_budget(agent, prompt, timeout, policy.total_budget(timeout), policy)
+    → retry_prompt_budget_loop(agent, timeout, total_budget, policy, || agent.prompt_details(prompt))
+    → [real loop logic]
+
+// ── correct: callers reach the real function directly ─────────────────────────
+pub fn retry_prompt_budget_loop(agent, timeout, total_budget, policy, call_fn)  // real work here
+// callers:
+let policy = RetryPolicy { … };
+let timeout = Duration::from_millis(50);
+retry_prompt_budget_loop(&agent, timeout, policy.total_budget(timeout), &policy,
+    || agent.prompt_details(prompt)).await
+```
+
+When the intermediate layers exist because callers varied in *one detail*
+(e.g. return type, budget source), the duplication is the signal: the difference
+should be expressed as a closure or type parameter at the canonical function
+boundary, not as parallel entry points.
+
+## Test-infrastructure synonyms
+
+Test code is not exempt. Mock helpers are as susceptible to the synonym smell as
+production code.
+
+```rust
+// ── banned ────────────────────────────────────────────────────────────────────
+fn mock_prompt_response(output: &str, usage: Usage) -> PromptResponse {
+    PromptResponse::new(output, usage)      // pure synonym for PromptResponse::new
+}
+fn mock_llm_agent_with_provider(provider, model, prompts, chats)
+    → mock_llm_agent_with_provider_id(provider, model, prompts, chats)   // identical signature
+```
+
+Delete and inline: call `PromptResponse::new(...)` and the canonical constructor
+directly. When two constructors exist and one is just the other with a constant
+bound, delete the shorter one and have callers pass the constant explicitly.
+
+## Test-control methods on production types
+
+Placing `#[cfg(test)]` control methods (`push_typed_ok`, `set_prompt_delay`,
+`typed_attempts`, …) on a production struct is doubly wrong:
+
+1. It puts test concerns inside the production type (see [[mock-at-the-right-seam-not-in-production]]).
+2. Each method is a synonym wrapper for direct field access on the underlying mock.
+
+The correct seam is a dedicated **controller** struct returned alongside the mock
+by the constructor. With `pub(crate)` fields on the controller, callers access
+mock state directly — no wrapper methods needed:
+
+```rust
+// ── banned: test methods on the production type ───────────────────────────────
+impl LlmAgent {
+    #[cfg(test)]
+    pub(crate) fn push_typed_ok<T>(&self, r: TypedPromptResponse<T>) { … }
+    #[cfg(test)]
+    pub(crate) fn typed_attempts(&self) -> usize { … }
+}
+
+// ── correct: pub(crate) fields on the controller ──────────────────────────────
+pub(crate) struct MockLlmAgentController {
+    pub(crate) typed_results:  TypedResultQueue,
+    pub(crate) typed_attempts: Arc<Mutex<usize>>,
+    …
+}
+// call sites: ctrl.typed_results.lock().unwrap().push_back(Ok(Box::new(r)));
+//             *ctrl.typed_attempts.lock().unwrap()
+```
+
+The same applies if wrapper methods exist on the controller itself — if every
+method body is just `.lock().unwrap()` boilerplate, the methods are synonyms.
+Make the fields `pub(crate)` and delete the methods.
 
 ## A related but distinct smell: redundant duplicate DI seams
 
@@ -120,19 +232,35 @@ removed (its assertions were covered by the proposal-writing method-seam test an
 the `TraderAgent::new` model-tier test). `run_trader` is now real work, not a
 delegator — and it never was a synonym.
 
-## Worked example
+## Worked examples
 
-`providers/factory/retry.rs` carried `should_retry_typed_error(err) ->
-should_retry_trading_error(err)` and `text_retry.rs` carried the identical
-`should_retry_text_error(err) -> should_retry_trading_error(err)`; a third,
-`#[cfg(test)] is_transient_error(err) -> transient_prompt_error_summary(err)
-.is_some()`. None converted types, mapped errors, or added a boundary — each was
-one alias for one behavior, and the `typed`/`text` names falsely implied
-per-path logic. All three were deleted: the two `should_retry_*` call sites
-(production and tests) now call `should_retry_trading_error` directly, and the
-five `is_transient_error` test assertions call `transient_prompt_error_summary(&err)
-.is_some()` / `.is_none()`. The `transient_prompt_error_summary` doc absorbed the
-classification note that lived on the deleted wrapper.
+**`providers/factory/retry.rs` — synonym chain + two-name duplication.** The
+module carried `should_retry_typed_error → should_retry_trading_error` and
+`should_retry_text_error → should_retry_trading_error`; a third,
+`#[cfg(test)] is_transient_error → transient_prompt_error_summary(err).is_some()`.
+Also a three-level chain: `prompt_with_retry` → `prompt_with_retry_budget` →
+`retry_prompt_budget_loop`, and a parallel `prompt_with_retry_details` →
+`retry_prompt_budget_loop`. All were collapsed: `retry_prompt_budget_loop` became
+`pub` and the canonical entry point; callers pass `|| agent.prompt_details(prompt)`
+as a closure and compute `policy.total_budget(timeout)` inline. All intermediate
+layers were deleted.
+
+**`providers/factory/agent.rs` — accessor methods and test-control on production
+type.** `LlmAgent` had four getter methods (`provider_name`, `provider_id`,
+`model_id`, `rate_limiter`) and ten `#[cfg(test)]` control methods
+(`push_typed_ok`, `set_prompt_delay`, `typed_attempts`, …). The getters were
+replaced by `pub` fields; `MockLlmAgentController` was expanded with `pub(crate)`
+fields so tests access mock state directly without wrapper methods.
+`mock_prompt_response` (synonym for `PromptResponse::new`) and the old
+`mock_llm_agent_with_provider` (identical signature to `mock_llm_agent_with_provider_id`)
+were deleted. `agent_test_support.rs` — a module whose only content was one
+wrapper function — was deleted entirely.
+
+**`providers/factory/retry.rs` — `prepare_attempt_text`.** A `pub(super)` function
+whose only body was `prepare_attempt(…, &RetryMessages { … })` with hardcoded
+text-prompt messages. Deleted; the `RetryMessages` value was extracted to a
+`pub(super) const TEXT_RETRY_MESSAGES` and callers pass it directly to
+`prepare_attempt`.
 
 See CLAUDE.md §2 "Simplicity First" / §3 "Surgical Changes", and the sibling
 rules [[no-write-only-placeholder-fields]] (deletes redundant *data* slots),

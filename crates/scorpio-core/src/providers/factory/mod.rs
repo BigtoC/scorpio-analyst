@@ -18,8 +18,6 @@
 //! | [`discovery`] | setup-only provider model listing and normalized discovery outcomes |
 
 mod agent;
-#[cfg(test)]
-pub(crate) mod agent_test_support;
 mod client;
 pub mod copilot_auth;
 mod discovery;
@@ -42,8 +40,8 @@ pub use agent::{LlmAgent, build_agent, build_agent_with_tools};
 
 pub use retry::{
     RetryOutcome, chat_with_retry_details, prompt_typed_with_retry,
-    prompt_typed_with_retry_validated, prompt_with_retry, prompt_with_retry_details,
-    prompt_with_retry_validated_details,
+    prompt_typed_with_retry_validated, prompt_with_retry_validated_details,
+    retry_prompt_budget_loop,
 };
 
 // ── text_retry submodule ─────────────────────────────────────────────────────
@@ -56,4 +54,4 @@ pub use error::sanitize_error_summary;
 // ── test-only mock infrastructure ────────────────────────────────────────────
 
 #[cfg(test)]
-pub(crate) use agent::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+pub(crate) use agent::{MockChatOutcome, mock_llm_agent};

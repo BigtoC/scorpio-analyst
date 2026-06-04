@@ -8,7 +8,7 @@
 //! - [`ModelTier`] encodes the PRD's quick-thinking / deep-thinking routing strategy.
 //! - [`factory::create_completion_model`] constructs a tier-specific reusable completion-model handle from config.
 //! - [`factory::build_agent`] wraps `rig`'s agent builder with system prompt setup.
-//! - [`factory::prompt_with_retry`] and [`factory::chat_with_retry_details`] add timeout and
+//! - [`factory::retry_prompt_budget_loop`] and [`factory::chat_with_retry_details`] add timeout and
 //!   exponential backoff retry around `rig` completion calls.
 //!
 //! # Example
@@ -22,7 +22,7 @@
 //! let cfg = Config::load().expect("config");
 //! let handle = factory::create_completion_model(ModelTier::QuickThinking, &cfg.llm, &cfg.providers, &ProviderRateLimiters::default())?;
 //! let agent = factory::build_agent(&handle, "You are a fast analyst.");
-//! let _model_id = agent.model_id();
+//! let _model_id = &agent.model_id;
 //! # Ok(())
 //! # }
 //! ```
