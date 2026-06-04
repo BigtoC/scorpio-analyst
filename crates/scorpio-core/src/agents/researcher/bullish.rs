@@ -138,10 +138,13 @@ fn build_bullish_prompt(debate_history: &[DebateMessage], bear_argument: Option<
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
-    use crate::providers::{ProviderId, factory::{MockChatOutcome, mock_llm_agent}};
-    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
+    use crate::providers::{
+        ProviderId,
+        factory::{MockChatOutcome, mock_llm_agent},
+    };
     use crate::state::DebateMessage;
+    use rig::agent::PromptResponse;
     use secrecy::SecretString;
 
     fn sample_llm_config() -> LlmConfig {
@@ -252,7 +255,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_accumulates_chat_history_across_invocations() {
-        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![
@@ -289,14 +293,18 @@ mod tests {
 
         assert_eq!(first.role, "bullish_researcher");
         assert_eq!(second.role, "bullish_researcher");
-        assert_eq!(controller.observed_history_lengths.lock().unwrap().clone(), vec![0, 2]);
+        assert_eq!(
+            controller.observed_history_lengths.lock().unwrap().clone(),
+            vec![0, 2]
+        );
         assert_eq!(usage.agent_name, "Bullish Researcher");
         assert_eq!(usage.model_id, "o3");
     }
 
     #[tokio::test]
     async fn run_marks_token_counts_unavailable_when_usage_zero() {
-        let (agent, _controller) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(

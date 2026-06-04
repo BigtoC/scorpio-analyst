@@ -201,10 +201,10 @@ mod tests {
     use crate::data::adapters::transcripts::{
         TranscriptEvidence, TranscriptFetch, TranscriptSegment,
     };
-    use crate::providers::{ProviderId, factory::mock_llm_agent};
-    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
+    use crate::providers::{ProviderId, factory::mock_llm_agent};
     use crate::state::{RiskLevel, RiskReport, TokenUsageTracker, TradeAction, TradeProposal};
+    use rig::agent::PromptResponse;
     use secrecy::SecretString;
     use uuid::Uuid;
 
@@ -315,7 +315,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_produces_nonempty_synthesis() {
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![Ok(PromptResponse::new(valid_synthesis(), mock_usage(40)))],
             vec![],
@@ -329,7 +330,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_synthesis_mentions_conservative_and_neutral_violation() {
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![Ok(PromptResponse::new(
                 valid_dual_violation_synthesis(),
@@ -352,7 +354,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_records_correct_agent_name() {
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![Ok(PromptResponse::new(valid_synthesis(), mock_usage(40)))],
             vec![],
@@ -369,7 +372,8 @@ mod tests {
     async fn run_prepends_violation_sentence_when_llm_omits_it() {
         // Flaky models (e.g. DeepSeek) may paraphrase or skip the canonical
         // sentence — we prepend it deterministically rather than failing.
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![Ok(PromptResponse::new(
                 "Summary without the required sentence.",
@@ -388,7 +392,8 @@ mod tests {
         // Control-char output fails shape validation. The validator-aware retry
         // gives the model a chance to self-correct; if every attempt fails the
         // last SchemaViolation propagates.
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![
                 Ok(PromptResponse::new("bad\x00output", mock_usage(10))),
@@ -405,7 +410,8 @@ mod tests {
     async fn run_recovers_when_first_response_has_control_char() {
         // First attempt fails shape validation (control char); second attempt
         // succeeds. The validator-aware retry recovers gracefully.
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![
                 Ok(PromptResponse::new("bad\x00output", mock_usage(10))),

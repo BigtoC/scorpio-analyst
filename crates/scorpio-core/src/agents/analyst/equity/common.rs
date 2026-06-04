@@ -297,16 +297,14 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::OpenAI,
-            "m",
-            vec![],
-            vec![],
-        );
-        ctrl.typed_results.lock().unwrap().push_back(Ok(Box::new(TypedPromptResponse::new(
-            Output { value: 42 },
-            sample_usage(10),
-        ))));
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "m", vec![], vec![]);
+        ctrl.typed_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(Box::new(TypedPromptResponse::new(
+                Output { value: 42 },
+                sample_usage(10),
+            ))));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -338,13 +336,12 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::OpenRouter,
-            "openrouter-model",
-            vec![],
-            vec![],
-        );
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": 99}"#, sample_usage(8))));
+        let (agent, ctrl) =
+            mock_llm_agent(ProviderId::OpenRouter, "openrouter-model", vec![], vec![]);
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(r#"{"value": 99}"#, sample_usage(8))));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -378,19 +375,17 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::DeepSeek,
-            "deepseek-chat",
-            vec![],
-            vec![],
-        );
+        let (agent, ctrl) = mock_llm_agent(ProviderId::DeepSeek, "deepseek-chat", vec![], vec![]);
         // Model wraps the JSON in a ```json fence with surrounding prose —
         // previously this failed serde at "line 1 column 1". The text-fallback
         // path now extracts the JSON object before parsing.
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
-            "Here is the analysis:\n```json\n{\"value\": 42}\n```\nDone.",
-            sample_usage(8),
-        )));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(
+                "Here is the analysis:\n```json\n{\"value\": 42}\n```\nDone.",
+                sample_usage(8),
+            )));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -421,13 +416,12 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::OpenRouter,
-            "openrouter-model",
-            vec![],
-            vec![],
-        );
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("not valid json", sample_usage(5))));
+        let (agent, ctrl) =
+            mock_llm_agent(ProviderId::OpenRouter, "openrouter-model", vec![], vec![]);
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new("not valid json", sample_usage(5))));
 
         let err = run_analyst_inference(
             &agent,
@@ -464,22 +458,21 @@ mod tests {
             v: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::OpenRouter,
-            "openrouter-model",
-            vec![],
-            vec![],
-        );
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
-            r#"{"v": 7}"#,
-            Usage {
-                input_tokens: 11,
-                output_tokens: 13,
-                total_tokens: 24,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            },
-        )));
+        let (agent, ctrl) =
+            mock_llm_agent(ProviderId::OpenRouter, "openrouter-model", vec![], vec![]);
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(
+                r#"{"v": 7}"#,
+                Usage {
+                    input_tokens: 11,
+                    output_tokens: 13,
+                    total_tokens: 24,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            )));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -513,14 +506,13 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::OpenRouter,
-            "openrouter-model",
-            vec![],
-            vec![],
-        );
+        let (agent, ctrl) =
+            mock_llm_agent(ProviderId::OpenRouter, "openrouter-model", vec![], vec![]);
         // JSON parses fine but fails semantic validation
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": -1}"#, sample_usage(6))));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(r#"{"value": -1}"#, sample_usage(6))));
 
         let err = run_analyst_inference(
             &agent,
@@ -567,14 +559,15 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::DeepSeek,
-            "deepseek-chat",
-            vec![],
-            vec![],
-        );
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("not valid json", sample_usage(5))));
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": 42}"#, sample_usage(8))));
+        let (agent, ctrl) = mock_llm_agent(ProviderId::DeepSeek, "deepseek-chat", vec![], vec![]);
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new("not valid json", sample_usage(5))));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(r#"{"value": 42}"#, sample_usage(8))));
 
         let policy = crate::error::RetryPolicy {
             max_retries: 2,
@@ -611,23 +604,26 @@ mod tests {
             value: i32,
         }
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::Gemini,
-            "gemini-test-model",
-            vec![],
-            vec![],
-        );
-        ctrl.typed_results.lock().unwrap().push_back(Err(crate::error::TradingError::SchemaViolation {
-            message:
-                "provider=gemini model=gemini-test-model: structured output could not be parsed"
-                    .to_owned(),
-        }));
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": 7}"#, sample_usage(9))));
+        let (agent, ctrl) = mock_llm_agent(ProviderId::Gemini, "gemini-test-model", vec![], vec![]);
+        ctrl.typed_results.lock().unwrap().push_back(Err(
+            crate::error::TradingError::SchemaViolation {
+                message:
+                    "provider=gemini model=gemini-test-model: structured output could not be parsed"
+                        .to_owned(),
+            },
+        ));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(r#"{"value": 7}"#, sample_usage(9))));
         // If the implementation retries typed again instead of falling back, this would be used.
-        ctrl.typed_results.lock().unwrap().push_back(Ok(Box::new(TypedPromptResponse::new(
-            Output { value: 99 },
-            sample_usage(10),
-        ))));
+        ctrl.typed_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(Box::new(TypedPromptResponse::new(
+                Output { value: 99 },
+                sample_usage(10),
+            ))));
 
         let outcome = run_analyst_inference(
             &agent,

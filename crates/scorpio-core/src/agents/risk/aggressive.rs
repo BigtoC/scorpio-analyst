@@ -196,10 +196,13 @@ fn build_aggressive_result(
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
-    use crate::providers::{ProviderId, factory::{MockChatOutcome, mock_llm_agent}};
-    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
+    use crate::providers::{
+        ProviderId,
+        factory::{MockChatOutcome, mock_llm_agent},
+    };
     use crate::state::{DebateMessage, TokenUsageTracker, TradeAction, TradeProposal};
+    use rig::agent::PromptResponse;
     use secrecy::SecretString;
     use uuid::Uuid;
 
@@ -297,7 +300,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_returns_aggressive_risk_report() {
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(
@@ -319,7 +323,8 @@ mod tests {
     #[tokio::test]
     async fn run_rejects_wrong_risk_level() {
         let wrong_json = r#"{"risk_level":"Conservative","assessment":"Too risky.","recommended_adjustments":[],"flags_violation":true}"#;
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(
@@ -338,7 +343,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_records_correct_agent_name_and_model_id() {
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(
@@ -423,18 +429,13 @@ mod tests {
 
     #[tokio::test]
     async fn run_accumulates_chat_history_across_invocations() {
-        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![
-                MockChatOutcome::Ok(PromptResponse::new(
-                    valid_aggressive_json(),
-                    mock_usage(20),
-                )),
-                MockChatOutcome::Ok(PromptResponse::new(
-                    valid_aggressive_json(),
-                    mock_usage(20),
-                )),
+                MockChatOutcome::Ok(PromptResponse::new(valid_aggressive_json(), mock_usage(20))),
+                MockChatOutcome::Ok(PromptResponse::new(valid_aggressive_json(), mock_usage(20))),
             ],
         );
         let mut analyst = AggressiveRiskAgent::from_test_agent(agent, "o3");
@@ -443,7 +444,10 @@ mod tests {
         analyst.run(&state, None, None).await.unwrap();
         analyst.run(&state, None, None).await.unwrap();
 
-        assert_eq!(ctrl.observed_history_lengths.lock().unwrap().clone(), vec![0, 2]);
+        assert_eq!(
+            ctrl.observed_history_lengths.lock().unwrap().clone(),
+            vec![0, 2]
+        );
     }
 
     #[test]
@@ -530,7 +534,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_marks_token_counts_unavailable_when_usage_zero() {
-        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
+        let (agent, _ctrl) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(

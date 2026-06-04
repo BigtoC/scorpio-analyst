@@ -131,7 +131,6 @@ pub(crate) enum MockChatOutcome {
     PartialUserThenErr(PromptError),
 }
 
-
 #[cfg(test)]
 pub(crate) fn mock_llm_agent(
     provider: ProviderId,
@@ -929,7 +928,10 @@ mod tests {
 
         assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
         assert_eq!(agent.provider.as_str(), "openrouter");
-        assert_eq!(agent.rate_limiter.as_ref().map(|l| l.label()), Some("openrouter"));
+        assert_eq!(
+            agent.rate_limiter.as_ref().map(|l| l.label()),
+            Some("openrouter")
+        );
     }
 
     #[tokio::test]
@@ -1013,24 +1015,28 @@ mod tests {
     #[tokio::test]
     async fn mock_agent_supports_typed_prompt_details_for_retry_tests() {
         let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
-        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(rig::agent::TypedPromptResponse::new(
-            TradeProposal {
-                action: crate::state::TradeAction::Buy,
-                target_price: 123.0,
-                stop_loss: 111.0,
-                confidence: 0.6,
-                rationale: "typed mock".to_owned(),
-                valuation_assessment: None,
-                scenario_valuation: None,
-            },
-            rig::completion::Usage {
-                input_tokens: 4,
-                output_tokens: 2,
-                total_tokens: 6,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            },
-        ))));
+        controller
+            .typed_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(Box::new(rig::agent::TypedPromptResponse::new(
+                TradeProposal {
+                    action: crate::state::TradeAction::Buy,
+                    target_price: 123.0,
+                    stop_loss: 111.0,
+                    confidence: 0.6,
+                    rationale: "typed mock".to_owned(),
+                    valuation_assessment: None,
+                    scenario_valuation: None,
+                },
+                rig::completion::Usage {
+                    input_tokens: 4,
+                    output_tokens: 2,
+                    total_tokens: 6,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            ))));
 
         let response = agent
             .prompt_typed_details::<TradeProposal>("prompt", 1)

@@ -627,22 +627,21 @@ mod tests {
             "summary": "Key development with direct relevance to price action."
         }"#;
 
-        let (agent, ctrl) = mock_llm_agent(
-            ProviderId::OpenRouter,
-            "openrouter-model",
-            vec![],
-            vec![],
-        );
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
-            valid_json,
-            Usage {
-                input_tokens: 10,
-                output_tokens: 20,
-                total_tokens: 30,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            },
-        )));
+        let (agent, ctrl) =
+            mock_llm_agent(ProviderId::OpenRouter, "openrouter-model", vec![], vec![]);
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(
+                valid_json,
+                Usage {
+                    input_tokens: 10,
+                    output_tokens: 20,
+                    total_tokens: 30,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            )));
 
         let outcome = run_analyst_inference(
             &agent,

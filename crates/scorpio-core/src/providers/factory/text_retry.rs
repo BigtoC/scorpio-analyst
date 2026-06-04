@@ -265,10 +265,12 @@ mod tests {
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
         };
-        let (agent, ctrl) =
-            mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // Response must be on the text_turn queue (not the one-shot prompt queue)
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("hello", usage)));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new("hello", usage)));
 
         let outcome = prompt_text_with_retry(
             &agent,
@@ -291,23 +293,28 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_retries_transient_prompt_errors() {
-        let (agent, ctrl) =
-            mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // First attempt: transient Rig error
-        ctrl.text_turn_results.lock().unwrap().push_back(Err(TradingError::Rig(
-            "connection timeout on attempt 0".to_owned(),
-        )));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Err(TradingError::Rig(
+                "connection timeout on attempt 0".to_owned(),
+            )));
         // Second attempt: success
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
-            "recovered",
-            Usage {
-                input_tokens: 2,
-                output_tokens: 1,
-                total_tokens: 3,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            },
-        )));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new(
+                "recovered",
+                Usage {
+                    input_tokens: 2,
+                    output_tokens: 1,
+                    total_tokens: 3,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            )));
 
         let outcome = prompt_text_with_retry(
             &agent,
@@ -330,8 +337,7 @@ mod tests {
     // that could otherwise let the delay land first (or budget-exhaust) under load.
     #[tokio::test(start_paused = true)]
     async fn prompt_text_with_retry_times_out_with_text_prompt_operation_name() {
-        let (agent, ctrl) =
-            mock_llm_agent(ProviderId::OpenAI, "slow-model", vec![], vec![]);
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "slow-model", vec![], vec![]);
         // Delay every text_turn response by 100ms so it times out
         *ctrl.text_turn_delay.lock().unwrap() = Duration::from_millis(100);
 
@@ -364,9 +370,11 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_preserves_max_turns_for_tool_enabled_requests() {
-        let (agent, ctrl) =
-            mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("result", zero_usage())));
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new("result", zero_usage())));
 
         // The important thing: max_turns=5 must reach the underlying agent
         prompt_text_with_retry(
@@ -392,10 +400,12 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_text_with_retry_uses_text_turn_agent_path_not_one_shot_prompt_details() {
-        let (agent, ctrl) =
-            mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // Push a response on the text_turn queue (NOT the one-shot prompt queue)
-        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("from text turn", zero_usage())));
+        ctrl.text_turn_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(PromptResponse::new("from text turn", zero_usage())));
 
         let outcome = prompt_text_with_retry(
             &agent,
