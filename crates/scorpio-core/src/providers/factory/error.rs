@@ -56,14 +56,6 @@ pub(super) fn map_structured_output_error_with_context(
 // ────────────────────────────────────────────────────────────────────────────
 // Sanitization utilities
 // ────────────────────────────────────────────────────────────────────────────
-
-/// Replace ASCII/Unicode control characters with a space.
-pub(crate) fn replace_control_chars(s: &str) -> String {
-    s.chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect()
-}
-
 /// Redact known credential patterns (API key prefixes, auth headers, bearer tokens).
 pub(crate) fn redact_credentials(s: &str) -> String {
     fn mask_prefixed_token(input: &str, prefix: &str) -> String {
