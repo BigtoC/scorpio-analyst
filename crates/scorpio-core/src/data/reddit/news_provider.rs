@@ -56,7 +56,8 @@ fn keep_submission(post: &RawSubmission, cutoff: DateTime<Utc>) -> bool {
     if post.over_18 || post.stickied {
         return false;
     }
-    if post.score < i64::from(REDDIT_MIN_SCORE) {
+    // RSS-sourced posts have no score; skip the score floor for them.
+    if !post.via_rss && post.score < i64::from(REDDIT_MIN_SCORE) {
         return false;
     }
     let Some(created) = DateTime::<Utc>::from_timestamp(post.created_utc as i64, 0) else {
@@ -69,8 +70,12 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
     input.chars().take(max_chars).collect()
 }
 
-fn compute_relevance_score(score: i64) -> Option<f64> {
-    let s = score.max(0) as f64;
+fn compute_relevance_score(post: &RawSubmission) -> Option<f64> {
+    // Score is unavailable for RSS-sourced posts; omit rather than fake zeros.
+    if post.via_rss {
+        return None;
+    }
+    let s = post.score.max(0) as f64;
     let raw = ((s + 1.0).log10()) / (1000_f64.log10());
     Some(raw.clamp(0.0, 1.0))
 }
@@ -80,11 +85,17 @@ fn normalize(post: &RawSubmission) -> NewsArticle {
     let published_at = DateTime::<Utc>::from_timestamp(post.created_utc as i64, 0)
         .map(|dt| dt.to_rfc3339())
         .unwrap_or_else(|| post.created_utc.to_string());
+    // Mark RSS-sourced posts so consumers know scores/counts are unavailable.
+    let source = if post.via_rss {
+        format!("Reddit r/{} (RSS, scores unavailable)", post.subreddit)
+    } else {
+        format!("Reddit r/{}", post.subreddit)
+    };
     NewsArticle {
         title: truncate_chars(&post.title, NEWS_TITLE_MAX_CHARS),
-        source: format!("Reddit r/{}", post.subreddit),
+        source,
         published_at,
-        relevance_score: compute_relevance_score(post.score),
+        relevance_score: compute_relevance_score(post),
         snippet: truncate_chars(&post.selftext, NEWS_SNIPPET_MAX_CHARS),
         url: Some(format!("https://www.reddit.com{}", post.permalink)),
     }
@@ -170,6 +181,7 @@ mod tests {
             score,
             over_18,
             stickied,
+            via_rss: false,
         }
     }
 
@@ -221,19 +233,29 @@ mod tests {
 
     #[test]
     fn compute_relevance_score_zero_score_is_zero() {
-        let r = compute_relevance_score(0).unwrap();
+        let p = submission("t", 0, recent_unix(), false, false);
+        let r = compute_relevance_score(&p).unwrap();
         assert!((r - 0.0).abs() < 1e-9, "got {r}");
     }
 
     #[test]
     fn compute_relevance_score_thousand_is_one() {
-        let r = compute_relevance_score(1000).unwrap();
+        let p = submission("t", 1000, recent_unix(), false, false);
+        let r = compute_relevance_score(&p).unwrap();
         assert!((r - 1.0).abs() < 1e-9, "got {r}");
     }
 
     #[test]
     fn compute_relevance_score_clamps_above_thousand() {
-        assert_eq!(compute_relevance_score(100_000).unwrap(), 1.0);
+        let p = submission("t", 100_000, recent_unix(), false, false);
+        assert_eq!(compute_relevance_score(&p).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn compute_relevance_score_is_none_for_rss_posts() {
+        let mut p = submission("t", 100, recent_unix(), false, false);
+        p.via_rss = true;
+        assert!(compute_relevance_score(&p).is_none());
     }
 
     #[test]
