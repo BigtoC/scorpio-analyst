@@ -359,7 +359,7 @@ pub async fn prefetch_analyst_news(
     let reddit_news_data: Option<NewsData> = match reddit_result {
         Ok(data) => Some(data),
         Err(err) => {
-            warn!(
+            tracing::debug!(
                 reddit_error = %err,
                 symbol,
                 "reddit news pre-fetch failed; sentiment lane continues without sidecar"

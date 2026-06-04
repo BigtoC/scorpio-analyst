@@ -26,9 +26,11 @@ pub struct RawChild {
     pub data: RawSubmission,
 }
 
-/// A Reddit submission as returned by `search.json`. Only the fields used by
-/// [`super::news_provider::RedditNewsProvider`] are listed; unknown fields
-/// are ignored (no `#[serde(deny_unknown_fields)]` — see project R29 note).
+/// A Reddit submission as returned by `search.json` or the RSS/Atom fallback.
+///
+/// Only the fields used by [`super::news_provider::RedditNewsProvider`] are
+/// listed; unknown fields are ignored. When `via_rss` is `true`, `score`
+/// is unavailable (set to `0`) and the provider omits relevance scoring.
 #[derive(Debug, Deserialize)]
 pub struct RawSubmission {
     #[serde(default)]
@@ -42,14 +44,17 @@ pub struct RawSubmission {
     /// Unix-seconds creation timestamp. Reddit returns this as `f64`.
     #[serde(default)]
     pub created_utc: f64,
-    /// Net upvote score (upvotes − downvotes). May be negative; we clamp at
-    /// 0 for `relevance_score` math.
+    /// Net upvote score. `0` and meaningless when `via_rss` is true.
     #[serde(default)]
     pub score: i64,
     #[serde(default)]
     pub over_18: bool,
     #[serde(default)]
     pub stickied: bool,
+    /// `true` when sourced from the public Atom/RSS feed fallback rather than
+    /// the JSON API. Score and comment counts are unavailable in that case.
+    #[serde(default)]
+    pub via_rss: bool,
 }
 
 #[cfg(test)]
