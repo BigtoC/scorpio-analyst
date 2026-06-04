@@ -42,7 +42,7 @@ pub use agent::{LlmAgent, build_agent, build_agent_with_tools};
 
 pub use retry::{
     RetryOutcome, chat_with_retry_details, prompt_typed_with_retry,
-    prompt_typed_with_retry_validated, prompt_with_retry, prompt_with_retry_details,
+    prompt_typed_with_retry_validated, retry_prompt_budget_loop,
     prompt_with_retry_validated_details,
 };
 

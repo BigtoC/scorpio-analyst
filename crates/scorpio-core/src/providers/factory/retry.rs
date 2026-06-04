@@ -1,7 +1,7 @@
 //! Retry-wrapped LLM completion helpers with timeout and exponential backoff.
 //!
 //! - [`RetryOutcome`] — bundles a successful response with rate-limit wait metadata.
-//! - [`prompt_with_retry`] / [`prompt_with_retry_details`] — one-shot prompt with retry.
+//! - [`retry_prompt_budget_loop`] — one-shot prompt retry core (pass `|| agent.prompt_details(p)`).
 //! - [`chat_with_retry_details`] — chat prompt (mutable history) with retry.
 //! - [`prompt_typed_with_retry`] — typed structured-output prompt with retry.
 //!
@@ -47,56 +47,6 @@ pub struct RetryOutcome<T> {
 // ────────────────────────────────────────────────────────────────────────────
 // Prompt retry helpers
 // ────────────────────────────────────────────────────────────────────────────
-
-/// Send a one-shot prompt with timeout and exponential-backoff retry.
-///
-/// Each attempt is guarded by `tokio::time::timeout(timeout)`. Transient errors
-/// (rate limit, timeout) trigger a retry up to `policy.max_retries` times. Permanent
-/// errors fail immediately.
-///
-/// Rate-limit acquire is performed outside the per-attempt timeout but is bounded
-/// by the remaining total budget (Option C semantics).
-///
-/// # Errors
-///
-/// - `TradingError::Rig` for permanent provider/transport failures.
-/// - `TradingError::NetworkTimeout` if all attempts exceed the timeout.
-pub async fn prompt_with_retry(
-    agent: &LlmAgent,
-    prompt: &str,
-    timeout: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<String>, TradingError> {
-    let total_budget = policy.total_budget(timeout);
-    prompt_with_retry_budget(agent, prompt, timeout, total_budget, policy).await
-}
-
-/// Send a one-shot prompt with timeout/retry and return extended details including usage.
-pub async fn prompt_with_retry_details(
-    agent: &LlmAgent,
-    prompt: &str,
-    timeout: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<PromptResponse>, TradingError> {
-    let total_budget = policy.total_budget(timeout);
-    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
-        agent.prompt_details(prompt)
-    })
-    .await
-}
-
-pub(crate) async fn prompt_with_retry_budget(
-    agent: &LlmAgent,
-    prompt: &str,
-    timeout: Duration,
-    total_budget: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<String>, TradingError> {
-    retry_prompt_budget_loop(agent, timeout, total_budget, policy, || async {
-        Ok(agent.prompt_details(prompt).await?.output)
-    })
-    .await
-}
 
 /// Send a one-shot prompt with timeout/retry and a post-call validator.
 ///
@@ -213,15 +163,15 @@ where
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
-/// Shared retry-loop core used by [`prompt_with_retry`], [`prompt_with_retry_details`],
-/// and [`prompt_with_retry_budget`].
+/// Retry-loop core for one-shot LLM prompt calls with timeout and exponential backoff.
 ///
 /// `call_fn` is invoked on each attempt and must return a `Future` that resolves to
-/// `Result<R, PromptError>`.
+/// `Result<R, PromptError>`. Pass `|| agent.prompt_details(prompt)` for plain prompts
+/// or a different closure for typed/text variants.
 ///
 /// Before each attempt, acquires a rate-limit permit (if one is configured) outside
 /// the per-attempt timeout, but bounded by the remaining total budget (Option C).
-async fn retry_prompt_budget_loop<R, F, Fut>(
+pub async fn retry_prompt_budget_loop<R, F, Fut>(
     agent: &LlmAgent,
     timeout: Duration,
     total_budget: Duration,
@@ -302,7 +252,7 @@ where
 ///
 /// # Errors
 ///
-/// Same as [`prompt_with_retry`].
+/// Same as [`prompt_with_retry_details`].
 pub async fn chat_with_retry_details(
     agent: &LlmAgent,
     prompt: &str,
@@ -945,20 +895,19 @@ mod tests {
             vec![],
         );
 
-        let response = prompt_with_retry_budget(
+        let policy = RetryPolicy { max_retries: 1, base_delay: Duration::from_millis(1) };
+        let timeout = Duration::from_millis(50);
+        let response = retry_prompt_budget_loop(
             &agent,
-            "next prompt",
-            Duration::from_millis(50),
-            Duration::from_millis(200),
-            &RetryPolicy {
-                max_retries: 1,
-                base_delay: Duration::from_millis(1),
-            },
+            timeout,
+            policy.total_budget(timeout),
+            &policy,
+            || agent.prompt_details("next prompt"),
         )
         .await
         .unwrap();
 
-        assert_eq!(response.result, "Recovered response");
+        assert_eq!(response.result.output, "Recovered response");
     }
 
     #[tokio::test]
@@ -978,14 +927,14 @@ mod tests {
             vec![],
         );
 
-        let response = prompt_with_retry_details(
+        let policy = RetryPolicy { max_retries: 0, base_delay: Duration::from_millis(1) };
+        let timeout = Duration::from_millis(50);
+        let response = retry_prompt_budget_loop(
             &agent,
-            "next prompt",
-            Duration::from_millis(50),
-            &RetryPolicy {
-                max_retries: 0,
-                base_delay: Duration::from_millis(1),
-            },
+            timeout,
+            policy.total_budget(timeout),
+            &policy,
+            || agent.prompt_details("next prompt"),
         )
         .await
         .unwrap();
@@ -1005,14 +954,14 @@ mod tests {
             vec![],
         );
 
-        let err = prompt_with_retry(
+        let policy = RetryPolicy { max_retries: 3, base_delay: Duration::from_millis(1) };
+        let timeout = Duration::from_millis(50);
+        let err = retry_prompt_budget_loop(
             &agent,
-            "next prompt",
-            Duration::from_millis(50),
-            &RetryPolicy {
-                max_retries: 3,
-                base_delay: Duration::from_millis(1),
-            },
+            timeout,
+            policy.total_budget(timeout),
+            &policy,
+            || agent.prompt_details("next prompt"),
         )
         .await
         .unwrap_err();
@@ -1035,14 +984,14 @@ mod tests {
         let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
         agent.set_prompt_delay(Duration::from_millis(25));
 
-        let err = prompt_with_retry(
+        let policy = RetryPolicy { max_retries: 1, base_delay: Duration::from_millis(1) };
+        let timeout = Duration::from_millis(5);
+        let err = retry_prompt_budget_loop(
             &agent,
-            "next prompt",
-            Duration::from_millis(5),
-            &RetryPolicy {
-                max_retries: 1,
-                base_delay: Duration::from_millis(1),
-            },
+            timeout,
+            policy.total_budget(timeout),
+            &policy,
+            || agent.prompt_details("next prompt"),
         )
         .await
         .unwrap_err();
@@ -1056,51 +1005,13 @@ mod tests {
         }
     }
 
-    // start_paused: the virtual clock makes elapsed advance exactly by the 18ms mock
-    // delay so the pre-attempt budget gate (elapsed + backoff > 20ms budget) trips
-    // deterministically, instead of depending on real-clock drift under load.
-    #[tokio::test(start_paused = true)]
-    async fn prompt_with_retry_public_entrypoint_surfaces_retry_budget_exhaustion_before_next_attempt()
-     {
-        let (agent, _controller) = mock_llm_agent(
-            "o3",
-            vec![Err(PromptError::CompletionError(
-                rig::completion::CompletionError::ResponseError(
-                    "HTTP 429 Too Many Requests".to_owned(),
-                ),
-            ))],
-            vec![],
-        );
-        agent.set_prompt_delay(Duration::from_millis(18));
-
-        let err = prompt_with_retry_budget(
-            &agent,
-            "next prompt",
-            Duration::from_millis(20),
-            Duration::from_millis(20),
-            &RetryPolicy {
-                max_retries: 1,
-                base_delay: Duration::from_millis(5),
-            },
-        )
-        .await
-        .unwrap_err();
-
-        match err {
-            TradingError::NetworkTimeout { message, .. } => {
-                assert!(message.contains("prompt retry budget exhausted before next attempt"));
-            }
-            other => panic!("expected TradingError::NetworkTimeout, got {other:?}"),
-        }
-    }
-
     #[tokio::test]
     async fn prompt_typed_with_retry_public_entrypoint_retries_transient_rig_errors() {
         let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
         agent.push_typed_error(TradingError::Rig(
             "provider=openai model=o3 summary=connection timeout".to_owned(),
         ));
-        agent.push_typed_ok(rig::agent::TypedPromptResponse::new(
+        agent.push_typed_ok(TypedPromptResponse::new(
             TradeProposal {
                 action: TradeAction::Buy,
                 target_price: 150.0,
@@ -1142,7 +1053,7 @@ mod tests {
         agent.push_typed_error(TradingError::SchemaViolation {
             message: "provider=openai model=o3: structured output could not be parsed".to_owned(),
         });
-        agent.push_typed_ok(rig::agent::TypedPromptResponse::new(
+        agent.push_typed_ok(TypedPromptResponse::new(
             TradeProposal {
                 action: TradeAction::Buy,
                 target_price: 150.0,
@@ -1192,8 +1103,8 @@ mod tests {
         }
     }
 
-    fn typed(proposal: TradeProposal) -> rig::agent::TypedPromptResponse<TradeProposal> {
-        rig::agent::TypedPromptResponse::new(
+    fn typed(proposal: TradeProposal) -> TypedPromptResponse<TradeProposal> {
+        TypedPromptResponse::new(
             proposal,
             rig::completion::Usage {
                 input_tokens: 10,

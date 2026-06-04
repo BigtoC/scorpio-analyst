@@ -210,7 +210,10 @@ pub(crate) fn truncate_to(s: &str, max_chars: usize) -> String {
 }
 
 pub fn sanitize_error_summary(input: &str) -> String {
-    let sanitized = replace_control_chars(input);
+    let sanitized = input
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
     let sanitized = redact_credentials(&sanitized);
     truncate_to(&sanitized, MAX_ERROR_SUMMARY_CHARS)
 }

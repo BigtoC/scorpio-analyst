@@ -154,11 +154,13 @@ pub(super) fn run_selected_model_tiers(
         runtime
             .block_on(async {
                 let agent = scorpio_core::providers::factory::build_agent(&handle, "");
-                scorpio_core::providers::factory::prompt_with_retry(
+                let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
+                scorpio_core::providers::factory::retry_prompt_budget_loop(
                     &agent,
-                    "Hello",
-                    Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                    timeout,
+                    RetryPolicy::default().total_budget(timeout),
                     &RetryPolicy::default(),
+                    || agent.prompt_details("Hello"),
                 )
                 .await
             })
@@ -193,11 +195,13 @@ pub(super) fn run_single_health_check(cfg: &scorpio_core::config::Config) -> any
                     // build_agent calls ToolServer::new().run() → tokio::spawn internally,
                     // so it must be called from within a live Tokio runtime context.
                     let agent = scorpio_core::providers::factory::build_agent(&handle, "");
-                    scorpio_core::providers::factory::prompt_with_retry(
+                    let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
+                    scorpio_core::providers::factory::retry_prompt_budget_loop(
                         &agent,
-                        "Hello",
-                        Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                        timeout,
+                        RetryPolicy::default().total_budget(timeout),
                         &RetryPolicy::default(),
+                        || agent.prompt_details("Hello"),
                     )
                     .await
                 })
@@ -285,11 +289,13 @@ pub(super) fn run_copilot_model_probe(
     runtime.block_on(async {
         for handle in &handles {
             let agent = scorpio_core::providers::factory::build_agent(handle, "");
-            scorpio_core::providers::factory::prompt_with_retry(
+            let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
+            scorpio_core::providers::factory::retry_prompt_budget_loop(
                 &agent,
-                "Hello",
-                Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+                timeout,
+                RetryPolicy::default().total_budget(timeout),
                 &RetryPolicy::default(),
+                || agent.prompt_details("Hello"),
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;

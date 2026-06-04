@@ -19,7 +19,9 @@ use tokio::time::Instant;
 use crate::error::{RetryPolicy, TradingError};
 
 use super::agent::LlmAgent;
-use super::retry::{RetryOutcome, TEXT_RETRY_MESSAGES, prepare_attempt, should_retry_trading_error};
+use super::retry::{
+    RetryOutcome, TEXT_RETRY_MESSAGES, prepare_attempt, should_retry_trading_error,
+};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -49,8 +51,16 @@ pub async fn prompt_text_with_retry(
     let mut rate_limit_wait_ms: u64 = 0;
 
     for attempt in 0..=policy.max_retries {
-        let attempt_budget =
-            prepare_attempt(agent, started_at, timeout, total_budget, policy, attempt, &TEXT_RETRY_MESSAGES).await?;
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            &TEXT_RETRY_MESSAGES,
+        )
+        .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
         return match tokio::time::timeout(
@@ -125,8 +135,16 @@ where
     let mut corrective_feedback: Option<String> = None;
 
     for attempt in 0..=policy.max_retries {
-        let attempt_budget =
-            prepare_attempt(agent, started_at, timeout, total_budget, policy, attempt, &TEXT_RETRY_MESSAGES).await?;
+        let attempt_budget = prepare_attempt(
+            agent,
+            started_at,
+            timeout,
+            total_budget,
+            policy,
+            attempt,
+            &TEXT_RETRY_MESSAGES,
+        )
+        .await?;
         rate_limit_wait_ms = rate_limit_wait_ms.saturating_add(attempt_budget.rate_limit_wait_ms);
 
         let current_prompt = match corrective_feedback.as_deref() {
