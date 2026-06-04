@@ -114,7 +114,15 @@ pub(crate) struct MockLlmAgent {
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct MockLlmAgentController {
-    observed_history_lengths: Arc<Mutex<Vec<usize>>>,
+    pub(crate) typed_results: TypedResultQueue,
+    pub(crate) text_turn_results: Arc<Mutex<VecDeque<Result<PromptResponse, TradingError>>>>,
+    pub(crate) observed_history_lengths: Arc<Mutex<Vec<usize>>>,
+    pub(crate) observed_max_turns: Arc<Mutex<Vec<usize>>>,
+    pub(crate) prompt_delay: Arc<Mutex<Duration>>,
+    pub(crate) text_turn_delay: Arc<Mutex<Duration>>,
+    pub(crate) typed_attempts: Arc<Mutex<usize>>,
+    pub(crate) prompt_attempts: Arc<Mutex<usize>>,
+    pub(crate) text_turn_attempts: Arc<Mutex<usize>>,
 }
 
 #[cfg(test)]
@@ -123,49 +131,38 @@ pub(crate) enum MockChatOutcome {
     PartialUserThenErr(PromptError),
 }
 
-#[cfg(test)]
-impl MockLlmAgentController {
-    pub(crate) fn observed_history_lengths(&self) -> Vec<usize> {
-        self.observed_history_lengths.lock().unwrap().clone()
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn mock_prompt_response(output: &str, usage: rig::completion::Usage) -> PromptResponse {
-    PromptResponse::new(output, usage)
-}
 
 #[cfg(test)]
 pub(crate) fn mock_llm_agent(
-    model_id: &str,
-    prompt_results: Vec<Result<PromptResponse, PromptError>>,
-    chat_results: Vec<MockChatOutcome>,
-) -> (LlmAgent, MockLlmAgentController) {
-    mock_llm_agent_with_provider_id(ProviderId::OpenAI, model_id, prompt_results, chat_results)
-}
-
-#[cfg(test)]
-pub(crate) fn mock_llm_agent_with_provider_id(
     provider: ProviderId,
     model_id: &str,
     prompt_results: Vec<Result<PromptResponse, PromptError>>,
     chat_results: Vec<MockChatOutcome>,
 ) -> (LlmAgent, MockLlmAgentController) {
     let observed_prompts = Arc::new(Mutex::new(Vec::new()));
+    let typed_results_arc: TypedResultQueue = Arc::new(Mutex::new(VecDeque::new()));
+    let text_turn_results_arc = Arc::new(Mutex::new(VecDeque::new()));
     let observed_history_lengths = Arc::new(Mutex::new(Vec::new()));
+    let observed_max_turns = Arc::new(Mutex::new(Vec::new()));
+    let prompt_delay = Arc::new(Mutex::new(Duration::ZERO));
+    let text_turn_delay = Arc::new(Mutex::new(Duration::ZERO));
+    let typed_attempts = Arc::new(Mutex::new(0usize));
+    let prompt_attempts = Arc::new(Mutex::new(0usize));
+    let text_turn_attempts = Arc::new(Mutex::new(0usize));
+
     let inner = MockLlmAgent {
         prompt_results: Arc::new(Mutex::new(prompt_results.into())),
         chat_results: Arc::new(Mutex::new(chat_results.into())),
-        typed_results: Arc::new(Mutex::new(VecDeque::new())),
-        text_turn_results: Arc::new(Mutex::new(VecDeque::new())),
+        typed_results: Arc::clone(&typed_results_arc),
+        text_turn_results: Arc::clone(&text_turn_results_arc),
         observed_prompts: Arc::clone(&observed_prompts),
         observed_history_lengths: Arc::clone(&observed_history_lengths),
-        observed_max_turns: Arc::new(Mutex::new(Vec::new())),
-        prompt_delay: Arc::new(Mutex::new(Duration::ZERO)),
-        text_turn_delay: Arc::new(Mutex::new(Duration::ZERO)),
-        typed_attempts: Arc::new(Mutex::new(0)),
-        prompt_attempts: Arc::new(Mutex::new(0)),
-        text_turn_attempts: Arc::new(Mutex::new(0)),
+        observed_max_turns: Arc::clone(&observed_max_turns),
+        prompt_delay: Arc::clone(&prompt_delay),
+        text_turn_delay: Arc::clone(&text_turn_delay),
+        typed_attempts: Arc::clone(&typed_attempts),
+        prompt_attempts: Arc::clone(&prompt_attempts),
+        text_turn_attempts: Arc::clone(&text_turn_attempts),
     };
 
     (
@@ -176,7 +173,15 @@ pub(crate) fn mock_llm_agent_with_provider_id(
             rate_limiter: None,
         },
         MockLlmAgentController {
+            typed_results: typed_results_arc,
+            text_turn_results: text_turn_results_arc,
             observed_history_lengths,
+            observed_max_turns,
+            prompt_delay,
+            text_turn_delay,
+            typed_attempts,
+            prompt_attempts,
+            text_turn_attempts,
         },
     )
 }
@@ -187,116 +192,14 @@ pub(crate) fn mock_llm_agent_with_provider_id(
 
 #[derive(Clone)]
 pub struct LlmAgent {
-    provider: ProviderId,
-    model_id: String,
+    pub provider: ProviderId,
+    pub model_id: String,
     inner: LlmAgentInner,
     /// Rate limiter for this provider's LLM calls, or `None` if disabled.
-    pub(crate) rate_limiter: Option<SharedRateLimiter>,
+    pub rate_limiter: Option<SharedRateLimiter>,
 }
 
 impl LlmAgent {
-    pub fn provider_name(&self) -> &'static str {
-        self.provider.as_str()
-    }
-
-    pub fn provider_id(&self) -> ProviderId {
-        self.provider
-    }
-
-    pub fn model_id(&self) -> &str {
-        &self.model_id
-    }
-
-    /// Return the rate limiter for this agent's provider, if one is configured.
-    pub fn rate_limiter(&self) -> Option<&SharedRateLimiter> {
-        self.rate_limiter.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_prompt_delay(&self, delay: Duration) {
-        if let LlmAgentInner::Mock(agent) = &self.inner {
-            *agent.prompt_delay.lock().unwrap() = delay;
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_typed_error(&self, err: TradingError) {
-        if let LlmAgentInner::Mock(agent) = &self.inner {
-            agent.typed_results.lock().unwrap().push_back(Err(err));
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_typed_ok<T>(&self, response: TypedPromptResponse<T>)
-    where
-        T: Send + 'static,
-    {
-        if let LlmAgentInner::Mock(agent) = &self.inner {
-            agent
-                .typed_results
-                .lock()
-                .unwrap()
-                .push_back(Ok(Box::new(response)));
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn typed_attempts(&self) -> usize {
-        match &self.inner {
-            LlmAgentInner::Mock(agent) => *agent.typed_attempts.lock().unwrap(),
-            _ => 0,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn prompt_attempts(&self) -> usize {
-        match &self.inner {
-            LlmAgentInner::Mock(agent) => *agent.prompt_attempts.lock().unwrap(),
-            _ => 0,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn text_turn_attempts(&self) -> usize {
-        match &self.inner {
-            LlmAgentInner::Mock(agent) => *agent.text_turn_attempts.lock().unwrap(),
-            _ => 0,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn observed_max_turns(&self) -> Vec<usize> {
-        match &self.inner {
-            LlmAgentInner::Mock(agent) => agent.observed_max_turns.lock().unwrap().clone(),
-            _ => vec![],
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_text_turn_delay(&self, delay: Duration) {
-        if let LlmAgentInner::Mock(agent) = &self.inner {
-            *agent.text_turn_delay.lock().unwrap() = delay;
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_text_turn_error(&self, err: TradingError) {
-        if let LlmAgentInner::Mock(agent) = &self.inner {
-            agent.text_turn_results.lock().unwrap().push_back(Err(err));
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_text_turn_ok(&self, response: PromptResponse) {
-        if let LlmAgentInner::Mock(agent) = &self.inner {
-            agent
-                .text_turn_results
-                .lock()
-                .unwrap()
-                .push_back(Ok(response));
-        }
-    }
-
     /// Create the tracing span for one LLM call, carrying the OTel `gen_ai.*`
     /// attributes Langfuse maps onto a generation observation.
     ///
@@ -310,8 +213,8 @@ impl LlmAgent {
         tracing::info_span!(
             "llm_generation",
             otel.name = operation,
-            gen_ai.system = self.provider_name(),
-            gen_ai.request.model = self.model_id(),
+            gen_ai.system = self.provider.as_str(),
+            gen_ai.request.model = self.model_id.as_str(),
             gen_ai.usage.input_tokens = tracing::field::Empty,
             gen_ai.usage.output_tokens = tracing::field::Empty,
             gen_ai.prompt = tracing::field::Empty,
@@ -348,7 +251,7 @@ impl LlmAgent {
 
         // Capture the error-mapping closure once so each arm stays a single expression.
         let map_err = |err| {
-            map_structured_output_error_with_context(self.provider_name(), self.model_id(), err)
+            map_structured_output_error_with_context(self.provider.as_str(), &self.model_id, err)
         };
 
         let span = self.llm_span("prompt_typed_details");
@@ -386,7 +289,7 @@ impl LlmAgent {
         max_turns: usize,
     ) -> Result<PromptResponse, TradingError> {
         let map_err = |err| {
-            super::error::map_prompt_error_with_context(self.provider_name(), self.model_id(), err)
+            super::error::map_prompt_error_with_context(self.provider.as_str(), &self.model_id, err)
         };
 
         // Use PromptRequest with the multi-turn loop to honour tool calls, returning
@@ -437,7 +340,9 @@ impl LlmAgent {
                 mock = |agent| agent.chat_details(prompt, chat_history).await
             )?;
             record_generation(&span, prompt, Some(&response.output), &response.usage);
-            append_response_messages(chat_history, &response);
+            if let Some(messages) = &response.messages {
+                chat_history.extend(messages.clone());
+            }
             Ok(response)
         }
         .instrument(span.clone())
@@ -466,21 +371,6 @@ fn record_generation(
     span.record("gen_ai.usage.output_tokens", usage.output_tokens);
 }
 
-/// Append the delta messages from a [`PromptResponse`] to `chat_history`.
-///
-/// Real providers (OpenAI, Anthropic, etc.) return the round's messages
-/// (user prompt + assistant reply) in `response.messages`. This helper extends
-/// `chat_history` with those messages so multi-turn callers accumulate context
-/// correctly.
-///
-/// The mock path sets `response.messages = None` and updates history directly inside
-/// `MockLlmAgent::chat_details`, so this function is a no-op for mocks.
-fn append_response_messages(chat_history: &mut Vec<Message>, response: &PromptResponse) {
-    if let Some(messages) = &response.messages {
-        chat_history.extend(messages.clone());
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // MockLlmAgent impl (test only)
 // ────────────────────────────────────────────────────────────────────────────
@@ -502,7 +392,7 @@ impl MockLlmAgent {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| {
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "",
                     rig::completion::Usage {
                         input_tokens: 0,
@@ -538,7 +428,7 @@ impl MockLlmAgent {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| {
-                Ok(mock_prompt_response(
+                Ok(PromptResponse::new(
                     "",
                     rig::completion::Usage {
                         input_tokens: 0,
@@ -571,7 +461,7 @@ impl MockLlmAgent {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| {
-                MockChatOutcome::Ok(mock_prompt_response(
+                MockChatOutcome::Ok(PromptResponse::new(
                     "",
                     rig::completion::Usage {
                         input_tokens: 0,
@@ -868,8 +758,8 @@ mod tests {
         )
         .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
-        assert_eq!(agent.provider_name(), "openai");
-        assert_eq!(agent.model_id(), "gpt-4o-mini");
+        assert_eq!(agent.provider.as_str(), "openai");
+        assert_eq!(agent.model_id, "gpt-4o-mini");
         assert!(matches!(&agent.inner, LlmAgentInner::OpenAI(_)));
     }
 
@@ -885,8 +775,8 @@ mod tests {
         )
         .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
-        assert_eq!(agent.provider_name(), "anthropic");
-        assert_eq!(agent.model_id(), "o3");
+        assert_eq!(agent.provider.as_str(), "anthropic");
+        assert_eq!(agent.model_id, "o3");
         assert!(matches!(&agent.inner, LlmAgentInner::Anthropic(_)));
     }
 
@@ -902,8 +792,8 @@ mod tests {
         )
         .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
-        assert_eq!(agent.provider_name(), "gemini");
-        assert_eq!(agent.model_id(), "o3");
+        assert_eq!(agent.provider.as_str(), "gemini");
+        assert_eq!(agent.model_id, "o3");
         assert!(matches!(&agent.inner, LlmAgentInner::Gemini(_)));
     }
 
@@ -921,8 +811,8 @@ mod tests {
         )
         .unwrap();
         let agent = build_agent(&handle, "You are a test agent.");
-        assert_eq!(agent.provider_name(), "openrouter");
-        assert_eq!(agent.model_id(), "qwen/qwen3.6-plus-preview:free");
+        assert_eq!(agent.provider.as_str(), "openrouter");
+        assert_eq!(agent.model_id, "qwen/qwen3.6-plus-preview:free");
         assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
     }
 
@@ -953,7 +843,7 @@ mod tests {
         .unwrap();
 
         let agent = build_agent(&handle, "You are a test agent.");
-        assert_eq!(agent.provider_name(), "deepseek");
+        assert_eq!(agent.provider.as_str(), "deepseek");
         assert!(matches!(&agent.inner, LlmAgentInner::DeepSeek(_)));
     }
 
@@ -972,8 +862,8 @@ mod tests {
         .unwrap();
         let agent = build_agent(&handle, "You are a deep-thinking test agent.");
 
-        assert_eq!(agent.provider_name(), "openrouter");
-        assert_eq!(agent.model_id(), "minimax/minimax-m2.5:free");
+        assert_eq!(agent.provider.as_str(), "openrouter");
+        assert_eq!(agent.model_id, "minimax/minimax-m2.5:free");
         assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
     }
 
@@ -1003,7 +893,7 @@ mod tests {
 
         assert_eq!(handle.provider_id(), ProviderId::OpenAI);
         assert_eq!(
-            agent.rate_limiter().map(|l| l.label()),
+            agent.rate_limiter.as_ref().map(|l| l.label()),
             Some(expected.as_str())
         );
     }
@@ -1038,67 +928,8 @@ mod tests {
         );
 
         assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
-        assert_eq!(agent.provider_name(), "openrouter");
-        assert_eq!(agent.rate_limiter().map(|l| l.label()), Some("openrouter"));
-    }
-
-    // ── append_response_messages (TDD – Task A) ──────────────────────────────
-
-    #[test]
-    fn append_response_messages_appends_new_messages_to_existing_history() {
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
-
-        let mut history: Vec<Message> = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("prior")),
-        }];
-        let response = PromptResponse::new(
-            "ok",
-            Usage {
-                input_tokens: 0,
-                output_tokens: 0,
-                total_tokens: 0,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            },
-        )
-        .with_messages(vec![
-            Message::User {
-                content: OneOrMany::one(UserContent::text("next")),
-            },
-            Message::Assistant {
-                content: OneOrMany::one(AssistantContent::text("done")),
-                id: None,
-            },
-        ]);
-
-        append_response_messages(&mut history, &response);
-
-        assert_eq!(history.len(), 3);
-    }
-
-    #[test]
-    fn append_response_messages_is_noop_when_provider_returns_no_messages() {
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
-
-        let mut history: Vec<Message> = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("prior")),
-        }];
-        let response = PromptResponse::new(
-            "ok",
-            Usage {
-                input_tokens: 0,
-                output_tokens: 0,
-                total_tokens: 0,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            },
-        );
-
-        append_response_messages(&mut history, &response);
-
-        assert_eq!(history.len(), 1);
+        assert_eq!(agent.provider.as_str(), "openrouter");
+        assert_eq!(agent.rate_limiter.as_ref().map(|l| l.label()), Some("openrouter"));
     }
 
     #[tokio::test]
@@ -1107,6 +938,7 @@ mod tests {
         use rig::completion::Usage;
 
         let (agent, _controller) = mock_llm_agent(
+            ProviderId::OpenAI,
             "o3",
             vec![],
             vec![MockChatOutcome::Ok(
@@ -1160,7 +992,7 @@ mod tests {
             super::super::client::ProviderClient::Copilot(client),
         );
         let agent = build_agent(&handle, "test prompt");
-        assert_eq!(agent.provider_name(), "copilot");
+        assert_eq!(agent.provider.as_str(), "copilot");
         assert!(matches!(&agent.inner, LlmAgentInner::Copilot(_)));
     }
 
@@ -1174,14 +1006,14 @@ mod tests {
             super::super::client::ProviderClient::XiaomiMimo(client),
         );
         let agent = build_agent(&handle, "test prompt");
-        assert_eq!(agent.provider_name(), "xiaomimimo");
+        assert_eq!(agent.provider.as_str(), "xiaomimimo");
         assert!(matches!(&agent.inner, LlmAgentInner::XiaomiMimo(_)));
     }
 
     #[tokio::test]
     async fn mock_agent_supports_typed_prompt_details_for_retry_tests() {
-        let (agent, _controller) = mock_llm_agent("o3", vec![], vec![]);
-        agent.push_typed_ok(rig::agent::TypedPromptResponse::new(
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
+        controller.typed_results.lock().unwrap().push_back(Ok(Box::new(rig::agent::TypedPromptResponse::new(
             TradeProposal {
                 action: crate::state::TradeAction::Buy,
                 target_price: 123.0,
@@ -1198,7 +1030,7 @@ mod tests {
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             },
-        ));
+        ))));
 
         let response = agent
             .prompt_typed_details::<TradeProposal>("prompt", 1)
@@ -1206,6 +1038,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.output.target_price, 123.0);
-        assert_eq!(agent.typed_attempts(), 1);
+        assert_eq!(*controller.typed_attempts.lock().unwrap(), 1);
     }
 }
