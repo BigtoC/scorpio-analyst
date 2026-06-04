@@ -18,8 +18,6 @@
 //! | [`discovery`] | setup-only provider model listing and normalized discovery outcomes |
 
 mod agent;
-#[cfg(test)]
-pub(crate) mod agent_test_support;
 mod client;
 pub mod copilot_auth;
 mod discovery;
@@ -56,4 +54,4 @@ pub use error::sanitize_error_summary;
 // ── test-only mock infrastructure ────────────────────────────────────────────
 
 #[cfg(test)]
-pub(crate) use agent::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+pub(crate) use agent::{MockChatOutcome, mock_llm_agent};
