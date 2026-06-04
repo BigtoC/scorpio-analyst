@@ -417,16 +417,6 @@ impl LlmAgent {
         .await
     }
 
-    /// Send a prompt with chat history and return the response text.
-    pub async fn chat(
-        &self,
-        prompt: &str,
-        chat_history: Vec<Message>,
-    ) -> Result<String, PromptError> {
-        let mut history = chat_history;
-        Ok(self.chat_details(prompt, &mut history).await?.output)
-    }
-
     /// Send a prompt with mutable chat history and return response text plus usage details.
     ///
     /// The `chat_history` is updated in place: the new user message and the assistant

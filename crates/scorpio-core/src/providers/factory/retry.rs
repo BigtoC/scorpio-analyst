@@ -2,7 +2,7 @@
 //!
 //! - [`RetryOutcome`] — bundles a successful response with rate-limit wait metadata.
 //! - [`prompt_with_retry`] / [`prompt_with_retry_details`] — one-shot prompt with retry.
-//! - [`chat_with_retry_details`] — chat prompt with retry.
+//! - [`chat_with_retry_details`] — chat prompt (mutable history) with retry.
 //! - [`prompt_typed_with_retry`] — typed structured-output prompt with retry.
 //!
 //! All functions apply `tokio::time::timeout` per attempt and exponential backoff
@@ -322,18 +322,6 @@ pub async fn chat_with_retry_details(
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     let total_budget = policy.total_budget(timeout);
-    chat_with_retry_details_budget(agent, prompt, chat_history, timeout, total_budget, policy).await
-}
-
-/// Budget-constrained variant of [`chat_with_retry_details`].
-pub(crate) async fn chat_with_retry_details_budget(
-    agent: &LlmAgent,
-    prompt: &str,
-    chat_history: &mut Vec<Message>,
-    timeout: Duration,
-    total_budget: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     let started_at = Instant::now();
     let mut rate_limit_wait_ms: u64 = 0;
 
@@ -903,12 +891,11 @@ mod tests {
             content: OneOrMany::one(UserContent::text("initial context")),
         }];
 
-        let response = chat_with_retry_details_budget(
+        let response = chat_with_retry_details(
             &agent,
             "next prompt",
             &mut history,
             Duration::from_millis(50),
-            Duration::from_millis(200),
             &RetryPolicy {
                 max_retries: 1,
                 base_delay: Duration::from_millis(1),
@@ -943,12 +930,11 @@ mod tests {
             content: OneOrMany::one(UserContent::text("initial context")),
         }];
 
-        let err = chat_with_retry_details_budget(
+        let err = chat_with_retry_details(
             &agent,
             "next prompt",
             &mut history,
             Duration::from_millis(50),
-            Duration::from_millis(200),
             &RetryPolicy {
                 max_retries: 1,
                 base_delay: Duration::from_millis(1),
