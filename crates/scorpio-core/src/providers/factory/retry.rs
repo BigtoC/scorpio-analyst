@@ -79,16 +79,6 @@ pub async fn prompt_with_retry_details(
     policy: &RetryPolicy,
 ) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     let total_budget = policy.total_budget(timeout);
-    prompt_with_retry_details_budget(agent, prompt, timeout, total_budget, policy).await
-}
-
-pub(crate) async fn prompt_with_retry_details_budget(
-    agent: &LlmAgent,
-    prompt: &str,
-    timeout: Duration,
-    total_budget: Duration,
-    policy: &RetryPolicy,
-) -> Result<RetryOutcome<PromptResponse>, TradingError> {
     retry_prompt_budget_loop(agent, timeout, total_budget, policy, || {
         agent.prompt_details(prompt)
     })
@@ -223,12 +213,11 @@ where
     unreachable!("retry loop executed zero iterations — max_retries must be >= 0")
 }
 
-/// Shared retry-loop core for [`prompt_with_retry_budget`] and
-/// [`prompt_with_retry_details_budget`].
+/// Shared retry-loop core used by [`prompt_with_retry`], [`prompt_with_retry_details`],
+/// and [`prompt_with_retry_budget`].
 ///
 /// `call_fn` is invoked on each attempt and must return a `Future` that resolves to
-/// `Result<R, PromptError>`. The two callers differ only in which `LlmAgent` method
-/// they invoke (`prompt` vs `prompt_details`).
+/// `Result<R, PromptError>`.
 ///
 /// Before each attempt, acquires a rate-limit permit (if one is configured) outside
 /// the per-attempt timeout, but bounded by the remaining total budget (Option C).
@@ -573,14 +562,22 @@ pub(super) struct AttemptBudget {
 }
 
 /// Log/error messages emitted by [`prepare_attempt`] for a given retry operation.
-struct RetryMessages {
-    retrying: &'static str,
-    retry_budget: &'static str,
-    acquire_budget: &'static str,
-    exhausted: &'static str,
+pub(super) struct RetryMessages {
+    pub(super) retrying: &'static str,
+    pub(super) retry_budget: &'static str,
+    pub(super) acquire_budget: &'static str,
+    pub(super) exhausted: &'static str,
 }
 
-async fn prepare_attempt(
+/// Messages used by [`prepare_attempt`] for plain text-prompt operations.
+pub(super) const TEXT_RETRY_MESSAGES: RetryMessages = RetryMessages {
+    retrying: "retrying text prompt after transient error",
+    retry_budget: "text prompt retry budget exhausted before next attempt",
+    acquire_budget: "text prompt budget exhausted before rate-limit acquire",
+    exhausted: "text prompt retry budget exhausted",
+};
+
+pub(super) async fn prepare_attempt(
     agent: &LlmAgent,
     started_at: Instant,
     timeout: Duration,
@@ -656,34 +653,6 @@ fn attempt_timeout_error(
             agent.model_id()
         ),
     }
-}
-
-/// Shared attempt-preparation logic exposed to sibling submodules (e.g. `text_retry`).
-///
-/// Uses fixed log messages appropriate for the "text prompt" operation.
-pub(super) async fn prepare_attempt_text(
-    agent: &LlmAgent,
-    started_at: Instant,
-    timeout: Duration,
-    total_budget: Duration,
-    policy: &RetryPolicy,
-    attempt: u32,
-) -> Result<AttemptBudget, TradingError> {
-    prepare_attempt(
-        agent,
-        started_at,
-        timeout,
-        total_budget,
-        policy,
-        attempt,
-        &RetryMessages {
-            retrying: "retrying text prompt after transient error",
-            retry_budget: "text prompt retry budget exhausted before next attempt",
-            acquire_budget: "text prompt budget exhausted before rate-limit acquire",
-            exhausted: "text prompt retry budget exhausted",
-        },
-    )
-    .await
 }
 
 /// Classify a `PromptError`: `Some(summary)` when it is likely transient and
