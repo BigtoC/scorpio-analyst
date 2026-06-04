@@ -143,7 +143,7 @@ where
     Validate: Fn(&T) -> Result<(), TradingError>,
 {
     if matches!(
-        agent.provider_id(),
+        agent.provider,
         ProviderId::OpenRouter | ProviderId::DeepSeek
     ) {
         return run_text_fallback_inference(
@@ -163,7 +163,7 @@ where
         match prompt_typed_with_retry::<T>(agent, prompt, timeout, retry_policy, max_turns).await {
             Ok(outcome) => outcome,
             Err(err @ TradingError::SchemaViolation { .. })
-                if agent.provider_id() == ProviderId::Gemini =>
+                if agent.provider == ProviderId::Gemini =>
             {
                 return run_text_fallback_inference(
                     agent,
@@ -209,7 +209,7 @@ where
         .rsplit("::")
         .next()
         .unwrap_or("unknown");
-    let model_id = agent.model_id();
+    let model_id = &agent.model_id;
 
     // Text-emitting models often wrap the JSON in markdown code fences or
     // surrounding prose, so extract the JSON object before parsing — without
@@ -246,7 +246,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::providers::ProviderId;
-    use crate::providers::factory::agent_test_support;
+    use crate::providers::factory::mock_llm_agent;
     use std::time::{Duration, Instant};
 
     use rig::completion::Usage;
@@ -297,16 +297,16 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::OpenAI,
             "m",
             vec![],
             vec![],
         );
-        agent.push_typed_ok(TypedPromptResponse::new(
+        ctrl.typed_results.lock().unwrap().push_back(Ok(Box::new(TypedPromptResponse::new(
             Output { value: 42 },
             sample_usage(10),
-        ));
+        ))));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -323,9 +323,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.output.value, 42);
-        assert_eq!(agent.typed_attempts(), 1);
-        assert_eq!(agent.text_turn_attempts(), 0);
-        assert_eq!(agent.prompt_attempts(), 0);
+        assert_eq!(*ctrl.typed_attempts.lock().unwrap(), 1);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 0);
+        assert_eq!(*ctrl.prompt_attempts.lock().unwrap(), 0);
     }
 
     #[tokio::test]
@@ -338,13 +338,13 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::OpenRouter,
             "openrouter-model",
             vec![],
             vec![],
         );
-        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 99}"#, sample_usage(8)));
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": 99}"#, sample_usage(8))));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -363,9 +363,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.output.value, 99);
-        assert_eq!(agent.typed_attempts(), 0);
-        assert_eq!(agent.text_turn_attempts(), 1);
-        assert_eq!(agent.prompt_attempts(), 0);
+        assert_eq!(*ctrl.typed_attempts.lock().unwrap(), 0);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 1);
+        assert_eq!(*ctrl.prompt_attempts.lock().unwrap(), 0);
     }
 
     #[tokio::test]
@@ -378,7 +378,7 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::DeepSeek,
             "deepseek-chat",
             vec![],
@@ -387,10 +387,10 @@ mod tests {
         // Model wraps the JSON in a ```json fence with surrounding prose —
         // previously this failed serde at "line 1 column 1". The text-fallback
         // path now extracts the JSON object before parsing.
-        agent.push_text_turn_ok(PromptResponse::new(
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
             "Here is the analysis:\n```json\n{\"value\": 42}\n```\nDone.",
             sample_usage(8),
-        ));
+        )));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -421,13 +421,13 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::OpenRouter,
             "openrouter-model",
             vec![],
             vec![],
         );
-        agent.push_text_turn_ok(PromptResponse::new("not valid json", sample_usage(5)));
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("not valid json", sample_usage(5))));
 
         let err = run_analyst_inference(
             &agent,
@@ -451,7 +451,7 @@ mod tests {
         ));
         // `fast_policy()` has `max_retries: 0`, so the loop runs exactly once
         // even though schema violations are now retryable inside the loop.
-        assert_eq!(agent.text_turn_attempts(), 1);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 1);
     }
 
     #[tokio::test]
@@ -464,13 +464,13 @@ mod tests {
             v: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::OpenRouter,
             "openrouter-model",
             vec![],
             vec![],
         );
-        agent.push_text_turn_ok(PromptResponse::new(
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
             r#"{"v": 7}"#,
             Usage {
                 input_tokens: 11,
@@ -479,7 +479,7 @@ mod tests {
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             },
-        ));
+        )));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -513,14 +513,14 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::OpenRouter,
             "openrouter-model",
             vec![],
             vec![],
         );
         // JSON parses fine but fails semantic validation
-        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": -1}"#, sample_usage(6)));
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": -1}"#, sample_usage(6))));
 
         let err = run_analyst_inference(
             &agent,
@@ -551,7 +551,7 @@ mod tests {
             crate::error::TradingError::SchemaViolation { .. }
         ));
         // `fast_policy()` has `max_retries: 0`, so the loop runs exactly once.
-        assert_eq!(agent.text_turn_attempts(), 1);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 1);
     }
 
     #[tokio::test]
@@ -567,14 +567,14 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::DeepSeek,
             "deepseek-chat",
             vec![],
             vec![],
         );
-        agent.push_text_turn_ok(PromptResponse::new("not valid json", sample_usage(5)));
-        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 42}"#, sample_usage(8)));
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new("not valid json", sample_usage(5))));
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": 42}"#, sample_usage(8))));
 
         let policy = crate::error::RetryPolicy {
             max_retries: 2,
@@ -598,7 +598,7 @@ mod tests {
         .expect("validator-aware retry should recover on second attempt");
 
         assert_eq!(outcome.output, Output { value: 42 });
-        assert_eq!(agent.text_turn_attempts(), 2);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 2);
     }
 
     #[tokio::test]
@@ -611,23 +611,23 @@ mod tests {
             value: i32,
         }
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::Gemini,
             "gemini-test-model",
             vec![],
             vec![],
         );
-        agent.push_typed_error(crate::error::TradingError::SchemaViolation {
+        ctrl.typed_results.lock().unwrap().push_back(Err(crate::error::TradingError::SchemaViolation {
             message:
                 "provider=gemini model=gemini-test-model: structured output could not be parsed"
                     .to_owned(),
-        });
-        agent.push_text_turn_ok(PromptResponse::new(r#"{"value": 7}"#, sample_usage(9)));
+        }));
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(r#"{"value": 7}"#, sample_usage(9))));
         // If the implementation retries typed again instead of falling back, this would be used.
-        agent.push_typed_ok(TypedPromptResponse::new(
+        ctrl.typed_results.lock().unwrap().push_back(Ok(Box::new(TypedPromptResponse::new(
             Output { value: 99 },
             sample_usage(10),
-        ));
+        ))));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -646,8 +646,8 @@ mod tests {
         .expect("Gemini should recover via text fallback after a typed schema violation");
 
         assert_eq!(outcome.output, Output { value: 7 });
-        assert_eq!(agent.typed_attempts(), 1);
-        assert_eq!(agent.text_turn_attempts(), 1);
+        assert_eq!(*ctrl.typed_attempts.lock().unwrap(), 1);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 1);
     }
 
     #[test]

@@ -196,7 +196,8 @@ fn build_aggressive_result(
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
-    use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+    use crate::providers::{ProviderId, factory::{MockChatOutcome, mock_llm_agent}};
+    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::{DebateMessage, TokenUsageTracker, TradeAction, TradeProposal};
     use secrecy::SecretString;
@@ -296,11 +297,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_returns_aggressive_risk_report() {
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
-                &valid_aggressive_json(),
+            vec![MockChatOutcome::Ok(PromptResponse::new(
+                valid_aggressive_json(),
                 mock_usage(20),
             ))],
         );
@@ -318,10 +319,10 @@ mod tests {
     #[tokio::test]
     async fn run_rejects_wrong_risk_level() {
         let wrong_json = r#"{"risk_level":"Conservative","assessment":"Too risky.","recommended_adjustments":[],"flags_violation":true}"#;
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
+            vec![MockChatOutcome::Ok(PromptResponse::new(
                 wrong_json,
                 mock_usage(20),
             ))],
@@ -337,11 +338,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_records_correct_agent_name_and_model_id() {
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
-                &valid_aggressive_json(),
+            vec![MockChatOutcome::Ok(PromptResponse::new(
+                valid_aggressive_json(),
                 mock_usage(30),
             ))],
         );
@@ -357,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_errors_when_trader_proposal_missing() {
-        let (agent, _ctrl) = mock_llm_agent("o3", vec![], vec![]);
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, "o3", vec![], vec![]);
         let mut analyst = AggressiveRiskAgent::from_test_agent(agent, "o3");
         let state = sample_state_no_proposal();
 
@@ -422,16 +423,16 @@ mod tests {
 
     #[tokio::test]
     async fn run_accumulates_chat_history_across_invocations() {
-        let (agent, ctrl) = mock_llm_agent(
+        let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
             vec![
-                MockChatOutcome::Ok(mock_prompt_response(
-                    &valid_aggressive_json(),
+                MockChatOutcome::Ok(PromptResponse::new(
+                    valid_aggressive_json(),
                     mock_usage(20),
                 )),
-                MockChatOutcome::Ok(mock_prompt_response(
-                    &valid_aggressive_json(),
+                MockChatOutcome::Ok(PromptResponse::new(
+                    valid_aggressive_json(),
                     mock_usage(20),
                 )),
             ],
@@ -442,7 +443,7 @@ mod tests {
         analyst.run(&state, None, None).await.unwrap();
         analyst.run(&state, None, None).await.unwrap();
 
-        assert_eq!(ctrl.observed_history_lengths(), vec![0, 2]);
+        assert_eq!(ctrl.observed_history_lengths.lock().unwrap().clone(), vec![0, 2]);
     }
 
     #[test]
@@ -529,11 +530,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_marks_token_counts_unavailable_when_usage_zero() {
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
-                &valid_aggressive_json(),
+            vec![MockChatOutcome::Ok(PromptResponse::new(
+                valid_aggressive_json(),
                 rig::completion::Usage {
                     input_tokens: 0,
                     output_tokens: 0,

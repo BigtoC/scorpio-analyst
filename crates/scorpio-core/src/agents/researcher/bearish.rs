@@ -139,7 +139,8 @@ mod tests {
     use super::super::common::validate_debate_content;
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
-    use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+    use crate::providers::{ProviderId, factory::{MockChatOutcome, mock_llm_agent}};
+    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::DebateMessage;
     use secrecy::SecretString;
@@ -264,11 +265,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_accumulates_chat_history_across_invocations() {
-        let (agent, controller) = mock_llm_agent(
+        let (agent, controller) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
             vec![
-                MockChatOutcome::Ok(mock_prompt_response(
+                MockChatOutcome::Ok(PromptResponse::new(
                     "Bear turn one",
                     rig::completion::Usage {
                         input_tokens: 11,
@@ -278,7 +279,7 @@ mod tests {
                         cache_creation_input_tokens: 0,
                     },
                 )),
-                MockChatOutcome::Ok(mock_prompt_response(
+                MockChatOutcome::Ok(PromptResponse::new(
                     "Bear turn two acknowledges the gap",
                     rig::completion::Usage {
                         input_tokens: 13,
@@ -304,17 +305,17 @@ mod tests {
 
         assert_eq!(first.role, "bearish_researcher");
         assert_eq!(second.role, "bearish_researcher");
-        assert_eq!(controller.observed_history_lengths(), vec![0, 2]);
+        assert_eq!(controller.observed_history_lengths.lock().unwrap().clone(), vec![0, 2]);
         assert_eq!(usage.agent_name, "Bearish Researcher");
         assert_eq!(usage.model_id, "o3");
     }
 
     #[tokio::test]
     async fn run_marks_token_counts_unavailable_when_usage_zero() {
-        let (agent, _controller) = mock_llm_agent(
+        let (agent, _controller) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
+            vec![MockChatOutcome::Ok(PromptResponse::new(
                 "Bear turn one",
                 rig::completion::Usage {
                     input_tokens: 0,

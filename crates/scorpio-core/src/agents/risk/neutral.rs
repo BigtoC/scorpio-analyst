@@ -195,7 +195,8 @@ fn build_neutral_result(
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, ProviderSettings, ProvidersConfig};
-    use crate::providers::factory::{MockChatOutcome, mock_llm_agent, mock_prompt_response};
+    use crate::providers::{ProviderId, factory::{MockChatOutcome, mock_llm_agent}};
+    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::state::{TokenUsageTracker, TradeAction, TradeProposal};
     use secrecy::SecretString;
@@ -289,11 +290,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_returns_neutral_risk_report() {
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
-                &valid_neutral_json(),
+            vec![MockChatOutcome::Ok(PromptResponse::new(
+                valid_neutral_json(),
                 mock_usage(20),
             ))],
         );
@@ -310,10 +311,10 @@ mod tests {
     #[tokio::test]
     async fn run_rejects_wrong_risk_level() {
         let wrong_json = r#"{"risk_level":"Aggressive","assessment":"Go big.","recommended_adjustments":[],"flags_violation":false}"#;
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
+            vec![MockChatOutcome::Ok(PromptResponse::new(
                 wrong_json,
                 mock_usage(20),
             ))],
@@ -329,11 +330,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_records_correct_agent_name() {
-        let (agent, _ctrl) = mock_llm_agent(
+        let (agent, _ctrl) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
             vec![],
-            vec![MockChatOutcome::Ok(mock_prompt_response(
-                &valid_neutral_json(),
+            vec![MockChatOutcome::Ok(PromptResponse::new(
+                valid_neutral_json(),
                 mock_usage(30),
             ))],
         );

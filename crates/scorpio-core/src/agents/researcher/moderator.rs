@@ -174,7 +174,8 @@ mod tests {
     use crate::data::adapters::transcripts::{
         TranscriptEvidence, TranscriptFetch, TranscriptSegment,
     };
-    use crate::providers::factory::{mock_llm_agent, mock_prompt_response};
+    use crate::providers::{ProviderId, factory::mock_llm_agent};
+    use rig::agent::PromptResponse;
     use crate::providers::{ModelTier, factory::create_completion_model};
     use secrecy::SecretString;
 
@@ -404,9 +405,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_rejects_output_without_explicit_stance() {
-        let (agent, _controller) = mock_llm_agent(
+        let (agent, _controller) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
-            vec![Ok(mock_prompt_response(
+            vec![Ok(PromptResponse::new(
                 "Evidence is balanced but unclear.",
                 rig::completion::Usage {
                     input_tokens: 20,
@@ -460,9 +461,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_accepts_valid_summary_and_records_zero_token_unavailability() {
-        let (agent, _controller) = mock_llm_agent(
+        let (agent, _controller) = mock_llm_agent(ProviderId::OpenAI, 
             "o3",
-            vec![Ok(mock_prompt_response(
+            vec![Ok(PromptResponse::new(
                 "Hold - strongest bullish evidence is growth, strongest bearish evidence is rates, unresolved uncertainty is demand durability.",
                 rig::completion::Usage {
                     input_tokens: 0,

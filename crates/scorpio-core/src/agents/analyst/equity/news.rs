@@ -609,7 +609,7 @@ mod tests {
     async fn news_run_uses_shared_inference_helper_for_openrouter() {
         use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
-        use crate::providers::factory::agent_test_support;
+        use crate::providers::factory::mock_llm_agent;
         use rig::agent::PromptResponse;
         use rig::completion::Usage;
 
@@ -627,13 +627,13 @@ mod tests {
             "summary": "Key development with direct relevance to price action."
         }"#;
 
-        let (agent, _ctrl) = agent_test_support::mock_llm_agent_with_provider(
+        let (agent, ctrl) = mock_llm_agent(
             ProviderId::OpenRouter,
             "openrouter-model",
             vec![],
             vec![],
         );
-        agent.push_text_turn_ok(PromptResponse::new(
+        ctrl.text_turn_results.lock().unwrap().push_back(Ok(PromptResponse::new(
             valid_json,
             Usage {
                 input_tokens: 10,
@@ -642,7 +642,7 @@ mod tests {
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             },
-        ));
+        )));
 
         let outcome = run_analyst_inference(
             &agent,
@@ -661,9 +661,9 @@ mod tests {
 
         let _ = outcome.output;
 
-        assert_eq!(agent.typed_attempts(), 0);
-        assert_eq!(agent.text_turn_attempts(), 1);
-        assert_eq!(agent.prompt_attempts(), 0);
+        assert_eq!(*ctrl.typed_attempts.lock().unwrap(), 0);
+        assert_eq!(*ctrl.text_turn_attempts.lock().unwrap(), 1);
+        assert_eq!(*ctrl.prompt_attempts.lock().unwrap(), 0);
     }
 
     // ── Task chunk1: Rendered-prompt evidence-discipline hardening ─────────
