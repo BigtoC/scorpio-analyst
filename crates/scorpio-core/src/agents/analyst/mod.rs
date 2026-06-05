@@ -213,16 +213,6 @@ fn build_sentiment_news(vetted: &NewsData, reddit: NewsData) -> Option<NewsData>
     })
 }
 
-/// Normalize a title for exact-match deduplication.
-///
-/// Uses `to_lowercase()` as a practical substitute for Unicode NFKC
-/// normalization (the `unicode_normalization` crate is not a workspace dep).
-/// The match is exact after normalization — near-identical titles from wire
-/// republication are intentionally preserved as distinct articles.
-fn canonical_title(title: &str) -> String {
-    title.trim().to_lowercase()
-}
-
 // ─── News merge ──────────────────────────────────────────────────────────────
 
 /// Merge two [`NewsData`] collections, deduplicating articles and sorting the
@@ -245,7 +235,8 @@ fn merge_news(primary: NewsData, secondary: NewsData) -> NewsData {
 
     // Helper closure: returns `true` if the article is a duplicate.
     let mut is_duplicate = |article: &NewsArticle| -> bool {
-        let title_key = canonical_title(&article.title);
+        // Normalize a title for exact-match deduplication.
+        let title_key = article.title.trim().to_lowercase();
         let url_key = article.url.as_deref().and_then(canonical_url);
         if let Some(ref key) = url_key {
             if seen_titles_without_url.contains(&title_key) {
