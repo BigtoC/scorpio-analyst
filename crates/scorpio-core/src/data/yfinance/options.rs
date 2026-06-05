@@ -8,23 +8,24 @@
 //! `OptionsOutcome::HistoricalRun` without making any network calls, since
 //! Yahoo Finance only publishes current live options data.
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_trait::async_trait;
+use chrono::TimeZone as _;
 use futures::StreamExt as _;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
+use rust_decimal::prelude::ToPrimitive;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use yfinance_rs::CacheMode;
 use yfinance_rs::YfError;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::ticker::{OptionChain, Ticker};
 
-use super::ohlcv::YFinanceClient;
+use super::client::YFinanceClient;
 use crate::data::provider_impls::require_equity_ticker;
 use crate::data::traits::options::{
     IvTermPoint, NearTermStrike, OptionsOutcome, OptionsProvider, OptionsSnapshot,
@@ -45,7 +46,7 @@ const OPTIONS_CHAIN_FETCH_CONCURRENCY: usize = 8;
 
 async fn with_options_timeout<T, F>(label: &'static str, fut: F) -> Result<T, TradingError>
 where
-    F: std::future::Future<Output = Result<T, YfError>>,
+    F: Future<Output = Result<T, YfError>>,
 {
     tokio::time::timeout(OPTIONS_FETCH_TIMEOUT, fut)
         .await
@@ -254,27 +255,18 @@ impl OptionsProvider for YFinanceOptionsProvider {
 /// Map a `YfError` to the nearest `TradingError` variant.
 fn map_yf_options_err(e: YfError) -> TradingError {
     TradingError::NetworkTimeout {
-        elapsed: std::time::Duration::ZERO,
+        elapsed: Duration::ZERO,
         message: e.to_string(),
     }
 }
 
 /// Convert a Unix-seconds timestamp to an ISO-8601 date string.
 fn timestamp_to_date_str(ts: i64) -> String {
-    use chrono::TimeZone as _;
     chrono::Utc
         .timestamp_opt(ts, 0)
         .single()
         .map(|dt| dt.date_naive().to_string())
         .unwrap_or_default()
-}
-
-/// Convert paft 0.8's `Decimal` implied volatility into the `f64` the snapshot
-/// math operates in. Returns `None` for "no IV reported" or an unrepresentable
-/// value (overflow), preserving the prior `Option<f64>` contract.
-fn iv_to_f64(iv: Option<rust_decimal::Decimal>) -> Option<f64> {
-    use rust_decimal::prelude::ToPrimitive;
-    iv.and_then(|d| d.to_f64())
 }
 
 /// Compute the ATM implied volatility from an option chain given the spot price.
@@ -301,8 +293,8 @@ fn compute_atm_iv(chain: &OptionChain, spot: f64) -> f64 {
         });
 
     match (
-        closest_call.and_then(|c| iv_to_f64(c.implied_volatility)),
-        closest_put.and_then(|c| iv_to_f64(c.implied_volatility)),
+        closest_call.and_then(|c| c.implied_volatility.and_then(|d| d.to_f64())),
+        closest_put.and_then(|c| c.implied_volatility.and_then(|d| d.to_f64())),
     ) {
         (Some(c_iv), Some(p_iv)) => (c_iv + p_iv) / 2.0,
         (Some(iv), None) | (None, Some(iv)) => iv,
@@ -404,7 +396,7 @@ fn build_ntm_slice(chain: &OptionChain, spot: f64) -> Option<Vec<NearTermStrike>
     for c in chain.calls() {
         let k = money_to_f64(&c.key.strike);
         call_data.entry(k.to_bits()).or_insert((
-            iv_to_f64(c.implied_volatility),
+            c.implied_volatility.and_then(|d| d.to_f64()),
             c.volume,
             c.open_interest,
         ));
@@ -413,7 +405,7 @@ fn build_ntm_slice(chain: &OptionChain, spot: f64) -> Option<Vec<NearTermStrike>
     for p in chain.puts() {
         let k = money_to_f64(&p.key.strike);
         put_data.entry(k.to_bits()).or_insert((
-            iv_to_f64(p.implied_volatility),
+            p.implied_volatility.and_then(|d| d.to_f64()),
             p.volume,
             p.open_interest,
         ));
@@ -1005,7 +997,7 @@ mod tests {
         ctx.store(sample_snapshot()).await.unwrap();
 
         let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
-        let result = rig::tool::Tool::call(
+        let result = Tool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),
@@ -1024,7 +1016,7 @@ mod tests {
         ctx.store(OptionsOutcome::HistoricalRun).await.unwrap();
 
         let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", yesterday_eastern(), ctx.clone());
-        let result = rig::tool::Tool::call(
+        let result = Tool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),
@@ -1047,7 +1039,7 @@ mod tests {
         ctx.store(sample_snapshot()).await.unwrap();
 
         let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
-        let result1 = rig::tool::Tool::call(
+        let result1 = Tool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),
@@ -1056,7 +1048,7 @@ mod tests {
         )
         .await
         .expect("first call should succeed");
-        let result2 = rig::tool::Tool::call(
+        let result2 = Tool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),

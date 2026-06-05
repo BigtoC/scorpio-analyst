@@ -22,6 +22,7 @@
 use chrono::Utc;
 use scorpio_core::config::ApiConfig;
 use scorpio_core::data::YFinanceClient;
+use scorpio_core::data::YFinanceData;
 use scorpio_core::data::traits::options::OptionsOutcome;
 use scorpio_core::data::yfinance::YFinanceOptionsProvider;
 use scorpio_core::data::yfinance::etf::is_supported_etf_kind;

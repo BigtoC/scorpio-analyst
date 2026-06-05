@@ -17,7 +17,7 @@
 use chrono::Utc;
 use yfinance_rs::NewsBuilder;
 
-use super::ohlcv::YFinanceClient;
+use super::client::YFinanceClient;
 use crate::constants::NEWS_ANALYSIS_DAYS;
 use crate::error::TradingError;
 use crate::state::{NewsArticle, NewsData};

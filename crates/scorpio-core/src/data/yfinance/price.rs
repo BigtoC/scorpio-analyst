@@ -16,7 +16,8 @@ use tracing::warn;
 
 use crate::state::{MarketVolatilityData, VixRegime, VixTrend};
 
-use super::ohlcv::{YFinanceClient, parse_date};
+use super::client::{YFinanceClient, YFinanceData};
+use super::ohlcv::parse_date;
 
 // ─── Latest close ─────────────────────────────────────────────────────────────
 
