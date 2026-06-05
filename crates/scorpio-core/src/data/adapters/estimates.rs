@@ -243,7 +243,14 @@ impl EstimatesProvider for YFinanceEstimatesProvider {
             evidence.price_target = Some(price_target_summary_from_upstream(pt));
         }
         if let Some(rs) = recommendations {
-            evidence.recommendations = Some(recommendations_summary_from_upstream(rs));
+            evidence.recommendations = Some(RecommendationsSummary {
+                strong_buy: rs.strong_buy,
+                buy: rs.buy,
+                hold: rs.hold,
+                sell: rs.sell,
+                strong_sell: rs.strong_sell,
+                mean_rating: rs.mean_rating_text.clone(),
+            });
         }
 
         Ok(ConsensusOutcome::Data(evidence))
@@ -314,19 +321,6 @@ fn price_target_summary_from_upstream(pt: &UpstreamPriceTarget) -> PriceTargetSu
         high: pt.high.as_ref().map(money_to_f64),
         low: pt.low.as_ref().map(money_to_f64),
         analyst_count: pt.number_of_analysts,
-    }
-}
-
-fn recommendations_summary_from_upstream(
-    rs: &UpstreamRecommendationSummary,
-) -> RecommendationsSummary {
-    RecommendationsSummary {
-        strong_buy: rs.strong_buy,
-        buy: rs.buy,
-        hold: rs.hold,
-        sell: rs.sell,
-        strong_sell: rs.strong_sell,
-        mean_rating: rs.mean_rating_text.clone(),
     }
 }
 
