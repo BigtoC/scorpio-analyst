@@ -296,7 +296,7 @@ fn merge_news(primary: NewsData, secondary: NewsData) -> NewsData {
 ///
 /// - `vetted` is `Some` when at least one of Finnhub or Yahoo succeeded.
 ///   Bound into `NewsAnalyst` via `KEY_CACHED_VETTED_NEWS`.
-/// - `sentiment` is `Some` when at least one of the three providers
+/// - `sentiment` is `Some` when at least one of the four providers
 ///   succeeded (vetted + Reddit sidecar). Bound into `SentimentAnalyst`
 ///   via `KEY_CACHED_SENTIMENT_NEWS`.
 #[derive(Debug, Clone, Default)]
@@ -305,9 +305,10 @@ pub struct PrefetchedNewsBundle {
     pub sentiment: Option<Arc<NewsData>>,
 }
 
-/// Pre-fetch news from Finnhub, Yahoo, and Reddit and build two analyst feeds.
+/// Pre-fetch news from Finnhub, Yahoo, Google News, and Reddit and build two
+/// analyst feeds.
 ///
-/// - Vetted feed (Finnhub + Yahoo, deduplicated and sorted) → `NewsAnalyst`.
+/// - Vetted feed (Finnhub + Yahoo + GNews, deduplicated and sorted) → `NewsAnalyst`.
 /// - Sentiment feed (vetted + Reddit sidecar, preserving Reddit rows as
 ///   distinct sentiment inputs) → `SentimentAnalyst`.
 ///
@@ -319,6 +320,7 @@ pub async fn prefetch_analyst_news(
     finnhub_news: &impl NewsProvider,
     yfinance_news: &impl NewsProvider,
     reddit_news: &impl NewsProvider,
+    gnews: &impl NewsProvider,
     symbol: &str,
 ) -> PrefetchedNewsBundle {
     let typed_symbol = match Ticker::parse(symbol) {
@@ -329,13 +331,14 @@ pub async fn prefetch_analyst_news(
         }
     };
 
-    let (finnhub_result, yahoo_result, reddit_result) = tokio::join!(
+    let (finnhub_result, yahoo_result, reddit_result, gnews_result) = tokio::join!(
         finnhub_news.fetch(&typed_symbol),
         yfinance_news.fetch(&typed_symbol),
         reddit_news.fetch(&typed_symbol),
+        gnews.fetch(&typed_symbol),
     );
 
-    let vetted: Option<NewsData> = match (finnhub_result, yahoo_result) {
+    let fh_yf: Option<NewsData> = match (finnhub_result, yahoo_result) {
         (Ok(fh), Ok(yf)) => Some(merge_news(fh, yf)),
         (Ok(fh), Err(yf_err)) => {
             warn!(error = %yf_err, symbol, "yahoo news pre-fetch failed; using finnhub only");
@@ -354,6 +357,23 @@ pub async fn prefetch_analyst_news(
             );
             None
         }
+    };
+
+    let vetted: Option<NewsData> = match (fh_yf, gnews_result) {
+        (Some(base), Ok(gn)) => Some(merge_news(base, gn)),
+        (Some(base), Err(gn_err)) => {
+            tracing::debug!(
+                gnews_error = %gn_err,
+                symbol,
+                "gnews pre-fetch failed; vetted lane continues without gnews"
+            );
+            Some(base)
+        }
+        (None, Ok(gn)) if !gn.articles.is_empty() => {
+            warn!(symbol, "finnhub+yahoo failed; using gnews only");
+            Some(sort_and_cap_news(gn))
+        }
+        (None, _) => None,
     };
 
     let reddit_news_data: Option<NewsData> = match reddit_result {
@@ -526,9 +546,20 @@ mod merge_tests {
     }
 
     /// Helper that builds an empty-news Reddit stub. The Reddit sidecar
-    /// is the third positional argument to `prefetch_analyst_news` after the
-    /// lane-split refactor; tests that don't care about the sidecar use this.
+    /// is the third positional argument to `prefetch_analyst_news`; tests that
+    /// don't care about the sidecar use this.
     fn empty_reddit_stub() -> StubNewsProvider {
+        StubNewsProvider::ok(NewsData {
+            articles: vec![],
+            macro_events: vec![],
+            summary: String::new(),
+        })
+    }
+
+    /// Helper that builds an empty-news GNews stub. GNews is the fourth
+    /// positional argument to `prefetch_analyst_news`; tests that don't need
+    /// gnews coverage use this.
+    fn empty_gnews_stub() -> StubNewsProvider {
         StubNewsProvider::ok(NewsData {
             articles: vec![],
             macro_events: vec![],
@@ -557,6 +588,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -589,6 +621,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -624,6 +657,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -658,6 +692,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -687,6 +722,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -738,6 +774,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -766,6 +803,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::err(),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -797,6 +835,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::err(),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -823,6 +862,7 @@ mod merge_tests {
             &StubNewsProvider::err(),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -840,6 +880,7 @@ mod merge_tests {
     #[tokio::test]
     async fn prefetch_all_three_fail_returns_none_for_both_lanes() {
         let bundle = prefetch_analyst_news(
+            &StubNewsProvider::err(),
             &StubNewsProvider::err(),
             &StubNewsProvider::err(),
             &StubNewsProvider::err(),
@@ -871,6 +912,7 @@ mod merge_tests {
             &StubNewsProvider::err(),
             &StubNewsProvider::err(),
             &StubNewsProvider::ok(reddit),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -907,6 +949,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &StubNewsProvider::ok(reddit),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -938,6 +981,7 @@ mod merge_tests {
             &StubNewsProvider::err(),
             &StubNewsProvider::err(),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -965,6 +1009,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
@@ -1062,6 +1107,7 @@ mod merge_tests {
             &StubNewsProvider::ok(fh),
             &StubNewsProvider::ok(yf),
             &empty_reddit_stub(),
+            &empty_gnews_stub(),
             "AAPL",
         )
         .await;
