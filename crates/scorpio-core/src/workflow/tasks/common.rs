@@ -4,9 +4,10 @@ use crate::{
     data::adapters::transcripts::TranscriptFetch,
     error::TradingError,
     state::AgentTokenUsage,
-    workflow::context_bridge::{read_prefixed_result, write_prefixed_result},
+    workflow::context_bridge::read_prefixed_result,
 };
 
+pub(super) const ANALYST_USAGE_PREFIX: &str = "usage.analyst";
 pub(super) const DEBATE_USAGE_PREFIX: &str = "usage.debate";
 pub(super) const RISK_USAGE_PREFIX: &str = "usage.risk";
 
@@ -30,12 +31,12 @@ pub const KEY_CACHED_SENTIMENT_NEWS: &str = "analyst.cached_news.sentiment";
 
 /// Context key for the [`ResolvedInstrument`] written by [`PreflightTask`].
 ///
-/// Value: JSON-serialised [`crate::data::ResolvedInstrument`].
+/// Value: JSON-serialized [`crate::data::ResolvedInstrument`].
 pub const KEY_RESOLVED_INSTRUMENT: &str = "resolved_instrument";
 
 /// Context key for [`ProviderCapabilities`] written by [`PreflightTask`].
 ///
-/// Value: JSON-serialised [`crate::data::adapters::ProviderCapabilities`].
+/// Value: JSON-serialized [`crate::data::adapters::ProviderCapabilities`].
 pub const KEY_PROVIDER_CAPABILITIES: &str = "provider_capabilities";
 
 /// Context key for the ordered list of required coverage inputs written by
@@ -45,7 +46,7 @@ pub const KEY_PROVIDER_CAPABILITIES: &str = "provider_capabilities";
 pub const KEY_REQUIRED_COVERAGE_INPUTS: &str = "required_coverage_inputs";
 
 /// Context key for the serde-serialized
-/// [`TranscriptFetch`](crate::data::adapters::transcripts::TranscriptFetch)
+/// [`TranscriptFetch`](TranscriptFetch)
 /// enum (JSON string).
 ///
 /// Always present after preflight; preflight seeds it to the serialized form
@@ -55,13 +56,13 @@ pub const KEY_TRANSCRIPT_FETCH_STATUS: &str = "transcript_fetch_status";
 
 /// Context key for the optional cached consensus-estimates payload.
 ///
-/// Value: JSON-serialised `Option<ConsensusEvidence>` — always present after
+/// Value: JSON-serialized `Option<ConsensusEvidence>` — always present after
 /// preflight.  Stage 1 value is the JSON literal `null`.
 pub const KEY_CACHED_CONSENSUS: &str = "cached_consensus";
 
 /// Context key for the optional cached event-news payload.
 ///
-/// Value: JSON-serialised `Option<EventNewsEvidence>` — always present after
+/// Value: JSON-serialized `Option<EventNewsEvidence>` — always present after
 /// preflight.  Stage 1 value is the JSON literal `null`.
 pub const KEY_CACHED_EVENT_FEED: &str = "cached_event_feed";
 
@@ -119,14 +120,6 @@ pub(super) async fn write_err(context: &Context, analyst_key: &str, message: &st
         .await;
 }
 
-pub(super) async fn write_analyst_usage(
-    context: &Context,
-    analyst_key: &str,
-    usage: &AgentTokenUsage,
-) -> Result<(), TradingError> {
-    write_prefixed_result(context, "usage.analyst", analyst_key, usage).await
-}
-
 pub(super) async fn read_analyst_usage(
     context: &Context,
     analyst_key: &str,
@@ -138,17 +131,6 @@ pub(super) async fn read_analyst_usage(
     }
 }
 
-pub(super) async fn write_round_usage(
-    context: &Context,
-    prefix: &str,
-    round: u32,
-    role: &str,
-    usage: &AgentTokenUsage,
-) -> Result<(), TradingError> {
-    let round_prefix = format!("{prefix}.{round}");
-    write_prefixed_result(context, &round_prefix, role, usage).await
-}
-
 pub(super) async fn read_round_usage(
     context: &Context,
     prefix: &str,
@@ -156,8 +138,7 @@ pub(super) async fn read_round_usage(
     role: &str,
     agent_name: &str,
 ) -> AgentTokenUsage {
-    let round_prefix = format!("{prefix}.{round}");
-    match read_prefixed_result::<AgentTokenUsage>(context, &round_prefix, role).await {
+    match read_prefixed_result::<AgentTokenUsage>(context, &format!("{prefix}.{round}"), role).await {
         Ok(usage) => usage,
         Err(_) => AgentTokenUsage::unavailable(agent_name, "unknown", 0),
     }

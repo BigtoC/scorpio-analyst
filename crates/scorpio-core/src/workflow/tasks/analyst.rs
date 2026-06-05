@@ -44,8 +44,8 @@ use crate::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::common::{
             ANALYST_FUNDAMENTAL, ANALYST_NEWS, ANALYST_PREFIX, ANALYST_SENTIMENT,
-            ANALYST_TECHNICAL, OK_SUFFIX, load_transcript_fetch, read_analyst_usage,
-            write_analyst_usage, write_err, write_flag,
+            ANALYST_TECHNICAL, ANALYST_USAGE_PREFIX, OK_SUFFIX, load_transcript_fetch,
+            read_analyst_usage, write_err, write_flag,
         },
     },
 };
@@ -334,15 +334,16 @@ impl Task for FundamentalAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_FUNDAMENTAL, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_FUNDAMENTAL, &usage).await;
+                let _ = write_prefixed_result(&context, ANALYST_USAGE_PREFIX, ANALYST_FUNDAMENTAL, &usage).await;
                 info!(analyst = "fundamental", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "fundamental", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_FUNDAMENTAL, false).await;
                 write_err(&context, ANALYST_FUNDAMENTAL, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_FUNDAMENTAL,
                     &AgentTokenUsage::unavailable("Fundamental Analyst", "unknown", 0),
                 )
@@ -443,15 +444,16 @@ impl Task for SentimentAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_SENTIMENT, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_SENTIMENT, &usage).await;
+                let _ = write_prefixed_result(&context, ANALYST_USAGE_PREFIX, ANALYST_SENTIMENT, &usage).await;
                 info!(analyst = "sentiment", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "sentiment", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_SENTIMENT, false).await;
                 write_err(&context, ANALYST_SENTIMENT, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_SENTIMENT,
                     &AgentTokenUsage::unavailable("Sentiment Analyst", "unknown", 0),
                 )
@@ -552,15 +554,16 @@ impl Task for NewsAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_NEWS, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_NEWS, &usage).await;
+                let _ = write_prefixed_result(&context, ANALYST_USAGE_PREFIX, ANALYST_NEWS, &usage).await;
                 info!(analyst = "news", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "news", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_NEWS, false).await;
                 write_err(&context, ANALYST_NEWS, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_NEWS,
                     &AgentTokenUsage::unavailable("News Analyst", "unknown", 0),
                 )
@@ -650,15 +653,16 @@ impl Task for TechnicalAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_TECHNICAL, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_TECHNICAL, &usage).await;
+                let _ = write_prefixed_result(&context, ANALYST_USAGE_PREFIX, ANALYST_TECHNICAL, &usage).await;
                 info!(analyst = "technical", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "technical", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_TECHNICAL, false).await;
                 write_err(&context, ANALYST_TECHNICAL, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_TECHNICAL,
                     &AgentTokenUsage::unavailable("Technical Analyst", "unknown", 0),
                 )

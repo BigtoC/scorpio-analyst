@@ -12,10 +12,11 @@ use crate::{
     config::Config,
     providers::factory::CompletionModelHandle,
     workflow::{
+        context_bridge::write_prefixed_result,
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::{
             accounting::risk_moderator_accounting,
-            common::{KEY_RISK_ROUND, RISK_USAGE_PREFIX, load_transcript_fetch, write_round_usage},
+            common::{KEY_RISK_ROUND, RISK_USAGE_PREFIX, load_transcript_fetch},
             runtime::{load_state, save_state, task_error},
         },
     },
@@ -67,7 +68,7 @@ impl Task for AggressiveRiskTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run aggressive turn", error))?;
 
-        write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "agg", &usage)
+        write_prefixed_result(&context, &format!("{RISK_USAGE_PREFIX}.{this_round}"), "agg", &usage)
             .await
             .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
@@ -124,7 +125,7 @@ impl Task for ConservativeRiskTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run conservative turn", error))?;
 
-        write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "con", &usage)
+        write_prefixed_result(&context, &format!("{RISK_USAGE_PREFIX}.{this_round}"), "con", &usage)
             .await
             .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
@@ -181,7 +182,7 @@ impl Task for NeutralRiskTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run neutral turn", error))?;
 
-        write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "neu", &usage)
+        write_prefixed_result(&context, &format!("{RISK_USAGE_PREFIX}.{this_round}"), "neu", &usage)
             .await
             .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
