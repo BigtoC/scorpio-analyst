@@ -68,9 +68,14 @@ impl Task for AggressiveRiskTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run aggressive turn", error))?;
 
-        write_prefixed_result(&context, &format!("{RISK_USAGE_PREFIX}.{this_round}"), "agg", &usage)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
+        write_prefixed_result(
+            &context,
+            &format!("{RISK_USAGE_PREFIX}.{this_round}"),
+            "agg",
+            &usage,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
         save_state(Self::TASK_NAME, &state, &context).await?;
 
@@ -125,9 +130,14 @@ impl Task for ConservativeRiskTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run conservative turn", error))?;
 
-        write_prefixed_result(&context, &format!("{RISK_USAGE_PREFIX}.{this_round}"), "con", &usage)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
+        write_prefixed_result(
+            &context,
+            &format!("{RISK_USAGE_PREFIX}.{this_round}"),
+            "con",
+            &usage,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
         save_state(Self::TASK_NAME, &state, &context).await?;
 
@@ -182,9 +192,14 @@ impl Task for NeutralRiskTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run neutral turn", error))?;
 
-        write_prefixed_result(&context, &format!("{RISK_USAGE_PREFIX}.{this_round}"), "neu", &usage)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
+        write_prefixed_result(
+            &context,
+            &format!("{RISK_USAGE_PREFIX}.{this_round}"),
+            "neu",
+            &usage,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
         save_state(Self::TASK_NAME, &state, &context).await?;
 

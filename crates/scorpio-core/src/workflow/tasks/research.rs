@@ -67,9 +67,14 @@ impl Task for BullishResearcherTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run bullish turn", error))?;
 
-        write_prefixed_result(&context, &format!("{DEBATE_USAGE_PREFIX}.{this_round}"), "bull", &usage)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
+        write_prefixed_result(
+            &context,
+            &format!("{DEBATE_USAGE_PREFIX}.{this_round}"),
+            "bull",
+            &usage,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
         save_state(Self::TASK_NAME, &state, &context).await?;
 
@@ -124,9 +129,14 @@ impl Task for BearishResearcherTask {
         .await
         .map_err(|error| task_error(Self::TASK_NAME, "failed to run bearish turn", error))?;
 
-        write_prefixed_result(&context, &format!("{DEBATE_USAGE_PREFIX}.{this_round}"), "bear", &usage)
-            .await
-            .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
+        write_prefixed_result(
+            &context,
+            &format!("{DEBATE_USAGE_PREFIX}.{this_round}"),
+            "bear",
+            &usage,
+        )
+        .await
+        .map_err(|error| task_error(Self::TASK_NAME, "failed to persist round usage", error))?;
 
         save_state(Self::TASK_NAME, &state, &context).await?;
 

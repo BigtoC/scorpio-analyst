@@ -1,9 +1,7 @@
 use graph_flow::Context;
 
 use crate::{
-    data::adapters::transcripts::TranscriptFetch,
-    error::TradingError,
-    state::AgentTokenUsage,
+    data::adapters::transcripts::TranscriptFetch, error::TradingError, state::AgentTokenUsage,
     workflow::context_bridge::read_prefixed_result,
 };
 
@@ -138,7 +136,8 @@ pub(super) async fn read_round_usage(
     role: &str,
     agent_name: &str,
 ) -> AgentTokenUsage {
-    match read_prefixed_result::<AgentTokenUsage>(context, &format!("{prefix}.{round}"), role).await {
+    match read_prefixed_result::<AgentTokenUsage>(context, &format!("{prefix}.{round}"), role).await
+    {
         Ok(usage) => usage,
         Err(_) => AgentTokenUsage::unavailable(agent_name, "unknown", 0),
     }
