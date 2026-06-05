@@ -24,7 +24,7 @@ use yfinance_rs::YfError;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::ticker::{OptionChain, Ticker};
 
-use super::ohlcv::YFinanceClient;
+use super::client::YFinanceClient;
 use crate::data::provider_impls::require_equity_ticker;
 use crate::data::traits::options::{
     IvTermPoint, NearTermStrike, OptionsOutcome, OptionsProvider, OptionsSnapshot,

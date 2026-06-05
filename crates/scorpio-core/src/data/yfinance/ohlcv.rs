@@ -8,24 +8,20 @@
 //! Higher-level price queries (latest close, VIX snapshot) live in the sibling
 //! [`super::price`] module, which builds on top of [`YFinanceClient`].
 
-use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDate, TimeZone, Utc};
+use chrono::NaiveDate;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 use tokio::sync::RwLock;
+use yfinance_rs::YfError;
 use yfinance_rs::core::conversions::money_to_f64;
-use yfinance_rs::{HistoryBuilder, Interval, YfError};
 
-use super::client::YfSession;
-
-use crate::{config::RateLimitConfig, error::TradingError, rate_limit::SharedRateLimiter};
-
-use crate::data::symbol::validate_symbol;
+use super::client::{YFinanceClient, YFinanceData};
+use crate::error::TradingError;
 
 // ─── Our Candle type ─────────────────────────────────────────────────────────
 
@@ -49,7 +45,7 @@ pub struct Candle {
 impl Candle {
     /// Convert from a `yfinance_rs::Candle` (whose OHLC fields are
     /// `paft_money::Price` as of paft 0.8) into our plain-`f64` representation.
-    fn from_yf(c: yfinance_rs::Candle) -> Self {
+    pub(super) fn from_yf(c: yfinance_rs::Candle) -> Self {
         Self {
             date: c.ts.format("%Y-%m-%d").to_string(),
             // `money_to_f64` accepts `&impl CurrencyValue`; `Price` implements
@@ -60,185 +56,6 @@ impl Candle {
             close: money_to_f64(&c.close),
             volume: c.volume,
         }
-    }
-}
-
-// ─── Client ──────────────────────────────────────────────────────────────────
-
-/// Cache key: normalized (uppercase) symbol + start date + end date.
-type OhlcvCacheKey = (String, String, String);
-
-/// Thin async wrapper around `yfinance-rs` for fetching historical OHLCV data.
-///
-/// Results of [`get_ohlcv`](YFinanceClient::get_ohlcv) are cached in memory by
-/// `(symbol, start, end)` so that repeated calls with the same parameters —
-/// whether from the LLM's tool loop or from different agents in the same session
-/// — return the cached `Vec<Candle>` without hitting the Yahoo Finance API more
-/// than once.
-#[derive(Clone)]
-pub struct YFinanceClient {
-    /// Shared Yahoo Finance session (HTTP client + rate limiter).
-    pub(super) session: YfSession,
-    /// Shared across all `Clone`s of this client; keyed by the normalized
-    /// (uppercase) symbol + ISO-8601 start/end dates.
-    cache: Arc<RwLock<HashMap<OhlcvCacheKey, Arc<Vec<Candle>>>>>,
-}
-
-impl std::fmt::Debug for YFinanceClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Avoid blocking inside `fmt` — use `try_read` so that holding a write
-        // lock elsewhere at the same time doesn't deadlock the debug path.
-        let cache_len = self.cache.try_read().map(|g| g.len()).unwrap_or(0);
-        f.debug_struct("YFinanceClient")
-            .field("session", &self.session)
-            .field("cached_entries", &cache_len)
-            .finish()
-    }
-}
-
-impl YFinanceClient {
-    /// Create a new client using a shared provider-scoped rate limiter.
-    #[must_use]
-    pub fn new(limiter: SharedRateLimiter) -> Self {
-        Self {
-            session: YfSession::new(limiter),
-            cache: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// Create a new client from `RateLimitConfig`.
-    ///
-    /// Uses `SharedRateLimiter::yahoo_finance_from_config` so operators can tune or
-    /// disable the Yahoo Finance rate limit via config without recompiling. When
-    /// `cfg.yahoo_finance_rps == 0` the limiter is disabled (no blocking).
-    #[must_use]
-    pub fn from_config(cfg: &RateLimitConfig) -> Self {
-        Self {
-            session: YfSession::from_config(cfg),
-            cache: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// Fetch daily OHLCV bars for `symbol` between `start` and `end`
-    /// (inclusive), both expressed as `"YYYY-MM-DD"` strings.
-    ///
-    /// # Errors
-    ///
-    /// - `TradingError::SchemaViolation` if either date cannot be parsed.
-    /// - `TradingError::SchemaViolation` if `end` is before `start`.
-    /// - `TradingError::NetworkTimeout` on transport failures.
-    /// - `TradingError::SchemaViolation` on response parsing failures.
-    pub async fn get_ohlcv(
-        &self,
-        symbol: &str,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<Candle>, TradingError> {
-        let symbol = validate_symbol(symbol)?;
-        let start_date = parse_date(start)?;
-        let end_date = parse_date(end)?;
-
-        if end_date < start_date {
-            return Err(TradingError::SchemaViolation {
-                message: format!("invalid date range: end ({end}) is before start ({start})"),
-            });
-        }
-
-        // --- In-memory cache lookup -------------------------------------------
-        // Normalize symbol to uppercase so "aapl" and "AAPL" share the same entry.
-        let cache_key: OhlcvCacheKey = (
-            symbol.to_ascii_uppercase(),
-            start.to_owned(),
-            end.to_owned(),
-        );
-        {
-            let cache = self.cache.read().await;
-            if let Some(cached) = cache.get(&cache_key) {
-                return Ok((**cached).clone());
-            }
-        }
-        // ----------------------------------------------------------------------
-
-        let start_dt = Utc
-            .from_local_datetime(&start_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
-                TradingError::SchemaViolation {
-                    message: format!("invalid start datetime for {start}"),
-                }
-            })?)
-            .single()
-            .ok_or_else(|| TradingError::SchemaViolation {
-                message: format!("invalid start datetime for {start}"),
-            })?;
-        let end_dt = Utc
-            .from_local_datetime(&end_date.and_hms_opt(23, 59, 59).ok_or_else(|| {
-                TradingError::SchemaViolation {
-                    message: format!("invalid end datetime for {end}"),
-                }
-            })?)
-            .single()
-            .ok_or_else(|| TradingError::SchemaViolation {
-                message: format!("invalid end datetime for {end}"),
-            })?;
-
-        self.session.limiter().acquire().await;
-        let candles = HistoryBuilder::new(self.session.client(), symbol)
-            .between(start_dt, end_dt)
-            .interval(Interval::D1)
-            .fetch()
-            .await
-            .map_err(map_yf_err)?;
-
-        let mut result: Vec<Candle> = candles.into_iter().map(Candle::from_yf).collect();
-        // Ensure chronological order (the API usually returns them sorted, but
-        // the spec requires it).
-        result.sort_by(|a, b| a.date.cmp(&b.date));
-
-        // Store in session cache so subsequent calls with the same key skip the network.
-        self.cache
-            .write()
-            .await
-            .insert(cache_key, Arc::new(result.clone()));
-
-        Ok(result)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn cache_len(&self) -> usize {
-        self.cache.read().await.len()
-    }
-
-    #[cfg(test)]
-    pub(super) async fn cache_seed(
-        &self,
-        symbol: &str,
-        start: &str,
-        end: &str,
-        candles: Vec<Candle>,
-    ) {
-        self.cache.write().await.insert(
-            (
-                symbol.to_ascii_uppercase(),
-                start.to_owned(),
-                end.to_owned(),
-            ),
-            Arc::new(candles),
-        );
-    }
-
-    #[cfg(test)]
-    fn limiter_label(&self) -> &str {
-        self.session.limiter().label()
-    }
-
-    #[cfg(test)]
-    fn limiter_is_enabled(&self) -> bool {
-        self.session.limiter().is_enabled()
-    }
-}
-
-impl Default for YFinanceClient {
-    fn default() -> Self {
-        Self::from_config(&RateLimitConfig::default())
     }
 }
 
@@ -509,6 +326,7 @@ impl Tool for GetOhlcv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     // ── Date validation ───────────────────────────────────────────────────
 
@@ -521,32 +339,6 @@ mod tests {
     fn parse_invalid_date_returns_schema_violation() {
         let err = parse_date("not-a-date").unwrap_err();
         assert!(matches!(err, TradingError::SchemaViolation { .. }));
-    }
-
-    #[tokio::test]
-    async fn end_before_start_returns_error() {
-        let client = YFinanceClient::default();
-        let result = client.get_ohlcv("AAPL", "2024-06-01", "2024-01-01").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, TradingError::SchemaViolation { ref message } if message.contains("before start"))
-        );
-    }
-
-    #[tokio::test]
-    async fn same_start_and_end_is_valid() {
-        // Dates are equal — should not return an "invalid range" error.
-        // Seed the cache so no real HTTP call is made.
-        let client = YFinanceClient::default();
-        client
-            .cache_seed("AAPL", "2024-01-15", "2024-01-15", vec![])
-            .await;
-        let result = client.get_ohlcv("AAPL", "2024-01-15", "2024-01-15").await;
-        assert!(
-            result.is_ok(),
-            "equal start/end should not fail with date-range error, got: {result:?}"
-        );
     }
 
     // ── Error mapping ─────────────────────────────────────────────────────
@@ -768,75 +560,6 @@ mod tests {
         );
     }
 
-    // ── In-memory client cache ────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn get_ohlcv_returns_cached_result_on_second_call_with_same_params() {
-        // Pre-populate the cache directly so we don't need a real network call.
-        let client = YFinanceClient::default();
-        let candles = vec![Candle {
-            date: "2024-01-02".to_owned(),
-            open: 180.0,
-            high: 182.0,
-            low: 179.0,
-            close: 181.0,
-            volume: Some(30_000_000),
-        }];
-        // Insert directly into the cache to simulate a prior successful fetch.
-        client.cache.write().await.insert(
-            (
-                "AAPL".to_owned(),
-                "2024-01-01".to_owned(),
-                "2024-01-31".to_owned(),
-            ),
-            Arc::new(candles.clone()),
-        );
-
-        // Both calls with the same params should return the cached data.
-        let first = client
-            .get_ohlcv("AAPL", "2024-01-01", "2024-01-31")
-            .await
-            .expect("cache hit must succeed");
-        let second = client
-            .get_ohlcv("AAPL", "2024-01-01", "2024-01-31")
-            .await
-            .expect("cache hit must succeed");
-
-        assert_eq!(first, candles);
-        assert_eq!(second, candles);
-        // Only one entry in the cache (no duplication).
-        assert_eq!(client.cache.read().await.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn get_ohlcv_cache_is_case_insensitive_for_symbol() {
-        let client = YFinanceClient::default();
-        let candles = vec![Candle {
-            date: "2024-03-01".to_owned(),
-            open: 170.0,
-            high: 172.0,
-            low: 169.0,
-            close: 171.0,
-            volume: None,
-        }];
-        // Pre-populate with uppercase key (as would happen after a real fetch).
-        client.cache.write().await.insert(
-            (
-                "MSFT".to_owned(),
-                "2024-03-01".to_owned(),
-                "2024-03-31".to_owned(),
-            ),
-            Arc::new(candles.clone()),
-        );
-
-        // Call with lowercase — should still hit the cache.
-        let result = client
-            .get_ohlcv("msft", "2024-03-01", "2024-03-31")
-            .await
-            .expect("case-insensitive cache hit must succeed");
-        assert_eq!(result, candles);
-    }
-
     // ── Chronological ordering ────────────────────────────────────────────
 
     #[test]
@@ -871,79 +594,5 @@ mod tests {
         assert_eq!(candles[0].date, "2024-01-01");
         assert_eq!(candles[1].date, "2024-01-02");
         assert_eq!(candles[2].date, "2024-01-03");
-    }
-
-    // ── from_config constructor ───────────────────────────────────────────
-
-    #[test]
-    fn from_config_with_zero_rps_creates_client_without_panic() {
-        use crate::config::RateLimitConfig;
-        let cfg = RateLimitConfig {
-            finnhub_rps: 0,
-            fred_rps: 0,
-            yahoo_finance_rps: 0,
-            alpha_vantage_rps: 0,
-            reddit_rpm: 0,
-            sec_edgar_rps: 0,
-        };
-        let client = YFinanceClient::from_config(&cfg);
-        assert_eq!(client.limiter_label(), "yahoo_finance");
-        assert!(
-            !client.limiter_is_enabled(),
-            "yahoo_finance_rps=0 should disable the limiter"
-        );
-    }
-
-    #[test]
-    fn from_config_with_nonzero_rps_creates_client_without_panic() {
-        use crate::config::RateLimitConfig;
-        let cfg = RateLimitConfig {
-            finnhub_rps: 0,
-            fred_rps: 0,
-            yahoo_finance_rps: 5,
-            alpha_vantage_rps: 0,
-            reddit_rpm: 0,
-            sec_edgar_rps: 0,
-        };
-        let client = YFinanceClient::from_config(&cfg);
-        assert_eq!(client.limiter_label(), "yahoo_finance");
-        assert!(
-            client.limiter_is_enabled(),
-            "non-zero yahoo_finance_rps should enable the limiter"
-        );
-    }
-
-    #[test]
-    fn default_and_from_config_default_produce_same_limiter_label() {
-        use crate::config::RateLimitConfig;
-        let default_client = YFinanceClient::default();
-        let config_client = YFinanceClient::from_config(&RateLimitConfig::default());
-        assert_eq!(default_client.limiter_label(), "yahoo_finance");
-        assert_eq!(config_client.limiter_label(), "yahoo_finance");
-        assert_eq!(
-            default_client.limiter_is_enabled(),
-            config_client.limiter_is_enabled()
-        );
-    }
-
-    #[tokio::test]
-    async fn cache_seed_helper_populates_cache_for_tests() {
-        let client = YFinanceClient::default();
-        client
-            .cache_seed(
-                "aapl",
-                "2024-01-01",
-                "2024-01-31",
-                vec![Candle {
-                    date: "2024-01-02".to_owned(),
-                    open: 100.0,
-                    high: 101.0,
-                    low: 99.0,
-                    close: 100.5,
-                    volume: Some(1),
-                }],
-            )
-            .await;
-        assert_eq!(client.cache_len().await, 1);
     }
 }
