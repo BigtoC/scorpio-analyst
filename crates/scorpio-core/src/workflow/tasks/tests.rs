@@ -1150,7 +1150,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
     ];
 
     for (analyst_key, usage) in usages {
-        common::write_analyst_usage(&ctx, analyst_key, &usage)
+        write_prefixed_result(&ctx, "usage.analyst", analyst_key, &usage)
             .await
             .expect("usage write should succeed");
     }

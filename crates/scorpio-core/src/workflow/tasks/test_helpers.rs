@@ -10,7 +10,9 @@ use crate::{
         TradeAction, TradeProposal,
     },
     workflow::{
-        context_bridge::{deserialize_state_from_context, serialize_state_to_context},
+        context_bridge::{
+            deserialize_state_from_context, serialize_state_to_context, write_prefixed_result,
+        },
         snapshot::{SnapshotPhase, SnapshotStore},
         topology::RoutingFlags,
     },
@@ -20,7 +22,7 @@ use super::{
     accounting::{debate_moderator_accounting, risk_moderator_accounting},
     common::{
         self, ANALYST_FUNDAMENTAL, ANALYST_NEWS, ANALYST_PREFIX, ANALYST_SENTIMENT,
-        ANALYST_TECHNICAL, DEBATE_USAGE_PREFIX, RISK_USAGE_PREFIX, write_round_usage,
+        ANALYST_TECHNICAL, ANALYST_USAGE_PREFIX, DEBATE_USAGE_PREFIX, RISK_USAGE_PREFIX,
     },
 };
 
@@ -30,12 +32,22 @@ pub async fn write_round_debate_usage(
     bull_usage: &AgentTokenUsage,
     bear_usage: &AgentTokenUsage,
 ) {
-    write_round_usage(context, DEBATE_USAGE_PREFIX, round, "bull", bull_usage)
-        .await
-        .expect("test: debate bull usage write");
-    write_round_usage(context, DEBATE_USAGE_PREFIX, round, "bear", bear_usage)
-        .await
-        .expect("test: debate bear usage write");
+    write_prefixed_result(
+        context,
+        &format!("{DEBATE_USAGE_PREFIX}.{round}"),
+        "bull",
+        bull_usage,
+    )
+    .await
+    .expect("test: debate bull usage write");
+    write_prefixed_result(
+        context,
+        &format!("{DEBATE_USAGE_PREFIX}.{round}"),
+        "bear",
+        bear_usage,
+    )
+    .await
+    .expect("test: debate bear usage write");
 }
 
 pub async fn write_round_risk_usage(
@@ -45,15 +57,30 @@ pub async fn write_round_risk_usage(
     con_usage: &AgentTokenUsage,
     neu_usage: &AgentTokenUsage,
 ) {
-    write_round_usage(context, RISK_USAGE_PREFIX, round, "agg", agg_usage)
-        .await
-        .expect("test: risk agg usage write");
-    write_round_usage(context, RISK_USAGE_PREFIX, round, "con", con_usage)
-        .await
-        .expect("test: risk con usage write");
-    write_round_usage(context, RISK_USAGE_PREFIX, round, "neu", neu_usage)
-        .await
-        .expect("test: risk neu usage write");
+    write_prefixed_result(
+        context,
+        &format!("{RISK_USAGE_PREFIX}.{round}"),
+        "agg",
+        agg_usage,
+    )
+    .await
+    .expect("test: risk agg usage write");
+    write_prefixed_result(
+        context,
+        &format!("{RISK_USAGE_PREFIX}.{round}"),
+        "con",
+        con_usage,
+    )
+    .await
+    .expect("test: risk con usage write");
+    write_prefixed_result(
+        context,
+        &format!("{RISK_USAGE_PREFIX}.{round}"),
+        "neu",
+        neu_usage,
+    )
+    .await
+    .expect("test: risk neu usage write");
 }
 
 /// Run the accounting portion of [`super::DebateModeratorTask`] with a supplied
@@ -247,7 +274,7 @@ impl graph_flow::Task for StubAnalystChild {
 
         common::write_flag(&context, self.analyst_key, true).await;
         let usage = stub_usage(&format!("Stub {} Analyst", self.analyst_key));
-        common::write_analyst_usage(&context, self.analyst_key, &usage)
+        write_prefixed_result(&context, ANALYST_USAGE_PREFIX, self.analyst_key, &usage)
             .await
             .map_err(|error| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -288,13 +315,18 @@ impl graph_flow::Task for StubBullishResearcherTask {
         let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Bullish Researcher");
-        write_round_usage(&context, DEBATE_USAGE_PREFIX, this_round, "bull", &usage)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "StubBullishResearcherTask: round usage write failed: {error}"
-                ))
-            })?;
+        write_prefixed_result(
+            &context,
+            &format!("{DEBATE_USAGE_PREFIX}.{this_round}"),
+            "bull",
+            &usage,
+        )
+        .await
+        .map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "StubBullishResearcherTask: round usage write failed: {error}"
+            ))
+        })?;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -336,13 +368,18 @@ impl graph_flow::Task for StubBearishResearcherTask {
         let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Bearish Researcher");
-        write_round_usage(&context, DEBATE_USAGE_PREFIX, this_round, "bear", &usage)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "StubBearishResearcherTask: round usage write failed: {error}"
-                ))
-            })?;
+        write_prefixed_result(
+            &context,
+            &format!("{DEBATE_USAGE_PREFIX}.{this_round}"),
+            "bear",
+            &usage,
+        )
+        .await
+        .map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "StubBearishResearcherTask: round usage write failed: {error}"
+            ))
+        })?;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -513,13 +550,18 @@ impl graph_flow::Task for StubAggressiveRiskTask {
         let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Aggressive Risk");
-        write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "agg", &usage)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "StubAggressiveRiskTask: round usage write failed: {error}"
-                ))
-            })?;
+        write_prefixed_result(
+            &context,
+            &format!("{RISK_USAGE_PREFIX}.{this_round}"),
+            "agg",
+            &usage,
+        )
+        .await
+        .map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "StubAggressiveRiskTask: round usage write failed: {error}"
+            ))
+        })?;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -567,13 +609,18 @@ impl graph_flow::Task for StubConservativeRiskTask {
         let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Conservative Risk");
-        write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "con", &usage)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "StubConservativeRiskTask: round usage write failed: {error}"
-                ))
-            })?;
+        write_prefixed_result(
+            &context,
+            &format!("{RISK_USAGE_PREFIX}.{this_round}"),
+            "con",
+            &usage,
+        )
+        .await
+        .map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "StubConservativeRiskTask: round usage write failed: {error}"
+            ))
+        })?;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -621,13 +668,18 @@ impl graph_flow::Task for StubNeutralRiskTask {
         let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Neutral Risk");
-        write_round_usage(&context, RISK_USAGE_PREFIX, this_round, "neu", &usage)
-            .await
-            .map_err(|error| {
-                graph_flow::GraphError::TaskExecutionFailed(format!(
-                    "StubNeutralRiskTask: round usage write failed: {error}"
-                ))
-            })?;
+        write_prefixed_result(
+            &context,
+            &format!("{RISK_USAGE_PREFIX}.{this_round}"),
+            "neu",
+            &usage,
+        )
+        .await
+        .map_err(|error| {
+            graph_flow::GraphError::TaskExecutionFailed(format!(
+                "StubNeutralRiskTask: round usage write failed: {error}"
+            ))
+        })?;
 
         serialize_state_to_context(&state, &context)
             .await
@@ -862,7 +914,7 @@ impl graph_flow::Task for CustomTechnicalAnalystChild {
 
         common::write_flag(&context, ANALYST_TECHNICAL, true).await;
         let usage = stub_usage("Stub Technical Analyst");
-        common::write_analyst_usage(&context, ANALYST_TECHNICAL, &usage)
+        write_prefixed_result(&context, ANALYST_USAGE_PREFIX, ANALYST_TECHNICAL, &usage)
             .await
             .map_err(|error| {
                 graph_flow::GraphError::TaskExecutionFailed(format!(

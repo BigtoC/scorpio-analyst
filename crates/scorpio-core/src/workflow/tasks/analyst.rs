@@ -44,8 +44,8 @@ use crate::{
         snapshot::{SnapshotPhase, SnapshotStore},
         tasks::common::{
             ANALYST_FUNDAMENTAL, ANALYST_NEWS, ANALYST_PREFIX, ANALYST_SENTIMENT,
-            ANALYST_TECHNICAL, OK_SUFFIX, load_transcript_fetch, read_analyst_usage,
-            write_analyst_usage, write_err, write_flag,
+            ANALYST_TECHNICAL, ANALYST_USAGE_PREFIX, OK_SUFFIX, load_transcript_fetch,
+            read_analyst_usage, write_err, write_flag,
         },
     },
 };
@@ -250,15 +250,6 @@ fn required_inputs_for_state(state: &TradingState) -> Vec<String> {
         })
 }
 
-/// Resolve the active analyst id set for this cycle from the pack's
-/// `required_inputs`. Entries that don't map to a known analyst are dropped.
-fn active_analyst_ids(state: &TradingState) -> Vec<AnalystId> {
-    required_inputs_for_state(state)
-        .iter()
-        .filter_map(|s| AnalystId::from_required_input(s))
-        .collect()
-}
-
 fn input_missing(state: &TradingState, input: &str) -> bool {
     match input {
         "fundamentals" => state.evidence_fundamental().is_none(),
@@ -343,15 +334,22 @@ impl Task for FundamentalAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_FUNDAMENTAL, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_FUNDAMENTAL, &usage).await;
+                let _ = write_prefixed_result(
+                    &context,
+                    ANALYST_USAGE_PREFIX,
+                    ANALYST_FUNDAMENTAL,
+                    &usage,
+                )
+                .await;
                 info!(analyst = "fundamental", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "fundamental", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_FUNDAMENTAL, false).await;
                 write_err(&context, ANALYST_FUNDAMENTAL, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_FUNDAMENTAL,
                     &AgentTokenUsage::unavailable("Fundamental Analyst", "unknown", 0),
                 )
@@ -452,15 +450,22 @@ impl Task for SentimentAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_SENTIMENT, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_SENTIMENT, &usage).await;
+                let _ = write_prefixed_result(
+                    &context,
+                    ANALYST_USAGE_PREFIX,
+                    ANALYST_SENTIMENT,
+                    &usage,
+                )
+                .await;
                 info!(analyst = "sentiment", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "sentiment", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_SENTIMENT, false).await;
                 write_err(&context, ANALYST_SENTIMENT, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_SENTIMENT,
                     &AgentTokenUsage::unavailable("Sentiment Analyst", "unknown", 0),
                 )
@@ -561,15 +566,17 @@ impl Task for NewsAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_NEWS, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_NEWS, &usage).await;
+                let _ = write_prefixed_result(&context, ANALYST_USAGE_PREFIX, ANALYST_NEWS, &usage)
+                    .await;
                 info!(analyst = "news", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "news", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_NEWS, false).await;
                 write_err(&context, ANALYST_NEWS, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_NEWS,
                     &AgentTokenUsage::unavailable("News Analyst", "unknown", 0),
                 )
@@ -659,15 +666,22 @@ impl Task for TechnicalAnalystTask {
                 }
 
                 write_flag(&context, ANALYST_TECHNICAL, true).await;
-                let _ = write_analyst_usage(&context, ANALYST_TECHNICAL, &usage).await;
+                let _ = write_prefixed_result(
+                    &context,
+                    ANALYST_USAGE_PREFIX,
+                    ANALYST_TECHNICAL,
+                    &usage,
+                )
+                .await;
                 info!(analyst = "technical", "analyst completed successfully");
             }
             Err(error) => {
                 warn!(analyst = "technical", error = %error, "analyst failed");
                 write_flag(&context, ANALYST_TECHNICAL, false).await;
                 write_err(&context, ANALYST_TECHNICAL, &error.to_string()).await;
-                let _ = write_analyst_usage(
+                let _ = write_prefixed_result(
                     &context,
+                    ANALYST_USAGE_PREFIX,
                     ANALYST_TECHNICAL,
                     &AgentTokenUsage::unavailable("Technical Analyst", "unknown", 0),
                 )
@@ -975,24 +989,17 @@ fn resolve_official_benchmark_name(
         return Some((
             metadata.name.clone(),
             metadata.source,
-            benchmark_metadata_age_days(metadata),
+            Some(
+                (Utc::now().date_naive() - metadata.filing_date?)
+                    .num_days()
+                    .max(0) as u32,
+            ),
         ));
     }
     nport
         .and_then(|holdings| holdings.stated_benchmark.as_deref())
         .and_then(normalize_optional_benchmark)
         .map(|name| (name, crate::state::BenchmarkSource::SecNport, None))
-}
-
-fn benchmark_metadata_age_days(
-    metadata: &crate::data::sec_risk_return::BenchmarkMetadata,
-) -> Option<u32> {
-    let filing_date = metadata.filing_date?;
-    Some(
-        (chrono::Utc::now().date_naive() - filing_date)
-            .num_days()
-            .max(0) as u32,
-    )
 }
 
 async fn fetch_with_timeout<T, F>(
@@ -1068,7 +1075,7 @@ fn no_valuator_selected(asset_shape: AssetShape) -> DerivedValuation {
 /// `tracing::warn!` and returns `None` so the valuator leaves
 /// dealer-positioning absent cleanly.
 pub(crate) fn etf_options_from_state(
-    state: &crate::state::TradingState,
+    state: &TradingState,
 ) -> Option<&crate::data::traits::options::OptionsSnapshot> {
     use crate::data::traits::options::OptionsOutcome;
     use crate::state::TechnicalOptionsContext;
@@ -1080,7 +1087,7 @@ pub(crate) fn etf_options_from_state(
             outcome: OptionsOutcome::Snapshot(snap),
         } => Some(snap),
         TechnicalOptionsContext::Available { outcome: other } => {
-            tracing::warn!(
+            warn!(
                 target: "scorpio_core::workflow::analyst",
                 outcome = %other,
                 symbol = %state.asset_symbol,
@@ -1089,7 +1096,7 @@ pub(crate) fn etf_options_from_state(
             None
         }
         TechnicalOptionsContext::FetchFailed { reason } => {
-            tracing::warn!(
+            warn!(
                 target: "scorpio_core::workflow::analyst",
                 symbol = %state.asset_symbol,
                 fetch_reason = %reason,
@@ -1100,10 +1107,6 @@ pub(crate) fn etf_options_from_state(
     }
 }
 
-pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) -> Option<f64> {
-    state.etf_risk_free_rate
-}
-
 /// Stage 3 cleanup: clear the transient `OptionsSnapshot.all_expirations`
 /// vector in place so persisted technical snapshots keep only the bounded
 /// `EtfValuation.options_gex.broad` summary, not the full non-front-month
@@ -1111,7 +1114,7 @@ pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) 
 ///
 /// Called immediately before `serialize_state_to_context(...)` on the ETF
 /// branch; no-op for any other technical context shape.
-pub(crate) fn strip_transient_all_expirations(state: &mut crate::state::TradingState) {
+pub(crate) fn strip_transient_all_expirations(state: &mut TradingState) {
     use crate::data::traits::options::OptionsOutcome;
     use crate::state::TechnicalOptionsContext;
 
@@ -1185,10 +1188,10 @@ fn derive_runtime_valuation(
                 .as_ref()
                 .map(|(metadata, age_days)| (metadata, *age_days)),
             etf_options: etf_options_from_state(state),
-            etf_risk_free_rate: etf_risk_free_rate_from_state(state),
+            etf_risk_free_rate: state.etf_risk_free_rate,
             etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
             as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
-                .unwrap_or_else(|_| chrono::Utc::now().date_naive()),
+                .unwrap_or_else(|_| Utc::now().date_naive()),
         },
         &provisional.asset_shape,
     )
@@ -1210,7 +1213,10 @@ impl Task for AnalystSyncTask {
                 ))
             })?;
 
-        let active_ids = active_analyst_ids(&state);
+        let active_ids: Vec<AnalystId> = required_inputs_for_state(&state)
+            .iter()
+            .filter_map(|s| AnalystId::from_required_input(s))
+            .collect();
         let active_total = active_ids.len();
         let mut failures = Vec::new();
 
@@ -1234,9 +1240,9 @@ impl Task for AnalystSyncTask {
             });
 
         // Only merge for analysts the active pack declared — keeps byte-identical
-        // behaviour for the equity baseline (all four active) while
+        // behavior for the equity baseline (all four active) while
         // preventing phantom "missing analyst" failures for packs that
-        // intentionally omit one. Each arm is still type-specialised because
+        // intentionally omit one. Each arm is still type-specialized because
         // each analyst writes a differently-shaped payload into state; the
         // registry-driven aggregation is the per-id gate here, not the types.
         if active_ids.contains(&AnalystId::Fundamental) {
@@ -1833,20 +1839,6 @@ mod tests {
 
         let extracted = super::etf_options_from_state(&state);
         assert!(extracted.is_none());
-    }
-
-    #[test]
-    fn etf_valuation_inputs_thread_etf_risk_free_rate_from_state() {
-        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
-        crate::testing::with_baseline_runtime_policy(&mut state);
-
-        state.etf_risk_free_rate = Some(0.0427);
-        let inputs_rate = super::etf_risk_free_rate_from_state(&state);
-        assert_eq!(inputs_rate, Some(0.0427));
-
-        state.etf_risk_free_rate = None;
-        let inputs_rate_none = super::etf_risk_free_rate_from_state(&state);
-        assert!(inputs_rate_none.is_none());
     }
 
     #[test]

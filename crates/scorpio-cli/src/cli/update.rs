@@ -269,10 +269,6 @@ fn asset_archive_suffix(asset_name: &str) -> Option<&'static str> {
     }
 }
 
-fn expected_asset_name(target: &str, archive_suffix: &str) -> String {
-    format!("{BIN_NAME}-{target}{archive_suffix}")
-}
-
 fn bin_name_in_archive(asset_name: &str) -> &'static str {
     if asset_name.ends_with(".zip") {
         WINDOWS_BIN_NAME
@@ -287,7 +283,7 @@ fn select_release_asset(release: &UpdateRelease, target: &str) -> anyhow::Result
         .iter()
         .find(|asset| {
             asset_archive_suffix(&asset.name)
-                .map(|suffix| asset.name == expected_asset_name(target, suffix))
+                .map(|suffix| asset.name == format!("{BIN_NAME}-{target}{suffix}"))
                 .unwrap_or(false)
         })
         .cloned()

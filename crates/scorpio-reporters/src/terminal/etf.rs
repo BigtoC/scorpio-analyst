@@ -43,10 +43,6 @@ impl RenderPolicy {
     }
 }
 
-pub(crate) fn render_etf_panel(out: &mut String, state: &TradingState) {
-    render_etf_panel_with_policy(out, state, RenderPolicy::Rich);
-}
-
 pub(crate) fn render_etf_panel_with_policy(
     out: &mut String,
     state: &TradingState,
@@ -433,8 +429,7 @@ fn format_strike_gex(s: &StrikeGex) -> String {
 }
 
 fn format_usd_signed(value: f64) -> String {
-    let abs = value.abs();
-    let (suffix, scaled) = scale_for_usd(abs);
+    let (suffix, scaled) = scale_for_usd(value.abs());
     let sign = if value >= 0.0 { '+' } else { '-' };
     format!("{sign}${scaled:.2}{suffix}")
 }
@@ -531,7 +526,7 @@ mod tests {
     fn renders_etf_panel_with_full_premium_snapshot() {
         let state = etf_state_with(minimal_etf());
         let mut out = String::new();
-        render_etf_panel(&mut out, &state);
+        render_etf_panel_with_policy(&mut out, &state, RenderPolicy::Rich);
         assert!(out.contains("ETF Valuation Snapshot"));
         assert!(out.contains("Market Price"));
         assert!(out.contains("Premium"));
@@ -548,7 +543,7 @@ mod tests {
             },
         });
         let mut out = String::new();
-        render_etf_panel(&mut out, &state);
+        render_etf_panel_with_policy(&mut out, &state, RenderPolicy::Rich);
         assert!(out.contains("Not assessed"));
         assert!(out.contains("etf_quote_unavailable"));
     }
@@ -557,7 +552,7 @@ mod tests {
     fn renders_holdings_unavailable_warning_when_composition_missing() {
         let state = etf_state_with(minimal_etf());
         let mut out = String::new();
-        render_etf_panel(&mut out, &state);
+        render_etf_panel_with_policy(&mut out, &state, RenderPolicy::Rich);
         assert!(out.contains("Holdings unavailable"));
     }
 
@@ -570,7 +565,7 @@ mod tests {
         etf.flags.nav_available = false;
         let state = etf_state_with(etf);
         let mut out = String::new();
-        render_etf_panel(&mut out, &state);
+        render_etf_panel_with_policy(&mut out, &state, RenderPolicy::Rich);
         assert!(out.contains("NAV              unavailable"));
         assert!(out.contains("Premium band unavailable"));
     }

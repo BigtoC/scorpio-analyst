@@ -32,7 +32,7 @@ fn write_valuation_body(out: &mut String, dv: &DerivedValuation, state: &Trading
             write_equity_metrics(out, equity);
         }
         ScenarioValuation::Etf(_) => {
-            super::etf::render_etf_panel(out, state);
+            super::etf::render_etf_panel_with_policy(out, state, super::etf::RenderPolicy::Rich);
         }
     }
 }
