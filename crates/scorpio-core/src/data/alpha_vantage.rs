@@ -233,11 +233,6 @@ impl AlphaVantageClient {
         }
     }
 
-    /// Return the number of cache write failures observed.
-    pub fn cache_failure_count(&self) -> u64 {
-        self.cache_failure_count.load(Ordering::Relaxed)
-    }
-
     /// Validate the quarter format (`"YYYYQN"` where N is 1-4) using byte
     /// arithmetic — no `regex` crate dependency for a 6-char structural check.
     fn validate_quarter(quarter: &str) -> Result<(), TradingError> {
@@ -405,10 +400,6 @@ impl AlphaVantageClient {
         );
     }
 
-    fn record_schema_error(&self) {
-        self.schema_error_count.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Escalate an authentication/authorization failure (HTTP 401/403).
     /// Increments the auth-failure counter and emits a single `error!`-level
     /// log on the first occurrence of the process lifetime.
@@ -450,22 +441,9 @@ impl AlphaVantageClient {
         Self::parse_optional_non_negative_f64(raw).filter(|value| *value <= 1.0)
     }
 
-    fn parse_optional_date(raw: Option<&str>) -> Option<NaiveDate> {
-        NaiveDate::parse_from_str(raw?.trim(), "%Y-%m-%d").ok()
-    }
-
     /// Upstream weights are decimal fractions (`0.084`); render as percent.
     fn parse_decimal_weight_pct(raw: Option<&str>) -> Option<f64> {
         Self::parse_optional_ratio(raw).map(|value| value * 100.0)
-    }
-
-    /// `ETF_PROFILE.leveraged` is `"NO"`/`"YES"`. Only plain (`"NO"`) funds get a
-    /// known `1.0` factor; a leveraged fund's true factor is not in this payload.
-    fn parse_leverage_factor(raw: Option<&str>) -> Option<f64> {
-        match raw?.trim().to_ascii_uppercase().as_str() {
-            "NO" => Some(1.0),
-            _ => None,
-        }
     }
 
     /// Parse a raw `ETF_PROFILE` JSON body into an [`EtfProfileFetch`]. Provider
@@ -542,13 +520,17 @@ impl AlphaVantageClient {
             expense_ratio_pct: Self::parse_optional_ratio(resp.net_expense_ratio.as_deref()),
             portfolio_turnover_pct: Self::parse_optional_ratio(resp.portfolio_turnover.as_deref()),
             distribution_yield_pct: Self::parse_optional_ratio(resp.dividend_yield.as_deref()),
-            inception_date: Self::parse_optional_date(resp.inception_date.as_deref()),
-            leverage_factor: Self::parse_leverage_factor(resp.leveraged.as_deref()),
+            inception_date: resp
+                .inception_date
+                .as_deref()
+                .and_then(|s| NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()),
+            leverage_factor: resp.leveraged.as_deref().and_then(|s| {
+                match s.trim().to_ascii_uppercase().as_str() {
+                    "NO" => Some(1.0),
+                    _ => None,
+                }
+            }),
         }))
-    }
-
-    fn build_etf_profile_url(&self) -> String {
-        format!("{}?function=ETF_PROFILE", self.base_url)
     }
 
     /// Fetch the Alpha Vantage `ETF_PROFILE` for `symbol`, fail-soft: transient
@@ -560,7 +542,7 @@ impl AlphaVantageClient {
 
         let response = self
             .http
-            .get(self.build_etf_profile_url())
+            .get(format!("{}?function=ETF_PROFILE", self.base_url))
             .query(&[("symbol", symbol), ("apikey", self.key.expose_secret())])
             .send()
             .await;
@@ -682,7 +664,7 @@ impl TranscriptProvider for AlphaVantageClient {
                     match Self::parse_response(&body) {
                         Ok(o) => o,
                         Err(e) => {
-                            self.record_schema_error();
+                            self.schema_error_count.fetch_add(1, Ordering::Relaxed);
                             warn!(
                                 provider = "alpha_vantage",
                                 symbol,
@@ -839,7 +821,7 @@ pub(crate) mod tests {
         assert_eq!(profile.distribution_yield_pct, Some(0.0061));
         assert_eq!(
             profile.inception_date,
-            Some(chrono::NaiveDate::from_ymd_opt(2001, 7, 10).unwrap())
+            Some(NaiveDate::from_ymd_opt(2001, 7, 10).unwrap())
         );
         assert_eq!(profile.leverage_factor, Some(1.0));
         assert_eq!(profile.holdings[0].ticker.as_deref(), Some("NVDA"));
@@ -1109,8 +1091,8 @@ pub(crate) mod tests {
     #[test]
     fn record_schema_error_increments_counter() {
         let client = AlphaVantageClient::for_test();
-        client.record_schema_error();
-        client.record_schema_error();
+        client.schema_error_count.fetch_add(1, Ordering::Relaxed);
+        client.schema_error_count.fetch_add(1, Ordering::Relaxed);
         assert_eq!(client.schema_error_count.load(Ordering::Relaxed), 2);
     }
 
@@ -1230,7 +1212,7 @@ pub(crate) mod tests {
         assert!(matches!(first, TranscriptFetch::Found(_)));
         assert_eq!(first, second);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(client.cache_failure_count(), 0);
+        assert_eq!(client.cache_failure_count.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -1262,7 +1244,7 @@ pub(crate) mod tests {
 
         assert!(matches!(result, TranscriptFetch::Found(_)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert!(client.cache_failure_count() > 0);
+        assert!(client.cache_failure_count.load(Ordering::Relaxed) > 0);
     }
 
     #[tokio::test]
