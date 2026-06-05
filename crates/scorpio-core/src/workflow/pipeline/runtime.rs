@@ -414,10 +414,11 @@ pub async fn run_analysis_cycle(
     let (price_result, vix_result, news_result, catalysts_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
         use crate::constants::{REDDIT_REQUEST_TIMEOUT_SECS, REDDIT_USER_AGENT_PREFIX};
-        use crate::data::YFinanceNewsProvider;
         use crate::data::reddit::RedditClient;
         use crate::data::reddit::RedditNewsProvider;
+        use crate::data::{GnewsNewsProvider, YFinanceNewsProvider};
         let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
+        let gnews_provider = GnewsNewsProvider::new();
 
         // Construct a per-cycle Reddit provider. Pipeline-level sharing would
         // require storing the client on `TradingPipeline` and threading it
@@ -462,6 +463,7 @@ pub async fn run_analysis_cycle(
                 &pipeline.finnhub,
                 &yfinance_news_provider,
                 &reddit_news_provider,
+                &gnews_provider,
                 &symbol,
             ),
             hydrate_catalysts(
