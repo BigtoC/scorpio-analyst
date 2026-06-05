@@ -22,7 +22,7 @@ use graph_flow::{Graph, fanout::FanOutTask};
 
 use super::pipeline::TradingPipeline;
 use super::pipeline::constants::TASKS;
-use super::pipeline::runtime::build_analyst_tasks;
+use super::pipeline::runtime::build_analyst_task;
 use super::snapshot::SnapshotStore;
 use super::tasks::{
     AggressiveRiskTask, AnalystSyncTask, AuditorTask, BearishResearcherTask, BullishResearcherTask,
@@ -82,15 +82,11 @@ pub fn build_graph_from_pack(
     );
     graph.add_task(Arc::new(preflight));
 
-    let analyst_tasks = build_analyst_tasks(
-        registry,
-        &pack.required_inputs,
-        finnhub,
-        fred,
-        yfinance,
-        quick_handle,
-        &config.llm,
-    );
+    let analyst_tasks: Vec<Arc<dyn graph_flow::Task>> = registry
+        .for_inputs(pack.required_inputs.iter().map(String::as_str))
+        .into_iter()
+        .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, &config.llm))
+        .collect();
     let fan_out = FanOutTask::new(TASKS.analyst_fan_out, analyst_tasks);
     graph.add_task(fan_out);
     graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
