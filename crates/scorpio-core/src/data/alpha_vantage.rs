@@ -1220,7 +1220,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("transcript-cache.db");
         let cache = TranscriptCacheStore::new(Some(&path)).await.expect("cache");
-        cache.close_for_test().await;
+        cache.pool.close().await;
         let calls = Arc::new(AtomicUsize::new(0));
 
         let base_url = spawn_transcript_server(

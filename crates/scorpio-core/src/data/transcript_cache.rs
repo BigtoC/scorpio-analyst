@@ -17,7 +17,7 @@ use crate::error::TradingError;
 /// Local SQLite cache for transcript fetch results.
 #[derive(Clone, Debug)]
 pub struct TranscriptCacheStore {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl TranscriptCacheStore {
@@ -159,12 +159,6 @@ impl TranscriptCacheStore {
                 None
             }
         }
-    }
-
-    /// Close the underlying pool. Test-only seam for forcing cache failures.
-    #[cfg(test)]
-    pub(crate) async fn close_for_test(&self) {
-        self.pool.close().await;
     }
 }
 
