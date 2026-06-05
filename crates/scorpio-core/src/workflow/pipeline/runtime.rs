@@ -274,7 +274,7 @@ where
         &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
+            dyn Future<
                     Output = Result<
                         crate::providers::factory::copilot_auth::GitHubIdentity,
                         TradingError,
@@ -428,7 +428,7 @@ pub async fn run_analysis_cycle(
             .timeout(std::time::Duration::from_secs(REDDIT_REQUEST_TIMEOUT_SECS))
             .build()
             .unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "failed to build reddit http client; using default");
+                warn!(error = %err, "failed to build reddit http client; using default");
                 reqwest::Client::new()
             });
         let reddit_limiter = SharedRateLimiter::reddit_from_config(&pipeline.config.rate_limits)
@@ -1023,14 +1023,12 @@ async fn resolve_transcript_quarter_from_fetch<F>(
     as_of: NaiveDate,
 ) -> Option<String>
 where
-    F: std::future::Future<
-            Output = Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
-        >,
+    F: Future<Output = Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>>,
 {
     let releases = match tokio::time::timeout(timeout, fetch).await {
         Ok(Ok(releases)) => releases,
         Ok(Err(error)) => {
-            tracing::warn!(
+            warn!(
                 symbol,
                 error = %error,
                 "transcript quarter resolution failed (fail-open)"
@@ -1038,7 +1036,7 @@ where
             return None;
         }
         Err(_) => {
-            tracing::warn!(
+            warn!(
                 symbol,
                 timeout_secs = timeout.as_secs_f64(),
                 "transcript quarter resolution timed out (fail-open)"
@@ -1050,7 +1048,7 @@ where
     let recent = select_transcript_quarter(releases.as_ref(), as_of);
 
     if let Some(q) = &recent {
-        tracing::info!(
+        info!(
             symbol,
             quarter = %q,
             source = "finnhub_earnings_calendar",
@@ -1086,7 +1084,7 @@ async fn hydrate_transcript(
     match result {
         Ok(Ok(outcome)) => {
             match &outcome {
-                TranscriptFetch::Found(ev) => tracing::info!(
+                TranscriptFetch::Found(ev) => info!(
                     symbol, quarter = %quarter, segments = ev.segments.len(),
                     "transcript enrichment: available"
                 ),
@@ -1094,20 +1092,20 @@ async fn hydrate_transcript(
                     symbol, quarter = %quarter, "transcript enrichment: not published"
                 ),
                 TranscriptFetch::Throttled => {
-                    tracing::warn!(symbol, "transcript enrichment: throttled")
+                    warn!(symbol, "transcript enrichment: throttled")
                 }
                 TranscriptFetch::Unavailable => {
-                    tracing::warn!(symbol, "transcript enrichment: unavailable")
+                    warn!(symbol, "transcript enrichment: unavailable")
                 }
             }
             outcome
         }
         Ok(Err(e)) => {
-            tracing::warn!(symbol, error = %e, "transcript enrichment: fetch error (fail-open)");
+            warn!(symbol, error = %e, "transcript enrichment: fetch error (fail-open)");
             TranscriptFetch::Unavailable
         }
         Err(_) => {
-            tracing::warn!(symbol, "transcript enrichment: outer timeout (fail-open)");
+            warn!(symbol, "transcript enrichment: outer timeout (fail-open)");
             TranscriptFetch::Unavailable
         }
     }
@@ -1323,7 +1321,7 @@ mod preflight_copilot_guard_tests {
             std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
 
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls_clone = calls.clone();
 
         let _ = validate_copilot_auth_before_preflight_with(&cfg, &token_dir, move |_token| {
