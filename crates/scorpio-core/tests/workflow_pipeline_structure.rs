@@ -28,7 +28,7 @@ use tempfile::tempdir;
 use workflow_pipeline_make_pipeline::{make_pipeline, make_pipeline_from_pack};
 
 fn market_today() -> String {
-    scorpio_core::testing::market_local_date_eastern().to_string()
+    scorpio_core::testing::market_local_date_eastern_at(chrono::Utc::now()).to_string()
 }
 
 fn sample_state() -> TradingState {
@@ -536,16 +536,13 @@ fn replace_task_for_test_rejects_unknown_task_id_with_typed_error() {
     struct UnknownTask;
 
     #[async_trait::async_trait]
-    impl graph_flow::Task for UnknownTask {
+    impl Task for UnknownTask {
         fn id(&self) -> &str {
             "not_a_pipeline_task"
         }
 
-        async fn run(&self, _context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
-            Ok(graph_flow::TaskResult::new(
-                None,
-                graph_flow::NextAction::Continue,
-            ))
+        async fn run(&self, _context: Context) -> graph_flow::Result<TaskResult> {
+            Ok(TaskResult::new(None, NextAction::Continue))
         }
     }
 
@@ -568,12 +565,12 @@ async fn build_graph_returns_detached_graph_not_live_pipeline_graph() {
     struct FailingDebateModerator;
 
     #[async_trait::async_trait]
-    impl graph_flow::Task for FailingDebateModerator {
+    impl Task for FailingDebateModerator {
         fn id(&self) -> &str {
             "debate_moderator"
         }
 
-        async fn run(&self, _context: Context) -> graph_flow::Result<graph_flow::TaskResult> {
+        async fn run(&self, _context: Context) -> graph_flow::Result<TaskResult> {
             Err(graph_flow::GraphError::TaskExecutionFailed(
                 "detached test graph should not affect pipeline".to_owned(),
             ))
@@ -938,7 +935,7 @@ async fn preflight_fetches_dgs3mo_for_etf_pack_and_persists_source() {
     let mut state = TradingState::new("SPY".to_owned(), market_today());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
-        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        PackId::EtfBaseline,
         &fred,
         &yfinance,
     )
@@ -973,7 +970,7 @@ async fn preflight_skips_dgs3mo_for_historical_etf_pack() {
     let mut state = TradingState::new("SPY".to_owned(), "2026-01-01".to_owned());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
-        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        PackId::EtfBaseline,
         &fred,
         &yfinance,
     )
@@ -999,7 +996,7 @@ async fn preflight_skips_dgs3mo_for_non_etf_pack() {
     let mut state = TradingState::new("AAPL".to_owned(), "2026-05-27".to_owned());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
-        scorpio_core::analysis_packs::PackId::Baseline,
+        PackId::Baseline,
         &fred,
         &yfinance,
     )
@@ -1024,7 +1021,7 @@ async fn preflight_falls_back_to_yfinance_irx_when_fred_returns_empty() {
     let mut state = TradingState::new("SPY".to_owned(), market_today());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
-        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        PackId::EtfBaseline,
         &fred,
         &yfinance,
     )
@@ -1055,7 +1052,7 @@ async fn preflight_degrades_rate_when_fred_and_yfinance_fail() {
     let mut state = TradingState::new("SPY".to_owned(), market_today());
     scorpio_core::workflow::tasks::preflight::run_for_test(
         &mut state,
-        scorpio_core::analysis_packs::PackId::EtfBaseline,
+        PackId::EtfBaseline,
         &fred,
         &yfinance,
     )

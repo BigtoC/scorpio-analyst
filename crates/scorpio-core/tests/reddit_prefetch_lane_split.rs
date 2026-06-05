@@ -96,6 +96,7 @@ async fn vetted_lane_never_contains_reddit_sources() {
         &StubNewsProvider::ok("finnhub", fh),
         &StubNewsProvider::ok("yfinance", yf),
         &StubNewsProvider::ok("reddit", rd),
+        &StubNewsProvider::ok("gnews", news(vec![])),
         "AAPL",
     )
     .await;
@@ -133,6 +134,7 @@ async fn sentiment_only_when_reddit_alone_succeeds() {
         &StubNewsProvider::err("finnhub"),
         &StubNewsProvider::err("yfinance"),
         &StubNewsProvider::ok("reddit", rd),
+        &StubNewsProvider::ok("gnews", news(vec![])),
         "AAPL",
     )
     .await;
@@ -161,6 +163,7 @@ async fn sentiment_lane_preserves_reddit_row_when_url_matches_vetted_story() {
         ),
         &StubNewsProvider::ok("yfinance", news(vec![yf_art])),
         &StubNewsProvider::ok("reddit", news(vec![rd_art])),
+        &StubNewsProvider::ok("gnews", news(vec![])),
         "AAPL",
     )
     .await;
@@ -194,6 +197,7 @@ async fn sentiment_lane_keeps_reddit_sidecar_under_vetted_saturation() {
         &StubNewsProvider::ok("finnhub", news(vetted_articles.clone())),
         &StubNewsProvider::ok("yfinance", news(vec![])),
         &StubNewsProvider::ok("reddit", news(vec![reddit_article])),
+        &StubNewsProvider::ok("gnews", news(vec![])),
         "AAPL",
     )
     .await;
@@ -224,6 +228,7 @@ async fn sentiment_lane_keeps_full_vetted_budget_when_reddit_sidecar_is_empty() 
         &StubNewsProvider::ok("finnhub", news(vetted_articles.clone())),
         &StubNewsProvider::ok("yfinance", news(vec![])),
         &StubNewsProvider::ok("reddit", news(vec![])),
+        &StubNewsProvider::ok("gnews", news(vec![])),
         "AAPL",
     )
     .await;

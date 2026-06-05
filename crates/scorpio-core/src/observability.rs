@@ -116,7 +116,10 @@ pub fn init_tracing() -> TracingGuard {
 /// they are not already set. Existing env vars are never overwritten so that
 /// process env and `.env` keep their precedence over the config file.
 fn apply_langfuse_config_fallback() {
-    let Ok(cfg) = crate::settings::load_user_config() else {
+    let Ok(path) = crate::settings::user_config_path() else {
+        return;
+    };
+    let Ok(cfg) = crate::settings::load_user_config_at(path) else {
         return;
     };
     set_env_var_if_unset(

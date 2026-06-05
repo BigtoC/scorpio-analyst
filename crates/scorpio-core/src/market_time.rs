@@ -1,16 +1,8 @@
 use chrono::{DateTime, NaiveDate, TimeZone as _, Utc};
 use chrono_tz::US::Eastern;
 
-pub fn market_local_date_eastern() -> NaiveDate {
-    market_local_date_eastern_at(Utc::now())
-}
-
-pub(crate) fn market_local_date_eastern_at(now: DateTime<Utc>) -> NaiveDate {
+pub fn market_local_date_eastern_at(now: DateTime<Utc>) -> NaiveDate {
     Eastern.from_utc_datetime(&now.naive_utc()).date_naive()
-}
-
-pub(crate) fn target_is_market_local_date(target_date: &str) -> bool {
-    target_is_market_local_date_at(target_date, Utc::now())
 }
 
 pub(crate) fn target_is_market_local_date_at(target_date: &str, now: DateTime<Utc>) -> bool {

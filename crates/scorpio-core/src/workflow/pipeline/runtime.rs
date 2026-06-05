@@ -76,41 +76,13 @@ pub(crate) fn build_catalyst_provider(
     source_timeout: std::time::Duration,
     sec_edgar_limiter: SharedRateLimiter,
 ) -> Arc<dyn CatalystCalendarProvider> {
-    let sec_edgar = SecEdgar8kProvider::new(SecEdgarClient::new(sec_edgar_limiter));
     info!("catalyst provider: Finnhub + FRED + yfinance + SEC EDGAR");
     Arc::new(CatalystProvider::with_timeout(
         finnhub.clone(),
         fred.clone(),
-        sec_edgar,
+        SecEdgar8kProvider::new(SecEdgarClient::new(sec_edgar_limiter)),
         source_timeout,
     ))
-}
-
-/// Construct the ordered list of analyst fan-out tasks for `required_inputs`.
-///
-/// For each entry of `required_inputs` that resolves to an [`AnalystId`]
-/// registered in `registry`, the matching concrete `Task` is built and pushed
-/// in input order. Unknown inputs and analysts that are not registered are
-/// silently dropped — consistent with the graceful-degradation contract
-/// already enforced in `AnalystSyncTask::input_missing`.
-///
-/// For the baseline pack's input list (`["fundamentals", "sentiment",
-/// "news", "technical"]`) this reproduces the previous hard-coded
-/// four-analyst vector byte-for-byte.
-pub(crate) fn build_analyst_tasks(
-    registry: &AnalystRegistry,
-    required_inputs: &[String],
-    finnhub: &FinnhubClient,
-    fred: &FredClient,
-    yfinance: &YFinanceClient,
-    quick_handle: &CompletionModelHandle,
-    llm_config: &crate::config::LlmConfig,
-) -> Vec<Arc<dyn graph_flow::Task>> {
-    registry
-        .for_inputs(required_inputs.iter().map(String::as_str))
-        .into_iter()
-        .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, llm_config))
-        .collect()
 }
 
 pub(crate) fn reddit_subreddits_for_cycle(
@@ -124,7 +96,7 @@ pub(crate) fn reddit_subreddits_for_cycle(
     }
 }
 
-fn build_analyst_task(
+pub(crate) fn build_analyst_task(
     id: AnalystId,
     finnhub: &FinnhubClient,
     fred: &FredClient,
@@ -274,7 +246,7 @@ where
         &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
+            dyn Future<
                     Output = Result<
                         crate::providers::factory::copilot_auth::GitHubIdentity,
                         TradingError,
@@ -390,7 +362,23 @@ pub async fn run_analysis_cycle(
                 prior_symbol = %payload.symbol,
                 "discarding in-memory consensus payload for a different symbol"
             );
-            load_prior_consensus_payload(&pipeline.snapshot_store, &symbol).await
+
+            // load prior consensus payload
+            match pipeline
+                .snapshot_store
+                .load_prior_consensus_for_symbol(&symbol, CONSENSUS_MEMORY_MAX_AGE_DAYS)
+                .await
+            {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(
+                        symbol = %symbol,
+                        error = %error,
+                        "prior consensus lookup failed; continuing without half-life history"
+                    );
+                    None
+                }
+            }
         }
         None => match pipeline
             .snapshot_store
@@ -414,10 +402,11 @@ pub async fn run_analysis_cycle(
     let (price_result, vix_result, news_result, catalysts_result) = {
         use crate::agents::analyst::prefetch_analyst_news;
         use crate::constants::{REDDIT_REQUEST_TIMEOUT_SECS, REDDIT_USER_AGENT_PREFIX};
-        use crate::data::YFinanceNewsProvider;
         use crate::data::reddit::RedditClient;
         use crate::data::reddit::RedditNewsProvider;
+        use crate::data::{GnewsNewsProvider, YFinanceNewsProvider};
         let yfinance_news_provider = YFinanceNewsProvider::new(&pipeline.yfinance);
+        let gnews_provider = GnewsNewsProvider::new();
 
         // Construct a per-cycle Reddit provider. Pipeline-level sharing would
         // require storing the client on `TradingPipeline` and threading it
@@ -427,7 +416,7 @@ pub async fn run_analysis_cycle(
             .timeout(std::time::Duration::from_secs(REDDIT_REQUEST_TIMEOUT_SECS))
             .build()
             .unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "failed to build reddit http client; using default");
+                warn!(error = %err, "failed to build reddit http client; using default");
                 reqwest::Client::new()
             });
         let reddit_limiter = SharedRateLimiter::reddit_from_config(&pipeline.config.rate_limits)
@@ -462,6 +451,7 @@ pub async fn run_analysis_cycle(
                 &pipeline.finnhub,
                 &yfinance_news_provider,
                 &reddit_news_provider,
+                &gnews_provider,
                 &symbol,
             ),
             hydrate_catalysts(
@@ -674,26 +664,6 @@ pub async fn run_analysis_cycle(
 
     info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle complete");
     Ok(final_state)
-}
-
-async fn load_prior_consensus_payload(
-    snapshot_store: &SnapshotStore,
-    symbol: &str,
-) -> Option<ConsensusEvidence> {
-    match snapshot_store
-        .load_prior_consensus_for_symbol(symbol, CONSENSUS_MEMORY_MAX_AGE_DAYS)
-        .await
-    {
-        Ok(payload) => payload,
-        Err(error) => {
-            warn!(
-                symbol = %symbol,
-                error = %error,
-                "prior consensus lookup failed; continuing without half-life history"
-            );
-            None
-        }
-    }
 }
 
 // ─── Enrichment hydration helpers ────────────────────────────────────────────
@@ -1021,14 +991,12 @@ async fn resolve_transcript_quarter_from_fetch<F>(
     as_of: NaiveDate,
 ) -> Option<String>
 where
-    F: std::future::Future<
-            Output = Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>,
-        >,
+    F: Future<Output = Result<Arc<Vec<finnhub::models::calendar::EarningsRelease>>, TradingError>>,
 {
     let releases = match tokio::time::timeout(timeout, fetch).await {
         Ok(Ok(releases)) => releases,
         Ok(Err(error)) => {
-            tracing::warn!(
+            warn!(
                 symbol,
                 error = %error,
                 "transcript quarter resolution failed (fail-open)"
@@ -1036,7 +1004,7 @@ where
             return None;
         }
         Err(_) => {
-            tracing::warn!(
+            warn!(
                 symbol,
                 timeout_secs = timeout.as_secs_f64(),
                 "transcript quarter resolution timed out (fail-open)"
@@ -1048,7 +1016,7 @@ where
     let recent = select_transcript_quarter(releases.as_ref(), as_of);
 
     if let Some(q) = &recent {
-        tracing::info!(
+        info!(
             symbol,
             quarter = %q,
             source = "finnhub_earnings_calendar",
@@ -1084,7 +1052,7 @@ async fn hydrate_transcript(
     match result {
         Ok(Ok(outcome)) => {
             match &outcome {
-                TranscriptFetch::Found(ev) => tracing::info!(
+                TranscriptFetch::Found(ev) => info!(
                     symbol, quarter = %quarter, segments = ev.segments.len(),
                     "transcript enrichment: available"
                 ),
@@ -1092,20 +1060,20 @@ async fn hydrate_transcript(
                     symbol, quarter = %quarter, "transcript enrichment: not published"
                 ),
                 TranscriptFetch::Throttled => {
-                    tracing::warn!(symbol, "transcript enrichment: throttled")
+                    warn!(symbol, "transcript enrichment: throttled")
                 }
                 TranscriptFetch::Unavailable => {
-                    tracing::warn!(symbol, "transcript enrichment: unavailable")
+                    warn!(symbol, "transcript enrichment: unavailable")
                 }
             }
             outcome
         }
         Ok(Err(e)) => {
-            tracing::warn!(symbol, error = %e, "transcript enrichment: fetch error (fail-open)");
+            warn!(symbol, error = %e, "transcript enrichment: fetch error (fail-open)");
             TranscriptFetch::Unavailable
         }
         Err(_) => {
-            tracing::warn!(symbol, "transcript enrichment: outer timeout (fail-open)");
+            warn!(symbol, "transcript enrichment: outer timeout (fail-open)");
             TranscriptFetch::Unavailable
         }
     }
@@ -1321,7 +1289,7 @@ mod preflight_copilot_guard_tests {
             std::fs::set_permissions(&token_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
 
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls_clone = calls.clone();
 
         let _ = validate_copilot_auth_before_preflight_with(&cfg, &token_dir, move |_token| {
