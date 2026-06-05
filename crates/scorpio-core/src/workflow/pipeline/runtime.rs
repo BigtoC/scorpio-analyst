@@ -76,41 +76,13 @@ pub(crate) fn build_catalyst_provider(
     source_timeout: std::time::Duration,
     sec_edgar_limiter: SharedRateLimiter,
 ) -> Arc<dyn CatalystCalendarProvider> {
-    let sec_edgar = SecEdgar8kProvider::new(SecEdgarClient::new(sec_edgar_limiter));
     info!("catalyst provider: Finnhub + FRED + yfinance + SEC EDGAR");
     Arc::new(CatalystProvider::with_timeout(
         finnhub.clone(),
         fred.clone(),
-        sec_edgar,
+        SecEdgar8kProvider::new(SecEdgarClient::new(sec_edgar_limiter)),
         source_timeout,
     ))
-}
-
-/// Construct the ordered list of analyst fan-out tasks for `required_inputs`.
-///
-/// For each entry of `required_inputs` that resolves to an [`AnalystId`]
-/// registered in `registry`, the matching concrete `Task` is built and pushed
-/// in input order. Unknown inputs and analysts that are not registered are
-/// silently dropped — consistent with the graceful-degradation contract
-/// already enforced in `AnalystSyncTask::input_missing`.
-///
-/// For the baseline pack's input list (`["fundamentals", "sentiment",
-/// "news", "technical"]`) this reproduces the previous hard-coded
-/// four-analyst vector byte-for-byte.
-pub(crate) fn build_analyst_tasks(
-    registry: &AnalystRegistry,
-    required_inputs: &[String],
-    finnhub: &FinnhubClient,
-    fred: &FredClient,
-    yfinance: &YFinanceClient,
-    quick_handle: &CompletionModelHandle,
-    llm_config: &crate::config::LlmConfig,
-) -> Vec<Arc<dyn graph_flow::Task>> {
-    registry
-        .for_inputs(required_inputs.iter().map(String::as_str))
-        .into_iter()
-        .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, llm_config))
-        .collect()
 }
 
 pub(crate) fn reddit_subreddits_for_cycle(
@@ -124,7 +96,7 @@ pub(crate) fn reddit_subreddits_for_cycle(
     }
 }
 
-fn build_analyst_task(
+pub(crate) fn build_analyst_task(
     id: AnalystId,
     finnhub: &FinnhubClient,
     fred: &FredClient,
@@ -390,7 +362,23 @@ pub async fn run_analysis_cycle(
                 prior_symbol = %payload.symbol,
                 "discarding in-memory consensus payload for a different symbol"
             );
-            load_prior_consensus_payload(&pipeline.snapshot_store, &symbol).await
+
+            // load prior consensus payload
+            match pipeline
+                .snapshot_store
+                .load_prior_consensus_for_symbol(&symbol, CONSENSUS_MEMORY_MAX_AGE_DAYS)
+                .await
+            {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(
+                        symbol = %symbol,
+                        error = %error,
+                        "prior consensus lookup failed; continuing without half-life history"
+                    );
+                    None
+                }
+            }
         }
         None => match pipeline
             .snapshot_store
@@ -676,26 +664,6 @@ pub async fn run_analysis_cycle(
 
     info!(symbol = %symbol, date = %date, execution_id = %execution_id, "cycle complete");
     Ok(final_state)
-}
-
-async fn load_prior_consensus_payload(
-    snapshot_store: &SnapshotStore,
-    symbol: &str,
-) -> Option<ConsensusEvidence> {
-    match snapshot_store
-        .load_prior_consensus_for_symbol(symbol, CONSENSUS_MEMORY_MAX_AGE_DAYS)
-        .await
-    {
-        Ok(payload) => payload,
-        Err(error) => {
-            warn!(
-                symbol = %symbol,
-                error = %error,
-                "prior consensus lookup failed; continuing without half-life history"
-            );
-            None
-        }
-    }
 }
 
 // ─── Enrichment hydration helpers ────────────────────────────────────────────
