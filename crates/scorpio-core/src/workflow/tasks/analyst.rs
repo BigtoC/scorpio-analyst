@@ -250,15 +250,6 @@ fn required_inputs_for_state(state: &TradingState) -> Vec<String> {
         })
 }
 
-/// Resolve the active analyst id set for this cycle from the pack's
-/// `required_inputs`. Entries that don't map to a known analyst are dropped.
-fn active_analyst_ids(state: &TradingState) -> Vec<AnalystId> {
-    required_inputs_for_state(state)
-        .iter()
-        .filter_map(|s| AnalystId::from_required_input(s))
-        .collect()
-}
-
 fn input_missing(state: &TradingState, input: &str) -> bool {
     match input {
         "fundamentals" => state.evidence_fundamental().is_none(),
@@ -975,24 +966,17 @@ fn resolve_official_benchmark_name(
         return Some((
             metadata.name.clone(),
             metadata.source,
-            benchmark_metadata_age_days(metadata),
+            Some(
+                (Utc::now().date_naive() - metadata.filing_date?)
+                    .num_days()
+                    .max(0) as u32,
+            ),
         ));
     }
     nport
         .and_then(|holdings| holdings.stated_benchmark.as_deref())
         .and_then(normalize_optional_benchmark)
         .map(|name| (name, crate::state::BenchmarkSource::SecNport, None))
-}
-
-fn benchmark_metadata_age_days(
-    metadata: &crate::data::sec_risk_return::BenchmarkMetadata,
-) -> Option<u32> {
-    let filing_date = metadata.filing_date?;
-    Some(
-        (Utc::now().date_naive() - filing_date)
-            .num_days()
-            .max(0) as u32,
-    )
 }
 
 async fn fetch_with_timeout<T, F>(
@@ -1100,10 +1084,6 @@ pub(crate) fn etf_options_from_state(
     }
 }
 
-pub(crate) fn etf_risk_free_rate_from_state(state: &TradingState) -> Option<f64> {
-    state.etf_risk_free_rate
-}
-
 /// Stage 3 cleanup: clear the transient `OptionsSnapshot.all_expirations`
 /// vector in place so persisted technical snapshots keep only the bounded
 /// `EtfValuation.options_gex.broad` summary, not the full non-front-month
@@ -1185,7 +1165,7 @@ fn derive_runtime_valuation(
                 .as_ref()
                 .map(|(metadata, age_days)| (metadata, *age_days)),
             etf_options: etf_options_from_state(state),
-            etf_risk_free_rate: etf_risk_free_rate_from_state(state),
+            etf_risk_free_rate: state.etf_risk_free_rate,
             etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
             as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
                 .unwrap_or_else(|_| Utc::now().date_naive()),
@@ -1210,7 +1190,10 @@ impl Task for AnalystSyncTask {
                 ))
             })?;
 
-        let active_ids = active_analyst_ids(&state);
+        let active_ids: Vec<AnalystId> = required_inputs_for_state(&state)
+            .iter()
+            .filter_map(|s| AnalystId::from_required_input(s))
+            .collect();
         let active_total = active_ids.len();
         let mut failures = Vec::new();
 
@@ -1833,20 +1816,6 @@ mod tests {
 
         let extracted = super::etf_options_from_state(&state);
         assert!(extracted.is_none());
-    }
-
-    #[test]
-    fn etf_valuation_inputs_thread_etf_risk_free_rate_from_state() {
-        let mut state = crate::state::TradingState::new("SPY", "2026-06-01");
-        crate::testing::with_baseline_runtime_policy(&mut state);
-
-        state.etf_risk_free_rate = Some(0.0427);
-        let inputs_rate = super::etf_risk_free_rate_from_state(&state);
-        assert_eq!(inputs_rate, Some(0.0427));
-
-        state.etf_risk_free_rate = None;
-        let inputs_rate_none = super::etf_risk_free_rate_from_state(&state);
-        assert!(inputs_rate_none.is_none());
     }
 
     #[test]
