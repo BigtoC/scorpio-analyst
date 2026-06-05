@@ -158,7 +158,20 @@ impl FinnhubClient {
 
         let latest_eps = earnings.first().and_then(|e| e.actual);
 
-        Ok(build_earnings_data(symbol, latest_eps, earnings.len()))
+        Ok(FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: None,
+            eps: latest_eps,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions: vec![],
+            summary: format!(
+                "{symbol}: {} quarterly earnings records fetched",
+                earnings.len()
+            ),
+        })
     }
 
     /// Fetch insider transactions and map to [`FundamentalData::insider_transactions`].
@@ -175,10 +188,19 @@ impl FinnhubClient {
             .await
             .map_err(map_finnhub_err)?;
 
-        Ok(build_insider_data(
-            symbol,
-            map_insider_transactions(raw.data),
-        ))
+        let insider_transactions = map_insider_transactions(raw.data);
+        let count = insider_transactions.len();
+        Ok(FundamentalData {
+            revenue_growth_pct: None,
+            pe_ratio: None,
+            eps: None,
+            current_ratio: None,
+            debt_to_equity: None,
+            gross_margin: None,
+            net_income: None,
+            insider_transactions,
+            summary: format!("{symbol}: {count} insider transactions"),
+        })
     }
 
     /// Fetch raw company news items for a date range.
@@ -366,21 +388,21 @@ fn build_fundamental_data(
     symbol: &str,
     insider_transactions: Vec<OurInsiderTransaction>,
 ) -> FundamentalData {
-    let pe_ratio = extract_f64(metrics, "peNormalizedAnnual")
-        .or_else(|| extract_f64(metrics, "peTTM"))
-        .or_else(|| extract_f64(metrics, "peBasicExclExtraTTM"));
-    let eps = extract_f64(metrics, "epsNormalizedAnnual")
-        .or_else(|| extract_f64(metrics, "epsTTM"))
-        .or_else(|| extract_f64(metrics, "epsBasicExclExtraItemsTTM"));
-    let revenue_growth_pct = extract_f64(metrics, "revenueGrowth3Y")
-        .or_else(|| extract_f64(metrics, "revenueGrowthTTMYoy"));
-    let current_ratio = extract_f64(metrics, "currentRatioAnnual");
-    let debt_to_equity = extract_f64(metrics, "totalDebt/totalEquityAnnual")
-        .or_else(|| extract_f64(metrics, "longTermDebt/equityAnnual"));
-    let gross_margin = extract_f64(metrics, "grossMarginAnnual")
-        .or_else(|| extract_f64(metrics, "grossMarginTTM"));
-    let net_income = extract_f64(metrics, "netIncomeGrowth3Y")
-        .or_else(|| extract_f64(metrics, "netIncomeAnnual"));
+    let pe_ratio = metrics.get("peNormalizedAnnual").and_then(serde_json::Value::as_f64)
+        .or_else(|| metrics.get("peTTM").and_then(serde_json::Value::as_f64))
+        .or_else(|| metrics.get("peBasicExclExtraTTM").and_then(serde_json::Value::as_f64));
+    let eps = metrics.get("epsNormalizedAnnual").and_then(serde_json::Value::as_f64)
+        .or_else(|| metrics.get("epsTTM").and_then(serde_json::Value::as_f64))
+        .or_else(|| metrics.get("epsBasicExclExtraItemsTTM").and_then(serde_json::Value::as_f64));
+    let revenue_growth_pct = metrics.get("revenueGrowth3Y").and_then(serde_json::Value::as_f64)
+        .or_else(|| metrics.get("revenueGrowthTTMYoy").and_then(serde_json::Value::as_f64));
+    let current_ratio = metrics.get("currentRatioAnnual").and_then(serde_json::Value::as_f64);
+    let debt_to_equity = metrics.get("totalDebt/totalEquityAnnual").and_then(serde_json::Value::as_f64)
+        .or_else(|| metrics.get("longTermDebt/equityAnnual").and_then(serde_json::Value::as_f64));
+    let gross_margin = metrics.get("grossMarginAnnual").and_then(serde_json::Value::as_f64)
+        .or_else(|| metrics.get("grossMarginTTM").and_then(serde_json::Value::as_f64));
+    let net_income = metrics.get("netIncomeGrowth3Y").and_then(serde_json::Value::as_f64)
+        .or_else(|| metrics.get("netIncomeAnnual").and_then(serde_json::Value::as_f64));
     let company_name = company_name.unwrap_or(symbol);
     let insider_count = insider_transactions.len();
 
@@ -400,38 +422,6 @@ fn build_fundamental_data(
     }
 }
 
-fn build_earnings_data(symbol: &str, latest_eps: Option<f64>, count: usize) -> FundamentalData {
-    FundamentalData {
-        revenue_growth_pct: None,
-        pe_ratio: None,
-        eps: latest_eps,
-        current_ratio: None,
-        debt_to_equity: None,
-        gross_margin: None,
-        net_income: None,
-        insider_transactions: vec![],
-        summary: format!("{symbol}: {count} quarterly earnings records fetched"),
-    }
-}
-
-fn build_insider_data(
-    symbol: &str,
-    insider_transactions: Vec<OurInsiderTransaction>,
-) -> FundamentalData {
-    let count = insider_transactions.len();
-
-    FundamentalData {
-        revenue_growth_pct: None,
-        pe_ratio: None,
-        eps: None,
-        current_ratio: None,
-        debt_to_equity: None,
-        gross_margin: None,
-        net_income: None,
-        insider_transactions,
-        summary: format!("{symbol}: {count} insider transactions"),
-    }
-}
 
 /// Sanitize externally-sourced news text before it is passed as tool output
 /// to an LLM agent.
@@ -537,9 +527,6 @@ pub(crate) fn normalize_news_fields(
     }
 }
 
-pub(crate) fn normalize_finnhub_article(n: &finnhub::models::news::CompanyNews) -> NewsArticle {
-    normalize_news_fields(&n.url, n.datetime, &n.headline, &n.source, &n.summary)
-}
 
 fn build_news_data(
     symbol: &str,
@@ -547,7 +534,10 @@ fn build_news_data(
     from: &str,
     to: &str,
 ) -> NewsData {
-    let articles: Vec<NewsArticle> = raw_news.iter().map(normalize_finnhub_article).collect();
+    let articles: Vec<NewsArticle> = raw_news
+        .iter()
+        .map(|n| normalize_news_fields(&n.url, n.datetime, &n.headline, &n.source, &n.summary))
+        .collect();
     let macro_events = derive_macro_events(&articles);
     let macro_count = macro_events.len();
     let article_count = articles.len();
@@ -636,14 +626,6 @@ fn push_macro_event(events: &mut Vec<crate::state::MacroEvent>, event: crate::st
     if !events.iter().any(|existing| existing.event == event.event) {
         events.push(event);
     }
-}
-
-/// Extract an `f64` from a Finnhub `BasicFinancials.metric` JSON map.
-fn extract_f64(
-    map: &std::collections::HashMap<String, serde_json::Value>,
-    key: &str,
-) -> Option<f64> {
-    map.get(key)?.as_f64()
 }
 
 // ─── rig::tool::Tool wrappers ────────────────────────────────────────────────
@@ -1072,28 +1054,6 @@ mod tests {
         assert!(matches!(mapped, TradingError::SchemaViolation { .. }));
     }
 
-    // ── extract_f64 tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn extract_f64_present() {
-        let mut m = std::collections::HashMap::new();
-        m.insert("peNormalizedAnnual".to_owned(), serde_json::json!(25.3));
-        assert_eq!(extract_f64(&m, "peNormalizedAnnual"), Some(25.3));
-    }
-
-    #[test]
-    fn extract_f64_absent_returns_none() {
-        let m = std::collections::HashMap::new();
-        assert_eq!(extract_f64(&m, "missing"), None);
-    }
-
-    #[test]
-    fn extract_f64_non_numeric_returns_none() {
-        let mut m = std::collections::HashMap::new();
-        m.insert("key".to_owned(), serde_json::json!("not-a-number"));
-        assert_eq!(extract_f64(&m, "key"), None);
-    }
-
     #[test]
     fn build_fundamental_data_includes_insiders() {
         let mut metrics = std::collections::HashMap::new();
@@ -1370,9 +1330,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_finnhub_article_preserves_url() {
+    fn normalize_news_fields_preserves_url() {
         let raw = sample_company_news("https://example.com/news/1", 1_705_276_800);
-        let article = normalize_finnhub_article(&raw);
+        let article = normalize_news_fields(&raw.url, raw.datetime, &raw.headline, &raw.source, &raw.summary);
         assert_eq!(
             article.url,
             Some("https://example.com/news/1".to_owned()),
@@ -1381,10 +1341,10 @@ mod tests {
     }
 
     #[test]
-    fn normalize_finnhub_article_formats_rfc3339_timestamp() {
+    fn normalize_news_fields_formats_rfc3339_timestamp() {
         // 2024-01-15 00:00:00 UTC as unix seconds
         let raw = sample_company_news("https://example.com/news/1", 1_705_276_800);
-        let article = normalize_finnhub_article(&raw);
+        let article = normalize_news_fields(&raw.url, raw.datetime, &raw.headline, &raw.source, &raw.summary);
         // Verify it parses as a valid RFC3339 datetime
         chrono::DateTime::parse_from_rfc3339(&article.published_at)
             .expect("published_at must be a valid RFC3339 string");
