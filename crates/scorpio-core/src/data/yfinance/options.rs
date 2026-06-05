@@ -8,10 +8,8 @@
 //! `OptionsOutcome::HistoricalRun` without making any network calls, since
 //! Yahoo Finance only publishes current live options data.
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_trait::async_trait;
+use chrono::TimeZone as _;
 use futures::StreamExt as _;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -19,6 +17,8 @@ use rust_decimal::prelude::ToPrimitive;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use yfinance_rs::CacheMode;
 use yfinance_rs::YfError;
@@ -262,7 +262,6 @@ fn map_yf_options_err(e: YfError) -> TradingError {
 
 /// Convert a Unix-seconds timestamp to an ISO-8601 date string.
 fn timestamp_to_date_str(ts: i64) -> String {
-    use chrono::TimeZone as _;
     chrono::Utc
         .timestamp_opt(ts, 0)
         .single()
