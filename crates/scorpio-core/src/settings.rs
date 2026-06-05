@@ -489,7 +489,7 @@ pub fn ensure_copilot_token_dir() -> anyhow::Result<PathBuf> {
 }
 
 #[cfg(any(not(unix), test))]
-fn unsupported_copilot_token_dir_security_error(dir: &std::path::Path) -> anyhow::Error {
+fn unsupported_copilot_token_dir_security_error(dir: &Path) -> anyhow::Error {
     anyhow::anyhow!(
         "Copilot token-dir security verification is unsupported on this non-Unix platform for {}",
         dir.display()
@@ -499,7 +499,7 @@ fn unsupported_copilot_token_dir_security_error(dir: &std::path::Path) -> anyhow
 /// Verify the Copilot token directory is a real, non-symlink directory owned by the
 /// current user with mode `0o700` or stricter.
 #[cfg(unix)]
-pub fn verify_copilot_token_dir_secure(dir: &std::path::Path) -> anyhow::Result<()> {
+pub fn verify_copilot_token_dir_secure(dir: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::symlink_metadata(dir)
@@ -556,13 +556,6 @@ pub fn load_user_config_at(path: impl AsRef<Path>) -> anyhow::Result<PartialConf
             }
             .into()
         })
-}
-
-/// Load [`PartialConfig`] from the default user config path.
-///
-/// Thin wrapper around [`load_user_config_at`] using [`user_config_path`].
-pub fn load_user_config() -> anyhow::Result<PartialConfig> {
-    load_user_config_at(user_config_path()?)
 }
 
 /// Write `cfg` atomically to `path`, creating parent directories as needed.
@@ -1085,7 +1078,7 @@ rpm = 22
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         save_user_config_at(&p, &path).expect("save");
-        let raw = std::fs::read_to_string(&path).expect("read");
+        let raw = fs::read_to_string(&path).expect("read");
         assert!(
             raw.contains("[providers.xiaomimimo]"),
             "expected nested table, got:\n{raw}"
@@ -1120,7 +1113,7 @@ rpm = 22
 
     #[test]
     fn verify_copilot_token_dir_secure_fails_closed_on_non_unix() {
-        let err = unsupported_copilot_token_dir_security_error(std::path::Path::new(
+        let err = unsupported_copilot_token_dir_security_error(Path::new(
             "/tmp/github_copilot",
         ));
         assert!(
