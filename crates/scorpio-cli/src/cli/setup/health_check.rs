@@ -65,14 +65,14 @@ where
     Back: FnMut() -> anyhow::Result<bool>,
 {
     loop {
-        match run_check() {
-            Ok(()) => return Ok(true),
+        return match run_check() {
+            Ok(()) => Ok(true),
             Err(error) => {
                 report_failure(&error);
                 if should_retry()? {
                     continue;
                 }
-                return should_back();
+                should_back()
             }
         }
     }
@@ -129,6 +129,29 @@ pub(super) fn configured_non_copilot_tiers(cfg: &scorpio_core::config::Config) -
 
 // ── LLM probes (non-Copilot) ──────────────────────────────────────────────────
 
+fn probe_completion_handle(
+    runtime: &tokio::runtime::Runtime,
+    handle: &scorpio_core::providers::factory::CompletionModelHandle,
+) -> anyhow::Result<()> {
+    // build_agent calls ToolServer::new().run() → tokio::spawn internally,
+    // so it must be called from within a live Tokio runtime context.
+    runtime
+        .block_on(async {
+            let agent = scorpio_core::providers::factory::build_agent(handle, "");
+            let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
+            scorpio_core::providers::factory::retry_prompt_budget_loop(
+                &agent,
+                timeout,
+                RetryPolicy::default().total_budget(timeout),
+                &RetryPolicy::default(),
+                || agent.prompt_details("Hello"),
+            )
+            .await
+        })
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
 pub(super) fn run_selected_model_tiers(
     cfg: &scorpio_core::config::Config,
     tiers: &[ModelTier],
@@ -151,21 +174,7 @@ pub(super) fn run_selected_model_tiers(
             .build()
             .context("failed to build runtime for health check")?;
 
-        runtime
-            .block_on(async {
-                let agent = scorpio_core::providers::factory::build_agent(&handle, "");
-                let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
-                scorpio_core::providers::factory::retry_prompt_budget_loop(
-                    &agent,
-                    timeout,
-                    RetryPolicy::default().total_budget(timeout),
-                    &RetryPolicy::default(),
-                    || agent.prompt_details("Hello"),
-                )
-                .await
-            })
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!(e))
+        probe_completion_handle(&runtime, &handle)
     })
 }
 
@@ -190,23 +199,7 @@ pub(super) fn run_single_health_check(cfg: &scorpio_core::config::Config) -> any
             )
             .map_err(|e| anyhow::anyhow!("failed to create completion model: {e}"))?;
 
-            runtime
-                .block_on(async {
-                    // build_agent calls ToolServer::new().run() → tokio::spawn internally,
-                    // so it must be called from within a live Tokio runtime context.
-                    let agent = scorpio_core::providers::factory::build_agent(&handle, "");
-                    let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
-                    scorpio_core::providers::factory::retry_prompt_budget_loop(
-                        &agent,
-                        timeout,
-                        RetryPolicy::default().total_budget(timeout),
-                        &RetryPolicy::default(),
-                        || agent.prompt_details("Hello"),
-                    )
-                    .await
-                })
-                .map(|_| ())
-                .map_err(|e| anyhow::anyhow!(e))
+            probe_completion_handle(&runtime, &handle)
         },
     )
 }
@@ -286,22 +279,10 @@ pub(super) fn run_copilot_model_probe(
         })
         .collect::<anyhow::Result<_>>()?;
 
-    runtime.block_on(async {
-        for handle in &handles {
-            let agent = scorpio_core::providers::factory::build_agent(handle, "");
-            let timeout = Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS);
-            scorpio_core::providers::factory::retry_prompt_budget_loop(
-                &agent,
-                timeout,
-                RetryPolicy::default().total_budget(timeout),
-                &RetryPolicy::default(),
-                || agent.prompt_details("Hello"),
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        }
-        Ok::<(), anyhow::Error>(())
-    })
+    for handle in &handles {
+        probe_completion_handle(&runtime, handle)?;
+    }
+    Ok(())
 }
 
 pub(super) async fn step5_validate_copilot_auth(token_dir: &std::path::Path) -> anyhow::Result<()> {
@@ -320,7 +301,7 @@ where
         &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
+            dyn Future<
                     Output = Result<
                         scorpio_core::providers::factory::copilot_auth::GitHubIdentity,
                         scorpio_core::error::TradingError,
