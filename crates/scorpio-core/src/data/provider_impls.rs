@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 
 use super::{
-    FinnhubClient, FredClient, YFinanceClient,
+    FinnhubClient, FredClient, YFinanceClient, YFinanceData,
     traits::{FundamentalsProvider, MacroProvider, NewsProvider, PriceBar, PriceHistoryProvider},
     yfinance::news::YFinanceNewsProvider,
 };

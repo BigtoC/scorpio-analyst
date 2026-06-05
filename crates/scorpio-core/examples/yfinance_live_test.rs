@@ -29,6 +29,7 @@
 //! `get_profile` returns `Profile::Fund` (or degrades without panicking).
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
+use scorpio_core::data::YFinanceData;
 use scorpio_core::data::adapters::estimates::{
     ConsensusOutcome, EstimatesProvider, YFinanceEstimatesProvider,
 };

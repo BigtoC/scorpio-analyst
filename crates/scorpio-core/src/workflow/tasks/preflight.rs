@@ -72,6 +72,8 @@ impl RiskFreeRateYFinanceClient for crate::data::YFinanceClient {
     }
 }
 
+use crate::data::YFinanceData;
+
 use super::common::{
     KEY_CACHED_CONSENSUS, KEY_CACHED_EVENT_FEED, KEY_MAX_DEBATE_ROUNDS, KEY_MAX_RISK_ROUNDS,
     KEY_PROVIDER_CAPABILITIES, KEY_REQUIRED_COVERAGE_INPUTS, KEY_RESOLVED_INSTRUMENT,
