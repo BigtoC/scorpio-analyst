@@ -989,7 +989,7 @@ fn benchmark_metadata_age_days(
 ) -> Option<u32> {
     let filing_date = metadata.filing_date?;
     Some(
-        (chrono::Utc::now().date_naive() - filing_date)
+        (Utc::now().date_naive() - filing_date)
             .num_days()
             .max(0) as u32,
     )
@@ -1068,7 +1068,7 @@ fn no_valuator_selected(asset_shape: AssetShape) -> DerivedValuation {
 /// `tracing::warn!` and returns `None` so the valuator leaves
 /// dealer-positioning absent cleanly.
 pub(crate) fn etf_options_from_state(
-    state: &crate::state::TradingState,
+    state: &TradingState,
 ) -> Option<&crate::data::traits::options::OptionsSnapshot> {
     use crate::data::traits::options::OptionsOutcome;
     use crate::state::TechnicalOptionsContext;
@@ -1080,7 +1080,7 @@ pub(crate) fn etf_options_from_state(
             outcome: OptionsOutcome::Snapshot(snap),
         } => Some(snap),
         TechnicalOptionsContext::Available { outcome: other } => {
-            tracing::warn!(
+            warn!(
                 target: "scorpio_core::workflow::analyst",
                 outcome = %other,
                 symbol = %state.asset_symbol,
@@ -1089,7 +1089,7 @@ pub(crate) fn etf_options_from_state(
             None
         }
         TechnicalOptionsContext::FetchFailed { reason } => {
-            tracing::warn!(
+            warn!(
                 target: "scorpio_core::workflow::analyst",
                 symbol = %state.asset_symbol,
                 fetch_reason = %reason,
@@ -1100,7 +1100,7 @@ pub(crate) fn etf_options_from_state(
     }
 }
 
-pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) -> Option<f64> {
+pub(crate) fn etf_risk_free_rate_from_state(state: &TradingState) -> Option<f64> {
     state.etf_risk_free_rate
 }
 
@@ -1111,7 +1111,7 @@ pub(crate) fn etf_risk_free_rate_from_state(state: &crate::state::TradingState) 
 ///
 /// Called immediately before `serialize_state_to_context(...)` on the ETF
 /// branch; no-op for any other technical context shape.
-pub(crate) fn strip_transient_all_expirations(state: &mut crate::state::TradingState) {
+pub(crate) fn strip_transient_all_expirations(state: &mut TradingState) {
     use crate::data::traits::options::OptionsOutcome;
     use crate::state::TechnicalOptionsContext;
 
@@ -1188,7 +1188,7 @@ fn derive_runtime_valuation(
             etf_risk_free_rate: etf_risk_free_rate_from_state(state),
             etf_distribution_yield_ttm: valuation_inputs.etf_distribution_yield_ttm_pct,
             as_of: chrono::NaiveDate::parse_from_str(&state.target_date, "%Y-%m-%d")
-                .unwrap_or_else(|_| chrono::Utc::now().date_naive()),
+                .unwrap_or_else(|_| Utc::now().date_naive()),
         },
         &provisional.asset_shape,
     )
@@ -1234,9 +1234,9 @@ impl Task for AnalystSyncTask {
             });
 
         // Only merge for analysts the active pack declared — keeps byte-identical
-        // behaviour for the equity baseline (all four active) while
+        // behavior for the equity baseline (all four active) while
         // preventing phantom "missing analyst" failures for packs that
-        // intentionally omit one. Each arm is still type-specialised because
+        // intentionally omit one. Each arm is still type-specialized because
         // each analyst writes a differently-shaped payload into state; the
         // registry-driven aggregation is the per-id gate here, not the types.
         if active_ids.contains(&AnalystId::Fundamental) {
