@@ -652,17 +652,16 @@ fn classify_fred_status(status: reqwest::StatusCode) -> FredStatusClass {
 fn map_fred_response_status(
     resp: reqwest::Response,
 ) -> Result<reqwest::Response, FredRequestError> {
-    let status = resp.status();
-    if status.is_success() {
+    if resp.status().is_success() {
         return Ok(resp);
     }
 
-    Err(match classify_fred_status(status) {
+    Err(match classify_fred_status(resp.status()) {
         FredStatusClass::RateLimited => FredRequestError::RateLimited {
             retry_after: parse_retry_after(resp.headers()),
         },
-        FredStatusClass::TransientServer => FredRequestError::TransientServer { status },
-        FredStatusClass::PermanentClient => FredRequestError::PermanentClient { status },
+        FredStatusClass::TransientServer => FredRequestError::TransientServer { status: resp.status() },
+        FredStatusClass::PermanentClient => FredRequestError::PermanentClient { status: resp.status() },
     })
 }
 
@@ -1143,13 +1142,13 @@ mod tests {
     async fn release_dates_returns_nonempty_for_cpi_in_60_day_window() {
         let api_key = std::env::var("SCORPIO_FRED_API_KEY")
             .expect("SCORPIO_FRED_API_KEY must be set for this test");
-        let api_cfg = crate::config::ApiConfig {
-            fred_api_key: Some(secrecy::SecretString::from(api_key)),
+        let api_cfg = ApiConfig {
+            fred_api_key: Some(SecretString::from(api_key)),
             ..Default::default()
         };
         let limiter = SharedRateLimiter::new("test-fred-live", 30);
         let client = FredClient::new(&api_cfg, limiter).expect("client");
-        let to = chrono::Utc::now().date_naive();
+        let to = Utc::now().date_naive();
         let from = to - chrono::Duration::days(60);
         let dates = client
             .release_dates(release_id::CPI, &from.to_string(), &to.to_string())
