@@ -852,7 +852,7 @@ async fn fetch_valuation_inputs(
 
     if pack_id == PackId::EtfBaseline {
         let is_historical_target_date =
-            !crate::market_time::target_is_market_local_date(target_date);
+            !crate::market_time::target_is_market_local_date_at(target_date, Utc::now());
 
         if is_historical_target_date {
             return ValuationInputs {
@@ -1529,6 +1529,7 @@ mod tests {
     use crate::valuation::{ValuatorId, ValuatorRegistry};
     use secrecy::SecretString;
     use std::sync::Arc;
+    use chrono::Utc;
 
     /// Build a shared `Info` snapshot carrying a Fund profile, so
     /// `fetch_valuation_inputs` reads the asset shape from it the same way the
@@ -1616,7 +1617,7 @@ mod tests {
         // deterministically — Utc::now().date_naive() diverges from the Eastern
         // trading date in the early-UTC window and would trip the historical
         // short-circuit, skipping the live ETF fetches under test.
-        let today = crate::market_time::market_local_date_eastern()
+        let today = crate::market_time::market_local_date_eastern_at(Utc::now())
             .format("%Y-%m-%d")
             .to_string();
 
@@ -1735,7 +1736,7 @@ mod tests {
         ));
 
         let info = etf_fund_info_snapshot();
-        let today = crate::market_time::market_local_date_eastern()
+        let today = crate::market_time::market_local_date_eastern_at(Utc::now())
             .format("%Y-%m-%d")
             .to_string();
 

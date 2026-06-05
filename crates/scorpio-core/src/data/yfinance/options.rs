@@ -89,7 +89,7 @@ impl YFinanceOptionsProvider {
         let ticker = require_equity_ticker(symbol)?;
 
         // ── Check market-local date ──────────────────────────────────────
-        if !crate::market_time::target_is_market_local_date(target_date) {
+        if !crate::market_time::target_is_market_local_date_at(target_date, chrono::Utc::now()) {
             return Ok(OptionsOutcome::HistoricalRun);
         }
 
@@ -860,11 +860,11 @@ mod tests {
     // ── Test helpers ──────────────────────────────────────────────────────
 
     fn today_eastern() -> String {
-        crate::market_time::market_local_date_eastern().to_string()
+        crate::market_time::market_local_date_eastern_at(chrono::Utc::now()).to_string()
     }
 
     fn yesterday_eastern() -> String {
-        (crate::market_time::market_local_date_eastern() - chrono::Duration::days(1)).to_string()
+        (crate::market_time::market_local_date_eastern_at(chrono::Utc::now()) - chrono::Duration::days(1)).to_string()
     }
 
     /// Build a minimal `OptionContract` with just the fields used by the

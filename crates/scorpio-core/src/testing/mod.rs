@@ -9,7 +9,7 @@ pub mod prompt_render;
 pub mod rate_clients;
 pub mod runtime_policy;
 
-pub use crate::market_time::market_local_date_eastern;
+pub use crate::market_time::market_local_date_eastern_at;
 pub use prompt_render::{
     LeverageWarningProbe, PromptRenderOutput, PromptRenderScenario, canonical_fixture_identity,
     render_baseline_prompt_for_role, render_levered_etf_risk_prompts_for_gate,

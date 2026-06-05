@@ -63,7 +63,7 @@ pub trait RiskFreeRateYFinanceClient: Send + Sync {
 #[async_trait]
 impl RiskFreeRateYFinanceClient for crate::data::YFinanceClient {
     async fn latest_risk_free_rate_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError> {
-        let today = crate::market_time::market_local_date_eastern();
+        let today = crate::market_time::market_local_date_eastern_at(chrono::Utc::now());
         let start = today - chrono::Duration::days(14);
         let candles = self
             .get_ohlcv(symbol, &start.to_string(), &today.to_string())
@@ -427,7 +427,7 @@ async fn apply_risk_free_rate(
 ) {
     use crate::state::EtfRiskFreeRateSource;
 
-    let is_today = crate::market_time::target_is_market_local_date(&state.target_date);
+    let is_today = crate::market_time::target_is_market_local_date_at(&state.target_date, chrono::Utc::now());
     if !matches!(pack_id, PackId::EtfBaseline) || !is_today {
         return;
     }
