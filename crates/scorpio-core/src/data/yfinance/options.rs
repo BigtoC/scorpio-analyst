@@ -864,7 +864,9 @@ mod tests {
     }
 
     fn yesterday_eastern() -> String {
-        (crate::market_time::market_local_date_eastern_at(chrono::Utc::now()) - chrono::Duration::days(1)).to_string()
+        (crate::market_time::market_local_date_eastern_at(chrono::Utc::now())
+            - chrono::Duration::days(1))
+        .to_string()
     }
 
     /// Build a minimal `OptionContract` with just the fields used by the

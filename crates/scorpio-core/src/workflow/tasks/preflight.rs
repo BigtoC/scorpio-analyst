@@ -427,7 +427,8 @@ async fn apply_risk_free_rate(
 ) {
     use crate::state::EtfRiskFreeRateSource;
 
-    let is_today = crate::market_time::target_is_market_local_date_at(&state.target_date, chrono::Utc::now());
+    let is_today =
+        crate::market_time::target_is_market_local_date_at(&state.target_date, chrono::Utc::now());
     if !matches!(pack_id, PackId::EtfBaseline) || !is_today {
         return;
     }

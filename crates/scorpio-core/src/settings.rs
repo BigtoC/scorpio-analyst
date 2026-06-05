@@ -1113,9 +1113,7 @@ rpm = 22
 
     #[test]
     fn verify_copilot_token_dir_secure_fails_closed_on_non_unix() {
-        let err = unsupported_copilot_token_dir_security_error(Path::new(
-            "/tmp/github_copilot",
-        ));
+        let err = unsupported_copilot_token_dir_security_error(Path::new("/tmp/github_copilot"));
         assert!(
             err.to_string().contains("non-Unix") || err.to_string().contains("platform"),
             "expected fail-closed unsupported-platform error, got: {err}"

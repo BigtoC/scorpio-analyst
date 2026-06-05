@@ -542,10 +542,7 @@ fn replace_task_for_test_rejects_unknown_task_id_with_typed_error() {
         }
 
         async fn run(&self, _context: Context) -> graph_flow::Result<TaskResult> {
-            Ok(TaskResult::new(
-                None,
-                NextAction::Continue,
-            ))
+            Ok(TaskResult::new(None, NextAction::Continue))
         }
     }
 

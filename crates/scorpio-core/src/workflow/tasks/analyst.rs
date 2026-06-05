@@ -1527,9 +1527,9 @@ mod tests {
     use crate::data::{MockYFinanceData, sec_edgar_nport::NPortHoldings};
     use crate::rate_limit::SharedRateLimiter;
     use crate::valuation::{ValuatorId, ValuatorRegistry};
+    use chrono::Utc;
     use secrecy::SecretString;
     use std::sync::Arc;
-    use chrono::Utc;
 
     /// Build a shared `Info` snapshot carrying a Fund profile, so
     /// `fetch_valuation_inputs` reads the asset shape from it the same way the
