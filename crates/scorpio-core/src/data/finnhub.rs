@@ -388,21 +388,59 @@ fn build_fundamental_data(
     symbol: &str,
     insider_transactions: Vec<OurInsiderTransaction>,
 ) -> FundamentalData {
-    let pe_ratio = metrics.get("peNormalizedAnnual").and_then(serde_json::Value::as_f64)
+    let pe_ratio = metrics
+        .get("peNormalizedAnnual")
+        .and_then(serde_json::Value::as_f64)
         .or_else(|| metrics.get("peTTM").and_then(serde_json::Value::as_f64))
-        .or_else(|| metrics.get("peBasicExclExtraTTM").and_then(serde_json::Value::as_f64));
-    let eps = metrics.get("epsNormalizedAnnual").and_then(serde_json::Value::as_f64)
+        .or_else(|| {
+            metrics
+                .get("peBasicExclExtraTTM")
+                .and_then(serde_json::Value::as_f64)
+        });
+    let eps = metrics
+        .get("epsNormalizedAnnual")
+        .and_then(serde_json::Value::as_f64)
         .or_else(|| metrics.get("epsTTM").and_then(serde_json::Value::as_f64))
-        .or_else(|| metrics.get("epsBasicExclExtraItemsTTM").and_then(serde_json::Value::as_f64));
-    let revenue_growth_pct = metrics.get("revenueGrowth3Y").and_then(serde_json::Value::as_f64)
-        .or_else(|| metrics.get("revenueGrowthTTMYoy").and_then(serde_json::Value::as_f64));
-    let current_ratio = metrics.get("currentRatioAnnual").and_then(serde_json::Value::as_f64);
-    let debt_to_equity = metrics.get("totalDebt/totalEquityAnnual").and_then(serde_json::Value::as_f64)
-        .or_else(|| metrics.get("longTermDebt/equityAnnual").and_then(serde_json::Value::as_f64));
-    let gross_margin = metrics.get("grossMarginAnnual").and_then(serde_json::Value::as_f64)
-        .or_else(|| metrics.get("grossMarginTTM").and_then(serde_json::Value::as_f64));
-    let net_income = metrics.get("netIncomeGrowth3Y").and_then(serde_json::Value::as_f64)
-        .or_else(|| metrics.get("netIncomeAnnual").and_then(serde_json::Value::as_f64));
+        .or_else(|| {
+            metrics
+                .get("epsBasicExclExtraItemsTTM")
+                .and_then(serde_json::Value::as_f64)
+        });
+    let revenue_growth_pct = metrics
+        .get("revenueGrowth3Y")
+        .and_then(serde_json::Value::as_f64)
+        .or_else(|| {
+            metrics
+                .get("revenueGrowthTTMYoy")
+                .and_then(serde_json::Value::as_f64)
+        });
+    let current_ratio = metrics
+        .get("currentRatioAnnual")
+        .and_then(serde_json::Value::as_f64);
+    let debt_to_equity = metrics
+        .get("totalDebt/totalEquityAnnual")
+        .and_then(serde_json::Value::as_f64)
+        .or_else(|| {
+            metrics
+                .get("longTermDebt/equityAnnual")
+                .and_then(serde_json::Value::as_f64)
+        });
+    let gross_margin = metrics
+        .get("grossMarginAnnual")
+        .and_then(serde_json::Value::as_f64)
+        .or_else(|| {
+            metrics
+                .get("grossMarginTTM")
+                .and_then(serde_json::Value::as_f64)
+        });
+    let net_income = metrics
+        .get("netIncomeGrowth3Y")
+        .and_then(serde_json::Value::as_f64)
+        .or_else(|| {
+            metrics
+                .get("netIncomeAnnual")
+                .and_then(serde_json::Value::as_f64)
+        });
     let company_name = company_name.unwrap_or(symbol);
     let insider_count = insider_transactions.len();
 
@@ -421,7 +459,6 @@ fn build_fundamental_data(
         ),
     }
 }
-
 
 /// Sanitize externally-sourced news text before it is passed as tool output
 /// to an LLM agent.
@@ -526,7 +563,6 @@ pub(crate) fn normalize_news_fields(
         url,
     }
 }
-
 
 fn build_news_data(
     symbol: &str,
@@ -1332,7 +1368,13 @@ mod tests {
     #[test]
     fn normalize_news_fields_preserves_url() {
         let raw = sample_company_news("https://example.com/news/1", 1_705_276_800);
-        let article = normalize_news_fields(&raw.url, raw.datetime, &raw.headline, &raw.source, &raw.summary);
+        let article = normalize_news_fields(
+            &raw.url,
+            raw.datetime,
+            &raw.headline,
+            &raw.source,
+            &raw.summary,
+        );
         assert_eq!(
             article.url,
             Some("https://example.com/news/1".to_owned()),
@@ -1344,7 +1386,13 @@ mod tests {
     fn normalize_news_fields_formats_rfc3339_timestamp() {
         // 2024-01-15 00:00:00 UTC as unix seconds
         let raw = sample_company_news("https://example.com/news/1", 1_705_276_800);
-        let article = normalize_news_fields(&raw.url, raw.datetime, &raw.headline, &raw.source, &raw.summary);
+        let article = normalize_news_fields(
+            &raw.url,
+            raw.datetime,
+            &raw.headline,
+            &raw.source,
+            &raw.summary,
+        );
         // Verify it parses as a valid RFC3339 datetime
         chrono::DateTime::parse_from_rfc3339(&article.published_at)
             .expect("published_at must be a valid RFC3339 string");
