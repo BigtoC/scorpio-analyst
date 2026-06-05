@@ -3,8 +3,8 @@
 //! [`PreflightTask`] runs before any analyst fan-out begins.  It:
 //!
 //! 1. Loads [`TradingState`] from the workflow context.
-//! 2. Validates and canonicalises the runtime asset symbol using
-//!    [`crate::data::resolve_symbol`].
+//! 2. Validates and canonicals the runtime asset symbol using
+//!    [`resolve_symbol`].
 //! 3. Writes the canonical symbol back into `TradingState.asset_symbol`.
 //! 4. Loads the most recent compatible prior thesis from the snapshot store and
 //!    attaches it to `TradingState.prior_thesis`.
@@ -56,7 +56,7 @@ impl FredSeriesClient for crate::data::FredClient {
 /// `pub` for the same reason as [`FredSeriesClient`].
 #[async_trait]
 pub trait RiskFreeRateYFinanceClient: Send + Sync {
-    /// Return the latest close as an annualised Treasury yield in percent units.
+    /// Return the latest close as an annualized Treasury yield in percent units.
     async fn latest_risk_free_rate_pct(&self, symbol: &str) -> Result<Option<f64>, TradingError>;
 }
 
@@ -146,12 +146,14 @@ impl PreflightTask {
         enrichment: crate::config::DataEnrichmentConfig,
         snapshot_store: Arc<SnapshotStore>,
     ) -> Self {
-        Self::with_runtime_policy(
+        Self::with_runtime_policy_and_rate_clients(
             enrichment,
             false,
             snapshot_store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
+            Arc::new(NoOpRateClient),
+            Arc::new(NoOpRateClient),
         )
     }
 
@@ -175,28 +177,6 @@ impl PreflightTask {
     }
 
     /// Create a new `PreflightTask` from an already-resolved runtime policy.
-    ///
-    /// Uses no-op rate clients; prefer
-    /// [`Self::with_runtime_policy_and_rate_clients`] for production ETF runs.
-    pub fn with_runtime_policy(
-        enrichment: crate::config::DataEnrichmentConfig,
-        transcripts_enabled: bool,
-        snapshot_store: Arc<SnapshotStore>,
-        runtime_policy: RuntimePolicy,
-    ) -> Self {
-        Self {
-            enrichment,
-            transcripts_enabled,
-            snapshot_store,
-            runtime_policy: Ok(runtime_policy),
-            routing_fallback_reason: None,
-            fred: Arc::new(NoOpRateClient),
-            yfinance: Arc::new(NoOpRateClient),
-        }
-    }
-
-    /// Create a new `PreflightTask` from an already-resolved runtime policy
-    /// with live rate-data clients for the ETF risk-free-rate fetch.
     pub fn with_runtime_policy_and_rate_clients(
         enrichment: crate::config::DataEnrichmentConfig,
         transcripts_enabled: bool,
@@ -233,7 +213,7 @@ impl Task for PreflightTask {
                 ))
             })?;
 
-        // ── Resolve and canonicalise symbol ───────────────────────────────
+        // ── Resolve and canonicalize symbol ───────────────────────────────
         let instrument = resolve_symbol(&state.asset_symbol).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: invalid asset symbol {:?}: {e}",
@@ -266,7 +246,7 @@ impl Task for PreflightTask {
         }
         state.prior_thesis = prior_thesis;
 
-        // ── Re-serialise the updated state ────────────────────────────────
+        // ── Re-serialize the updated state ────────────────────────────────
         serialize_state_to_context(&state, &context)
             .await
             .map_err(|e| {
@@ -571,12 +551,14 @@ mod tests {
             .await
             .expect("state serialization");
 
-        let task = PreflightTask::with_runtime_policy(
+        let task = PreflightTask::with_runtime_policy_and_rate_clients(
             enrichment,
             transcripts_enabled,
             store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
+            Arc::new(super::NoOpRateClient),
+            Arc::new(super::NoOpRateClient),
         );
         task.run(ctx.clone()).await?;
         Ok(ctx)
@@ -1051,12 +1033,14 @@ mod tests {
         .await
         .expect("override write");
 
-        let task = PreflightTask::with_runtime_policy(
+        let task = PreflightTask::with_runtime_policy_and_rate_clients(
             DataEnrichmentConfig::default(),
             false,
             store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
+            Arc::new(super::NoOpRateClient),
+            Arc::new(super::NoOpRateClient),
         );
         task.run(ctx.clone())
             .await
@@ -1102,12 +1086,14 @@ mod tests {
         .await
         .expect("override write");
 
-        let task = PreflightTask::with_runtime_policy(
+        let task = PreflightTask::with_runtime_policy_and_rate_clients(
             DataEnrichmentConfig::default(),
             false,
             store,
             crate::analysis_packs::resolve_runtime_policy("baseline")
                 .expect("baseline pack must resolve"),
+            Arc::new(super::NoOpRateClient),
+            Arc::new(super::NoOpRateClient),
         );
         task.run(ctx.clone())
             .await
