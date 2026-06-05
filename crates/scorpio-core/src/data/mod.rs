@@ -32,6 +32,7 @@ pub mod entity;
 pub mod finnhub;
 pub mod fred;
 pub mod futu;
+pub mod gnews;
 mod provider_impls;
 pub mod reddit;
 pub mod sec_edgar;
@@ -53,6 +54,7 @@ pub use finnhub::{
 };
 pub use fred::{FredClient, GetEconomicIndicators};
 pub use futu::FutuClient;
+pub use gnews::GnewsNewsProvider;
 pub use reddit::{RedditClient, RedditNewsProvider};
 pub use sec_edgar::{FilingHeader, SecEdgarClient};
 pub use sec_edgar_nport::{NPortHoldingRow, NPortHoldings, NPortSectorRow};
