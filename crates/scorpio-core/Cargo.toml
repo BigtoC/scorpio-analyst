@@ -60,6 +60,7 @@ url.workspace = true
 libc.workspace = true
 finnhub.workspace = true
 yfinance-rs.workspace = true
+gnews-rs.workspace = true
 kand.workspace = true
 num-traits.workspace = true
 quick-xml.workspace = true
