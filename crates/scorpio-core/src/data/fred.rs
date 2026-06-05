@@ -590,10 +590,6 @@ fn within_retry_budget(
     }
 }
 
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    parse_retry_after_at(headers, Utc::now())
-}
-
 fn parse_retry_after_at(
     headers: &reqwest::header::HeaderMap,
     now: DateTime<Utc>,
@@ -658,10 +654,14 @@ fn map_fred_response_status(
 
     Err(match classify_fred_status(resp.status()) {
         FredStatusClass::RateLimited => FredRequestError::RateLimited {
-            retry_after: parse_retry_after(resp.headers()),
+            retry_after: parse_retry_after_at(resp.headers(), Utc::now()),
         },
-        FredStatusClass::TransientServer => FredRequestError::TransientServer { status: resp.status() },
-        FredStatusClass::PermanentClient => FredRequestError::PermanentClient { status: resp.status() },
+        FredStatusClass::TransientServer => FredRequestError::TransientServer {
+            status: resp.status(),
+        },
+        FredStatusClass::PermanentClient => FredRequestError::PermanentClient {
+            status: resp.status(),
+        },
     })
 }
 
@@ -822,7 +822,10 @@ mod tests {
         .into_iter()
         .collect::<reqwest::header::HeaderMap>();
 
-        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(3)));
+        assert_eq!(
+            parse_retry_after_at(&headers, Utc::now()),
+            Some(Duration::from_secs(3))
+        );
     }
 
     #[test]
