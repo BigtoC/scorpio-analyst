@@ -263,7 +263,7 @@ impl Task for PreflightTask {
                 "PreflightTask: orchestration corruption: ProviderCapabilities serialization failed: {e}"
             ))
         })?;
-        context.set(KEY_PROVIDER_CAPABILITIES, caps_json).await;
+        context.set(KEY_PROVIDER_CAPABILITIES, caps_json)?;
 
         // ── Write ResolvedInstrument ──────────────────────────────────────
         let instrument_json = serde_json::to_string(&instrument).map_err(|e| {
@@ -271,7 +271,7 @@ impl Task for PreflightTask {
                 "PreflightTask: orchestration corruption: ResolvedInstrument serialization failed: {e}"
             ))
         })?;
-        context.set(KEY_RESOLVED_INSTRUMENT, instrument_json).await;
+        context.set(KEY_RESOLVED_INSTRUMENT, instrument_json)?;
 
         // ── Resolve analysis pack into runtime policy ─────────────────────
         let (runtime_policy, routing_fallback_reason) =
@@ -310,16 +310,12 @@ impl Task for PreflightTask {
         // when the upstream classifier captured a fallback reason — absent
         // otherwise, matching the on-disk semantics of
         // `TradingState::etf_routing_fallback_reason`.
-        context
-            .set(
-                KEY_RUNTIME_PACK_ROUTE,
-                runtime_policy.pack_id.as_str().to_owned(),
-            )
-            .await;
+        context.set(
+            KEY_RUNTIME_PACK_ROUTE,
+            runtime_policy.pack_id.as_str().to_owned(),
+        )?;
         if let Some(reason) = routing_fallback_reason.as_deref() {
-            context
-                .set(KEY_ROUTING_FALLBACK_REASON, reason.to_owned())
-                .await;
+            context.set(KEY_ROUTING_FALLBACK_REASON, reason.to_owned())?;
         }
 
         // ── Write required coverage inputs from runtime policy ────────────
@@ -328,14 +324,14 @@ impl Task for PreflightTask {
                 "PreflightTask: orchestration corruption: required_coverage_inputs serialization failed: {e}"
             ))
         })?;
-        context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json).await;
+        context.set(KEY_REQUIRED_COVERAGE_INPUTS, inputs_json)?;
 
         let policy_json = serde_json::to_string(&runtime_policy).map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
                 "PreflightTask: orchestration corruption: RuntimePolicy serialization failed: {e}"
             ))
         })?;
-        context.set(KEY_RUNTIME_POLICY, policy_json).await;
+        context.set(KEY_RUNTIME_POLICY, policy_json)?;
 
         // ── Build per-run topology + routing flags ───────────────────────
         // Read the configured round counts already written into context by
@@ -343,8 +339,8 @@ impl Task for PreflightTask {
         // structurally safe because the conditional-edge closures already
         // tolerate `None` the same way; in practice both keys are present
         // for every active pipeline run.
-        let max_debate_rounds = context.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
-        let max_risk_rounds = context.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
+        let max_debate_rounds = context.get::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
+        let max_risk_rounds = context.get::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
         let topology = build_run_topology(
             &runtime_policy.required_inputs,
             max_debate_rounds,
@@ -355,7 +351,7 @@ impl Task for PreflightTask {
         // Store RoutingFlags as a typed struct so the conditional-edge
         // closures in `workflow::builder` can read it via `get_sync` without
         // a JSON round-trip on every iteration.
-        context.set(KEY_ROUTING_FLAGS, routing_flags).await;
+        context.set(KEY_ROUTING_FLAGS, routing_flags)?;
 
         // ── Active-pack completeness gate (fail-loud) ─────────────────────
         // Validate the resolved runtime policy that this graph will actually
@@ -467,13 +463,15 @@ pub async fn run_for_test(
 /// Seed `KEY_TRANSCRIPT_FETCH_STATUS` to the serialized `TranscriptFetch::Unavailable`
 /// if the key has not already been populated by `run_analysis_cycle`.
 async fn seed_transcript_status_if_absent(context: &Context) {
-    let existing: Option<String> = context.get(KEY_TRANSCRIPT_FETCH_STATUS).await;
+    let existing: Option<String> = context.get(KEY_TRANSCRIPT_FETCH_STATUS);
     if existing.is_none() {
         let default = serde_json::to_string(
             &crate::data::adapters::transcripts::TranscriptFetch::Unavailable,
         )
         .unwrap_or_else(|_| "\"Unavailable\"".to_owned());
-        context.set(KEY_TRANSCRIPT_FETCH_STATUS, default).await;
+        context
+            .set(KEY_TRANSCRIPT_FETCH_STATUS, default)
+            .expect("a String always serializes");
     }
 }
 
@@ -481,10 +479,12 @@ async fn seed_transcript_status_if_absent(context: &Context) {
 /// value is the JSON literal `"null"`.  This preserves enrichment data that
 /// `run_analysis_cycle` may have hydrated before the graph starts.
 async fn seed_if_absent(context: &Context, key: &str) {
-    let existing: Option<String> = context.get(key).await;
+    let existing: Option<String> = context.get(key);
     match existing.as_deref() {
         None | Some("null") => {
-            context.set(key, "null".to_owned()).await;
+            context
+                .set(key, "null".to_owned())
+                .expect("a String always serializes");
         }
         Some(_) => {
             // Already populated with real data — do not overwrite.
@@ -644,7 +644,6 @@ mod tests {
 
         let json: String = ctx
             .get(KEY_RESOLVED_INSTRUMENT)
-            .await
             .expect("resolved_instrument key must be present");
         let instrument: ResolvedInstrument =
             serde_json::from_str(&json).expect("ResolvedInstrument deserialization");
@@ -664,7 +663,6 @@ mod tests {
 
         let json: String = ctx
             .get(KEY_PROVIDER_CAPABILITIES)
-            .await
             .expect("provider_capabilities key must be present");
         let caps: ProviderCapabilities =
             serde_json::from_str(&json).expect("ProviderCapabilities deserialization");
@@ -681,7 +679,6 @@ mod tests {
 
         let json: String = ctx
             .get(KEY_REQUIRED_COVERAGE_INPUTS)
-            .await
             .expect("required_coverage_inputs key must be present");
         let inputs: Vec<String> =
             serde_json::from_str(&json).expect("required_coverage_inputs deserialization");
@@ -697,7 +694,7 @@ mod tests {
             .await
             .expect("preflight should succeed");
 
-        let raw: Option<String> = ctx.get("cached_transcript").await;
+        let raw: Option<String> = ctx.get("cached_transcript");
         assert!(
             raw.is_none(),
             "legacy cached_transcript key should be absent after preflight"
@@ -712,7 +709,6 @@ mod tests {
 
         let raw: String = ctx
             .get(KEY_CACHED_CONSENSUS)
-            .await
             .expect("cached_consensus must be present");
         assert_eq!(raw, "null");
     }
@@ -725,7 +721,6 @@ mod tests {
 
         let raw: String = ctx
             .get(KEY_CACHED_EVENT_FEED)
-            .await
             .expect("cached_event_feed must be present");
         assert_eq!(raw, "null");
     }
@@ -738,7 +733,6 @@ mod tests {
 
         let raw: String = ctx
             .get(KEY_TRANSCRIPT_FETCH_STATUS)
-            .await
             .expect("transcript_fetch_status must be present");
         let status: crate::data::adapters::transcripts::TranscriptFetch =
             serde_json::from_str(&raw).expect("TranscriptFetch deserialization");
@@ -761,14 +755,15 @@ mod tests {
 
         // Pre-hydrate consensus cache key with real data.
         let real_data = r#"{"symbol":"AAPL","eps_estimate":2.5,"revenue_estimate_m":95000.0,"analyst_count":35,"as_of_date":"2026-01-15"}"#;
-        ctx.set(KEY_CACHED_CONSENSUS, real_data.to_owned()).await;
+        ctx.set(KEY_CACHED_CONSENSUS, real_data.to_owned())
+            .expect("KEY_CACHED_CONSENSUS is serializable");
 
         let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
         task.run(ctx.clone())
             .await
             .expect("preflight should succeed");
 
-        let after: String = ctx.get(KEY_CACHED_CONSENSUS).await.expect("key must exist");
+        let after: String = ctx.get(KEY_CACHED_CONSENSUS).expect("key must exist");
         assert_eq!(
             after, real_data,
             "preflight must not overwrite pre-hydrated enrichment data"
@@ -785,17 +780,15 @@ mod tests {
             .expect("state serialization");
 
         let real_data = r#"[{"symbol":"AAPL","event_timestamp":"2026-01-14T18:00:00Z","event_type":"earnings_release","headline":"Apple beats Q1","impact":"positive"}]"#;
-        ctx.set(KEY_CACHED_EVENT_FEED, real_data.to_owned()).await;
+        ctx.set(KEY_CACHED_EVENT_FEED, real_data.to_owned())
+            .expect("KEY_CACHED_EVENT_FEED is serializable");
 
         let task = PreflightTask::new(DataEnrichmentConfig::default(), store);
         task.run(ctx.clone())
             .await
             .expect("preflight should succeed");
 
-        let after: String = ctx
-            .get(KEY_CACHED_EVENT_FEED)
-            .await
-            .expect("key must exist");
+        let after: String = ctx.get(KEY_CACHED_EVENT_FEED).expect("key must exist");
         assert_eq!(
             after, real_data,
             "preflight must not overwrite pre-hydrated event feed data"
@@ -939,7 +932,6 @@ mod tests {
 
         let json: String = ctx
             .get(KEY_RUNTIME_POLICY)
-            .await
             .expect("runtime_policy key must be present after preflight");
         let policy: crate::analysis_packs::RuntimePolicy =
             serde_json::from_str(&json).expect("RuntimePolicy deserialization");
@@ -956,7 +948,7 @@ mod tests {
             .await
             .expect("preflight should succeed");
 
-        let json: String = ctx.get(KEY_RUNTIME_POLICY).await.unwrap();
+        let json: String = ctx.get(KEY_RUNTIME_POLICY).unwrap();
         let policy: crate::analysis_packs::RuntimePolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(
             policy.required_inputs,
@@ -1006,7 +998,7 @@ mod tests {
             KEY_CACHED_EVENT_FEED,
             KEY_RUNTIME_POLICY,
         ] {
-            let val: Option<String> = ctx.get(key).await;
+            let val: Option<String> = ctx.get(key);
             assert!(
                 val.is_some(),
                 "context key '{key}' must be present after preflight"
@@ -1047,14 +1039,11 @@ mod tests {
             .await
             .expect("preflight should succeed");
 
-        let route: Option<String> = ctx
-            .get(crate::workflow::tasks::common::KEY_RUNTIME_PACK_ROUTE)
-            .await;
+        let route: Option<String> = ctx.get(crate::workflow::tasks::common::KEY_RUNTIME_PACK_ROUTE);
         assert_eq!(route.as_deref(), Some("baseline"));
 
-        let reason: Option<String> = ctx
-            .get(crate::workflow::tasks::common::KEY_ROUTING_FALLBACK_REASON)
-            .await;
+        let reason: Option<String> =
+            ctx.get(crate::workflow::tasks::common::KEY_ROUTING_FALLBACK_REASON);
         assert_eq!(reason.as_deref(), Some("profile_lookup_unavailable"));
 
         let after = deserialize_state_from_context(&ctx)
@@ -1123,18 +1112,15 @@ mod tests {
             .await
             .expect("preflight should succeed");
 
-        let route: Option<String> = ctx
-            .get(crate::workflow::tasks::common::KEY_RUNTIME_PACK_ROUTE)
-            .await;
+        let route: Option<String> = ctx.get(crate::workflow::tasks::common::KEY_RUNTIME_PACK_ROUTE);
         assert_eq!(
             route.as_deref(),
             Some("baseline"),
             "matched-routing path must still emit the pack route"
         );
 
-        let reason: Option<String> = ctx
-            .get(crate::workflow::tasks::common::KEY_ROUTING_FALLBACK_REASON)
-            .await;
+        let reason: Option<String> =
+            ctx.get(crate::workflow::tasks::common::KEY_ROUTING_FALLBACK_REASON);
         assert!(
             reason.is_none(),
             "matched routing must not emit a fallback reason"

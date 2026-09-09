@@ -177,7 +177,7 @@ impl Task for FundManagerTask {
 
         // Route to the auditor if it is enabled; otherwise terminate.
         let skip_auditor = context
-            .get_sync::<RoutingFlags>(KEY_ROUTING_FLAGS)
+            .get::<RoutingFlags>(KEY_ROUTING_FLAGS)
             .map(|f| f.skip_auditor)
             .unwrap_or(true);
         if !skip_auditor {

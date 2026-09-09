@@ -312,7 +312,7 @@ impl graph_flow::Task for StubBullishResearcherTask {
             content: "stub: bullish argument — strong growth outlook".to_owned(),
         });
 
-        let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Bullish Researcher");
         write_prefixed_result(
@@ -365,7 +365,7 @@ impl graph_flow::Task for StubBearishResearcherTask {
             content: "stub: bearish argument — overvaluation risk".to_owned(),
         });
 
-        let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(super::KEY_DEBATE_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Bearish Researcher");
         write_prefixed_result(
@@ -547,7 +547,7 @@ impl graph_flow::Task for StubAggressiveRiskTask {
             content: "stub: risk is manageable, proceed".to_owned(),
         });
 
-        let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(super::KEY_RISK_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Aggressive Risk");
         write_prefixed_result(
@@ -606,7 +606,7 @@ impl graph_flow::Task for StubConservativeRiskTask {
             content: "stub: acceptable with tighter stop-loss".to_owned(),
         });
 
-        let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(super::KEY_RISK_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Conservative Risk");
         write_prefixed_result(
@@ -665,7 +665,7 @@ impl graph_flow::Task for StubNeutralRiskTask {
             content: "stub: balanced view, proceed with caution".to_owned(),
         });
 
-        let current_round: u32 = context.get(super::KEY_RISK_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(super::KEY_RISK_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         let usage = stub_usage("Neutral Risk");
         write_prefixed_result(
@@ -831,7 +831,7 @@ impl graph_flow::Task for StubFundManagerTask {
 
         // Mirror FundManagerTask: route to auditor when auditor is enabled.
         let skip_auditor = context
-            .get_sync::<RoutingFlags>(super::KEY_ROUTING_FLAGS)
+            .get::<RoutingFlags>(super::KEY_ROUTING_FLAGS)
             .map(|f| f.skip_auditor)
             .unwrap_or(true);
         let next = if skip_auditor {

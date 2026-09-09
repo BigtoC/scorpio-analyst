@@ -49,7 +49,7 @@ impl Task for AuditorTask {
 
     async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
         let skip = context
-            .get_sync::<RoutingFlags>(KEY_ROUTING_FLAGS)
+            .get::<RoutingFlags>(KEY_ROUTING_FLAGS)
             .map(|f| f.skip_auditor)
             .unwrap_or(true);
 

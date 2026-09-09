@@ -31,7 +31,11 @@ pub async fn serialize_state_to_context(
     let json = serde_json::to_string(state).map_err(|e| TradingError::SchemaViolation {
         message: format!("failed to serialize TradingState to context: {e}"),
     })?;
-    context.set(TRADING_STATE_KEY, json).await;
+    context
+        .set(TRADING_STATE_KEY, json)
+        .map_err(|e| TradingError::SchemaViolation {
+            message: format!("failed to store TradingState in context: {e}"),
+        })?;
     Ok(())
 }
 
@@ -44,7 +48,7 @@ pub async fn serialize_state_to_context(
 pub async fn deserialize_state_from_context(
     context: &Context,
 ) -> Result<TradingState, TradingError> {
-    let json: Option<String> = context.get(TRADING_STATE_KEY).await;
+    let json: Option<String> = context.get(TRADING_STATE_KEY);
     let json = json.ok_or_else(|| TradingError::SchemaViolation {
         message: format!("context missing required key '{TRADING_STATE_KEY}'"),
     })?;
@@ -122,7 +126,11 @@ pub async fn write_prefixed_result<T: Serialize>(
     let json = serde_json::to_string(value).map_err(|e| TradingError::SchemaViolation {
         message: format!("failed to serialize prefixed result '{full_key}': {e}"),
     })?;
-    context.set(full_key, json).await;
+    context
+        .set(&full_key, json)
+        .map_err(|e| TradingError::SchemaViolation {
+            message: format!("failed to store prefixed result '{full_key}': {e}"),
+        })?;
     Ok(())
 }
 
@@ -142,7 +150,7 @@ pub async fn read_prefixed_result<T: DeserializeOwned>(
     key: &str,
 ) -> Result<T, TradingError> {
     let full_key = prefixed_key(prefix, key)?;
-    let json: Option<String> = context.get(&full_key).await;
+    let json: Option<String> = context.get(&full_key);
     let json = json.ok_or_else(|| TradingError::SchemaViolation {
         message: format!("context missing prefixed key '{full_key}'"),
     })?;

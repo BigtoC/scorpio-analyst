@@ -43,7 +43,9 @@ mod tests;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use errors::map_graph_error;
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+#[cfg(any(test, feature = "test-helpers"))]
+use std::{collections::HashMap, sync::Mutex};
 
 use graph_flow::Graph;
 #[cfg(any(test, feature = "test-helpers"))]
@@ -127,7 +129,14 @@ pub struct TradingPipeline {
     /// Pack-derived runtime policy when the pipeline was built from a resolved pack.
     pub(super) runtime_policy: Option<RuntimePolicy>,
     /// Pre-built graph - stateless, safe to share across analysis cycles.
-    pub(super) graph: Arc<Graph>,
+    ///
+    /// Behind an `RwLock` because graph-flow 0.8's `Graph` is immutable once
+    /// built: [`replace_task_for_test`][Self::replace_task_for_test] swaps in a
+    /// freshly built graph instead of mutating this one.
+    pub(super) graph: RwLock<Arc<Graph>>,
+    /// Task overrides installed by the test seam, replayed on every rebuild.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(super) task_overrides: Mutex<HashMap<String, Arc<dyn graph_flow::Task>>>,
 }
 
 impl std::fmt::Debug for TradingPipeline {
@@ -146,7 +155,7 @@ impl std::fmt::Debug for TradingPipeline {
             .field("quick_handle", &self.quick_handle)
             .field("deep_handle", &self.deep_handle)
             .field("runtime_policy", &self.runtime_policy)
-            .field("graph", &"Arc<Graph>")
+            .field("graph", &"RwLock<Arc<Graph>>")
             .finish()
     }
 }
@@ -208,7 +217,9 @@ impl TradingPipeline {
             quick_handle,
             deep_handle,
             runtime_policy: None,
-            graph,
+            graph: RwLock::new(graph),
+            #[cfg(any(test, feature = "test-helpers"))]
+            task_overrides: Mutex::new(HashMap::new()),
         }
     }
 
@@ -280,7 +291,9 @@ impl TradingPipeline {
             quick_handle,
             deep_handle,
             runtime_policy: None,
-            graph,
+            graph: RwLock::new(graph),
+            #[cfg(any(test, feature = "test-helpers"))]
+            task_overrides: Mutex::new(HashMap::new()),
         })
     }
 
@@ -315,8 +328,44 @@ impl TradingPipeline {
             quick_handle,
             deep_handle,
             runtime_policy,
-            graph,
+            graph: RwLock::new(graph),
+            #[cfg(any(test, feature = "test-helpers"))]
+            task_overrides: Mutex::new(HashMap::new()),
         }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Rebuild the graph from the pipeline topology with every registered test
+    /// override applied.
+    ///
+    /// `GraphBuilder::add_task` replaces an existing task id in place, so
+    /// re-adding an override after the standard topology swaps it out.
+    fn rebuild_graph_with_overrides(&self) {
+        let mut builder = runtime::build_graph_builder(
+            Arc::clone(&self.config),
+            &self.finnhub,
+            &self.fred,
+            &self.yfinance,
+            build_default_sec_edgar_client(runtime::build_sec_edgar_limiter(
+                &self.config.rate_limits,
+            )),
+            self.alpha_vantage.clone(),
+            Arc::clone(&self.snapshot_store),
+            &self.quick_handle,
+            &self.deep_handle,
+        );
+        for task in self
+            .task_overrides
+            .lock()
+            .expect("task override lock poisoned")
+            .values()
+        {
+            builder = builder.add_task(Arc::clone(task));
+        }
+        let graph = builder
+            .build()
+            .expect("trading_pipeline graph is statically well-formed");
+        *self.graph.write().expect("graph lock poisoned") = Arc::new(graph);
     }
 
     #[cfg(any(test, feature = "test-helpers"))]
@@ -357,7 +406,11 @@ impl TradingPipeline {
                 task_id: task_id.to_owned(),
             });
         }
-        self.graph.add_task(task);
+        self.task_overrides
+            .lock()
+            .expect("task override lock poisoned")
+            .insert(task_id.to_owned(), task);
+        self.rebuild_graph_with_overrides();
         Ok(())
     }
 
