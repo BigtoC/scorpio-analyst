@@ -11,8 +11,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig_core::tool::PortableTool;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -395,7 +394,7 @@ fn degrade_transient_series_error(
     }
 }
 
-// ─── rig::tool::Tool wrapper ─────────────────────────────────────────────────
+// ─── rig_core::tool::PortableTool wrapper ─────────────────────────────────────────────────
 
 /// `rig` tool: fetch a fixed macro-economic indicator snapshot from FRED.
 ///
@@ -417,23 +416,23 @@ impl GetEconomicIndicators {
     }
 }
 
-impl Tool for GetEconomicIndicators {
+impl PortableTool for GetEconomicIndicators {
     const NAME: &'static str = "get_economic_indicators";
 
     type Error = TradingError;
     type Args = EmptyObjectArgs;
     type Output = Vec<MacroEvent>;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Fetch macro-economic indicators (Federal Funds Rate and CPI) from FRED and summarize them as macro events.".to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        }
+    fn description(&self) -> String {
+        "Fetch macro-economic indicators (Federal Funds Rate and CPI) from FRED and summarize them as macro events.".to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -993,36 +992,36 @@ mod tests {
         assert!(debug.contains("test-fred"));
     }
 
-    #[tokio::test]
-    async fn get_economic_indicators_tool_name() {
-        use rig::tool::Tool;
-        let tool = GetEconomicIndicators { client: None };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_economic_indicators");
+    #[test]
+    fn get_economic_indicators_tool_name() {
+        use rig_core::tool::PortableTool;
+        let name = <GetEconomicIndicators as PortableTool>::NAME;
+        assert_eq!(name, "get_economic_indicators");
     }
 
     #[tokio::test]
     async fn get_economic_indicators_accepts_empty_object_args_at_tool_boundary() {
-        use rig::tool::Tool;
+        use rig_core::tool::PortableTool;
         let tool = GetEconomicIndicators { client: None };
         let result = tool.call(EmptyObjectArgs {}).await;
         assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
     }
 
-    #[tokio::test]
-    async fn get_economic_indicators_definition_advertises_empty_object_schema() {
-        use rig::tool::Tool;
+    #[test]
+    fn get_economic_indicators_definition_advertises_empty_object_schema() {
+        use rig_core::tool::PortableTool;
         let tool = GetEconomicIndicators { client: None };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_economic_indicators");
-        assert_eq!(def.parameters["type"], "object");
-        let props = &def.parameters["properties"];
+        let name = <GetEconomicIndicators as PortableTool>::NAME;
+        let parameters = tool.parameters();
+        assert_eq!(name, "get_economic_indicators");
+        assert_eq!(parameters["type"], "object");
+        let props = &parameters["properties"];
         assert!(
             props.as_object().map(|o| o.is_empty()).unwrap_or(false),
             "properties must be an empty object, got: {props}"
         );
         assert_eq!(
-            def.parameters["additionalProperties"], false,
+            parameters["additionalProperties"], false,
             "additionalProperties must be false"
         );
     }

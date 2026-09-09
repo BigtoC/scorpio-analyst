@@ -12,8 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::NaiveDate;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig_core::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::RwLock;
@@ -97,7 +96,7 @@ pub(super) fn map_yf_err(err: YfError) -> TradingError {
     }
 }
 
-// ─── rig::tool::Tool wrapper ──────────────────────────────────────────────────
+// ─── rig_core::tool::PortableTool wrapper ──────────────────────────────────────────────────
 
 /// Args for the `get_ohlcv` tool call.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -230,14 +229,14 @@ impl GetOhlcv {
     }
 }
 
-impl Tool for GetOhlcv {
+impl PortableTool for GetOhlcv {
     const NAME: &'static str = "get_ohlcv";
 
     type Error = TradingError;
     type Args = OhlcvArgs;
     type Output = Vec<Candle>;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+    fn description(&self) -> String {
         let mut desc = "Fetch historical daily OHLCV (open/high/low/close/volume) bars for a \
                         stock symbol between start and end dates (YYYY-MM-DD, inclusive) from \
                         Yahoo Finance."
@@ -254,6 +253,10 @@ impl Tool for GetOhlcv {
             desc.push_str(&format!(" The end date MUST be exactly \"{end}\"."));
         }
 
+        desc
+    }
+
+    fn parameters(&self) -> serde_json::Value {
         // Build per-property schema, pinning enum when a scope value is set.
         let symbol_schema = match &self.allowed_symbol {
             Some(s) => {
@@ -280,19 +283,15 @@ impl Tool for GetOhlcv {
             }
         };
 
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: desc,
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "symbol": symbol_schema,
-                    "start": start_schema,
-                    "end": end_schema
-                },
-                "required": ["symbol", "start", "end"]
-            }),
-        }
+        json!({
+            "type": "object",
+            "properties": {
+                "symbol": symbol_schema,
+                "start": start_schema,
+                "end": end_schema
+            },
+            "required": ["symbol", "start", "end"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -406,17 +405,10 @@ mod tests {
 
     // ── Tool ─────────────────────────────────────────────────────────────
 
-    #[tokio::test]
-    async fn get_ohlcv_tool_name() {
-        let tool = GetOhlcv {
-            client: None,
-            allowed_symbol: None,
-            allowed_start: None,
-            allowed_end: None,
-            context: None,
-        };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_ohlcv");
+    #[test]
+    fn get_ohlcv_tool_name() {
+        let name = <GetOhlcv as PortableTool>::NAME;
+        assert_eq!(name, "get_ohlcv");
     }
 
     #[tokio::test]
