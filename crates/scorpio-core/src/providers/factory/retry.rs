@@ -11,10 +11,11 @@
 
 use std::time::Duration;
 
-use rig::{
+use rig_agent::{
     agent::{PromptResponse, TypedPromptResponse},
-    completion::{Message, PromptError},
+    completion::PromptError,
 };
+use rig_core::completion::Message;
 use serde::de::DeserializeOwned;
 use tracing::warn;
 // Budget accounting reads tokio's clock (not `std::time::Instant`) so the per-attempt
@@ -615,11 +616,11 @@ fn transient_prompt_error_summary(err: &PromptError) -> Option<String> {
             let message = ce.to_string();
             is_transient_message(&message).then(|| sanitize_error_summary(&message))
         }
-        // Tool errors and cancellations are not transient
-        PromptError::ToolError(_)
-        | PromptError::ToolServerError(_)
+        // Memory, turn-budget, tool-dispatch and cancellation failures are not transient
+        PromptError::MemoryError(_)
         | PromptError::MaxTurnsError { .. }
-        | PromptError::PromptCancelled { .. } => None,
+        | PromptError::PromptCancelled { .. }
+        | PromptError::UnknownToolCall { .. } => None,
     }
 }
 
@@ -669,52 +670,57 @@ mod tests {
     use super::*;
     use crate::error::RetryPolicy;
     use crate::state::{TradeAction, TradeProposal};
-    use rig::OneOrMany;
-    use rig::completion::Message;
-    use rig::message::UserContent;
+    use rig_core::completion::Message;
+    use rig_core::message::UserContent;
 
     use super::super::agent::{MockChatOutcome, mock_llm_agent};
     use crate::providers::ProviderId;
-    use rig::agent::PromptResponse;
+    use rig_agent::agent::PromptResponse;
 
     // ── Transient error classification ───────────────────────────────────
 
     #[test]
     fn rate_limit_error_is_transient() {
-        let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
-            "rate limit exceeded".to_owned(),
-        ));
+        let err = PromptError::CompletionError(
+            rig_core::completion::CompletionError::ProviderError("rate limit exceeded".to_owned()),
+        );
         assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
     fn http_429_error_is_transient() {
-        let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
-            "HTTP 429 Too Many Requests".to_owned(),
-        ));
+        let err =
+            PromptError::CompletionError(rig_core::completion::CompletionError::ProviderError(
+                "HTTP 429 Too Many Requests".to_owned(),
+            ));
         assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
     fn server_500_error_is_transient() {
-        let err = PromptError::CompletionError(rig::completion::CompletionError::ResponseError(
-            "Internal server error 500".to_owned(),
-        ));
+        let err =
+            PromptError::CompletionError(rig_core::completion::CompletionError::ResponseError(
+                "Internal server error 500".to_owned(),
+            ));
         assert!(transient_prompt_error_summary(&err).is_some());
     }
 
     #[test]
     fn auth_error_is_not_transient() {
-        let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
-            "invalid API key".to_owned(),
-        ));
+        let err = PromptError::CompletionError(
+            rig_core::completion::CompletionError::ProviderError("invalid API key".to_owned()),
+        );
         assert!(transient_prompt_error_summary(&err).is_none());
     }
 
     #[test]
     fn tool_error_is_not_transient() {
-        use rig::tool::ToolSetError;
-        let err = PromptError::ToolError(ToolSetError::ToolNotFoundError("foo".to_owned()));
+        let err = PromptError::UnknownToolCall {
+            tool_name: "foo".to_owned(),
+            available_tools: Vec::new(),
+            allowed_tools: Vec::new(),
+            chat_history: Box::new(Vec::new()),
+        };
         assert!(transient_prompt_error_summary(&err).is_none());
     }
 
@@ -794,23 +800,27 @@ mod tests {
             vec![],
             vec![
                 MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
-                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
+                    rig_core::completion::CompletionError::ResponseError(
+                        "rate limit 429".to_owned(),
+                    ),
                 )),
                 MockChatOutcome::Ok(PromptResponse::new(
                     "Recovered response",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 10,
                         output_tokens: 5,
                         total_tokens: 15,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
             ],
         );
 
         let mut history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("initial context")),
+            content: vec![UserContent::text("initial context")],
         }];
 
         let response = chat_with_retry_details(
@@ -844,16 +854,20 @@ mod tests {
             vec![],
             vec![
                 MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
-                    rig::completion::CompletionError::ResponseError("rate limit 429".to_owned()),
+                    rig_core::completion::CompletionError::ResponseError(
+                        "rate limit 429".to_owned(),
+                    ),
                 )),
                 MockChatOutcome::PartialUserThenErr(PromptError::CompletionError(
-                    rig::completion::CompletionError::ProviderError("invalid API key".to_owned()),
+                    rig_core::completion::CompletionError::ProviderError(
+                        "invalid API key".to_owned(),
+                    ),
                 )),
             ],
         );
 
         let mut history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("initial context")),
+            content: vec![UserContent::text("initial context")],
         }];
 
         let err = chat_with_retry_details(
@@ -888,18 +902,20 @@ mod tests {
             "o3",
             vec![
                 Err(PromptError::CompletionError(
-                    rig::completion::CompletionError::ResponseError(
+                    rig_core::completion::CompletionError::ResponseError(
                         "HTTP 429 Too Many Requests".to_owned(),
                     ),
                 )),
                 Ok(PromptResponse::new(
                     "Recovered response",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 10,
                         output_tokens: 5,
                         total_tokens: 15,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
             ],
@@ -931,12 +947,14 @@ mod tests {
             "o3",
             vec![Ok(PromptResponse::new(
                 "Detailed response",
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 7,
                     output_tokens: 3,
                     total_tokens: 10,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
             vec![],
@@ -968,7 +986,7 @@ mod tests {
             ProviderId::OpenAI,
             "o3",
             vec![Err(PromptError::CompletionError(
-                rig::completion::CompletionError::ProviderError("invalid API key".to_owned()),
+                rig_core::completion::CompletionError::ProviderError("invalid API key".to_owned()),
             ))],
             vec![],
         );
@@ -1054,12 +1072,14 @@ mod tests {
                     valuation_assessment: None,
                     scenario_valuation: None,
                 },
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 12,
                     output_tokens: 8,
                     total_tokens: 20,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))));
 
@@ -1105,12 +1125,14 @@ mod tests {
                     valuation_assessment: None,
                     scenario_valuation: None,
                 },
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))));
 
@@ -1148,12 +1170,14 @@ mod tests {
     fn typed(proposal: TradeProposal) -> TypedPromptResponse<TradeProposal> {
         TypedPromptResponse::new(
             proposal,
-            rig::completion::Usage {
+            rig_core::completion::Usage {
                 input_tokens: 10,
                 output_tokens: 5,
                 total_tokens: 15,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
         )
     }
@@ -1310,12 +1334,14 @@ mod tests {
             "o3",
             vec![Ok(PromptResponse::new(
                 "good output",
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
             vec![],
@@ -1345,22 +1371,26 @@ mod tests {
             vec![
                 Ok(PromptResponse::new(
                     "bad",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 1,
                         output_tokens: 1,
                         total_tokens: 2,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
                 Ok(PromptResponse::new(
                     "good",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 1,
                         output_tokens: 1,
                         total_tokens: 2,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
             ],
@@ -1399,22 +1429,26 @@ mod tests {
             vec![
                 Ok(PromptResponse::new(
                     "bad",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 1,
                         output_tokens: 1,
                         total_tokens: 2,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
                 Ok(PromptResponse::new(
                     "bad",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 1,
                         output_tokens: 1,
                         total_tokens: 2,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
             ],
@@ -1453,12 +1487,14 @@ mod tests {
             "o3",
             vec![Ok(PromptResponse::new(
                 "anything",
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
             vec![],

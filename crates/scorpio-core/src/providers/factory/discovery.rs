@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use futures::future::join_all;
-use rig::client::ModelListingClient;
-use rig::model::ModelList;
+use rig_core::client::ModelListingClient;
+use rig_core::model::ModelList;
 use tokio::time::timeout;
 
 use crate::config::ProvidersConfig;
@@ -199,7 +199,7 @@ async fn list_openai_models(settings: &ProviderSettings) -> Result<ModelList, St
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = rig::providers::openai::Client::new(key.expose_secret())
+    let client = rig_core::providers::openai::Client::new(key.expose_secret())
         .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
@@ -212,7 +212,7 @@ async fn list_anthropic_models(settings: &ProviderSettings) -> Result<ModelList,
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = rig::providers::anthropic::Client::new(key.expose_secret())
+    let client = rig_core::providers::anthropic::Client::new(key.expose_secret())
         .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
@@ -225,7 +225,7 @@ async fn list_gemini_models(settings: &ProviderSettings) -> Result<ModelList, St
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = rig::providers::gemini::Client::new(key.expose_secret())
+    let client = rig_core::providers::gemini::Client::new(key.expose_secret())
         .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
@@ -238,7 +238,7 @@ async fn list_deepseek_models(settings: &ProviderSettings) -> Result<ModelList, 
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = rig::providers::deepseek::Client::new(key.expose_secret())
+    let client = rig_core::providers::deepseek::Client::new(key.expose_secret())
         .map_err(|e| format!("client build error: {e}"))?;
     client.list_models().await.map_err(|e| e.to_string())
 }
@@ -251,7 +251,7 @@ async fn list_xiaomimimo_models(settings: &ProviderSettings) -> Result<ModelList
         .api_key
         .as_ref()
         .ok_or_else(|| "missing API key".to_owned())?;
-    let client = rig::providers::xiaomimimo::Client::new(key.expose_secret())
+    let client = rig_core::providers::xiaomimimo::Client::new(key.expose_secret())
         .map_err(|e| format!("client build error: {e}"))?;
     let raw = client.list_models().await.map_err(|e| e.to_string())?;
     Ok(sanitize_xiaomimimo_model_ids(raw))
@@ -272,7 +272,7 @@ fn is_safe_model_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rig::model::{Model, ModelList};
+    use rig_core::model::{Model, ModelList};
 
     #[test]
     fn openrouter_returns_manual_only() {

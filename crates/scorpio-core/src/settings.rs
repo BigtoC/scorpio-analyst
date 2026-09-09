@@ -460,7 +460,7 @@ pub fn user_config_path() -> anyhow::Result<PathBuf> {
 ///
 /// Path: `<config_root>/github_copilot/`. The directory is *not* created here —
 /// callers must ensure it exists with `0o700` permissions before passing it to
-/// `rig::providers::copilot::Client::builder().token_dir(...)`.
+/// `rig_core::providers::copilot::Client::builder().token_dir(...)`.
 pub fn copilot_token_dir() -> anyhow::Result<PathBuf> {
     let config = user_config_path()?;
     let root = config
