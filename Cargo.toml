@@ -2,6 +2,10 @@
 members = ["crates/*"]
 resolver = "2"
 
+[profile.release]
+debug = 1
+strip = false
+
 [profile.dev]
 # Reduce debug info from 2 (full) to 1 (line tables only).
 # This dramatically shrinks the size of target/debug.
