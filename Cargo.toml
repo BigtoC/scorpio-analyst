@@ -23,7 +23,10 @@ description = "Rust-native multi-agent portfolio manager and financial analyst t
 # eliminates cross-crate version drift once the two-crate split lands.
 [workspace.dependencies]
 # LLM framework
-rig-core = "0.36.0"
+# rig 0.42 split the agent/tool/extractor layer out of `rig-core` into `rig-agent`;
+# `rig-core` keeps completion, providers, and the portable tool primitives.
+rig-core = "0.42.0"
+rig-agent = "0.42.0"
 schemars = { version = "1", features = ["chrono04"] }
 
 # Serialization
@@ -92,7 +95,7 @@ statrs = "0.18"
 quick-xml = "0.40"
 
 # Graph orchestration
-graph-flow = { version = "0.5.1", features = ["rig"] }
+graph-flow = { version = "0.8.0", features = ["rig"] }
 async-trait = "0.1"
 
 # Phase snapshot persistence

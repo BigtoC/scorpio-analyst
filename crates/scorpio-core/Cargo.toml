@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 # LLM framework
 rig-core.workspace = true
+rig-agent.workspace = true
 schemars.workspace = true
 
 # Serialization
