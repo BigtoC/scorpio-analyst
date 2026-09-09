@@ -169,7 +169,7 @@ fn build_moderator_result(
     output: String,
     state: &TradingState,
     model_id: &str,
-    usage: rig::completion::Usage,
+    usage: rig_core::completion::Usage,
     started_at: Instant,
     rate_limit_wait_ms: u64,
 ) -> Result<(String, AgentTokenUsage), TradingError> {
@@ -204,7 +204,7 @@ mod tests {
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::providers::{ProviderId, factory::mock_llm_agent};
     use crate::state::{RiskLevel, RiskReport, TokenUsageTracker, TradeAction, TradeProposal};
-    use rig::agent::PromptResponse;
+    use rig_agent::agent::PromptResponse;
     use secrecy::SecretString;
     use uuid::Uuid;
 
@@ -301,13 +301,15 @@ mod tests {
         "Violation status: dual-risk escalation present. Both conservative and neutral reviewers flagged a material violation. The proposal's stop-loss is too wide."
     }
 
-    fn mock_usage(total: u64) -> rig::completion::Usage {
-        rig::completion::Usage {
+    fn mock_usage(total: u64) -> rig_core::completion::Usage {
+        rig_core::completion::Usage {
             input_tokens: total / 2,
             output_tokens: total / 2,
             total_tokens: total,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         }
     }
 
@@ -466,12 +468,14 @@ mod tests {
             valid_synthesis().to_owned(),
             &sample_state(),
             "o3",
-            rig::completion::Usage {
+            rig_core::completion::Usage {
                 input_tokens: 20,
                 output_tokens: 10,
                 total_tokens: 30,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
             started_at,
             0,

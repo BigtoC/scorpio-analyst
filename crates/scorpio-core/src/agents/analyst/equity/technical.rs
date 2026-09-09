@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use rig::tool::ToolDyn;
+use rig_agent::tool::server::ToolServer;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -343,24 +343,23 @@ impl TechnicalAnalyst {
             prepared.options_tool_available,
         );
 
-        let mut tools: Vec<Box<dyn ToolDyn>> = vec![
-            Box::new(GetOhlcv::scoped(
+        let mut tools = ToolServer::new()
+            .tool(GetOhlcv::scoped(
                 self.yfinance.clone(),
                 self.symbol.clone(),
                 start_date.clone(),
                 self.target_date.clone(),
                 ohlcv_context.clone(),
-            )),
-            Box::new(CalculateAllIndicators::new(ohlcv_context.clone())),
-            Box::new(CalculateRsi::new(ohlcv_context.clone())),
-            Box::new(CalculateMacd::new(ohlcv_context.clone())),
-            Box::new(CalculateAtr::new(ohlcv_context.clone())),
-            Box::new(CalculateBollingerBands::new(ohlcv_context.clone())),
-            Box::new(CalculateIndicatorByName::new(ohlcv_context)),
-        ];
+            ))
+            .tool(CalculateAllIndicators::new(ohlcv_context.clone()))
+            .tool(CalculateRsi::new(ohlcv_context.clone()))
+            .tool(CalculateMacd::new(ohlcv_context.clone()))
+            .tool(CalculateAtr::new(ohlcv_context.clone()))
+            .tool(CalculateBollingerBands::new(ohlcv_context.clone()))
+            .tool(CalculateIndicatorByName::new(ohlcv_context));
 
         if let Some(options_tool) = prepared.tool {
-            tools.push(Box::new(options_tool));
+            tools = tools.tool(options_tool);
         }
 
         let agent = build_agent_with_tools(&self.handle, &system_prompt, tools);
@@ -804,8 +803,8 @@ mod tests {
         use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
         use crate::providers::factory::mock_llm_agent;
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
+        use rig_agent::agent::PromptResponse;
+        use rig_core::completion::Usage;
 
         let valid_json = r#"{
             "rsi": 55.0,
@@ -836,6 +835,8 @@ mod tests {
                     total_tokens: 30,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             )));
 
@@ -1019,7 +1020,7 @@ mod tests {
         let provider = YFinanceOptionsProvider::new(client);
         let tool = GetOptionsSnapshot::scoped(provider, "AAPL", "2020-01-01");
 
-        let result: serde_json::Value = rig::tool::Tool::call(
+        let result: serde_json::Value = rig_core::tool::PortableTool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),

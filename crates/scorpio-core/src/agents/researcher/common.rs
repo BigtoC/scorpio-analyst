@@ -237,7 +237,7 @@ pub(super) fn build_debate_result(
     role: &str,
     output: String,
     model_id: &str,
-    usage: rig::completion::Usage,
+    usage: rig_core::completion::Usage,
     started_at: std::time::Instant,
     rate_limit_wait_ms: u64,
 ) -> Result<(DebateMessage, AgentTokenUsage), TradingError> {
@@ -262,7 +262,7 @@ pub(super) fn build_debate_result(
 mod tests {
     use std::time::{Duration, Instant};
 
-    use rig::completion::Usage;
+    use rig_core::completion::Usage;
 
     use super::*;
     use crate::data::adapters::transcripts::{
@@ -342,6 +342,8 @@ mod tests {
             total_tokens: 200,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result = agent_token_usage_from_completion("Agent", "o3", usage, Instant::now(), 0);
         assert!(result.token_counts_available);
@@ -356,6 +358,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result = agent_token_usage_from_completion("Agent", "o3", usage, Instant::now(), 0);
         assert!(!result.token_counts_available);
@@ -542,6 +546,8 @@ mod tests {
             total_tokens: 225,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Bullish Researcher", "o3", usage, Instant::now(), 0);

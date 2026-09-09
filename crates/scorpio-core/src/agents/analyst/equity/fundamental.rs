@@ -11,7 +11,7 @@
 
 use std::time::Instant;
 
-use rig::tool::ToolDyn;
+use rig_agent::tool::server::ToolServer;
 
 use crate::{
     agents::shared::agent_token_usage_from_completion,
@@ -101,16 +101,15 @@ impl FundamentalAnalyst {
     pub async fn run(&self) -> Result<(FundamentalData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        let tools: Vec<Box<dyn ToolDyn>> = vec![
-            Box::new(GetFundamentals::scoped(
+        let tools = ToolServer::new()
+            .tool(GetFundamentals::scoped(
                 self.finnhub.clone(),
                 self.symbol.clone(),
-            )),
-            Box::new(GetEarnings::scoped(
+            ))
+            .tool(GetEarnings::scoped(
                 self.finnhub.clone(),
                 self.symbol.clone(),
-            )),
-        ];
+            ));
 
         let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
 
@@ -403,8 +402,8 @@ mod tests {
         use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
         use crate::providers::factory::mock_llm_agent;
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
+        use rig_agent::agent::PromptResponse;
+        use rig_core::completion::Usage;
 
         let valid_json = r#"{
             "revenue_growth_pct": 0.10,
@@ -431,6 +430,8 @@ mod tests {
                     total_tokens: 30,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             )));
 

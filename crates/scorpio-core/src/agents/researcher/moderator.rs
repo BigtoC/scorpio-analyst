@@ -149,7 +149,7 @@ fn build_moderator_prompt(
 fn build_moderator_result(
     output: String,
     model_id: &str,
-    usage: rig::completion::Usage,
+    usage: rig_core::completion::Usage,
     started_at: Instant,
     rate_limit_wait_ms: u64,
 ) -> Result<(String, AgentTokenUsage), TradingError> {
@@ -176,7 +176,7 @@ mod tests {
     };
     use crate::providers::{ModelTier, factory::create_completion_model};
     use crate::providers::{ProviderId, factory::mock_llm_agent};
-    use rig::agent::PromptResponse;
+    use rig_agent::agent::PromptResponse;
     use secrecy::SecretString;
 
     fn sample_llm_config() -> LlmConfig {
@@ -379,12 +379,14 @@ mod tests {
     #[test]
     fn build_moderator_result_constructs_usage() {
         let started_at = Instant::now();
-        let usage = rig::completion::Usage {
+        let usage = rig_core::completion::Usage {
             input_tokens: 30,
             output_tokens: 18,
             total_tokens: 48,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
 
         let (summary, token_usage) = build_moderator_result(
@@ -410,12 +412,14 @@ mod tests {
             "o3",
             vec![Ok(PromptResponse::new(
                 "Evidence is balanced but unclear.",
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 20,
                     output_tokens: 10,
                     total_tokens: 30,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
             vec![],
@@ -467,12 +471,14 @@ mod tests {
             "o3",
             vec![Ok(PromptResponse::new(
                 "Hold - strongest bullish evidence is growth, strongest bearish evidence is rates, unresolved uncertainty is demand durability.",
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 0,
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
             vec![],

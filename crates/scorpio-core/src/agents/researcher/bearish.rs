@@ -6,8 +6,8 @@
 
 use std::time::Instant;
 
-use rig::completion::Message;
-use rig::{OneOrMany, message::UserContent};
+use rig_core::completion::Message;
+use rig_core::message::UserContent;
 
 use crate::{
     config::LlmConfig,
@@ -66,10 +66,10 @@ impl BearishResearcher {
             llm_config,
         )?;
         let chat_history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text(build_analyst_context(
+            content: vec![UserContent::text(build_analyst_context(
                 state,
                 transcript_fetch,
-            ))),
+            ))],
         }];
         Ok(Self { core, chat_history })
     }
@@ -145,7 +145,7 @@ mod tests {
         factory::{MockChatOutcome, mock_llm_agent},
     };
     use crate::state::DebateMessage;
-    use rig::agent::PromptResponse;
+    use rig_agent::agent::PromptResponse;
     use secrecy::SecretString;
 
     fn sample_llm_config() -> LlmConfig {
@@ -240,12 +240,14 @@ mod tests {
     #[test]
     fn build_debate_result_constructs_bearish_message_and_usage() {
         let started_at = std::time::Instant::now();
-        let usage = rig::completion::Usage {
+        let usage = rig_core::completion::Usage {
             input_tokens: 20,
             output_tokens: 12,
             total_tokens: 32,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
 
         let (message, token_usage) = build_debate_result(
@@ -275,22 +277,26 @@ mod tests {
             vec![
                 MockChatOutcome::Ok(PromptResponse::new(
                     "Bear turn one",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 11,
                         output_tokens: 5,
                         total_tokens: 16,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
                 MockChatOutcome::Ok(PromptResponse::new(
                     "Bear turn two acknowledges the gap",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 13,
                         output_tokens: 7,
                         total_tokens: 20,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )),
             ],
@@ -325,12 +331,14 @@ mod tests {
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(
                 "Bear turn one",
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 0,
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
         );

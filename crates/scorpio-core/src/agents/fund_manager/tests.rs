@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, sync::Mutex, time::Duration};
 
 use chrono::Utc;
-use rig::{agent::PromptResponse, completion::Usage};
+use rig_agent::agent::PromptResponse;
+use rig_core::completion::Usage;
 use secrecy::SecretString;
 
 use super::{FundManagerAgent, agent::FundManagerInference};
@@ -197,6 +198,8 @@ fn nonzero_usage() -> Usage {
         total_tokens: 165,
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
+        tool_use_prompt_tokens: 0,
+        reasoning_tokens: 0,
     }
 }
 
@@ -207,6 +210,8 @@ fn zero_usage() -> Usage {
         total_tokens: 0,
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
+        tool_use_prompt_tokens: 0,
+        reasoning_tokens: 0,
     }
 }
 

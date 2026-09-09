@@ -6,7 +6,7 @@ use crate::state::AgentTokenUsage;
 pub(crate) fn agent_token_usage_from_completion(
     agent_name: &str,
     model_id: &str,
-    usage: rig::completion::Usage,
+    usage: rig_core::completion::Usage,
     started_at: Instant,
     rate_limit_wait_ms: u64,
 ) -> AgentTokenUsage {
@@ -36,12 +36,14 @@ mod tests {
 
     #[test]
     fn usage_from_completion_folds_cache_tokens_into_prompt_tokens() {
-        let usage = rig::completion::Usage {
+        let usage = rig_core::completion::Usage {
             input_tokens: 80,
             output_tokens: 20,
             total_tokens: 140,
             cached_input_tokens: 30,
             cache_creation_input_tokens: 10,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
 
         let result =
@@ -55,12 +57,14 @@ mod tests {
 
     #[test]
     fn usage_from_completion_marks_cache_only_counts_available() {
-        let usage = rig::completion::Usage {
+        let usage = rig_core::completion::Usage {
             input_tokens: 0,
             output_tokens: 0,
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 12,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
 
         let result =

@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use rig::agent::TypedPromptResponse;
+use rig_agent::agent::TypedPromptResponse;
 
 #[cfg(test)]
 use crate::agents::shared::redact_secret_like_values;

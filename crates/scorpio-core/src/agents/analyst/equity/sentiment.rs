@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use rig::tool::ToolDyn;
+use rig_agent::tool::server::ToolServer;
 
 use crate::{
     agents::shared::{
@@ -124,15 +124,13 @@ impl SentimentAnalyst {
     pub async fn run(&self) -> Result<(SentimentData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        let tools: Vec<Box<dyn ToolDyn>> = match &self.cached_news {
-            Some(arc) => vec![Box::new(GetCachedNews::new(
-                arc.clone(),
-                self.symbol.clone(),
-            ))],
-            None => vec![Box::new(GetNews::scoped(
-                self.finnhub.clone(),
-                self.symbol.clone(),
-            ))],
+        let tools = match &self.cached_news {
+            Some(arc) => {
+                ToolServer::new().tool(GetCachedNews::new(arc.clone(), self.symbol.clone()))
+            }
+            None => {
+                ToolServer::new().tool(GetNews::scoped(self.finnhub.clone(), self.symbol.clone()))
+            }
         };
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
@@ -516,8 +514,8 @@ mod tests {
         use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
         use crate::providers::factory::mock_llm_agent;
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
+        use rig_agent::agent::PromptResponse;
+        use rig_core::completion::Usage;
 
         let valid_json = r#"{
             "overall_score": 0.5,
@@ -541,6 +539,8 @@ mod tests {
                     total_tokens: 30,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             )));
 
