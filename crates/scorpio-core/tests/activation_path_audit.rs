@@ -89,7 +89,7 @@ async fn pipeline_new_entry_task_is_preflight() {
     );
     let graph = pipeline.build_graph();
     assert_eq!(
-        graph.start_task_id().as_deref(),
+        graph.start_task_id(),
         Some(PREFLIGHT_TASK_ID),
         "TradingPipeline::new must produce a graph whose entry task is PreflightTask"
     );
@@ -112,7 +112,7 @@ async fn pipeline_try_new_entry_task_is_preflight() {
     .expect("baseline pack must resolve");
     let graph = pipeline.build_graph();
     assert_eq!(
-        graph.start_task_id().as_deref(),
+        graph.start_task_id(),
         Some(PREFLIGHT_TASK_ID),
         "TradingPipeline::try_new must produce a graph whose entry task is PreflightTask"
     );
@@ -136,7 +136,7 @@ async fn pipeline_from_pack_entry_task_is_preflight() {
     let pipeline = TradingPipeline::from_pack(&pack, deps);
     let graph = pipeline.build_graph();
     assert_eq!(
-        graph.start_task_id().as_deref(),
+        graph.start_task_id(),
         Some(PREFLIGHT_TASK_ID),
         "TradingPipeline::from_pack must produce a graph whose entry task is PreflightTask"
     );
@@ -166,7 +166,7 @@ async fn build_graph_from_pack_entry_task_is_preflight() {
         &CompletionModelHandle::for_test(),
     );
     assert_eq!(
-        graph.start_task_id().as_deref(),
+        graph.start_task_id(),
         Some(PREFLIGHT_TASK_ID),
         "build_graph_from_pack must produce a graph whose entry task is PreflightTask"
     );

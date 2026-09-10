@@ -16,12 +16,14 @@ pub(super) async fn debate_moderator_accounting(
     mod_usage: &AgentTokenUsage,
     phase_start: &std::time::Instant,
 ) -> bool {
-    let max_rounds: u32 = context.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
+    let max_rounds: u32 = context.get(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
 
     let new_round = if max_rounds > 0 {
-        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).unwrap_or(0);
         let new_round = current_round + 1;
-        context.set(KEY_DEBATE_ROUND, new_round).await;
+        context
+            .set(KEY_DEBATE_ROUND, new_round)
+            .expect("a u32 always serializes");
         info!(
             round = new_round,
             max_rounds,
@@ -82,12 +84,14 @@ pub(super) async fn risk_moderator_accounting(
     mod_usage: &AgentTokenUsage,
     phase_start: &std::time::Instant,
 ) -> bool {
-    let max_rounds: u32 = context.get(KEY_MAX_RISK_ROUNDS).await.unwrap_or(0);
+    let max_rounds: u32 = context.get(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
 
     let new_round = if max_rounds > 0 {
-        let current_round: u32 = context.get(KEY_RISK_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(KEY_RISK_ROUND).unwrap_or(0);
         let new_round = current_round + 1;
-        context.set(KEY_RISK_ROUND, new_round).await;
+        context
+            .set(KEY_RISK_ROUND, new_round)
+            .expect("a u32 always serializes");
         info!(
             round = new_round,
             max_rounds,

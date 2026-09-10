@@ -54,7 +54,7 @@ impl Task for BullishResearcherTask {
             task_error(Self::TASK_NAME, "failed to load transcript status", error)
         })?;
 
-        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 
@@ -116,7 +116,7 @@ impl Task for BearishResearcherTask {
             task_error(Self::TASK_NAME, "failed to load transcript status", error)
         })?;
 
-        let current_round: u32 = context.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let current_round: u32 = context.get(KEY_DEBATE_ROUND).unwrap_or(0);
         let this_round = current_round + 1;
         info!(task = Self::TASK_ID, round = this_round, "task started");
 

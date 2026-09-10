@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, sync::Mutex, time::Instant};
 
 use chrono::Utc;
-use rig::{agent::TypedPromptResponse, completion::Usage};
+use rig_agent::agent::TypedPromptResponse;
+use rig_core::completion::Usage;
 use secrecy::SecretString;
 
 use super::schema::TraderProposalResponse;
@@ -177,6 +178,8 @@ impl StubInference {
                     total_tokens: 0,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ),
             rate_limit_wait_ms: 0,
@@ -273,6 +276,8 @@ async fn run_writes_valid_trade_proposal_to_state() {
             total_tokens: 165,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -307,6 +312,8 @@ async fn run_recovers_after_validator_rejection_then_valid_retry() {
                 total_tokens: 10,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
         )),
         Ok(TypedPromptResponse::new(
@@ -317,6 +324,8 @@ async fn run_recovers_after_validator_rejection_then_valid_retry() {
                 total_tokens: 15,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
         )),
     ]);
@@ -348,6 +357,8 @@ async fn run_returns_schema_violation_and_preserves_none_for_invalid_post_parse_
             total_tokens: 40,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -383,6 +394,8 @@ async fn run_records_token_unavailability_when_counts_are_zero() {
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -409,6 +422,8 @@ async fn run_records_nonzero_latency_on_success() {
             total_tokens: 15,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -436,7 +451,10 @@ async fn run_succeeds_with_partial_analyst_data() {
             output_tokens: 15,
             total_tokens: 55,
             cached_input_tokens: 0,
-            cache_creation_input_tokens: 0,        },
+            cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
+        },
     ))]);
 
     let agent = trader_agent_for_test(&state);
@@ -464,7 +482,10 @@ async fn run_succeeds_with_missing_consensus_summary() {
             output_tokens: 12,
             total_tokens: 47,
             cached_input_tokens: 0,
-            cache_creation_input_tokens: 0,        },
+            cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
+        },
     ))]);
 
     let agent = trader_agent_for_test(&state);
@@ -489,6 +510,8 @@ async fn run_rejects_missing_data_when_rationale_does_not_acknowledge_gap() {
             total_tokens: 55,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -518,6 +541,8 @@ async fn run_rejects_divergence_without_explanation() {
             total_tokens: 60,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -794,6 +819,8 @@ fn usage_from_typed_response_agent_name_and_model_id() {
         total_tokens: 150,
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
+        tool_use_prompt_tokens: 0,
+        reasoning_tokens: 0,
     };
     let result = agent_token_usage_from_completion("Trader Agent", "o3", usage, Instant::now(), 0);
     assert_eq!(result.agent_name, "Trader Agent");
@@ -812,6 +839,8 @@ fn usage_from_typed_response_unavailable_when_all_zero() {
         total_tokens: 0,
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
+        tool_use_prompt_tokens: 0,
+        reasoning_tokens: 0,
     };
     let result = agent_token_usage_from_completion("Trader Agent", "o3", usage, Instant::now(), 0);
     assert!(!result.token_counts_available);
@@ -1001,6 +1030,8 @@ async fn provider_facing_prompt_contains_alignment_and_divergence_instructions()
             total_tokens: 2,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
     let agent = trader_agent_for_test(&state);
@@ -1027,6 +1058,8 @@ async fn provider_facing_prompt_uses_pack_owned_missing_data_instruction_when_in
             total_tokens: 2,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
     let agent = trader_agent_for_test(&state);
@@ -1333,6 +1366,8 @@ async fn runtime_injects_scenario_valuation_from_state_into_proposal_after_llm()
             total_tokens: 15,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -1385,6 +1420,8 @@ async fn runtime_injects_not_assessed_scenario_valuation_for_fund_style_state() 
             total_tokens: 15,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 
@@ -1418,6 +1455,8 @@ async fn proposal_scenario_valuation_is_none_when_no_derived_valuation_in_state(
             total_tokens: 15,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         },
     ))]);
 

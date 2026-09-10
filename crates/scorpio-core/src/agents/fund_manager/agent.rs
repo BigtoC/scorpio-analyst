@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use graph_flow::Context;
-use rig::agent::PromptResponse;
+use rig_agent::agent::PromptResponse;
 
 use super::{
     prompt::build_prompt_context,
@@ -204,7 +204,7 @@ pub(super) async fn run_fund_manager(
     context: &Context,
 ) -> Result<AgentTokenUsage, TradingError> {
     let routing_flags = context
-        .get_sync::<crate::workflow::RoutingFlags>(crate::workflow::KEY_ROUTING_FLAGS)
+        .get::<crate::workflow::RoutingFlags>(crate::workflow::KEY_ROUTING_FLAGS)
         .ok_or_else(|| {
             TradingError::Config(anyhow::anyhow!(
                 "fund manager: missing routing flags — preflight must run before fund manager"

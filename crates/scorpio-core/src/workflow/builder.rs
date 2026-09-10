@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use graph_flow::{Graph, fanout::FanOutTask};
+use graph_flow::{Graph, GraphBuilder, fanout::FanOutTask};
 
 use super::pipeline::TradingPipeline;
 use super::pipeline::constants::TASKS;
@@ -49,6 +49,169 @@ use crate::providers::factory::CompletionModelHandle;
 /// count around, so the clippy lint is silenced here.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
+pub fn build_graph_builder_from_pack(
+    pack: &AnalysisPackManifest,
+    config: Arc<Config>,
+    registry: &AnalystRegistry,
+    finnhub: &FinnhubClient,
+    fred: &FredClient,
+    yfinance: &YFinanceClient,
+    sec_edgar: Arc<SecEdgarClient>,
+    alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
+    snapshot_store: Arc<SnapshotStore>,
+    quick_handle: &CompletionModelHandle,
+    deep_handle: &CompletionModelHandle,
+) -> GraphBuilder {
+    // graph-flow's default per-task wall-clock timeout is 300s, which trips
+    // the analyst fan-out under realistic LLM latency. The inner per-attempt
+    // budget is governed by `analyst_timeout_secs` + retry policy; this outer
+    // graph-level timeout just needs to be large enough not to fire first.
+    let mut graph =
+        GraphBuilder::new("trading_pipeline").with_task_timeout(Duration::from_secs(600));
+    let runtime_policy = resolve_runtime_policy_for_manifest(pack)
+        .expect("build_graph_from_pack requires a valid analysis pack manifest");
+
+    let preflight = PreflightTask::with_runtime_policy_and_rate_clients(
+        config.enrichment.clone(),
+        config.api.alpha_vantage_api_key.is_some(),
+        Arc::clone(&snapshot_store),
+        runtime_policy,
+        Arc::new(fred.clone()),
+        Arc::new(yfinance.clone()),
+    );
+    graph = graph.add_task(Arc::new(preflight));
+
+    let analyst_tasks: Vec<Arc<dyn graph_flow::Task>> = registry
+        .for_inputs(pack.required_inputs.iter().map(String::as_str))
+        .into_iter()
+        .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, &config.llm))
+        .collect();
+    let fan_out = FanOutTask::new(TASKS.analyst_fan_out, analyst_tasks);
+    graph = graph.add_task(fan_out);
+    graph = graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
+
+    let analyst_sync = AnalystSyncTask::with_yfinance_edgar_and_alpha_vantage(
+        Arc::clone(&snapshot_store),
+        Arc::new(yfinance.clone()),
+        sec_edgar,
+        alpha_vantage,
+        Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
+    );
+    graph = graph.add_task(analyst_sync);
+    graph = graph.add_edge(TASKS.analyst_fan_out, TASKS.analyst_sync);
+
+    // Stage-entry routing: enter the debate stage iff `RoutingFlags`
+    // (written by `PreflightTask`) does not skip it. `RoutingFlags` is
+    // derived once per cycle from the topology, replacing the previous
+    // direct read of `KEY_MAX_DEBATE_ROUNDS`. Loop-back conditionals below
+    // keep using the per-iteration round counter.
+    graph = graph.add_conditional_edge(
+        TASKS.analyst_sync,
+        |ctx| {
+            ctx.get::<crate::workflow::topology::RoutingFlags>(KEY_ROUTING_FLAGS)
+                .map(|flags| !flags.skip_debate)
+                .unwrap_or_else(|| ctx.get::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0) > 0)
+        },
+        TASKS.bullish_researcher,
+        TASKS.trader,
+    );
+
+    graph = graph.add_task(BullishResearcherTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+    ));
+    graph = graph.add_task(BearishResearcherTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+    ));
+    graph = graph.add_task(DebateModeratorTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+        Arc::clone(&snapshot_store),
+    ));
+
+    graph = graph.add_edge(TASKS.bullish_researcher, TASKS.bearish_researcher);
+    graph = graph.add_edge(TASKS.bearish_researcher, TASKS.debate_moderator);
+    graph = graph.add_conditional_edge(
+        TASKS.debate_moderator,
+        |ctx| {
+            let round = ctx.get::<u32>(KEY_DEBATE_ROUND).unwrap_or(0);
+            let max = ctx.get::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
+            round < max
+        },
+        TASKS.bullish_researcher,
+        TASKS.trader,
+    );
+
+    graph = graph.add_task(TraderTask::new(
+        Arc::clone(&config),
+        Arc::clone(&snapshot_store),
+    ));
+    // Stage-entry routing: enter the risk stage iff `RoutingFlags` does
+    // not skip it. Same source as the debate-entry closure above.
+    graph = graph.add_conditional_edge(
+        TASKS.trader,
+        |ctx| {
+            ctx.get::<crate::workflow::topology::RoutingFlags>(KEY_ROUTING_FLAGS)
+                .map(|flags| !flags.skip_risk)
+                .unwrap_or_else(|| ctx.get::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0) > 0)
+        },
+        TASKS.aggressive_risk,
+        TASKS.fund_manager,
+    );
+
+    graph = graph.add_task(AggressiveRiskTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+    ));
+    graph = graph.add_task(ConservativeRiskTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+    ));
+    graph = graph.add_task(NeutralRiskTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+    ));
+    graph = graph.add_task(RiskModeratorTask::new(
+        Arc::clone(&config),
+        deep_handle.clone(),
+        Arc::clone(&snapshot_store),
+    ));
+
+    graph = graph.add_edge(TASKS.aggressive_risk, TASKS.conservative_risk);
+    graph = graph.add_edge(TASKS.conservative_risk, TASKS.neutral_risk);
+    graph = graph.add_edge(TASKS.neutral_risk, TASKS.risk_moderator);
+    graph = graph.add_conditional_edge(
+        TASKS.risk_moderator,
+        |ctx| {
+            let round = ctx.get::<u32>(KEY_RISK_ROUND).unwrap_or(0);
+            let max = ctx.get::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
+            round < max
+        },
+        TASKS.aggressive_risk,
+        TASKS.fund_manager,
+    );
+
+    graph = graph.add_task(FundManagerTask::new(
+        Arc::clone(&config),
+        Arc::clone(&snapshot_store),
+    ));
+
+    // Auditor is always registered; `AuditorTask` reads `skip_auditor` from
+    // `RoutingFlags` and becomes a no-op when `auditor_enabled = false`.
+    graph = graph.add_task(AuditorTask::new(Arc::clone(&config)));
+    graph = graph.add_edge(TASKS.fund_manager, TASKS.auditor);
+
+    graph.set_start_task(TASKS.preflight)
+}
+
+/// Build the finished pipeline [`Graph`] for `pack`.
+///
+/// Thin finisher over [`build_graph_builder_from_pack`]; the split exists so
+/// the test seam can register task overrides on the builder before `build()`
+/// (graph-flow 0.8's `Graph` is immutable once built).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn build_graph_from_pack(
     pack: &AnalysisPackManifest,
     config: Arc<Config>,
@@ -62,149 +225,23 @@ pub fn build_graph_from_pack(
     quick_handle: &CompletionModelHandle,
     deep_handle: &CompletionModelHandle,
 ) -> Arc<Graph> {
-    // graph-flow's default per-task wall-clock timeout is 300s, which trips
-    // the analyst fan-out under realistic LLM latency. The inner per-attempt
-    // budget is governed by `analyst_timeout_secs` + retry policy; this outer
-    // graph-level timeout just needs to be large enough not to fire first.
-    let mut graph = Graph::new("trading_pipeline");
-    graph.set_task_timeout(Duration::from_secs(600));
-    let graph = Arc::new(graph);
-    let runtime_policy = resolve_runtime_policy_for_manifest(pack)
-        .expect("build_graph_from_pack requires a valid analysis pack manifest");
-
-    let preflight = PreflightTask::with_runtime_policy_and_rate_clients(
-        config.enrichment.clone(),
-        config.api.alpha_vantage_api_key.is_some(),
-        Arc::clone(&snapshot_store),
-        runtime_policy,
-        Arc::new(fred.clone()),
-        Arc::new(yfinance.clone()),
-    );
-    graph.add_task(Arc::new(preflight));
-
-    let analyst_tasks: Vec<Arc<dyn graph_flow::Task>> = registry
-        .for_inputs(pack.required_inputs.iter().map(String::as_str))
-        .into_iter()
-        .filter_map(|id| build_analyst_task(id, finnhub, fred, yfinance, quick_handle, &config.llm))
-        .collect();
-    let fan_out = FanOutTask::new(TASKS.analyst_fan_out, analyst_tasks);
-    graph.add_task(fan_out);
-    graph.add_edge(TASKS.preflight, TASKS.analyst_fan_out);
-
-    let analyst_sync = AnalystSyncTask::with_yfinance_edgar_and_alpha_vantage(
-        Arc::clone(&snapshot_store),
-        Arc::new(yfinance.clone()),
-        sec_edgar,
-        alpha_vantage,
-        Duration::from_secs(config.llm.valuation_fetch_timeout_secs),
-    );
-    graph.add_task(analyst_sync);
-    graph.add_edge(TASKS.analyst_fan_out, TASKS.analyst_sync);
-
-    // Stage-entry routing: enter the debate stage iff `RoutingFlags`
-    // (written by `PreflightTask`) does not skip it. `RoutingFlags` is
-    // derived once per cycle from the topology, replacing the previous
-    // direct read of `KEY_MAX_DEBATE_ROUNDS`. Loop-back conditionals below
-    // keep using the per-iteration round counter.
-    graph.add_conditional_edge(
-        TASKS.analyst_sync,
-        |ctx| {
-            ctx.get_sync::<crate::workflow::topology::RoutingFlags>(KEY_ROUTING_FLAGS)
-                .map(|flags| !flags.skip_debate)
-                .unwrap_or_else(|| ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0) > 0)
-        },
-        TASKS.bullish_researcher,
-        TASKS.trader,
-    );
-
-    graph.add_task(BullishResearcherTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(BearishResearcherTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(DebateModeratorTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-        Arc::clone(&snapshot_store),
-    ));
-
-    graph.add_edge(TASKS.bullish_researcher, TASKS.bearish_researcher);
-    graph.add_edge(TASKS.bearish_researcher, TASKS.debate_moderator);
-    graph.add_conditional_edge(
-        TASKS.debate_moderator,
-        |ctx| {
-            let round = ctx.get_sync::<u32>(KEY_DEBATE_ROUND).unwrap_or(0);
-            let max = ctx.get_sync::<u32>(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
-            round < max
-        },
-        TASKS.bullish_researcher,
-        TASKS.trader,
-    );
-
-    graph.add_task(TraderTask::new(
-        Arc::clone(&config),
-        Arc::clone(&snapshot_store),
-    ));
-    // Stage-entry routing: enter the risk stage iff `RoutingFlags` does
-    // not skip it. Same source as the debate-entry closure above.
-    graph.add_conditional_edge(
-        TASKS.trader,
-        |ctx| {
-            ctx.get_sync::<crate::workflow::topology::RoutingFlags>(KEY_ROUTING_FLAGS)
-                .map(|flags| !flags.skip_risk)
-                .unwrap_or_else(|| ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0) > 0)
-        },
-        TASKS.aggressive_risk,
-        TASKS.fund_manager,
-    );
-
-    graph.add_task(AggressiveRiskTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(ConservativeRiskTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(NeutralRiskTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-    ));
-    graph.add_task(RiskModeratorTask::new(
-        Arc::clone(&config),
-        deep_handle.clone(),
-        Arc::clone(&snapshot_store),
-    ));
-
-    graph.add_edge(TASKS.aggressive_risk, TASKS.conservative_risk);
-    graph.add_edge(TASKS.conservative_risk, TASKS.neutral_risk);
-    graph.add_edge(TASKS.neutral_risk, TASKS.risk_moderator);
-    graph.add_conditional_edge(
-        TASKS.risk_moderator,
-        |ctx| {
-            let round = ctx.get_sync::<u32>(KEY_RISK_ROUND).unwrap_or(0);
-            let max = ctx.get_sync::<u32>(KEY_MAX_RISK_ROUNDS).unwrap_or(0);
-            round < max
-        },
-        TASKS.aggressive_risk,
-        TASKS.fund_manager,
-    );
-
-    graph.add_task(FundManagerTask::new(
-        Arc::clone(&config),
-        Arc::clone(&snapshot_store),
-    ));
-
-    // Auditor is always registered; `AuditorTask` reads `skip_auditor` from
-    // `RoutingFlags` and becomes a no-op when `auditor_enabled = false`.
-    graph.add_task(AuditorTask::new(Arc::clone(&config)));
-    graph.add_edge(TASKS.fund_manager, TASKS.auditor);
-
-    graph.set_start_task(TASKS.preflight);
-    graph
+    Arc::new(
+        build_graph_builder_from_pack(
+            pack,
+            config,
+            registry,
+            finnhub,
+            fred,
+            yfinance,
+            sec_edgar,
+            alpha_vantage,
+            snapshot_store,
+            quick_handle,
+            deep_handle,
+        )
+        .build()
+        .expect("trading_pipeline graph is statically well-formed"),
+    )
 }
 
 /// Dependencies handed to [`TradingPipeline::from_pack`].

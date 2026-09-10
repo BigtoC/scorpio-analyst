@@ -108,7 +108,7 @@ mod reddit_lane_tests {
                 })
                 .expect("serialize sentiment cache"),
             )
-            .await;
+            .expect("KEY_CACHED_SENTIMENT_NEWS is serializable");
 
         let sources = sentiment_evidence_sources(&context)
             .await
@@ -142,7 +142,7 @@ mod reddit_lane_tests {
                 })
                 .expect("serialize vetted cache"),
             )
-            .await;
+            .expect("KEY_CACHED_VETTED_NEWS is serializable");
         context
             .set(
                 KEY_CACHED_SENTIMENT_NEWS,
@@ -160,7 +160,7 @@ mod reddit_lane_tests {
                 })
                 .expect("serialize sentiment cache"),
             )
-            .await;
+            .expect("KEY_CACHED_SENTIMENT_NEWS is serializable");
 
         let vetted = read_cached_news_at("test", &context, KEY_CACHED_VETTED_NEWS)
             .await
@@ -183,7 +183,7 @@ async fn read_cached_news_at(
     context: &Context,
     key: &str,
 ) -> graph_flow::Result<Option<Arc<NewsData>>> {
-    let json: Option<String> = context.get(key).await;
+    let json: Option<String> = context.get(key);
     json.map(|value| {
         serde_json::from_str::<NewsData>(&value).map(Arc::new).map_err(|error| {
             graph_flow::GraphError::TaskExecutionFailed(format!(
@@ -1039,7 +1039,7 @@ async fn merge_analyst_result<T, F, G>(
     G: FnOnce(&mut TradingState, T),
 {
     let ok_key = format!("{ANALYST_PREFIX}.{analyst_key}.{OK_SUFFIX}");
-    let succeeded: bool = context.get(&ok_key).await.unwrap_or(false);
+    let succeeded: bool = context.get(&ok_key).unwrap_or(false);
 
     if !succeeded {
         failures.push(analyst_key);

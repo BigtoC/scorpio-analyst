@@ -40,7 +40,8 @@ async fn seed_all_analysts_ok(ctx: &Context, state: &TradingState) {
         .expect("serialize");
 
     for analyst in ["fundamental", "sentiment", "news", "technical"] {
-        ctx.set(format!("analyst.{analyst}.ok"), true).await;
+        ctx.set(format!("analyst.{analyst}.ok"), true)
+            .expect("format is serializable");
     }
 
     write_prefixed_result(
@@ -184,8 +185,10 @@ pub fn run_debate_accounting_under_collector(
                 .await
                 .expect("serialize");
 
-            ctx.set(KEY_MAX_DEBATE_ROUNDS, max_rounds).await;
-            ctx.set(KEY_DEBATE_ROUND, current_round).await;
+            ctx.set(KEY_MAX_DEBATE_ROUNDS, max_rounds)
+                .expect("KEY_MAX_DEBATE_ROUNDS is serializable");
+            ctx.set(KEY_DEBATE_ROUND, current_round)
+                .expect("KEY_DEBATE_ROUND is serializable");
 
             if max_rounds > 0 {
                 let round_number = current_round + 1;
@@ -229,8 +232,10 @@ pub fn run_debate_accounting_under_structured_collector(
                 .await
                 .expect("serialize");
 
-            ctx.set(KEY_MAX_DEBATE_ROUNDS, max_rounds).await;
-            ctx.set(KEY_DEBATE_ROUND, current_round).await;
+            ctx.set(KEY_MAX_DEBATE_ROUNDS, max_rounds)
+                .expect("KEY_MAX_DEBATE_ROUNDS is serializable");
+            ctx.set(KEY_DEBATE_ROUND, current_round)
+                .expect("KEY_DEBATE_ROUND is serializable");
 
             if max_rounds > 0 {
                 let round_number = current_round + 1;
@@ -270,8 +275,10 @@ pub fn run_risk_accounting_under_collector(
                 .await
                 .expect("serialize");
 
-            ctx.set(KEY_MAX_RISK_ROUNDS, max_rounds).await;
-            ctx.set(KEY_RISK_ROUND, current_round).await;
+            ctx.set(KEY_MAX_RISK_ROUNDS, max_rounds)
+                .expect("KEY_MAX_RISK_ROUNDS is serializable");
+            ctx.set(KEY_RISK_ROUND, current_round)
+                .expect("KEY_RISK_ROUND is serializable");
 
             if max_rounds > 0 {
                 let round_number = current_round + 1;

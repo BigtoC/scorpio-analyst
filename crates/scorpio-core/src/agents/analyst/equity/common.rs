@@ -96,7 +96,7 @@ pub(super) struct AnalystInferenceOutcome<T> {
     /// The successfully parsed and validated output from the LLM.
     pub output: T,
     /// Provider-reported token usage from the underlying LLM call.
-    pub usage: rig::completion::Usage,
+    pub usage: rig_core::completion::Usage,
     /// Total milliseconds spent waiting for rate-limit permits.
     pub rate_limit_wait_ms: u64,
 }
@@ -249,7 +249,7 @@ mod tests {
     use crate::providers::factory::mock_llm_agent;
     use std::time::{Duration, Instant};
 
-    use rig::completion::Usage;
+    use rig_core::completion::Usage;
 
     use super::*;
 
@@ -284,12 +284,14 @@ mod tests {
             total_tokens: total,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         }
     }
 
     #[tokio::test]
     async fn run_analyst_inference_uses_typed_path_for_non_openrouter() {
-        use rig::agent::TypedPromptResponse;
+        use rig_agent::agent::TypedPromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
@@ -328,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_analyst_inference_uses_text_fallback_for_openrouter() {
-        use rig::agent::PromptResponse;
+        use rig_agent::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
@@ -367,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_analyst_inference_text_fallback_strips_code_fence_and_prose() {
-        use rig::agent::PromptResponse;
+        use rig_agent::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
@@ -408,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_analyst_inference_returns_schema_violation_for_invalid_fallback_json() {
-        use rig::agent::PromptResponse;
+        use rig_agent::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -450,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_analyst_inference_preserves_usage_from_fallback_response() {
-        use rig::agent::PromptResponse;
+        use rig_agent::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -471,6 +473,8 @@ mod tests {
                     total_tokens: 24,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             )));
 
@@ -498,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn run_analyst_inference_returns_terminal_schema_violation_for_semantically_invalid_fallback_output()
      {
-        use rig::agent::PromptResponse;
+        use rig_agent::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -551,7 +555,7 @@ mod tests {
         // DeepSeek/OpenRouter often emit malformed or semantically invalid JSON
         // on the first attempt. The validator-aware retry feeds the schema
         // error back into the prompt and the second response succeeds.
-        use rig::agent::PromptResponse;
+        use rig_agent::agent::PromptResponse;
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
@@ -596,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_analyst_inference_falls_back_to_text_for_gemini_after_typed_schema_violation() {
-        use rig::agent::{PromptResponse, TypedPromptResponse};
+        use rig_agent::agent::{PromptResponse, TypedPromptResponse};
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
@@ -710,6 +714,8 @@ mod tests {
             total_tokens: 150,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
@@ -729,6 +735,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
@@ -748,6 +756,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("Agent", "model-x", usage, Instant::now(), 0);
@@ -766,6 +776,8 @@ mod tests {
             total_tokens: 150,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result =
             agent_token_usage_from_completion("MyAgent", "my-model", usage, Instant::now(), 0);

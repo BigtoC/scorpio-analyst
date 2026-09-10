@@ -51,17 +51,20 @@ async fn debate_round_transitions_are_context_observable() {
     use scorpio_core::workflow::test_support::{KEY_DEBATE_ROUND, KEY_MAX_DEBATE_ROUNDS};
 
     let ctx = Context::new();
-    ctx.set(KEY_MAX_DEBATE_ROUNDS, 2u32).await;
-    ctx.set(KEY_DEBATE_ROUND, 0u32).await;
+    ctx.set(KEY_MAX_DEBATE_ROUNDS, 2u32)
+        .expect("KEY_MAX_DEBATE_ROUNDS is serializable");
+    ctx.set(KEY_DEBATE_ROUND, 0u32)
+        .expect("KEY_DEBATE_ROUND is serializable");
 
     for expected_round in 1u32..=2 {
-        let current: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
-        ctx.set(KEY_DEBATE_ROUND, current + 1).await;
+        let current: u32 = ctx.get(KEY_DEBATE_ROUND).unwrap_or(0);
+        ctx.set(KEY_DEBATE_ROUND, current + 1)
+            .expect("KEY_DEBATE_ROUND is serializable");
 
-        let new_round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(0);
+        let new_round: u32 = ctx.get(KEY_DEBATE_ROUND).unwrap_or(0);
         assert_eq!(new_round, expected_round);
 
-        let max: u32 = ctx.get(KEY_MAX_DEBATE_ROUNDS).await.unwrap_or(0);
+        let max: u32 = ctx.get(KEY_MAX_DEBATE_ROUNDS).unwrap_or(0);
         let should_loop = new_round < max;
 
         if expected_round < 2 {

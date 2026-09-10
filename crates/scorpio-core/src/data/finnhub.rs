@@ -23,8 +23,7 @@ use crate::{
 };
 use finnhub::FinnhubClient as FhClient;
 use finnhub::models::news::NewsCategory;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig_core::tool::PortableTool;
 use schemars::JsonSchema;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -664,7 +663,7 @@ fn push_macro_event(events: &mut Vec<crate::state::MacroEvent>, event: crate::st
     }
 }
 
-// ─── rig::tool::Tool wrappers ────────────────────────────────────────────────
+// ─── rig_core::tool::PortableTool wrappers ────────────────────────────────────────────────
 
 /// Args for all single-symbol Finnhub tool calls.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -726,21 +725,21 @@ impl GetFundamentals {
     }
 }
 
-impl Tool for GetFundamentals {
+impl PortableTool for GetFundamentals {
     const NAME: &'static str = "get_fundamentals";
 
     type Error = TradingError;
     type Args = SymbolArgs;
     type Output = FundamentalData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Fetch corporate financials and company profile from Finnhub, \
-                           returning valuation ratios, margins, and a summary string."
-                .to_owned(),
-            parameters: symbol_params(),
-        }
+    fn description(&self) -> String {
+        "Fetch corporate financials and company profile from Finnhub, \
+                       returning valuation ratios, margins, and a summary string."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        symbol_params()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -785,20 +784,19 @@ impl GetEarnings {
     }
 }
 
-impl Tool for GetEarnings {
+impl PortableTool for GetEarnings {
     const NAME: &'static str = "get_earnings";
 
     type Error = TradingError;
     type Args = SymbolArgs;
     type Output = FundamentalData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Fetch the last 4 quarterly EPS records for a stock symbol from Finnhub."
-                .to_owned(),
-            parameters: symbol_params(),
-        }
+    fn description(&self) -> String {
+        "Fetch the last 4 quarterly EPS records for a stock symbol from Finnhub.".to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        symbol_params()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -841,21 +839,20 @@ impl GetInsiderTransactions {
     }
 }
 
-impl Tool for GetInsiderTransactions {
+impl PortableTool for GetInsiderTransactions {
     const NAME: &'static str = "get_insider_transactions";
 
     type Error = TradingError;
     type Args = SymbolArgs;
     type Output = FundamentalData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description:
-                "Fetch insider buy/sell transactions for a stock symbol from Finnhub (last 3 months)."
-                    .to_owned(),
-            parameters: symbol_params(),
-        }
+    fn description(&self) -> String {
+        "Fetch insider buy/sell transactions for a stock symbol from Finnhub (last 3 months)."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        symbol_params()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -900,21 +897,20 @@ impl GetNews {
     }
 }
 
-impl Tool for GetNews {
+impl PortableTool for GetNews {
     const NAME: &'static str = "get_news";
 
     type Error = TradingError;
     type Args = SymbolArgs;
     type Output = NewsData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description:
-                "Fetch the last 30 days of company news articles for a stock symbol from Finnhub."
-                    .to_owned(),
-            parameters: symbol_params(),
-        }
+    fn description(&self) -> String {
+        "Fetch the last 30 days of company news articles for a stock symbol from Finnhub."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        symbol_params()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -942,24 +938,23 @@ impl GetMarketNews {
     }
 }
 
-impl Tool for GetMarketNews {
+impl PortableTool for GetMarketNews {
     const NAME: &'static str = "get_market_news";
 
     type Error = TradingError;
     type Args = EmptyObjectArgs;
     type Output = NewsData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Fetch recent general market news from Finnhub for macro analysis."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        }
+    fn description(&self) -> String {
+        "Fetch recent general market news from Finnhub for macro analysis.".to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -1003,7 +998,7 @@ impl GetCachedNews {
     }
 }
 
-impl Tool for GetCachedNews {
+impl PortableTool for GetCachedNews {
     /// Intentionally the same name as `GetNews` so existing prompts work unchanged.
     const NAME: &'static str = "get_news";
 
@@ -1011,14 +1006,13 @@ impl Tool for GetCachedNews {
     type Args = SymbolArgs;
     type Output = NewsData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description:
-                "Fetch the last 30 days of company news articles for a stock symbol from Finnhub."
-                    .to_owned(),
-            parameters: symbol_params(),
-        }
+    fn description(&self) -> String {
+        "Fetch the last 30 days of company news articles for a stock symbol from Finnhub."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        symbol_params()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -1150,44 +1144,28 @@ mod tests {
 
     // ── Tool definition tests ─────────────────────────────────────────────
 
-    #[tokio::test]
-    async fn get_fundamentals_tool_name() {
-        let tool = GetFundamentals {
-            client: None,
-            allowed_symbol: None,
-        };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_fundamentals");
+    #[test]
+    fn get_fundamentals_tool_name() {
+        let name = <GetFundamentals as PortableTool>::NAME;
+        assert_eq!(name, "get_fundamentals");
     }
 
-    #[tokio::test]
-    async fn get_earnings_tool_name() {
-        let tool = GetEarnings {
-            client: None,
-            allowed_symbol: None,
-        };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_earnings");
+    #[test]
+    fn get_earnings_tool_name() {
+        let name = <GetEarnings as PortableTool>::NAME;
+        assert_eq!(name, "get_earnings");
     }
 
-    #[tokio::test]
-    async fn get_insider_transactions_tool_name() {
-        let tool = GetInsiderTransactions {
-            client: None,
-            allowed_symbol: None,
-        };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_insider_transactions");
+    #[test]
+    fn get_insider_transactions_tool_name() {
+        let name = <GetInsiderTransactions as PortableTool>::NAME;
+        assert_eq!(name, "get_insider_transactions");
     }
 
-    #[tokio::test]
-    async fn get_news_tool_name() {
-        let tool = GetNews {
-            client: None,
-            allowed_symbol: None,
-        };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_news");
+    #[test]
+    fn get_news_tool_name() {
+        let name = <GetNews as PortableTool>::NAME;
+        assert_eq!(name, "get_news");
     }
 
     // ── Tool call without client returns Config error ─────────────────────
@@ -1309,19 +1287,20 @@ mod tests {
         assert!(matches!(result.unwrap_err(), TradingError::Config(_)));
     }
 
-    #[tokio::test]
-    async fn get_market_news_definition_advertises_empty_object_schema() {
+    #[test]
+    fn get_market_news_definition_advertises_empty_object_schema() {
         let tool = GetMarketNews { client: None };
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "get_market_news");
-        assert_eq!(def.parameters["type"], "object");
-        let props = &def.parameters["properties"];
+        let name = <GetMarketNews as PortableTool>::NAME;
+        let parameters = tool.parameters();
+        assert_eq!(name, "get_market_news");
+        assert_eq!(parameters["type"], "object");
+        let props = &parameters["properties"];
         assert!(
             props.as_object().map(|o| o.is_empty()).unwrap_or(false),
             "properties must be an empty object, got: {props}"
         );
         assert_eq!(
-            def.parameters["additionalProperties"], false,
+            parameters["additionalProperties"], false,
             "additionalProperties must be false"
         );
     }

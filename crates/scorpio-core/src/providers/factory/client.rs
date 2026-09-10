@@ -4,7 +4,7 @@
 //! - [`create_completion_model`] — construct a handle from tier + config.
 //! - [`create_completion_model_with_copilot`] — construct a Copilot handle with an explicit auth mode.
 
-use rig::providers::{anthropic, copilot, deepseek, gemini, openai, openrouter, xiaomimimo};
+use rig_core::providers::{anthropic, copilot, deepseek, gemini, openai, openrouter, xiaomimimo};
 use secrecy::ExposeSecret;
 use tracing::info;
 

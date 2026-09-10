@@ -1,14 +1,13 @@
 //! `rig` tool wrappers for the technical indicator calculation functions.
 //!
-//! Each struct implements [`rig::tool::Tool`] so the downstream Technical
+//! Each struct implements [`rig_core::tool::PortableTool`] so the downstream Technical
 //! Analyst agent can bind these calculations via the agent-builder helper.
 //! Tools operate on pre-fetched candle data; they do **not** fetch market
 //! data directly, preserving the separation between the `financial-data` and
 //! `technical-analysis` capabilities.
 
 use crate::data::yfinance::OhlcvToolContext;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig_core::tool::PortableTool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -41,25 +40,25 @@ impl CalculateAllIndicators {
     }
 }
 
-impl Tool for CalculateAllIndicators {
+impl PortableTool for CalculateAllIndicators {
     const NAME: &'static str = "calculate_all_indicators";
     type Error = TradingError;
     type Args = CalculateAllIndicatorsArgs;
     type Output = TechnicalData;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Compute all technical indicators (RSI, MACD, ATR, Bollinger Bands, \
-                           SMA, EMA, VWMA, support/resistance) from pre-fetched OHLCV candle \
-                           data and return a populated TechnicalData snapshot."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        }
+    fn description(&self) -> String {
+        "Compute all technical indicators (RSI, MACD, ATR, Bollinger Bands, \
+                       SMA, EMA, VWMA, support/resistance) from pre-fetched OHLCV candle \
+                       data and return a populated TechnicalData snapshot."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -104,27 +103,27 @@ impl CalculateRsi {
     }
 }
 
-impl Tool for CalculateRsi {
+impl PortableTool for CalculateRsi {
     const NAME: &'static str = "calculate_rsi";
     type Error = TradingError;
     type Args = CalculateRsiArgs;
     type Output = Vec<Option<f64>>;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Compute RSI (Relative Strength Index, default period 14) from \
-                           pre-fetched OHLCV candles. Returns per-bar RSI values; None indicates \
-                           the indicator was not yet valid at that bar."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "period":  { "type": "integer", "description": "RSI period (default 14)", "default": 14 }
-                },
-                "required": []
-            }),
-        }
+    fn description(&self) -> String {
+        "Compute RSI (Relative Strength Index, default period 14) from \
+                       pre-fetched OHLCV candles. Returns per-bar RSI values; None indicates \
+                       the indicator was not yet valid at that bar."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "period":  { "type": "integer", "description": "RSI period (default 14)", "default": 14 }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -180,29 +179,29 @@ impl CalculateMacd {
     }
 }
 
-impl Tool for CalculateMacd {
+impl PortableTool for CalculateMacd {
     const NAME: &'static str = "calculate_macd";
     type Error = TradingError;
     type Args = CalculateMacdArgs;
     type Output = MacdResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Compute MACD (Moving Average Convergence Divergence, default \
-                           12/26/9) from pre-fetched OHLCV candles. Returns MACD line, signal \
-                           line, and histogram as separate per-bar series."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "fast":    { "type": "integer", "description": "Fast EMA period (default 12)", "default": 12 },
-                    "slow":    { "type": "integer", "description": "Slow EMA period (default 26)", "default": 26 },
-                    "signal":  { "type": "integer", "description": "Signal line period (default 9)", "default": 9 }
-                },
-                "required": []
-            }),
-        }
+    fn description(&self) -> String {
+        "Compute MACD (Moving Average Convergence Divergence, default \
+                       12/26/9) from pre-fetched OHLCV candles. Returns MACD line, signal \
+                       line, and histogram as separate per-bar series."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "fast":    { "type": "integer", "description": "Fast EMA period (default 12)", "default": 12 },
+                "slow":    { "type": "integer", "description": "Slow EMA period (default 26)", "default": 26 },
+                "signal":  { "type": "integer", "description": "Signal line period (default 9)", "default": 9 }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -246,27 +245,26 @@ impl CalculateAtr {
     }
 }
 
-impl Tool for CalculateAtr {
+impl PortableTool for CalculateAtr {
     const NAME: &'static str = "calculate_atr";
     type Error = TradingError;
     type Args = CalculateAtrArgs;
     type Output = Vec<Option<f64>>;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description:
-                "Compute ATR (Average True Range, default period 14) from pre-fetched OHLCV \
-                 candles. Returns per-bar ATR values; None before the lookback period."
-                    .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "period":  { "type": "integer", "description": "ATR period (default 14)", "default": 14 }
-                },
-                "required": []
-            }),
-        }
+    fn description(&self) -> String {
+        "Compute ATR (Average True Range, default period 14) from pre-fetched OHLCV \
+             candles. Returns per-bar ATR values; None before the lookback period."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "period":  { "type": "integer", "description": "ATR period (default 14)", "default": 14 }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -316,27 +314,27 @@ impl CalculateBollingerBands {
     }
 }
 
-impl Tool for CalculateBollingerBands {
+impl PortableTool for CalculateBollingerBands {
     const NAME: &'static str = "calculate_bollinger_bands";
     type Error = TradingError;
     type Args = CalculateBollingerArgs;
     type Output = BollingerResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Compute Bollinger Bands (default 20/2.0) from pre-fetched OHLCV \
-                           candles. Returns upper, middle (SMA), and lower band series."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "period":  { "type": "integer", "description": "Bollinger period (default 20)", "default": 20 },
-                    "std_dev": { "type": "number", "description": "Std-dev multiplier (default 2.0)", "default": 2.0 }
-                },
-                "required": []
-            }),
-        }
+    fn description(&self) -> String {
+        "Compute Bollinger Bands (default 20/2.0) from pre-fetched OHLCV \
+                       candles. Returns upper, middle (SMA), and lower band series."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "period":  { "type": "integer", "description": "Bollinger period (default 20)", "default": 20 },
+                "std_dev": { "type": "number", "description": "Std-dev multiplier (default 2.0)", "default": 2.0 }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -379,37 +377,37 @@ impl CalculateIndicatorByName {
     }
 }
 
-impl Tool for CalculateIndicatorByName {
+impl PortableTool for CalculateIndicatorByName {
     const NAME: &'static str = "calculate_indicator_by_name";
     type Error = TradingError;
     type Args = CalculateIndicatorByNameArgs;
     type Output = NamedIndicatorOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: "Compute a single technical indicator by its prompt-compatible name \
-                           from pre-fetched OHLCV candles. Supported: close_50_sma, \
-                           close_200_sma, close_10_ema, macd, macds, macdh, rsi, boll, \
-                           boll_ub, boll_lb, atr, vwma."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "indicator": {
-                        "type": "string",
-                        "description": "Prompt-compatible indicator name",
-                        "enum": [
-                            "close_50_sma", "close_200_sma", "close_10_ema",
-                            "macd", "macds", "macdh",
-                            "rsi", "boll", "boll_ub", "boll_lb",
-                            "atr", "vwma"
-                        ]
-                    }
-                },
-                "required": ["indicator"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Compute a single technical indicator by its prompt-compatible name \
+                       from pre-fetched OHLCV candles. Supported: close_50_sma, \
+                       close_200_sma, close_10_ema, macd, macds, macdh, rsi, boll, \
+                       boll_ub, boll_lb, atr, vwma."
+            .to_owned()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "indicator": {
+                    "type": "string",
+                    "description": "Prompt-compatible indicator name",
+                    "enum": [
+                        "close_50_sma", "close_200_sma", "close_10_ema",
+                        "macd", "macds", "macdh",
+                        "rsi", "boll", "boll_ub", "boll_lb",
+                        "atr", "vwma"
+                    ]
+                }
+            },
+            "required": ["indicator"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -437,46 +435,40 @@ mod tests {
         context
     }
 
-    #[tokio::test]
-    async fn tool_calculate_all_indicators_name() {
-        let tool = CalculateAllIndicators::new(seeded_context(200).await);
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "calculate_all_indicators");
+    #[test]
+    fn tool_calculate_all_indicators_name() {
+        let name = <CalculateAllIndicators as PortableTool>::NAME;
+        assert_eq!(name, "calculate_all_indicators");
     }
 
-    #[tokio::test]
-    async fn tool_calculate_rsi_name() {
-        let tool = CalculateRsi::new(seeded_context(50).await);
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "calculate_rsi");
+    #[test]
+    fn tool_calculate_rsi_name() {
+        let name = <CalculateRsi as PortableTool>::NAME;
+        assert_eq!(name, "calculate_rsi");
     }
 
-    #[tokio::test]
-    async fn tool_calculate_macd_name() {
-        let tool = CalculateMacd::new(seeded_context(50).await);
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "calculate_macd");
+    #[test]
+    fn tool_calculate_macd_name() {
+        let name = <CalculateMacd as PortableTool>::NAME;
+        assert_eq!(name, "calculate_macd");
     }
 
-    #[tokio::test]
-    async fn tool_calculate_atr_name() {
-        let tool = CalculateAtr::new(seeded_context(50).await);
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "calculate_atr");
+    #[test]
+    fn tool_calculate_atr_name() {
+        let name = <CalculateAtr as PortableTool>::NAME;
+        assert_eq!(name, "calculate_atr");
     }
 
-    #[tokio::test]
-    async fn tool_calculate_bollinger_name() {
-        let tool = CalculateBollingerBands::new(seeded_context(50).await);
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "calculate_bollinger_bands");
+    #[test]
+    fn tool_calculate_bollinger_name() {
+        let name = <CalculateBollingerBands as PortableTool>::NAME;
+        assert_eq!(name, "calculate_bollinger_bands");
     }
 
-    #[tokio::test]
-    async fn tool_calculate_indicator_by_name_name() {
-        let tool = CalculateIndicatorByName::new(seeded_context(50).await);
-        let def = tool.definition(String::new()).await;
-        assert_eq!(def.name, "calculate_indicator_by_name");
+    #[test]
+    fn tool_calculate_indicator_by_name_name() {
+        let name = <CalculateIndicatorByName as PortableTool>::NAME;
+        assert_eq!(name, "calculate_indicator_by_name");
     }
 
     #[tokio::test]

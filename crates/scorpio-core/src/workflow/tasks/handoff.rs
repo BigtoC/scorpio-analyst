@@ -40,14 +40,14 @@ pub(in crate::workflow) async fn put_into_context(
             "orchestration corruption: runtime preflight override serialization failed: {err}"
         ))
     })?;
-    context.set(KEY_RUNTIME_PREFLIGHT_OVERRIDE, json).await;
+    context.set(KEY_RUNTIME_PREFLIGHT_OVERRIDE, json)?;
     Ok(())
 }
 
 pub(in crate::workflow) async fn try_load_from_context(
     context: &Context,
 ) -> graph_flow::Result<Option<(RuntimePolicy, Option<String>)>> {
-    let raw: Option<String> = context.get(KEY_RUNTIME_PREFLIGHT_OVERRIDE).await;
+    let raw: Option<String> = context.get(KEY_RUNTIME_PREFLIGHT_OVERRIDE);
     let Some(json) = raw else {
         return Ok(None);
     };
@@ -102,7 +102,7 @@ mod tests {
         let context = Context::new();
         context
             .set(KEY_RUNTIME_PREFLIGHT_OVERRIDE, "{not valid json".to_owned())
-            .await;
+            .expect("KEY_RUNTIME_PREFLIGHT_OVERRIDE is serializable");
         let err = try_load_from_context(&context)
             .await
             .expect_err("malformed override must surface as TaskExecutionFailed");

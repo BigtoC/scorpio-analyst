@@ -106,7 +106,7 @@ pub(super) const ANALYST_TECHNICAL: &str = "technical";
 pub(super) async fn write_flag(context: &Context, analyst_key: &str, ok: bool) {
     context
         .set(format!("{ANALYST_PREFIX}.{analyst_key}.{OK_SUFFIX}"), ok)
-        .await;
+        .expect("a bool always serializes");
 }
 
 pub(super) async fn write_err(context: &Context, analyst_key: &str, message: &str) {
@@ -115,7 +115,7 @@ pub(super) async fn write_err(context: &Context, analyst_key: &str, message: &st
             format!("{ANALYST_PREFIX}.{analyst_key}.{ERR_SUFFIX}"),
             message.to_owned(),
         )
-        .await;
+        .expect("a String always serializes");
 }
 
 pub(super) async fn read_analyst_usage(
@@ -146,12 +146,12 @@ pub(super) async fn read_round_usage(
 pub(super) async fn load_transcript_fetch(
     context: &Context,
 ) -> Result<TranscriptFetch, TradingError> {
-    let raw: String = context
-        .get(KEY_TRANSCRIPT_FETCH_STATUS)
-        .await
-        .ok_or_else(|| TradingError::SchemaViolation {
-            message: format!("context missing required key '{KEY_TRANSCRIPT_FETCH_STATUS}'"),
-        })?;
+    let raw: String =
+        context
+            .get(KEY_TRANSCRIPT_FETCH_STATUS)
+            .ok_or_else(|| TradingError::SchemaViolation {
+                message: format!("context missing required key '{KEY_TRANSCRIPT_FETCH_STATUS}'"),
+            })?;
 
     serde_json::from_str(&raw).map_err(|error| TradingError::SchemaViolation {
         message: format!(
@@ -172,7 +172,9 @@ mod tests {
         let context = Context::new();
         let status = TranscriptFetch::Unavailable;
         let raw = serde_json::to_string(&status).expect("status serialization");
-        context.set(KEY_TRANSCRIPT_FETCH_STATUS, raw).await;
+        context
+            .set(KEY_TRANSCRIPT_FETCH_STATUS, raw)
+            .expect("KEY_TRANSCRIPT_FETCH_STATUS is serializable");
 
         let loaded = load_transcript_fetch(&context)
             .await
@@ -202,7 +204,7 @@ mod tests {
         let context = Context::new();
         context
             .set(KEY_TRANSCRIPT_FETCH_STATUS, "not-json".to_owned())
-            .await;
+            .expect("KEY_TRANSCRIPT_FETCH_STATUS is serializable");
 
         let error = load_transcript_fetch(&context)
             .await

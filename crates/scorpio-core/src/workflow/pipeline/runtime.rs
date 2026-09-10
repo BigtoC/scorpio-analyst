@@ -207,6 +207,44 @@ pub(super) fn build_graph(
     )
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
+/// Builder-stage twin of [`build_graph`], so the test seam can register
+/// task overrides before the graph is finalized.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_graph_builder(
+    config: Arc<Config>,
+    finnhub: &FinnhubClient,
+    fred: &FredClient,
+    yfinance: &YFinanceClient,
+    sec_edgar: Arc<SecEdgarClient>,
+    alpha_vantage: Option<Arc<crate::data::AlphaVantageClient>>,
+    snapshot_store: Arc<SnapshotStore>,
+    quick_handle: &CompletionModelHandle,
+    deep_handle: &CompletionModelHandle,
+) -> graph_flow::GraphBuilder {
+    // Phase 7 synthesis: delegate to the pack-driven builder after
+    // resolving the active pack id. If the config selects an unknown pack
+    // or a non-selectable stub, fall back to the baseline manifest so the
+    // graph still builds for misconfigured runs — `run_analysis_cycle`
+    // re-resolves and surfaces a proper error downstream.
+    let pack_id: PackId = config.analysis_pack.parse().unwrap_or(PackId::Baseline);
+    let pack = resolve_pack(pack_id);
+    let registry = AnalystRegistry::all_known();
+    crate::workflow::builder::build_graph_builder_from_pack(
+        &pack,
+        config,
+        &registry,
+        finnhub,
+        fred,
+        yfinance,
+        sec_edgar,
+        alpha_vantage,
+        snapshot_store,
+        quick_handle,
+        deep_handle,
+    )
+}
+
 /// Guard that validates Copilot authentication before the pipeline preflight task
 /// runs, using the real [`crate::providers::factory::copilot_auth::fetch_github_identity`]
 /// to verify the live GitHub identity matches the stored binding.
@@ -559,7 +597,7 @@ pub async fn run_analysis_cycle(
         .sentiment
         .as_ref()
         .and_then(|arc| serde_json::to_string(arc.as_ref()).ok());
-    let graph = Arc::clone(&pipeline.graph);
+    let graph = Arc::clone(&pipeline.graph.read().expect("graph lock poisoned"));
     let storage = Arc::new(InMemorySessionStorage::new());
     let session_id = Uuid::new_v4().to_string();
     let session = Session::new_from_task(session_id.clone(), TASKS.preflight);
@@ -575,13 +613,19 @@ pub async fn run_analysis_cycle(
     session
         .context
         .set(KEY_MAX_DEBATE_ROUNDS, pipeline.config.llm.max_debate_rounds)
-        .await;
+        .map_err(errors::map_graph_error)?;
     session
         .context
         .set(KEY_MAX_RISK_ROUNDS, pipeline.config.llm.max_risk_rounds)
-        .await;
-    session.context.set(KEY_DEBATE_ROUND, 0u32).await;
-    session.context.set(KEY_RISK_ROUND, 0u32).await;
+        .map_err(errors::map_graph_error)?;
+    session
+        .context
+        .set(KEY_DEBATE_ROUND, 0u32)
+        .map_err(errors::map_graph_error)?;
+    session
+        .context
+        .set(KEY_RISK_ROUND, 0u32)
+        .map_err(errors::map_graph_error)?;
 
     handoff::put_into_context(&session.context, runtime_policy, routing_fallback_reason)
         .await
@@ -592,10 +636,16 @@ pub async fn run_analysis_cycle(
         })?;
 
     if let Some(json) = vetted_news_json {
-        session.context.set(KEY_CACHED_VETTED_NEWS, json).await;
+        session
+            .context
+            .set(KEY_CACHED_VETTED_NEWS, json)
+            .map_err(errors::map_graph_error)?;
     }
     if let Some(json) = sentiment_news_json {
-        session.context.set(KEY_CACHED_SENTIMENT_NEWS, json).await;
+        session
+            .context
+            .set(KEY_CACHED_SENTIMENT_NEWS, json)
+            .map_err(errors::map_graph_error)?;
     }
 
     // ── Write enrichment payloads to context cache keys ──────────────
@@ -605,13 +655,19 @@ pub async fn run_analysis_cycle(
         && let Ok(json) = serde_json::to_string(events)
     {
         info!(count = events.len(), "hydrated event-news enrichment");
-        session.context.set(KEY_CACHED_EVENT_FEED, json).await;
+        session
+            .context
+            .set(KEY_CACHED_EVENT_FEED, json)
+            .map_err(errors::map_graph_error)?;
     }
     if let Some(ref consensus) = initial_state.enrichment_consensus.payload
         && let Ok(json) = serde_json::to_string(consensus)
     {
         info!(symbol = %consensus.symbol, "hydrated consensus-estimates enrichment");
-        session.context.set(KEY_CACHED_CONSENSUS, json).await;
+        session
+            .context
+            .set(KEY_CACHED_CONSENSUS, json)
+            .map_err(errors::map_graph_error)?;
     }
 
     // KEY_TRANSCRIPT_FETCH_STATUS holds the serde-serialized `TranscriptFetch`.
@@ -622,7 +678,7 @@ pub async fn run_analysis_cycle(
     session
         .context
         .set(KEY_TRANSCRIPT_FETCH_STATUS, status_json)
-        .await;
+        .map_err(errors::map_graph_error)?;
 
     storage
         .save(session)
@@ -1114,15 +1170,6 @@ async fn run_pipeline_loop(runner: &FlowRunner, session_id: &str) -> Result<(), 
                     phase: "pipeline_execution".into(),
                     task: "unexpected_input_wait".into(),
                     cause: "pipeline unexpectedly waiting for input".into(),
-                });
-            }
-            ExecutionStatus::Error(ref msg) => {
-                error!(error = %msg, step, "pipeline step returned error status");
-                let (task_id, cause) = errors::extract_task_identity(msg);
-                return Err(TradingError::GraphFlow {
-                    phase: errors::phase_for_task(&task_id),
-                    task: task_id,
-                    cause: crate::providers::factory::sanitize_error_summary(&cause),
                 });
             }
         }

@@ -180,16 +180,12 @@ impl Task for PartialAnalystChild {
         }
 
         let ok = self.analyst_key != ANALYST_TECHNICAL;
-        context
-            .set(format!("analyst.{}.ok", self.analyst_key), ok)
-            .await;
+        context.set(format!("analyst.{}.ok", self.analyst_key), ok)?;
         if !ok {
-            context
-                .set(
-                    format!("analyst.{}.err", self.analyst_key),
-                    "stub: technical omitted".to_owned(),
-                )
-                .await;
+            context.set(
+                format!("analyst.{}.err", self.analyst_key),
+                "stub: technical omitted".to_owned(),
+            )?;
         }
 
         write_prefixed_result(

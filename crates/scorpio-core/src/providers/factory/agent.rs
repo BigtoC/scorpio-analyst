@@ -16,13 +16,14 @@ use std::{
 #[cfg(test)]
 type TypedResultQueue = Arc<Mutex<VecDeque<Result<Box<dyn std::any::Any + Send>, TradingError>>>>;
 
-#[cfg(test)]
-use rig::{OneOrMany, completion::AssistantContent, message::UserContent};
-use rig::{
-    agent::{PromptResponse, TypedPromptResponse},
-    completion::{Message, Prompt, PromptError},
-    tool::ToolDyn,
+use rig_agent::{
+    agent::{Agent, PromptResponse, TypedPromptResponse},
+    completion::{Prompt, PromptError},
+    tool::server::ToolServer,
 };
+use rig_core::completion::Message;
+#[cfg(test)]
+use rig_core::{completion::AssistantContent, message::UserContent};
 use serde::de::DeserializeOwned;
 use tracing::Instrument;
 
@@ -31,31 +32,10 @@ use crate::{error::TradingError, providers::ProviderId, rate_limit::SharedRateLi
 use super::client::{CompletionModelHandle, ProviderClient};
 use super::error::map_structured_output_error_with_context;
 
-// ────────────────────────────────────────────────────────────────────────────
-// Type aliases for provider completion models
-// ────────────────────────────────────────────────────────────────────────────
-
-type OpenAIModel = rig::providers::openai::responses_api::ResponsesCompletionModel;
-type AnthropicModel = rig::providers::anthropic::completion::CompletionModel;
-type GeminiModel = rig::providers::gemini::completion::CompletionModel;
-type OpenRouterModel = rig::providers::openrouter::completion::CompletionModel;
-type DeepSeekModel = rig::providers::deepseek::CompletionModel;
-type CopilotModel = rig::providers::copilot::CompletionModel<reqwest::Client>;
-type XiaomiMimoModel = rig::providers::openai::completion::GenericCompletionModel<
-    rig::providers::xiaomimimo::XiaomiMimoExt,
-    reqwest::Client,
->;
-
 macro_rules! dispatch_llm_agent {
     ($inner:expr, |$agent:ident| $body:expr, mock = |$mock:ident| $mock_body:expr) => {
         match $inner {
-            LlmAgentInner::OpenAI($agent) => $body,
-            LlmAgentInner::Anthropic($agent) => $body,
-            LlmAgentInner::Gemini($agent) => $body,
-            LlmAgentInner::OpenRouter($agent) => $body,
-            LlmAgentInner::DeepSeek($agent) => $body,
-            LlmAgentInner::Copilot($agent) => $body,
-            LlmAgentInner::XiaomiMimo($agent) => $body,
+            LlmAgentInner::Rig($agent) => $body,
             #[cfg(test)]
             LlmAgentInner::Mock($mock) => $mock_body,
         }
@@ -68,24 +48,18 @@ macro_rules! dispatch_llm_agent {
 
 /// A provider-agnostic agent that implements uniform `prompt` and `chat` operations.
 ///
-/// Each variant wraps a fully-configured `rig::agent::Agent<M>` for the corresponding
-/// provider's completion model type.
+/// rig 0.42 erases the completion model at agent construction, so one
+/// [`rig_agent::agent::Agent`] covers every provider; the enum exists only to
+/// swap in the test mock.
+///
+/// The size disparity clippy flags exists only in test builds, where the much
+/// smaller `Mock` variant is compiled in; production has the single `Rig`
+/// variant, so boxing `Agent` would buy an allocation and nothing else.
+#[cfg_attr(test, allow(clippy::large_enum_variant))]
 #[derive(Clone)]
 enum LlmAgentInner {
-    /// Agent backed by OpenAI Responses API.
-    OpenAI(rig::agent::Agent<OpenAIModel>),
-    /// Agent backed by Anthropic Messages API.
-    Anthropic(rig::agent::Agent<AnthropicModel>),
-    /// Agent backed by Google Gemini API.
-    Gemini(rig::agent::Agent<GeminiModel>),
-    /// Agent backed by OpenRouter API aggregator.
-    OpenRouter(rig::agent::Agent<OpenRouterModel>),
-    /// Agent backed by DeepSeek API.
-    DeepSeek(rig::agent::Agent<DeepSeekModel>),
-    /// Agent backed by GitHub Copilot via OAuth/device flow.
-    Copilot(rig::agent::Agent<CopilotModel>),
-    /// Agent backed by Xiaomi MiMo via OpenAI-compatible API.
-    XiaomiMimo(rig::agent::Agent<XiaomiMimoModel>),
+    /// Agent backed by a real provider completion model.
+    Rig(Agent),
     #[cfg(test)]
     Mock(MockLlmAgent),
 }
@@ -246,7 +220,7 @@ impl LlmAgent {
     where
         T: schemars::JsonSchema + DeserializeOwned + Send + 'static,
     {
-        use rig::completion::TypedPrompt;
+        use rig_agent::completion::TypedPrompt;
 
         // Capture the error-mapping closure once so each arm stays a single expression.
         let map_err = |err| {
@@ -298,7 +272,7 @@ impl LlmAgent {
             let response = dispatch_llm_agent!(
                 &self.inner,
                 |agent| {
-                    use rig::agent::PromptRequest;
+                    use rig_agent::agent::PromptRequest;
                     PromptRequest::from_agent(agent, prompt)
                         .max_turns(max_turns)
                         .extended_details()
@@ -324,7 +298,7 @@ impl LlmAgent {
         prompt: &str,
         chat_history: &mut Vec<Message>,
     ) -> Result<PromptResponse, PromptError> {
-        use rig::agent::PromptRequest;
+        use rig_agent::agent::PromptRequest;
 
         let span = self.llm_span("chat_details");
         async {
@@ -332,7 +306,7 @@ impl LlmAgent {
                 &self.inner,
                 |agent| {
                     PromptRequest::from_agent(agent, prompt)
-                        .with_history(chat_history.clone())
+                        .history(chat_history.clone())
                         .extended_details()
                         .await
                 },
@@ -360,7 +334,7 @@ fn record_generation(
     span: &tracing::Span,
     prompt: &str,
     completion: Option<&str>,
-    usage: &rig::completion::Usage,
+    usage: &rig_core::completion::Usage,
 ) {
     span.record("gen_ai.prompt", prompt);
     if let Some(c) = completion {
@@ -393,12 +367,14 @@ impl MockLlmAgent {
             .unwrap_or_else(|| {
                 Ok(PromptResponse::new(
                     "",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 0,
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 ))
             })
@@ -429,12 +405,14 @@ impl MockLlmAgent {
             .unwrap_or_else(|| {
                 Ok(PromptResponse::new(
                     "",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 0,
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 ))
             })
@@ -462,12 +440,14 @@ impl MockLlmAgent {
             .unwrap_or_else(|| {
                 MockChatOutcome::Ok(PromptResponse::new(
                     "",
-                    rig::completion::Usage {
+                    rig_core::completion::Usage {
                         input_tokens: 0,
                         output_tokens: 0,
                         total_tokens: 0,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 ))
             });
@@ -475,10 +455,10 @@ impl MockLlmAgent {
         let round_messages = || {
             vec![
                 Message::User {
-                    content: OneOrMany::one(UserContent::text(prompt)),
+                    content: vec![UserContent::text(prompt)],
                 },
                 Message::Assistant {
-                    content: OneOrMany::one(AssistantContent::text("")),
+                    content: vec![AssistantContent::text("")],
                     id: None,
                 },
             ]
@@ -491,7 +471,7 @@ impl MockLlmAgent {
                 } else {
                     let mut messages = round_messages();
                     messages[1] = Message::Assistant {
-                        content: OneOrMany::one(AssistantContent::text(response.output.clone())),
+                        content: vec![AssistantContent::text(response.output.clone())],
                         id: None,
                     };
                     Ok(response.with_messages(messages))
@@ -539,7 +519,7 @@ impl MockLlmAgent {
 
 /// Build a configured [`LlmAgent`] for the given tier with a system prompt.
 ///
-/// This thin helper wraps `rig::AgentBuilder` so downstream agents don't repeat boilerplate.
+/// This thin helper wraps `rig_core::AgentBuilder` so downstream agents don't repeat boilerplate.
 /// Tools and structured output are **not** attached here — callers extend the agent
 /// as needed after creation, or use [`build_agent_with_tools`] for tool-enabled agents.
 pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAgent {
@@ -548,9 +528,9 @@ pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAg
 
 /// Build a configured [`LlmAgent`] with a set of tools attached.
 ///
-/// Tools are passed as `Vec<Box<dyn ToolDyn>>` to avoid type-parameter explosion —
-/// rig's `AgentBuilder::tools()` accepts this and uses the `ToolServer` internally
-/// to dispatch tool calls at runtime.
+/// Tools are collected into a [`ToolServer`], which accepts heterogeneous
+/// concrete tool types across successive `.tool()` calls — rig 0.42 removed the
+/// object-safe `ToolDyn` boxing that used to serve that purpose.
 ///
 /// # Example
 ///
@@ -558,13 +538,13 @@ pub fn build_agent(handle: &CompletionModelHandle, system_prompt: &str) -> LlmAg
 /// let agent = build_agent_with_tools(
 ///     &handle,
 ///     "You are a financial analyst.",
-///     vec![Box::new(StockPriceTool::new(client.clone()))],
+///     ToolServer::new().tool(StockPriceTool::new(client.clone())),
 /// );
 /// ```
 pub fn build_agent_with_tools(
     handle: &CompletionModelHandle,
     system_prompt: &str,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tools: ToolServer,
 ) -> LlmAgent {
     build_agent_inner(handle, system_prompt, Some(tools))
 }
@@ -572,76 +552,46 @@ pub fn build_agent_with_tools(
 /// Shared builder core for [`build_agent`] and [`build_agent_with_tools`].
 ///
 /// When `tools` is `None` the agent is constructed without tool bindings;
-/// when `Some` the tools are attached via `AgentBuilder::tools`.
+/// when `Some` the tool server is attached via `AgentBuilder::tool_server_handle`.
 ///
 /// # Typestate note
 ///
-/// `rig`'s `AgentBuilder` uses a typestate pattern: calling `.tools()` changes
-/// the builder's type parameter from `NoToolConfig` to `WithBuilderTools`, making
-/// it impossible to assign back to the same `let mut` binding. The macro therefore
-/// has two branches — one for `None` (no tools) and one for `Some(t)` (with tools)
-/// — rather than a conditional `builder = builder.tools(t)`.
+/// `rig`'s `AgentBuilder` uses a typestate pattern: attaching tools changes the
+/// builder's type parameter from `NoToolConfig` to `WithToolServerHandle`, making
+/// it impossible to assign back to the same `let mut` binding. Hence the two
+/// branches rather than a conditional `builder = builder.tool_server_handle(t)`.
 fn build_agent_inner(
     handle: &CompletionModelHandle,
     system_prompt: &str,
-    tools: Option<Vec<Box<dyn ToolDyn>>>,
+    tools: Option<ToolServer>,
 ) -> LlmAgent {
-    // Produces the base builder (without Anthropic's extra `.max_tokens`) and
-    // dispatches on `tools` to avoid the typestate assignment problem.
-    macro_rules! make_agent {
-        ($base_builder:expr, $variant:ident) => {{
-            let agent = match tools {
-                None => $base_builder.build(),
-                Some(t) => $base_builder.tools(t).build(),
-            };
-            LlmAgent {
-                provider: handle.provider_id(),
-                model_id: handle.model_id().to_owned(),
-                inner: LlmAgentInner::$variant(agent),
-                rate_limiter: handle.rate_limiter().cloned(),
-            }
-        }};
-    }
+    // `.agent()` comes from rig-agent's client extension trait; the model type is
+    // erased at `build()`, so every provider arm yields the same `AgentBuilder`.
+    use rig_agent::client::AgentClientExt;
 
-    match &handle.client {
-        ProviderClient::OpenAI(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, OpenAI)
-        }
-        ProviderClient::Anthropic(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c
-                .agent(handle.model_id())
-                .preamble(system_prompt)
-                .max_tokens(4096);
-            make_agent!(base, Anthropic)
-        }
-        ProviderClient::Gemini(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, Gemini)
-        }
-        ProviderClient::OpenRouter(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, OpenRouter)
-        }
-        ProviderClient::DeepSeek(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, DeepSeek)
-        }
-        ProviderClient::Copilot(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, Copilot)
-        }
-        ProviderClient::XiaomiMimo(c) => {
-            use rig::prelude::CompletionClient;
-            let base = c.agent(handle.model_id()).preamble(system_prompt);
-            make_agent!(base, XiaomiMimo)
-        }
+    let base = match &handle.client {
+        ProviderClient::OpenAI(c) => c.agent(handle.model_id()).preamble(system_prompt),
+        ProviderClient::Anthropic(c) => c
+            .agent(handle.model_id())
+            .preamble(system_prompt)
+            .max_tokens(4096),
+        ProviderClient::Gemini(c) => c.agent(handle.model_id()).preamble(system_prompt),
+        ProviderClient::OpenRouter(c) => c.agent(handle.model_id()).preamble(system_prompt),
+        ProviderClient::DeepSeek(c) => c.agent(handle.model_id()).preamble(system_prompt),
+        ProviderClient::Copilot(c) => c.agent(handle.model_id()).preamble(system_prompt),
+        ProviderClient::XiaomiMimo(c) => c.agent(handle.model_id()).preamble(system_prompt),
+    };
+
+    let agent = match tools {
+        None => base.build(),
+        Some(server) => base.tool_server_handle(server.run()).build(),
+    };
+
+    LlmAgent {
+        provider: handle.provider_id(),
+        model_id: handle.model_id().to_owned(),
+        inner: LlmAgentInner::Rig(agent),
+        rate_limiter: handle.rate_limiter().cloned(),
     }
 }
 
@@ -656,7 +606,7 @@ mod tests {
     use crate::rate_limit::ProviderRateLimiters;
     use crate::state::TradeProposal;
     use crate::{config::ProvidersConfig, providers::ProviderId};
-    use rig::tool::Tool;
+    use rig_core::tool::PortableTool;
     use secrecy::SecretString;
     use serde::{Deserialize, Serialize};
 
@@ -721,22 +671,22 @@ mod tests {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestToolArgs {}
 
-    impl Tool for TestTool {
+    impl PortableTool for TestTool {
         const NAME: &'static str = "test_tool";
         type Error = TradingError;
         type Args = TestToolArgs;
         type Output = String;
 
-        async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-            rig::completion::ToolDefinition {
-                name: Self::NAME.to_owned(),
-                description: "test tool".to_owned(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-            }
+        fn description(&self) -> String {
+            "test tool".to_owned()
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })
         }
 
         async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -759,7 +709,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider.as_str(), "openai");
         assert_eq!(agent.model_id, "gpt-4o-mini");
-        assert!(matches!(&agent.inner, LlmAgentInner::OpenAI(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -776,7 +726,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider.as_str(), "anthropic");
         assert_eq!(agent.model_id, "o3");
-        assert!(matches!(&agent.inner, LlmAgentInner::Anthropic(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -793,7 +743,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider.as_str(), "gemini");
         assert_eq!(agent.model_id, "o3");
-        assert!(matches!(&agent.inner, LlmAgentInner::Gemini(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -812,7 +762,7 @@ mod tests {
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider.as_str(), "openrouter");
         assert_eq!(agent.model_id, "qwen/qwen3.6-plus-preview:free");
-        assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -843,7 +793,7 @@ mod tests {
 
         let agent = build_agent(&handle, "You are a test agent.");
         assert_eq!(agent.provider.as_str(), "deepseek");
-        assert!(matches!(&agent.inner, LlmAgentInner::DeepSeek(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -863,7 +813,7 @@ mod tests {
 
         assert_eq!(agent.provider.as_str(), "openrouter");
         assert_eq!(agent.model_id, "minimax/minimax-m2.5:free");
-        assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -923,10 +873,10 @@ mod tests {
         let agent = build_agent_with_tools(
             &handle,
             "You are a tool-using test agent.",
-            vec![Box::new(TestTool)],
+            ToolServer::new().tool(TestTool),
         );
 
-        assert!(matches!(&agent.inner, LlmAgentInner::OpenRouter(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
         assert_eq!(agent.provider.as_str(), "openrouter");
         assert_eq!(
             agent.rate_limiter.as_ref().map(|l| l.label()),
@@ -936,8 +886,8 @@ mod tests {
 
     #[tokio::test]
     async fn chat_details_appends_provider_messages_to_existing_history() {
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
+        use rig_agent::agent::PromptResponse;
+        use rig_core::completion::Usage;
 
         let (agent, _controller) = mock_llm_agent(
             ProviderId::OpenAI,
@@ -952,14 +902,16 @@ mod tests {
                         total_tokens: 0,
                         cached_input_tokens: 0,
                         cache_creation_input_tokens: 0,
+                        tool_use_prompt_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                 )
                 .with_messages(vec![
                     Message::User {
-                        content: OneOrMany::one(UserContent::text("next")),
+                        content: vec![UserContent::text("next")],
                     },
                     Message::Assistant {
-                        content: OneOrMany::one(AssistantContent::text("done")),
+                        content: vec![AssistantContent::text("done")],
                         id: None,
                     },
                 ]),
@@ -967,7 +919,7 @@ mod tests {
         );
 
         let mut history = vec![Message::User {
-            content: OneOrMany::one(UserContent::text("prior")),
+            content: vec![UserContent::text("prior")],
         }];
 
         let response = agent.chat_details("next", &mut history).await.unwrap();
@@ -983,7 +935,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token_dir = dir.path().join("github_copilot");
         std::fs::create_dir_all(&token_dir).unwrap();
-        let client = rig::providers::copilot::Client::builder()
+        let client = rig_core::providers::copilot::Client::builder()
             .oauth()
             .token_dir(&token_dir)
             .build()
@@ -995,12 +947,12 @@ mod tests {
         );
         let agent = build_agent(&handle, "test prompt");
         assert_eq!(agent.provider.as_str(), "copilot");
-        assert!(matches!(&agent.inner, LlmAgentInner::Copilot(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[test]
     fn build_agent_supports_xiaomimimo_variant() {
-        let client = rig::providers::xiaomimimo::Client::new("test-key")
+        let client = rig_core::providers::xiaomimimo::Client::new("test-key")
             .expect("xiaomimimo client construction");
         let handle = super::super::client::CompletionModelHandle::for_test_with_client(
             ProviderId::XiaomiMimo,
@@ -1009,7 +961,7 @@ mod tests {
         );
         let agent = build_agent(&handle, "test prompt");
         assert_eq!(agent.provider.as_str(), "xiaomimimo");
-        assert!(matches!(&agent.inner, LlmAgentInner::XiaomiMimo(_)));
+        assert!(matches!(&agent.inner, LlmAgentInner::Rig(_)));
     }
 
     #[tokio::test]
@@ -1019,7 +971,7 @@ mod tests {
             .typed_results
             .lock()
             .unwrap()
-            .push_back(Ok(Box::new(rig::agent::TypedPromptResponse::new(
+            .push_back(Ok(Box::new(rig_agent::agent::TypedPromptResponse::new(
                 TradeProposal {
                     action: crate::state::TradeAction::Buy,
                     target_price: 123.0,
@@ -1029,12 +981,14 @@ mod tests {
                     valuation_assessment: None,
                     scenario_valuation: None,
                 },
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 4,
                     output_tokens: 2,
                     total_tokens: 6,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))));
 

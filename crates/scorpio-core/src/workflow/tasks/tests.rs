@@ -51,12 +51,12 @@ async fn context_with_invalid_cached_news() -> Context {
         common::KEY_CACHED_VETTED_NEWS.to_owned(),
         "not valid json".to_owned(),
     )
-    .await;
+    .expect("common::KEY_CACHED_VETTED_NEWS is serializable");
     ctx.set(
         common::KEY_CACHED_SENTIMENT_NEWS.to_owned(),
         "not valid json".to_owned(),
     )
-    .await;
+    .expect("common::KEY_CACHED_SENTIMENT_NEWS is serializable");
     ctx
 }
 
@@ -70,7 +70,7 @@ async fn write_flag_true_readable_back() {
         common::ANALYST_FUNDAMENTAL,
         common::OK_SUFFIX
     );
-    let ok: Option<bool> = ctx.get(&key).await;
+    let ok: Option<bool> = ctx.get(&key);
     assert_eq!(ok, Some(true));
 }
 
@@ -84,7 +84,7 @@ async fn write_err_readable_back() {
         common::ANALYST_NEWS,
         common::ERR_SUFFIX
     );
-    let msg: Option<String> = ctx.get(&key).await;
+    let msg: Option<String> = ctx.get(&key);
     assert_eq!(msg.as_deref(), Some("something went wrong"));
 }
 
@@ -113,7 +113,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -123,7 +123,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -133,7 +133,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -143,7 +143,7 @@ async fn analyst_sync_all_succeed_returns_continue() {
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
 
     write_prefixed_result(
         &ctx,
@@ -286,7 +286,7 @@ async fn analyst_sync_records_reddit_sentiment_provenance_when_cached_sentiment_
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -296,7 +296,7 @@ async fn analyst_sync_records_reddit_sentiment_provenance_when_cached_sentiment_
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -306,7 +306,7 @@ async fn analyst_sync_records_reddit_sentiment_provenance_when_cached_sentiment_
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -316,7 +316,7 @@ async fn analyst_sync_records_reddit_sentiment_provenance_when_cached_sentiment_
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
 
     ctx.set(
         common::KEY_CACHED_SENTIMENT_NEWS.to_owned(),
@@ -334,7 +334,7 @@ async fn analyst_sync_records_reddit_sentiment_provenance_when_cached_sentiment_
         })
         .expect("serialize sentiment cache"),
     )
-    .await;
+    .expect("common::KEY_CACHED_SENTIMENT_NEWS is serializable");
 
     write_prefixed_result(
         &ctx,
@@ -458,7 +458,7 @@ async fn analyst_sync_reddit_only_sentiment_provenance_does_not_claim_finnhub() 
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         common::KEY_CACHED_SENTIMENT_NEWS.to_owned(),
         serde_json::to_string(&NewsData {
@@ -475,7 +475,7 @@ async fn analyst_sync_reddit_only_sentiment_provenance_does_not_claim_finnhub() 
         })
         .expect("serialize sentiment cache"),
     )
-    .await;
+    .expect("common::KEY_CACHED_SENTIMENT_NEWS is serializable");
 
     write_prefixed_result(
         &ctx,
@@ -557,7 +557,7 @@ async fn analyst_sync_derives_required_inputs_from_runtime_policy() {
             ),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
 
     write_prefixed_result(
@@ -663,7 +663,7 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
         ),
         false,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -673,7 +673,7 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
         ),
         false,
     )
-    .await;
+    .expect("format is serializable");
 
     // Remaining analysts succeed.
     ctx.set(
@@ -685,7 +685,7 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -695,7 +695,7 @@ async fn analyst_sync_two_failures_returns_error_instead_of_end() {
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
 
     write_prefixed_result(
         &ctx,
@@ -768,7 +768,7 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
             format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
     ctx.set(
         format!(
@@ -779,7 +779,7 @@ async fn analyst_sync_one_missing_technical_marks_coverage_and_provenance() {
         ),
         false,
     )
-    .await;
+    .expect("format is serializable");
 
     write_prefixed_result(
         &ctx,
@@ -890,12 +890,12 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         "analyst.fundamental".to_owned(),
         "not valid json".to_owned(),
     )
-    .await;
+    .expect("context value is serializable");
 
     // Remaining analysts succeed, so the degraded path should still continue.
     ctx.set(
@@ -907,7 +907,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -917,7 +917,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
     ctx.set(
         format!(
             "{}.{}.{}",
@@ -927,7 +927,7 @@ async fn analyst_sync_counts_flagged_success_with_unreadable_payload_as_failure(
         ),
         true,
     )
-    .await;
+    .expect("format is serializable");
 
     write_prefixed_result(
         &ctx,
@@ -1023,7 +1023,7 @@ async fn analyst_sync_uses_longest_analyst_latency_for_fan_out_duration() {
             ),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
 
     write_prefixed_result(
@@ -1204,7 +1204,7 @@ async fn analyst_sync_honours_restricted_required_inputs_without_phantom_failure
             ),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
     write_prefixed_result(
         &ctx,
@@ -2152,7 +2152,7 @@ async fn analyst_sync_sets_derived_valuation_some_on_state() {
             format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
     write_prefixed_result(
         &ctx,
@@ -2321,7 +2321,7 @@ async fn analyst_sync_with_stubbed_yfinance_sets_corporate_equity_valuation_on_s
             format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
 
     write_prefixed_result(
@@ -2532,7 +2532,7 @@ async fn analyst_sync_without_selected_valuator_degrades_to_not_assessed() {
             format!("{}.{}.{}", common::ANALYST_PREFIX, key, common::OK_SUFFIX),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
 
     write_prefixed_result(
@@ -2696,7 +2696,7 @@ async fn run_analyst_sync_with_technical(technical_data: TechnicalData) -> Vec<S
             ),
             true,
         )
-        .await;
+        .expect("format is serializable");
     }
 
     write_prefixed_result(

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use rig::tool::ToolDyn;
+use rig_agent::tool::server::ToolServer;
 
 use crate::{
     agents::shared::{
@@ -135,15 +135,18 @@ impl NewsAnalyst {
     pub async fn run(&self) -> Result<(NewsData, AgentTokenUsage), TradingError> {
         let started_at = Instant::now();
 
-        let news_tool: Box<dyn ToolDyn> = match &self.cached_news {
-            Some(arc) => Box::new(GetCachedNews::new(arc.clone(), self.symbol.clone())),
-            None => Box::new(GetNews::scoped(self.finnhub.clone(), self.symbol.clone())),
-        };
-        let tools: Vec<Box<dyn ToolDyn>> = vec![
-            news_tool,
-            Box::new(GetMarketNews::new(self.finnhub.clone())),
-            Box::new(GetEconomicIndicators::new(self.fred.clone())),
-        ];
+        // `ToolServer::tool` takes each concrete type, so the cached/live news
+        // tools are registered in their own branches rather than through a box.
+        let tools = match &self.cached_news {
+            Some(arc) => {
+                ToolServer::new().tool(GetCachedNews::new(arc.clone(), self.symbol.clone()))
+            }
+            None => {
+                ToolServer::new().tool(GetNews::scoped(self.finnhub.clone(), self.symbol.clone()))
+            }
+        }
+        .tool(GetMarketNews::new(self.finnhub.clone()))
+        .tool(GetEconomicIndicators::new(self.fred.clone()));
 
         // ── 2. Build agent with tools and invoke LLM ──────────────────────
         let agent = build_agent_with_tools(&self.handle, &self.system_prompt, tools);
@@ -610,8 +613,8 @@ mod tests {
         use super::super::common::run_analyst_inference;
         use crate::providers::ProviderId;
         use crate::providers::factory::mock_llm_agent;
-        use rig::agent::PromptResponse;
-        use rig::completion::Usage;
+        use rig_agent::agent::PromptResponse;
+        use rig_core::completion::Usage;
 
         let valid_json = r#"{
             "articles": [
@@ -640,6 +643,8 @@ mod tests {
                     total_tokens: 30,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             )));
 

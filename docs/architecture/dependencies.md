@@ -2,8 +2,9 @@
 
 | Crate                              | Purpose                                                                            |
 |------------------------------------|------------------------------------------------------------------------------------|
-| `rig-core` 0.32                    | LLM provider abstraction (OpenAI, Anthropic, Gemini, custom Copilot)               |
-| `graph-flow` 0.5 (feature `"rig"`) | Stateful directed graph orchestration (LangGraph equivalent)                       |
+| `rig-core` 0.42                    | LLM provider abstraction (OpenAI, Anthropic, Gemini, custom Copilot), completion types, portable tools |
+| `rig-agent` 0.42                   | Agent/tool/extractor runtime split out of `rig-core` in 0.42 (`Agent`, `ToolServer`, `PromptError`)    |
+| `graph-flow` 0.8 (feature `"rig"`) | Stateful directed graph orchestration (LangGraph equivalent)                       |
 | `schemars` 1                       | JSON schema generation for `#[tool]` macros                                        |
 | `clap` 4 (feature `"derive"`)      | CLI argument parsing (`scorpio analyze <SYMBOL>`, `scorpio setup`)                 |
 | `inquire` 0.9                      | Interactive setup wizard prompts (Password, Select, Confirm)                       |
@@ -42,7 +43,7 @@ Protobuf compiler (`protoc`) is required by transitive dependencies.
 
 Shared dep versions are pinned centrally under `[workspace.dependencies]` in the root `Cargo.toml`; each crate consumes them via `foo.workspace = true`.
 
-- **Core** owns the runtime dep set: rig-core, graph-flow, kand, finnhub, yfinance-rs, sqlx, secrecy, config, dotenvy, governor, schemars, nonzero_ext.
+- **Core** owns the runtime dep set: rig-core, rig-agent, graph-flow, kand, finnhub, yfinance-rs, sqlx, secrecy, config, dotenvy, governor, schemars, nonzero_ext.
 - **CLI** owns the presentation/binary-specific set: clap, inquire, colored, comfy-table, figlet-rs, self_update, semver, sha2, hex.
 - **Reporters** consumes core plus presentation deps (colored, comfy-table) for terminal rendering.
 - **Server** is a Loco app — its own dep set lives under `crates/scorpio-server/Cargo.toml`.

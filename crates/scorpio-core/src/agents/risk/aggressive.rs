@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use rig::completion::Message;
+use rig_core::completion::Message;
 
 use crate::{
     agents::shared::agent_token_usage_from_completion,
@@ -151,7 +151,7 @@ fn build_aggressive_prompt(
 fn build_aggressive_result(
     output: String,
     model_id: &str,
-    usage: rig::completion::Usage,
+    usage: rig_core::completion::Usage,
     started_at: Instant,
     rate_limit_wait_ms: u64,
 ) -> Result<(RiskReport, AgentTokenUsage), TradingError> {
@@ -202,7 +202,7 @@ mod tests {
         factory::{MockChatOutcome, mock_llm_agent},
     };
     use crate::state::{DebateMessage, TokenUsageTracker, TradeAction, TradeProposal};
-    use rig::agent::PromptResponse;
+    use rig_agent::agent::PromptResponse;
     use secrecy::SecretString;
     use uuid::Uuid;
 
@@ -286,13 +286,15 @@ mod tests {
         r#"{"risk_level":"Aggressive","assessment":"Upside is strong; proceed with full sizing.","recommended_adjustments":["Tighten stop to 185"],"flags_violation":false}"#.to_owned()
     }
 
-    fn mock_usage(total: u64) -> rig::completion::Usage {
-        rig::completion::Usage {
+    fn mock_usage(total: u64) -> rig_core::completion::Usage {
+        rig_core::completion::Usage {
             input_tokens: total / 2,
             output_tokens: total / 2,
             total_tokens: total,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         }
     }
 
@@ -480,12 +482,14 @@ mod tests {
         let result = build_aggressive_result(
             json.to_owned(),
             "o3",
-            rig::completion::Usage {
+            rig_core::completion::Usage {
                 input_tokens: 1,
                 output_tokens: 1,
                 total_tokens: 2,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
             Instant::now(),
             0,
@@ -499,12 +503,14 @@ mod tests {
         let result = build_aggressive_result(
             json.to_owned(),
             "o3",
-            rig::completion::Usage {
+            rig_core::completion::Usage {
                 input_tokens: 1,
                 output_tokens: 1,
                 total_tokens: 2,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
             Instant::now(),
             0,
@@ -517,12 +523,14 @@ mod tests {
         let (report, usage) = build_aggressive_result(
             valid_aggressive_json(),
             "o3",
-            rig::completion::Usage {
+            rig_core::completion::Usage {
                 input_tokens: 10,
                 output_tokens: 5,
                 total_tokens: 15,
                 cached_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
             Instant::now(),
             0,
@@ -540,12 +548,14 @@ mod tests {
             vec![],
             vec![MockChatOutcome::Ok(PromptResponse::new(
                 valid_aggressive_json(),
-                rig::completion::Usage {
+                rig_core::completion::Usage {
                     input_tokens: 0,
                     output_tokens: 0,
                     total_tokens: 0,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             ))],
         );

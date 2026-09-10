@@ -88,7 +88,7 @@ impl Task for RuntimeSurfaceProbe {
 
         let runtime_policy_pack_name = ctx
             .get::<String>(KEY_RUNTIME_POLICY)
-            .await
+
             .map(|json| {
                 serde_json::from_str::<scorpio_core::analysis_packs::RuntimePolicy>(&json)
                     .map(|policy| policy.pack_id.to_string())
@@ -106,7 +106,6 @@ impl Task for RuntimeSurfaceProbe {
         // round-trip with a typed read in the conditional-edge closures).
         let has_routing_flags = ctx
             .get::<scorpio_core::workflow::RoutingFlags>(KEY_ROUTING_FLAGS)
-            .await
             .is_some();
 
         self.observations
@@ -146,7 +145,7 @@ async fn observe_runtime_surfaces_at(
 
 async fn set_analyst_ok(ctx: &Context, analyst: &str, ok: bool) {
     ctx.set(format!("{ANALYST_PREFIX}.{analyst}.{OK_SUFFIX}"), ok)
-        .await;
+        .expect("format is serializable");
 }
 
 async fn set_analyst_err(ctx: &Context, analyst: &str, msg: &str) {
@@ -154,7 +153,7 @@ async fn set_analyst_err(ctx: &Context, analyst: &str, msg: &str) {
         format!("{ANALYST_PREFIX}.{analyst}.{ERR_SUFFIX}"),
         msg.to_owned(),
     )
-    .await;
+    .expect("format is serializable");
 }
 
 async fn write_analyst_data(ctx: &Context, analyst: &str, data: impl serde::Serialize) {
@@ -427,7 +426,7 @@ fn pipeline_graph_topology_has_correct_start_and_all_nodes() {
     let (pipeline, _store, _dir) = rt.block_on(make_pipeline("topology.db", "test-topology", 1, 1));
     let graph = pipeline.build_graph();
 
-    assert_eq!(graph.start_task_id(), Some("preflight".to_owned()));
+    assert_eq!(graph.start_task_id(), Some("preflight"));
 
     for id in [
         "preflight",
@@ -561,36 +560,6 @@ fn replace_task_for_test_rejects_unknown_task_id_with_typed_error() {
 }
 
 #[tokio::test]
-async fn build_graph_returns_detached_graph_not_live_pipeline_graph() {
-    struct FailingDebateModerator;
-
-    #[async_trait::async_trait]
-    impl Task for FailingDebateModerator {
-        fn id(&self) -> &str {
-            "debate_moderator"
-        }
-
-        async fn run(&self, _context: Context) -> graph_flow::Result<TaskResult> {
-            Err(graph_flow::GraphError::TaskExecutionFailed(
-                "detached test graph should not affect pipeline".to_owned(),
-            ))
-        }
-    }
-
-    let (pipeline, _store, _dir) =
-        make_pipeline("detached-graph.db", "test-detached-graph", 1, 1).await;
-    pipeline
-        .install_stub_tasks_for_test()
-        .expect("stub install must succeed");
-
-    let graph = pipeline.build_graph();
-    graph.add_task(Arc::new(FailingDebateModerator));
-
-    let result = run_analysis_cycle(&pipeline, TradingState::new("AAPL", "2026-03-20")).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
 async fn malformed_trading_state_json_returns_schema_violation() {
     use scorpio_core::{
         error::TradingError,
@@ -599,7 +568,7 @@ async fn malformed_trading_state_json_returns_schema_violation() {
 
     let ctx = Context::new();
     ctx.set(TRADING_STATE_KEY, "not valid json {{{{".to_owned())
-        .await;
+        .expect("TRADING_STATE_KEY is serializable");
 
     let err = deserialize_state_from_context(&ctx)
         .await
@@ -659,8 +628,10 @@ async fn zero_round_debate_does_not_create_phantom_round_entry() {
     let ctx = Context::new();
     let state = sample_state();
     seed_state(&ctx, &state).await;
-    ctx.set(KEY_MAX_DEBATE_ROUNDS, 0u32).await;
-    ctx.set(KEY_DEBATE_ROUND, 0u32).await;
+    ctx.set(KEY_MAX_DEBATE_ROUNDS, 0u32)
+        .expect("KEY_MAX_DEBATE_ROUNDS is serializable");
+    ctx.set(KEY_DEBATE_ROUND, 0u32)
+        .expect("KEY_DEBATE_ROUND is serializable");
 
     let mod_usage = AgentTokenUsage {
         agent_name: "Debate Moderator".to_owned(),
@@ -677,7 +648,7 @@ async fn zero_round_debate_does_not_create_phantom_round_entry() {
     write_round_debate_usage(&ctx, 1, &mod_usage, &mod_usage).await;
     run_debate_moderator_accounting(&ctx, &mod_usage, Arc::clone(&store)).await;
 
-    let round: u32 = ctx.get(KEY_DEBATE_ROUND).await.unwrap_or(99);
+    let round: u32 = ctx.get(KEY_DEBATE_ROUND).unwrap_or(99);
     assert_eq!(round, 0);
 
     let final_state = deserialize_state_from_context(&ctx).await.unwrap();
@@ -705,8 +676,10 @@ async fn zero_round_risk_does_not_create_phantom_round_entry() {
     let ctx = Context::new();
     let state = sample_state();
     seed_state(&ctx, &state).await;
-    ctx.set(KEY_MAX_RISK_ROUNDS, 0u32).await;
-    ctx.set(KEY_RISK_ROUND, 0u32).await;
+    ctx.set(KEY_MAX_RISK_ROUNDS, 0u32)
+        .expect("KEY_MAX_RISK_ROUNDS is serializable");
+    ctx.set(KEY_RISK_ROUND, 0u32)
+        .expect("KEY_RISK_ROUND is serializable");
 
     let mod_usage = AgentTokenUsage {
         agent_name: "Risk Moderator".to_owned(),
@@ -723,7 +696,7 @@ async fn zero_round_risk_does_not_create_phantom_round_entry() {
     write_round_risk_usage(&ctx, 1, &mod_usage, &mod_usage, &mod_usage).await;
     run_risk_moderator_accounting(&ctx, &mod_usage, Arc::clone(&store)).await;
 
-    let round: u32 = ctx.get(KEY_RISK_ROUND).await.unwrap_or(99);
+    let round: u32 = ctx.get(KEY_RISK_ROUND).unwrap_or(99);
     assert_eq!(round, 0);
 
     let final_state = deserialize_state_from_context(&ctx).await.unwrap();
@@ -807,7 +780,7 @@ async fn analyst_child_deserialization_failure_returns_err() {
 
     let ctx = Context::new();
     ctx.set(TRADING_STATE_KEY, "this is not valid JSON {{{".to_owned())
-        .await;
+        .expect("TRADING_STATE_KEY is serializable");
 
     let llm_config = LlmConfig {
         quick_thinking_provider: "openai".to_owned(),

@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use rig::completion::Message;
-use rig::{OneOrMany, message::UserContent};
+use rig_core::completion::Message;
+use rig_core::message::UserContent;
 
 #[cfg(test)]
 use crate::agents::shared::agent_token_usage_from_completion;
@@ -332,10 +332,10 @@ pub(super) fn initial_untrusted_history(
     transcript_fetch: Option<&TranscriptFetch>,
 ) -> Vec<Message> {
     vec![Message::User {
-        content: OneOrMany::one(UserContent::text(format!(
+        content: vec![UserContent::text(format!(
             "{UNTRUSTED_CONTEXT_NOTICE}\n\n{}",
             build_analyst_context_body(state, transcript_fetch)
-        ))),
+        ))],
     }]
 }
 
@@ -423,7 +423,7 @@ pub(super) fn expected_moderator_violation_sentence(status: DualRiskStatus) -> &
 mod tests {
     use std::time::{Duration, Instant};
 
-    use rig::completion::Usage;
+    use rig_core::completion::Usage;
 
     use super::*;
     use crate::config::LlmConfig;
@@ -706,6 +706,8 @@ mod tests {
             total_tokens: 200,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result = agent_token_usage_from_completion("Agent", "o3", usage, Instant::now(), 0);
         assert!(result.token_counts_available);
@@ -720,6 +722,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let result = agent_token_usage_from_completion("Agent", "o3", usage, Instant::now(), 0);
         assert!(!result.token_counts_available);

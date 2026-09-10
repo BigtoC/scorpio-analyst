@@ -5,7 +5,7 @@
 //!   distinguishing schema violations from transport failures.
 //! - [`sanitize_error_summary`] — redact credentials and truncate error strings for safe logging.
 
-use rig::completion::{PromptError, StructuredOutputError};
+use rig_agent::completion::{PromptError, StructuredOutputError};
 
 use crate::{constants::MAX_ERROR_SUMMARY_CHARS, error::TradingError};
 
@@ -255,9 +255,9 @@ mod tests {
 
     #[test]
     fn map_prompt_error_produces_rig_variant() {
-        let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
-            "test error".to_owned(),
-        ));
+        let err = PromptError::CompletionError(
+            rig_core::completion::CompletionError::ProviderError("test error".to_owned()),
+        );
         let mapped = map_prompt_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::Rig(_)));
         assert!(mapped.to_string().contains("openai"));
@@ -282,9 +282,9 @@ mod tests {
 
     #[test]
     fn map_structured_output_prompt_error_falls_through_to_rig() {
-        let inner = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
-            "inner".to_owned(),
-        ));
+        let inner = PromptError::CompletionError(
+            rig_core::completion::CompletionError::ProviderError("inner".to_owned()),
+        );
         let err = StructuredOutputError::PromptError(Box::new(inner));
         let mapped = map_structured_output_error_with_context("openai", "gpt-4o-mini", err);
         assert!(matches!(mapped, TradingError::Rig(_)));
@@ -322,9 +322,10 @@ mod tests {
 
     #[test]
     fn map_prompt_error_flattens_summary_before_embedding_in_error_message() {
-        let err = PromptError::CompletionError(rig::completion::CompletionError::ProviderError(
-            "first line\napi_key=secret123\tsecond line".to_owned(),
-        ));
+        let err =
+            PromptError::CompletionError(rig_core::completion::CompletionError::ProviderError(
+                "first line\napi_key=secret123\tsecond line".to_owned(),
+            ));
 
         let mapped =
             map_prompt_error_with_context("openrouter", "qwen/qwen3.6-plus-preview:free", err);

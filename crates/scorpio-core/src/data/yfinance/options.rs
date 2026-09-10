@@ -11,8 +11,7 @@
 use async_trait::async_trait;
 use chrono::TimeZone as _;
 use futures::StreamExt as _;
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig_core::tool::PortableTool;
 use rust_decimal::prelude::ToPrimitive;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -694,7 +693,7 @@ fn serialize_options_outcome_for_tool(
     Ok(val)
 }
 
-// ─── rig::tool::Tool wrapper ──────────────────────────────────────────────────
+// ─── rig_core::tool::PortableTool wrapper ──────────────────────────────────────────────────
 
 /// Args for the `get_options_snapshot` tool call.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -756,14 +755,14 @@ impl GetOptionsSnapshot {
     }
 }
 
-impl Tool for GetOptionsSnapshot {
+impl PortableTool for GetOptionsSnapshot {
     const NAME: &'static str = "get_options_snapshot";
 
     type Error = TradingError;
     type Args = OptionsSnapshotArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+    fn description(&self) -> String {
         let mut desc = "Fetch a live options-chain snapshot for an equity symbol from Yahoo \
                         Finance. Returns implied volatility, put/call ratios, max-pain strike, \
                         and near-term strike details. Only valid for today's US/Eastern date."
@@ -776,6 +775,10 @@ impl Tool for GetOptionsSnapshot {
             desc.push_str(&format!(" The target_date MUST be exactly \"{td}\"."));
         }
 
+        desc
+    }
+
+    fn parameters(&self) -> serde_json::Value {
         let symbol_schema = match &self.allowed_symbol {
             Some(s) => json!({ "type": "string", "enum": [s] }),
             None => json!({ "type": "string", "description": "The equity ticker symbol" }),
@@ -785,18 +788,14 @@ impl Tool for GetOptionsSnapshot {
             None => json!({ "type": "string", "description": "ISO-8601 date (YYYY-MM-DD)" }),
         };
 
-        ToolDefinition {
-            name: Self::NAME.to_owned(),
-            description: desc,
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "symbol": symbol_schema,
-                    "target_date": date_schema
-                },
-                "required": ["symbol", "target_date"]
-            }),
-        }
+        json!({
+            "type": "object",
+            "properties": {
+                "symbol": symbol_schema,
+                "target_date": date_schema
+            },
+            "required": ["symbol", "target_date"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -999,7 +998,7 @@ mod tests {
         ctx.store(sample_snapshot()).await.unwrap();
 
         let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
-        let result = Tool::call(
+        let result = PortableTool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),
@@ -1018,7 +1017,7 @@ mod tests {
         ctx.store(OptionsOutcome::HistoricalRun).await.unwrap();
 
         let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", yesterday_eastern(), ctx.clone());
-        let result = Tool::call(
+        let result = PortableTool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),
@@ -1035,13 +1034,13 @@ mod tests {
     #[tokio::test]
     async fn get_options_snapshot_replay_is_idempotent_across_multiple_calls() {
         // The LLM may invoke get_options_snapshot more than once in a run.
-        // load() must be multi-read (not consuming): calling Tool::call() twice must both succeed
+        // load() must be multi-read (not consuming): calling PortableTool::call() twice must both succeed
         // and return identical output.
         let ctx = OptionsToolContext::new();
         ctx.store(sample_snapshot()).await.unwrap();
 
         let tool = GetOptionsSnapshot::scoped_prefetched("AAPL", today_eastern(), ctx.clone());
-        let result1 = Tool::call(
+        let result1 = PortableTool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),
@@ -1050,7 +1049,7 @@ mod tests {
         )
         .await
         .expect("first call should succeed");
-        let result2 = Tool::call(
+        let result2 = PortableTool::call(
             &tool,
             OptionsSnapshotArgs {
                 symbol: "AAPL".to_owned(),

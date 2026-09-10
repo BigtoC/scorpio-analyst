@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use rig::agent::PromptResponse;
+use rig_agent::agent::PromptResponse;
 use tracing::warn;
 // Shares the budget clock with `super::retry` (see the note there): `tokio::time::Instant`
 // keeps the elapsed/timeout accounting on the same clock as the backoff/timeout sleeps.
@@ -229,7 +229,7 @@ fn text_timeout_error(started_at: Instant, agent: &LlmAgent, attempt: u32) -> Tr
 mod tests {
     use std::time::Duration;
 
-    use rig::completion::Usage;
+    use rig_core::completion::Usage;
 
     use crate::error::RetryPolicy;
     use crate::providers::ProviderId;
@@ -244,6 +244,8 @@ mod tests {
             total_tokens: 0,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         }
     }
 
@@ -264,6 +266,8 @@ mod tests {
             total_tokens: 8,
             cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         };
         let (agent, ctrl) = mock_llm_agent(ProviderId::OpenAI, "test-model", vec![], vec![]);
         // Response must be on the text_turn queue (not the one-shot prompt queue)
@@ -313,6 +317,8 @@ mod tests {
                     total_tokens: 3,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    tool_use_prompt_tokens: 0,
+                    reasoning_tokens: 0,
                 },
             )));
 
